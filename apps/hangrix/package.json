@@ -1,0 +1,11 @@
+{
+  "name": "hangrix",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "go tool air -c .air.toml",
+    "build": "node ./scripts/copy-web-dist.mjs && go build -o bin/ ./cmd/hangrix",
+    "test": "go test ./...",
+    "lint": "go vet ./..."
+  }
+}

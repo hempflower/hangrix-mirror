@@ -1,0 +1,46 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "ui": "tui",
+  "globalPassThroughEnv": [
+    "GOCACHE",
+    "GOPATH",
+    "GOMODCACHE",
+    "GOOS",
+    "GOARCH",
+    "GOFLAGS",
+    "GOPROXY",
+    "GOSUMDB",
+    "LOCALAPPDATA",
+    "APPDATA",
+    "USERPROFILE",
+    "HOME",
+    "TMP",
+    "TEMP"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".output/**", ".nuxt/**", "dist/**", "bin/**"],
+      "inputs": ["$TURBO_DEFAULT$", "!**/*.md"]
+    },
+    "generate": {
+      "outputs": [".output/public/**", ".nuxt/**"],
+      "inputs": ["$TURBO_DEFAULT$", "!**/*.md"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "lint": {
+      "outputs": []
+    },
+    "typecheck": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    }
+  }
+}

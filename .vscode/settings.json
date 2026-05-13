@@ -1,0 +1,9 @@
+{
+  "json.schemaDownload.enable": true,
+  "json.schemas": [
+    {
+      "fileMatch": ["components.json"],
+      "url": "https://shadcn-vue.com/schema.json"
+    }
+  ]
+}
