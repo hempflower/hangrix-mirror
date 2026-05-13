@@ -5,8 +5,15 @@ import (
 	"os"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/app"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/kv"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/git"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/healthz"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/hello"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/token"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/user"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/server"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/web"
 	"github.com/hangrix/hangrix/pkg/ioc"
@@ -18,8 +25,15 @@ func main() {
 	c.Load(
 		app.Module(),
 		server.Module(),
+		database.Module(),
+		kv.Module(),
 		healthz.Module(),
 		hello.Module(),
+		user.Module(),
+		auth.Module(),
+		token.Module(),
+		git.Module(),
+		repo.Module(),
 		web.Module(),
 	)
 

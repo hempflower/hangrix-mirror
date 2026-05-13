@@ -1,0 +1,1002 @@
+// Package infra holds the go-git-backed concrete implementation of the git
+// domain. GoGit operates on bare repositories at filesystem paths; it has no
+// dependencies beyond go-git itself. Other modules consume it via domain.Git
+// resolved through the ioc container.
+package infra
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
+	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
+	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
+)
+
+// GoGit is a stateless implementation of domain.Git backed by github.com/go-git/go-git.
+// All state lives on disk in the bare repositories under the configured root;
+// this struct exists only to bind methods to a value the DI container can hand out.
+type GoGit struct{}
+
+// GoGitDeps is the empty deps holder required by the project's DI convention.
+// See pkg/ioc/module.go: every constructor takes a *Deps pointer to a struct,
+// even when there are no dependencies to inject.
+type GoGitDeps struct{}
+
+// NewGoGit constructs a GoGit. It has no side effects.
+func NewGoGit(_ *GoGitDeps) *GoGit { return &GoGit{} }
+
+// Init creates a bare repository at path and points HEAD at the given default
+// branch. If the path already contains a bare repo, Init is a no-op.
+func (g *GoGit) Init(path string, defaultBranch string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("init: mkdir parent: %w", err)
+	}
+
+	_, err := git.PlainInit(path, true)
+	if err != nil {
+		if errors.Is(err, git.ErrRepositoryAlreadyExists) {
+			return nil
+		}
+		return fmt.Errorf("init: plain init: %w", err)
+	}
+
+	repo, err := git.PlainOpen(path)
+	if err != nil {
+		return fmt.Errorf("init: reopen: %w", err)
+	}
+	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName(defaultBranch))
+	if err := repo.Storer.SetReference(headRef); err != nil {
+		return fmt.Errorf("init: set HEAD: %w", err)
+	}
+	return nil
+}
+
+// SeedReadme writes a single README.md commit directly via the object storer
+// (no worktree, no index), then advances refs/heads/<defaultBranch> to it.
+// Returns nil if the branch already has a commit.
+func (g *GoGit) SeedReadme(path, defaultBranch, repoName, description, authorName, authorEmail string) error {
+	repo, err := openRepo(path)
+	if err != nil {
+		return err
+	}
+
+	branchRef := plumbing.NewBranchReferenceName(defaultBranch)
+	if _, err := repo.Reference(branchRef, false); err == nil {
+		return nil
+	} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return fmt.Errorf("seed readme: check branch: %w", err)
+	}
+
+	if description == "" {
+		description = "This repository was created by Hangrix."
+	}
+	readmeContent := fmt.Sprintf("# %s\n\n%s\n", repoName, description)
+
+	st := repo.Storer
+
+	// blob
+	blobObj := st.NewEncodedObject()
+	blobObj.SetType(plumbing.BlobObject)
+	blobObj.SetSize(int64(len(readmeContent)))
+	w, err := blobObj.Writer()
+	if err != nil {
+		return fmt.Errorf("seed readme: blob writer: %w", err)
+	}
+	if _, err := w.Write([]byte(readmeContent)); err != nil {
+		_ = w.Close()
+		return fmt.Errorf("seed readme: write blob: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("seed readme: close blob: %w", err)
+	}
+	blobHash, err := st.SetEncodedObject(blobObj)
+	if err != nil {
+		return fmt.Errorf("seed readme: store blob: %w", err)
+	}
+
+	// tree
+	tree := &object.Tree{
+		Entries: []object.TreeEntry{
+			{Name: "README.md", Mode: filemode.Regular, Hash: blobHash},
+		},
+	}
+	treeObj := st.NewEncodedObject()
+	if err := tree.Encode(treeObj); err != nil {
+		return fmt.Errorf("seed readme: encode tree: %w", err)
+	}
+	treeHash, err := st.SetEncodedObject(treeObj)
+	if err != nil {
+		return fmt.Errorf("seed readme: store tree: %w", err)
+	}
+
+	// commit
+	now := time.Now()
+	sig := object.Signature{Name: authorName, Email: authorEmail, When: now}
+	commit := &object.Commit{
+		Author:    sig,
+		Committer: sig,
+		Message:   "Initial commit\n",
+		TreeHash:  treeHash,
+	}
+	commitObj := st.NewEncodedObject()
+	if err := commit.Encode(commitObj); err != nil {
+		return fmt.Errorf("seed readme: encode commit: %w", err)
+	}
+	commitHash, err := st.SetEncodedObject(commitObj)
+	if err != nil {
+		return fmt.Errorf("seed readme: store commit: %w", err)
+	}
+
+	if err := st.SetReference(plumbing.NewHashReference(branchRef, commitHash)); err != nil {
+		return fmt.Errorf("seed readme: set branch ref: %w", err)
+	}
+	return nil
+}
+
+// ListRefs walks all repository references, splitting into branches and tags,
+// and returns the resolved default branch and its current SHA.
+func (g *GoGit) ListRefs(path string) (*domain.Refs, error) {
+	repo, err := openRepo(path)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &domain.Refs{}
+
+	// Default branch comes from the HEAD symref target.
+	headRef, err := repo.Reference(plumbing.HEAD, false)
+	if err != nil {
+		return nil, fmt.Errorf("list refs: head: %w", err)
+	}
+	if headRef.Type() == plumbing.SymbolicReference {
+		target := headRef.Target()
+		if target.IsBranch() {
+			out.DefaultBranch = target.Short()
+		}
+	}
+
+	iter, err := repo.References()
+	if err != nil {
+		return nil, fmt.Errorf("list refs: iter: %w", err)
+	}
+	defer iter.Close()
+
+	err = iter.ForEach(func(ref *plumbing.Reference) error {
+		// Resolve symbolic refs to a hash; skip those we cannot resolve.
+		if ref.Type() == plumbing.SymbolicReference {
+			return nil
+		}
+		name := ref.Name()
+		switch {
+		case name.IsBranch():
+			out.Branches = append(out.Branches, &domain.Ref{
+				Name: name.Short(),
+				SHA:  ref.Hash().String(),
+			})
+			if out.DefaultBranch != "" && name.Short() == out.DefaultBranch {
+				out.DefaultBranchSHA = ref.Hash().String()
+			}
+		case name.IsTag():
+			out.Tags = append(out.Tags, &domain.Ref{
+				Name: name.Short(),
+				SHA:  ref.Hash().String(),
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list refs: foreach: %w", err)
+	}
+
+	sort.Slice(out.Branches, func(i, j int) bool { return out.Branches[i].Name < out.Branches[j].Name })
+	sort.Slice(out.Tags, func(i, j int) bool { return out.Tags[i].Name < out.Tags[j].Name })
+	return out, nil
+}
+
+// ListCommits walks history from ref, skipping offset and returning at most
+// limit commits. Returns ErrEmptyRepo for an unborn default branch.
+func (g *GoGit) ListCommits(path, ref string, offset, limit int) ([]*domain.Commit, error) {
+	repo, err := openRepo(path)
+	if err != nil {
+		return nil, err
+	}
+
+	hash, err := resolveRef(repo, ref)
+	if err != nil {
+		// Treat "no commits yet" specially when caller passed the default branch.
+		if errors.Is(err, domain.ErrRefNotFound) {
+			if isEmptyRepo(repo) {
+				return nil, domain.ErrEmptyRepo
+			}
+		}
+		return nil, err
+	}
+
+	iter, err := repo.Log(&git.LogOptions{From: hash})
+	if err != nil {
+		return nil, fmt.Errorf("list commits: log: %w", err)
+	}
+	defer iter.Close()
+
+	if offset < 0 {
+		offset = 0
+	}
+	out := make([]*domain.Commit, 0, limit)
+	skipped := 0
+	err = iter.ForEach(func(c *object.Commit) error {
+		if skipped < offset {
+			skipped++
+			return nil
+		}
+		if limit > 0 && len(out) >= limit {
+			return storerStop
+		}
+		out = append(out, toDomainCommit(c))
+		return nil
+	})
+	if err != nil && !errors.Is(err, storerStop) {
+		return nil, fmt.Errorf("list commits: walk: %w", err)
+	}
+	return out, nil
+}
+
+// storerStop is a sentinel used to short-circuit ForEach once limit is hit.
+var storerStop = errors.New("stop")
+
+// CommitByID loads a commit by SHA and returns it along with the diff against
+// its first parent (empty diff for root commits).
+func (g *GoGit) CommitByID(path, sha string) (*domain.CommitWithDiff, error) {
+	repo, err := openRepo(path)
+	if err != nil {
+		return nil, err
+	}
+
+	hash := plumbing.NewHash(sha)
+	commit, err := repo.CommitObject(hash)
+	if err != nil {
+		if errors.Is(err, plumbing.ErrObjectNotFound) {
+			return nil, domain.ErrRefNotFound
+		}
+		return nil, fmt.Errorf("commit by id: %w", err)
+	}
+
+	out := &domain.CommitWithDiff{Commit: toDomainCommit(commit)}
+
+	if commit.NumParents() == 0 {
+		return out, nil
+	}
+	parent, err := commit.Parent(0)
+	if err != nil {
+		return nil, fmt.Errorf("commit by id: parent: %w", err)
+	}
+	patch, err := parent.Patch(commit)
+	if err != nil {
+		return nil, fmt.Errorf("commit by id: patch: %w", err)
+	}
+	out.Diff = patchToFileDiffs(patch)
+	return out, nil
+}
+
+// Tree returns the immediate entries under treePath at refOrSha. An empty
+// treePath returns the root tree.
+func (g *GoGit) Tree(path, refOrSha, treePath string) ([]*domain.TreeEntry, error) {
+	repo, err := openRepo(path)
+	if err != nil {
+		return nil, err
+	}
+
+	hash, err := resolveRef(repo, refOrSha)
+	if err != nil {
+		return nil, err
+	}
+	commit, err := repo.CommitObject(hash)
+	if err != nil {
+		return nil, fmt.Errorf("tree: commit: %w", err)
+	}
+	root, err := commit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("tree: root: %w", err)
+	}
+
+	current := root
+	treePath = strings.Trim(treePath, "/")
+	if treePath != "" {
+		for part := range strings.SplitSeq(treePath, "/") {
+			next, err := current.Tree(part)
+			if err != nil {
+				if errors.Is(err, object.ErrDirectoryNotFound) {
+					return nil, domain.ErrPathNotFound
+				}
+				return nil, fmt.Errorf("tree: descend %q: %w", part, err)
+			}
+			current = next
+		}
+	}
+
+	out := make([]*domain.TreeEntry, 0, len(current.Entries))
+	for _, e := range current.Entries {
+		kind := entryKind(e.Mode)
+		fullPath := e.Name
+		if treePath != "" {
+			fullPath = treePath + "/" + e.Name
+		}
+		te := &domain.TreeEntry{
+			Name: e.Name,
+			Path: fullPath,
+			Kind: kind,
+			SHA:  e.Hash.String(),
+		}
+		if kind == domain.EntryKindBlob || kind == domain.EntryKindExecutable {
+			if size, err := current.Size(e.Name); err == nil {
+				te.Size = size
+			}
+		}
+		out = append(out, te)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		ai, aj := out[i].Kind == domain.EntryKindTree, out[j].Kind == domain.EntryKindTree
+		if ai != aj {
+			return ai // trees first
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
+// TreeView returns the entries Tree() would, plus per-entry last commit
+// and a top-level last_commit + total_commits for the ref. Single walk of
+// the commit log: counts every commit, assigns each entry's last_commit on
+// the first commit (newest first) that touches a path prefixed by the
+// entry's path. Stops diff work (but not the count) once every entry has
+// been assigned.
+func (g *GoGit) TreeView(path, refOrSha, treePath string) (*domain.TreeView, error) {
+	repo, err := openRepo(path)
+	if err != nil {
+		return nil, err
+	}
+	hash, err := resolveRef(repo, refOrSha)
+	if err != nil {
+		// Empty repo (HEAD points at an unborn branch): return a
+		// well-formed empty view rather than 404, so the file page has
+		// something to render.
+		if errors.Is(err, domain.ErrRefNotFound) && isEmptyRepo(repo) {
+			return &domain.TreeView{Entries: []*domain.EntryWithCommit{}}, nil
+		}
+		return nil, err
+	}
+
+	entries, err := g.Tree(path, refOrSha, treePath)
+	if err != nil {
+		return nil, err
+	}
+
+	enriched := make([]*domain.EntryWithCommit, len(entries))
+	for i, e := range entries {
+		enriched[i] = &domain.EntryWithCommit{TreeEntry: e}
+	}
+	unassigned := len(enriched)
+
+	iter, err := repo.Log(&git.LogOptions{From: hash})
+	if err != nil {
+		return nil, fmt.Errorf("tree view: log: %w", err)
+	}
+	defer iter.Close()
+
+	var lastCommit *domain.Commit
+	var total int64
+
+	err = iter.ForEach(func(c *object.Commit) error {
+		total++
+		if lastCommit == nil {
+			lastCommit = toDomainCommit(c)
+		}
+		if unassigned == 0 {
+			// Already found every entry's last commit — keep walking
+			// (we still need to count) but skip the expensive diff.
+			return nil
+		}
+		changed, err := commitChangedPaths(c)
+		if err != nil {
+			return err
+		}
+		dc := toDomainCommit(c)
+		for _, entry := range enriched {
+			if entry.LastCommit != nil {
+				continue
+			}
+			if entryTouchedByPaths(entry, changed) {
+				entry.LastCommit = dc
+				unassigned--
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tree view: walk: %w", err)
+	}
+
+	return &domain.TreeView{
+		Entries:      enriched,
+		LastCommit:   lastCommit,
+		TotalCommits: total,
+	}, nil
+}
+
+// entryTouchedByPaths reports whether any path in changed is the entry's
+// own path (for a blob) or any descendant of the entry's path (for a tree).
+// Symlinks/executables are treated as blobs for this check.
+func entryTouchedByPaths(e *domain.EntryWithCommit, changed map[string]struct{}) bool {
+	if _, ok := changed[e.Path]; ok {
+		return true
+	}
+	if e.Kind == domain.EntryKindTree {
+		prefix := e.Path + "/"
+		for p := range changed {
+			if strings.HasPrefix(p, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// commitChangedPaths returns the set of file paths changed in commit c
+// against its first parent. Root commits report every file in the tree.
+// Both the old and new paths are reported for renames so the caller's
+// prefix match works either way.
+func commitChangedPaths(c *object.Commit) (map[string]struct{}, error) {
+	out := map[string]struct{}{}
+	if c.NumParents() == 0 {
+		tree, err := c.Tree()
+		if err != nil {
+			return nil, err
+		}
+		err = tree.Files().ForEach(func(f *object.File) error {
+			out[f.Name] = struct{}{}
+			return nil
+		})
+		return out, err
+	}
+	parent, err := c.Parent(0)
+	if err != nil {
+		return nil, err
+	}
+	parentTree, err := parent.Tree()
+	if err != nil {
+		return nil, err
+	}
+	currTree, err := c.Tree()
+	if err != nil {
+		return nil, err
+	}
+	changes, err := parentTree.Diff(currTree)
+	if err != nil {
+		return nil, err
+	}
+	for _, ch := range changes {
+		if ch.From.Name != "" {
+			out[ch.From.Name] = struct{}{}
+		}
+		if ch.To.Name != "" {
+			out[ch.To.Name] = struct{}{}
+		}
+	}
+	return out, nil
+}
+
+// Blob returns the raw bytes of the file at refOrSha:filePath. The binary
+// flag is true iff any of the first 8 KiB contains a NUL byte.
+func (g *GoGit) Blob(path, refOrSha, filePath string) ([]byte, bool, error) {
+	repo, err := openRepo(path)
+	if err != nil {
+		return nil, false, err
+	}
+	hash, err := resolveRef(repo, refOrSha)
+	if err != nil {
+		return nil, false, err
+	}
+	commit, err := repo.CommitObject(hash)
+	if err != nil {
+		return nil, false, fmt.Errorf("blob: commit: %w", err)
+	}
+	root, err := commit.Tree()
+	if err != nil {
+		return nil, false, fmt.Errorf("blob: root tree: %w", err)
+	}
+
+	filePath = strings.Trim(filePath, "/")
+	entry, err := root.FindEntry(filePath)
+	if err != nil {
+		if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) || errors.Is(err, object.ErrFileNotFound) {
+			return nil, false, domain.ErrPathNotFound
+		}
+		return nil, false, fmt.Errorf("blob: find: %w", err)
+	}
+	if entry.Mode == filemode.Dir || entry.Mode == filemode.Submodule {
+		return nil, false, domain.ErrNotABlob
+	}
+
+	blob, err := repo.BlobObject(entry.Hash)
+	if err != nil {
+		if errors.Is(err, plumbing.ErrObjectNotFound) {
+			return nil, false, domain.ErrPathNotFound
+		}
+		return nil, false, fmt.Errorf("blob: object: %w", err)
+	}
+	rd, err := blob.Reader()
+	if err != nil {
+		return nil, false, fmt.Errorf("blob: reader: %w", err)
+	}
+	defer rd.Close()
+	content, err := io.ReadAll(rd)
+	if err != nil {
+		return nil, false, fmt.Errorf("blob: read: %w", err)
+	}
+
+	return content, isBinary(content), nil
+}
+
+// CreateBranch creates a new branch ref pointing at startRef. The branch must
+// not already exist; the name must satisfy go-git's ref-name rules plus our
+// own conservative pre-checks.
+func (g *GoGit) CreateBranch(path, branchName, startRef string) error {
+	repo, err := openRepo(path)
+	if err != nil {
+		return err
+	}
+	if !isSafeRefSegment(branchName) {
+		return domain.ErrInvalidRefName
+	}
+	refName := plumbing.NewBranchReferenceName(branchName)
+	if !refName.IsBranch() {
+		return domain.ErrInvalidRefName
+	}
+	if err := refName.Validate(); err != nil {
+		return domain.ErrInvalidRefName
+	}
+
+	if _, err := repo.Reference(refName, false); err == nil {
+		return domain.ErrBranchExists
+	} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return fmt.Errorf("create branch: check existing: %w", err)
+	}
+
+	hash, err := resolveRef(repo, startRef)
+	if err != nil {
+		return err
+	}
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
+		return fmt.Errorf("create branch: set ref: %w", err)
+	}
+	return nil
+}
+
+// DeleteBranch removes the named branch. Refuses to delete the branch that
+// HEAD currently points at — caller must SetHEAD elsewhere first.
+func (g *GoGit) DeleteBranch(path, branchName string) error {
+	repo, err := openRepo(path)
+	if err != nil {
+		return err
+	}
+	refName := plumbing.NewBranchReferenceName(branchName)
+	if _, err := repo.Reference(refName, false); err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return domain.ErrRefNotFound
+		}
+		return fmt.Errorf("delete branch: lookup: %w", err)
+	}
+
+	headRef, err := repo.Reference(plumbing.HEAD, false)
+	if err == nil && headRef.Type() == plumbing.SymbolicReference {
+		if headRef.Target() == refName {
+			return domain.ErrCannotDeleteHEAD
+		}
+	}
+
+	if err := repo.Storer.RemoveReference(refName); err != nil {
+		return fmt.Errorf("delete branch: remove: %w", err)
+	}
+	return nil
+}
+
+// SetHEAD updates the symbolic HEAD ref to point at refs/heads/branchName.
+// The branch must already exist.
+func (g *GoGit) SetHEAD(path, branchName string) error {
+	repo, err := openRepo(path)
+	if err != nil {
+		return err
+	}
+	refName := plumbing.NewBranchReferenceName(branchName)
+	if _, err := repo.Reference(refName, false); err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return domain.ErrRefNotFound
+		}
+		return fmt.Errorf("set head: lookup branch: %w", err)
+	}
+	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, refName)
+	if err := repo.Storer.SetReference(headRef); err != nil {
+		return fmt.Errorf("set head: %w", err)
+	}
+	return nil
+}
+
+// CreateLightweightTag creates a tag ref that points directly at the commit
+// resolved from refOrSha. No tag object is written.
+func (g *GoGit) CreateLightweightTag(path, tagName, refOrSha string) error {
+	repo, hash, err := prepareNewTag(path, tagName, refOrSha)
+	if err != nil {
+		return err
+	}
+	refName := plumbing.NewTagReferenceName(tagName)
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
+		return fmt.Errorf("create lightweight tag: set ref: %w", err)
+	}
+	return nil
+}
+
+// CreateAnnotatedTag writes a tag object with the given message and tagger
+// identity, then points tagName at it. The target must resolve to a commit.
+func (g *GoGit) CreateAnnotatedTag(path, tagName, refOrSha, message string, tagger domain.Signature) error {
+	repo, hash, err := prepareNewTag(path, tagName, refOrSha)
+	if err != nil {
+		return err
+	}
+
+	// Confirm the target is a commit; annotated tags in M3 only point at commits.
+	if _, err := repo.CommitObject(hash); err != nil {
+		if errors.Is(err, plumbing.ErrObjectNotFound) {
+			return domain.ErrRefNotFound
+		}
+		return fmt.Errorf("create annotated tag: target commit: %w", err)
+	}
+
+	when := tagger.When
+	if when.IsZero() {
+		when = time.Now()
+	}
+	tag := &object.Tag{
+		Name:       tagName,
+		Tagger:     object.Signature{Name: tagger.Name, Email: tagger.Email, When: when},
+		Message:    message,
+		TargetType: plumbing.CommitObject,
+		Target:     hash,
+	}
+	st := repo.Storer
+	obj := st.NewEncodedObject()
+	if err := tag.Encode(obj); err != nil {
+		return fmt.Errorf("create annotated tag: encode: %w", err)
+	}
+	tagHash, err := st.SetEncodedObject(obj)
+	if err != nil {
+		return fmt.Errorf("create annotated tag: store object: %w", err)
+	}
+	refName := plumbing.NewTagReferenceName(tagName)
+	if err := st.SetReference(plumbing.NewHashReference(refName, tagHash)); err != nil {
+		return fmt.Errorf("create annotated tag: set ref: %w", err)
+	}
+	return nil
+}
+
+// DeleteTag removes the tag ref. Tag objects (for annotated tags) are left
+// orphaned for git gc to reap.
+func (g *GoGit) DeleteTag(path, tagName string) error {
+	repo, err := openRepo(path)
+	if err != nil {
+		return err
+	}
+	refName := plumbing.NewTagReferenceName(tagName)
+	if _, err := repo.Reference(refName, false); err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return domain.ErrRefNotFound
+		}
+		return fmt.Errorf("delete tag: lookup: %w", err)
+	}
+	if err := repo.Storer.RemoveReference(refName); err != nil {
+		return fmt.Errorf("delete tag: remove: %w", err)
+	}
+	return nil
+}
+
+// prepareNewTag opens the repo, validates a fresh tag name, and resolves the
+// target ref to a hash. Returned for use by both lightweight and annotated tag
+// constructors.
+func prepareNewTag(path, tagName, refOrSha string) (*git.Repository, plumbing.Hash, error) {
+	repo, err := openRepo(path)
+	if err != nil {
+		return nil, plumbing.ZeroHash, err
+	}
+	if !isSafeRefSegment(tagName) {
+		return nil, plumbing.ZeroHash, domain.ErrInvalidRefName
+	}
+	refName := plumbing.NewTagReferenceName(tagName)
+	if !refName.IsTag() {
+		return nil, plumbing.ZeroHash, domain.ErrInvalidRefName
+	}
+	if err := refName.Validate(); err != nil {
+		return nil, plumbing.ZeroHash, domain.ErrInvalidRefName
+	}
+	if _, err := repo.Reference(refName, false); err == nil {
+		return nil, plumbing.ZeroHash, domain.ErrTagExists
+	} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return nil, plumbing.ZeroHash, fmt.Errorf("prepare tag: check existing: %w", err)
+	}
+	hash, err := resolveRef(repo, refOrSha)
+	if err != nil {
+		return nil, plumbing.ZeroHash, err
+	}
+	return repo, hash, nil
+}
+
+// isSafeRefSegment short-circuits the cheapest, most obviously-bad branch/tag
+// names so callers see ErrInvalidRefName immediately rather than a wrapped
+// go-git Validate error. Full ref-grammar enforcement still happens via
+// ReferenceName.Validate().
+func isSafeRefSegment(name string) bool {
+	if name == "" || len(name) > 200 {
+		return false
+	}
+	if strings.HasPrefix(name, "-") || strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") {
+		return false
+	}
+	if strings.Contains(name, "..") || strings.Contains(name, "//") {
+		return false
+	}
+	for _, r := range name {
+		if r <= 0x20 || r == 0x7f {
+			return false
+		}
+		switch r {
+		case '~', '^', ':', '?', '*', '[', '\\':
+			return false
+		}
+	}
+	return true
+}
+
+// DiffRefs computes the changes going from from to to. Either side may be
+// a branch, tag, or SHA.
+func (g *GoGit) DiffRefs(path, from, to string) ([]*domain.FileDiff, error) {
+	repo, err := openRepo(path)
+	if err != nil {
+		return nil, err
+	}
+	fromHash, err := resolveRef(repo, from)
+	if err != nil {
+		return nil, err
+	}
+	toHash, err := resolveRef(repo, to)
+	if err != nil {
+		return nil, err
+	}
+	fromCommit, err := repo.CommitObject(fromHash)
+	if err != nil {
+		return nil, fmt.Errorf("diff refs: from commit: %w", err)
+	}
+	toCommit, err := repo.CommitObject(toHash)
+	if err != nil {
+		return nil, fmt.Errorf("diff refs: to commit: %w", err)
+	}
+	patch, err := fromCommit.Patch(toCommit)
+	if err != nil {
+		return nil, fmt.Errorf("diff refs: patch: %w", err)
+	}
+	return patchToFileDiffs(patch), nil
+}
+
+// --- helpers ---
+
+// openRepo wraps git.PlainOpen, mapping the "no repo" sentinel to the domain
+// error so callers can branch on it without importing go-git.
+func openRepo(path string) (*git.Repository, error) {
+	repo, err := git.PlainOpen(path)
+	if err != nil {
+		if errors.Is(err, git.ErrRepositoryNotExists) {
+			return nil, domain.ErrRepoNotFound
+		}
+		return nil, fmt.Errorf("open repo: %w", err)
+	}
+	return repo, nil
+}
+
+// resolveRef tries the given ref as a branch, then a tag, then as a raw
+// revision (SHA or anything ResolveRevision accepts). Returns ErrRefNotFound
+// if none match.
+// resolveRef looks up a ref (branch / tag / SHA / abbrev) and returns the
+// hash of the **commit it points at**. Annotated tags are transparently
+// peeled to their underlying commit — every internal caller wants a commit
+// hash, so doing the peel here keeps the rest of the impl uniform.
+func resolveRef(repo *git.Repository, ref string) (plumbing.Hash, error) {
+	if ref == "" {
+		return plumbing.ZeroHash, domain.ErrRefNotFound
+	}
+
+	hash, err := lookupRefHash(repo, ref)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return peelHashToCommit(repo, hash)
+}
+
+func lookupRefHash(repo *git.Repository, ref string) (plumbing.Hash, error) {
+	if r, err := repo.Reference(plumbing.NewBranchReferenceName(ref), true); err == nil {
+		return r.Hash(), nil
+	} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return plumbing.ZeroHash, fmt.Errorf("resolve ref: branch lookup: %w", err)
+	}
+
+	if r, err := repo.Reference(plumbing.NewTagReferenceName(ref), true); err == nil {
+		return r.Hash(), nil
+	} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return plumbing.ZeroHash, fmt.Errorf("resolve ref: tag lookup: %w", err)
+	}
+
+	h, err := repo.ResolveRevision(plumbing.Revision(ref))
+	if err != nil {
+		return plumbing.ZeroHash, domain.ErrRefNotFound
+	}
+	return *h, nil
+}
+
+// peelHashToCommit returns the input hash unchanged if it already points at
+// a commit (the common case: branch, lightweight tag, bare SHA), and
+// follows the chain through a *object.Tag for annotated tags. Returns
+// ErrRefNotFound if the hash points at something that has no commit
+// (e.g. a blob).
+func peelHashToCommit(repo *git.Repository, hash plumbing.Hash) (plumbing.Hash, error) {
+	obj, err := repo.Object(plumbing.AnyObject, hash)
+	if err != nil {
+		return plumbing.ZeroHash, domain.ErrRefNotFound
+	}
+	switch v := obj.(type) {
+	case *object.Commit:
+		return v.Hash, nil
+	case *object.Tag:
+		commit, err := v.Commit()
+		if err != nil {
+			return plumbing.ZeroHash, domain.ErrRefNotFound
+		}
+		return commit.Hash, nil
+	default:
+		return plumbing.ZeroHash, domain.ErrRefNotFound
+	}
+}
+
+// isEmptyRepo reports whether the repo has no commit-bearing branch.
+func isEmptyRepo(repo *git.Repository) bool {
+	iter, err := repo.References()
+	if err != nil {
+		return false
+	}
+	defer iter.Close()
+	hasBranch := false
+	_ = iter.ForEach(func(r *plumbing.Reference) error {
+		if r.Type() == plumbing.SymbolicReference {
+			return nil
+		}
+		if r.Name().IsBranch() {
+			hasBranch = true
+		}
+		return nil
+	})
+	return !hasBranch
+}
+
+func toDomainCommit(c *object.Commit) *domain.Commit {
+	parents := make([]string, 0, len(c.ParentHashes))
+	for _, p := range c.ParentHashes {
+		parents = append(parents, p.String())
+	}
+	return &domain.Commit{
+		SHA:        c.Hash.String(),
+		ParentSHAs: parents,
+		Author: domain.Signature{
+			Name:  c.Author.Name,
+			Email: c.Author.Email,
+			When:  c.Author.When,
+		},
+		Committer: domain.Signature{
+			Name:  c.Committer.Name,
+			Email: c.Committer.Email,
+			When:  c.Committer.When,
+		},
+		Message:     c.Message,
+		CommittedAt: c.Committer.When,
+	}
+}
+
+func entryKind(mode filemode.FileMode) string {
+	switch mode {
+	case filemode.Submodule:
+		return domain.EntryKindSubmodule
+	case filemode.Symlink:
+		return domain.EntryKindSymlink
+	case filemode.Dir:
+		return domain.EntryKindTree
+	case filemode.Executable:
+		return domain.EntryKindExecutable
+	default:
+		return domain.EntryKindBlob
+	}
+}
+
+func isBinary(content []byte) bool {
+	limit := min(len(content), 8*1024)
+	return bytes.IndexByte(content[:limit], 0x00) >= 0
+}
+
+// singleFilePatch adapts one fdiff.FilePatch to fdiff.Patch so it can be
+// rendered standalone via the unified encoder. This is the cleanest way to
+// emit per-file unified diff text in go-git v5: the public Patch.String()
+// concatenates every file, with no per-FilePatch accessor.
+type singleFilePatch struct {
+	fp fdiff.FilePatch
+}
+
+func (s *singleFilePatch) FilePatches() []fdiff.FilePatch { return []fdiff.FilePatch{s.fp} }
+func (s *singleFilePatch) Message() string                { return "" }
+
+// patchToFileDiffs maps go-git's per-file patches into domain.FileDiff. Status
+// is derived from the presence of from/to File:
+//   - from nil          -> added
+//   - to nil            -> deleted
+//   - from.Path != to.Path -> renamed
+//   - otherwise         -> modified
+//
+// Patch text is rendered per-file via singleFilePatch + UnifiedEncoder so each
+// FileDiff carries only its own hunks. Binary patches carry no chunks (go-git
+// represents them with IsBinary()=true) and we emit an empty patch string.
+func patchToFileDiffs(p *object.Patch) []*domain.FileDiff {
+	if p == nil {
+		return nil
+	}
+	patches := p.FilePatches()
+	out := make([]*domain.FileDiff, 0, len(patches))
+	for _, fp := range patches {
+		from, to := fp.Files()
+		fd := &domain.FileDiff{Binary: fp.IsBinary()}
+
+		switch {
+		case from == nil && to != nil:
+			fd.NewPath = to.Path()
+			fd.Status = domain.DiffStatusAdded
+		case to == nil && from != nil:
+			fd.OldPath = from.Path()
+			fd.Status = domain.DiffStatusDeleted
+		case from != nil && to != nil:
+			fd.OldPath = from.Path()
+			fd.NewPath = to.Path()
+			if from.Path() != to.Path() {
+				fd.Status = domain.DiffStatusRenamed
+			} else {
+				fd.Status = domain.DiffStatusModified
+			}
+		default:
+			// Both nil: skip degenerate entry.
+			continue
+		}
+
+		if !fd.Binary {
+			var buf bytes.Buffer
+			enc := fdiff.NewUnifiedEncoder(&buf, fdiff.DefaultContextLines)
+			if err := enc.Encode(&singleFilePatch{fp: fp}); err == nil {
+				fd.Patch = buf.String()
+			}
+		}
+
+		out = append(out, fd)
+	}
+	return out
+}

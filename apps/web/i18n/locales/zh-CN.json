@@ -1,0 +1,322 @@
+{
+  "app": {
+    "name": "Hangrix",
+    "tagline": "面向 AI Agent 的 Git 平台"
+  },
+  "nav": {
+    "home": "首页",
+    "dashboard": "仪表盘",
+    "repos": "仓库",
+    "profile": "个人资料",
+    "settings": "设置",
+    "users": "用户管理",
+    "logout": "退出登录",
+    "toggleSidebar": "切换侧边栏",
+    "backToWorkspace": "返回工作区"
+  },
+  "sidebar": {
+    "workspace": "工作区",
+    "manage": "管理",
+    "account": "账号",
+    "language": "语言",
+    "switchAccount": "切换账号"
+  },
+  "common": {
+    "save": "保存",
+    "saving": "保存中…",
+    "loading": "加载中…",
+    "submit": "提交",
+    "cancel": "取消",
+    "actions": "操作",
+    "id": "ID",
+    "email": "邮箱",
+    "username": "用户名",
+    "password": "密码",
+    "currentPassword": "当前密码",
+    "newPassword": "新密码",
+    "role": "角色",
+    "status": "状态",
+    "total": "共 {n} 条",
+    "search": "搜索",
+    "close": "关闭",
+    "confirm": "确认",
+    "back": "返回"
+  },
+  "role": {
+    "admin": "管理员",
+    "user": "普通用户"
+  },
+  "status": {
+    "active": "已启用",
+    "disabled": "已禁用"
+  },
+  "login": {
+    "title": "登录",
+    "description": "使用你的 Hangrix 账号登录。",
+    "submit": "登录",
+    "submitting": "登录中…",
+    "createAccount": "注册新账号",
+    "failed": "登录失败"
+  },
+  "register": {
+    "title": "注册账号",
+    "description": "第一个注册的账号会自动成为管理员。",
+    "submit": "创建账号",
+    "submitting": "创建中…",
+    "haveAccount": "已经有账号？",
+    "failed": "注册失败"
+  },
+  "profile": {
+    "title": "个人资料",
+    "subtitle": "管理你的账号信息与登录凭据。",
+    "emailSection": "邮箱",
+    "emailDescription": "修改与该账号关联的邮箱地址。",
+    "passwordSection": "密码",
+    "passwordDescription": "修改密码需要先输入当前密码。",
+    "saveProfile": "保存",
+    "savingProfile": "保存中…",
+    "changePassword": "修改密码",
+    "changingPassword": "修改中…",
+    "profileSaved": "资料已更新。",
+    "passwordChanged": "密码已修改。",
+    "updateFailed": "更新失败",
+    "changeFailed": "修改失败"
+  },
+  "admin": {
+    "section": "管理后台",
+    "badge": "Admin",
+    "exit": "返回工作区",
+    "users": {
+      "title": "用户管理",
+      "subtitle": "管理平台中的所有账号。",
+      "cardTitle": "全部账号",
+      "cardDescription": "切换角色或禁用状态。服务端会阻止你对自己执行这些操作。",
+      "promote": "升为管理员",
+      "demote": "降为普通用户",
+      "enable": "启用",
+      "disable": "禁用",
+      "loadFailed": "加载失败",
+      "updateFailed": "更新失败"
+    }
+  },
+  "home": {
+    "title": "仪表盘",
+    "subtitle": "你的工作区概览。",
+    "welcome": "欢迎，{name}",
+    "m1Title": "M1 — 账号基础设施",
+    "m1Description": "登录、会话、用户/管理员两级权限已经就绪。仓库、Issue 等工作流会在后续里程碑里上线。",
+    "stats": {
+      "role": "当前角色",
+      "status": "账号状态"
+    },
+    "quickActions": {
+      "title": "快捷入口",
+      "description": "从这里跳转到常用页面。",
+      "newRepo": "新建仓库",
+      "profile": "查看个人资料",
+      "users": "管理用户"
+    }
+  },
+  "repo": {
+    "title": "仓库",
+    "subtitle": "你创建或参与的仓库。",
+    "empty": "你还没有仓库",
+    "emptyHint": "在 Hangrix 里，一切 git 协作都从仓库开始。",
+    "create": "新建仓库",
+    "createTitle": "新建仓库",
+    "createSubtitle": "创建一个仓库，立刻就能 git clone。",
+    "name": "仓库名",
+    "nameHint": "字母、数字、`_`、`.`、`-`，1–100 字符",
+    "description": "简介",
+    "visibility": "可见性",
+    "visibilityPublic": "公开",
+    "visibilityPrivate": "私有",
+    "visibilityPublicHint": "任何登录用户可以查看",
+    "visibilityPrivateHint": "仅你和管理员可见",
+    "defaultBranch": "默认分支",
+    "initReadme": "用一条 README 初始提交开局",
+    "initReadmeHint": "勾上：repo 立即可 clone。不勾：需要你先 push。",
+    "submit": "创建",
+    "submitting": "创建中…",
+    "createFailed": "创建失败",
+    "loadFailed": "加载失败",
+    "notFound": "仓库不存在或无权访问",
+    "cloneUrl": "克隆地址",
+    "copy": "复制",
+    "copied": "已复制",
+    "tabs": {
+      "files": "文件",
+      "commits": "提交记录",
+      "branches": "分支",
+      "tags": "Tag",
+      "compare": "比较"
+    },
+    "files": {
+      "ref": "分支 / 标签",
+      "rootBreadcrumb": "根目录",
+      "emptyRepo": "这个仓库还没有提交",
+      "emptyRepoHint": "git clone 这个仓库，然后 push 一次首个提交。",
+      "binary": "二进制文件",
+      "tooLarge": "文件过大，无法在线预览（> 1 MiB）",
+      "download": "下载",
+      "size": "{n} 字节",
+      "name": "文件名",
+      "lastCommit": "最后提交",
+      "lastCommitMessage": "提交消息",
+      "lastCommitTime": "提交时间",
+      "commitsCount": "{n} 次提交",
+      "noLastCommit": "—",
+      "submoduleHint": "submodule（暂不可浏览）",
+      "symlinkHint": "符号链接"
+    },
+    "sidebarGroup": "本仓库",
+    "nav": {
+      "code": "代码"
+    },
+    "time": {
+      "justNow": "刚刚",
+      "secondsAgo": "{n} 秒前",
+      "minutesAgo": "{n} 分钟前",
+      "hoursAgo": "{n} 小时前",
+      "daysAgo": "{n} 天前",
+      "weeksAgo": "{n} 周前",
+      "monthsAgo": "{n} 个月前",
+      "yearsAgo": "{n} 年前"
+    },
+    "commits": {
+      "title": "提交记录",
+      "none": "暂无提交"
+    },
+    "commit": {
+      "title": "提交详情",
+      "files": "文件变更",
+      "binaryDiff": "二进制差异",
+      "parents": "父提交"
+    },
+    "settings": {
+      "title": "仓库设置",
+      "general": "一般",
+      "danger": "危险区",
+      "saveGeneral": "保存",
+      "saving": "保存中…",
+      "saved": "已保存",
+      "saveFailed": "保存失败",
+      "delete": "删除仓库",
+      "deleteHint": "删除后仓库的元数据和磁盘上的 bare repo 都会消失，无法恢复。",
+      "deleteConfirm": "为了确认，请输入 {name}：",
+      "deleteAction": "永久删除",
+      "deleting": "删除中…",
+      "deleteFailed": "删除失败",
+      "transfer": "转让 ownership",
+      "transferHint": "敬请期待。"
+    },
+    "branches": {
+      "title": "分支",
+      "subtitle": "管理这个仓库的所有分支。",
+      "create": "新建分支",
+      "name": "分支名",
+      "startRef": "起点",
+      "submit": "创建",
+      "submitting": "创建中…",
+      "default": "默认",
+      "setDefault": "设为默认",
+      "setDefaultFailed": "切换默认分支失败",
+      "delete": "删除",
+      "deleteConfirm": "删除分支 {name}？",
+      "deleteFailed": "删除失败",
+      "deleteDefaultBlocked": "不能删除默认分支",
+      "empty": "暂无分支"
+    },
+    "tags": {
+      "title": "Tag",
+      "subtitle": "为某个 commit 打一个不变的引用。",
+      "create": "新建 Tag",
+      "name": "Tag 名",
+      "ref": "起点",
+      "annotated": "带注释的 Tag（annotated）",
+      "annotatedHint": "勾上后会写入 tag 对象（含作者和消息），适合发布版本。",
+      "message": "消息",
+      "messageRequired": "annotated tag 需要消息",
+      "submit": "创建",
+      "submitting": "创建中…",
+      "delete": "删除",
+      "deleteConfirm": "删除 tag {name}？",
+      "deleteFailed": "删除失败",
+      "empty": "暂无 tag"
+    },
+    "compare": {
+      "title": "比较",
+      "subtitle": "选两个 ref，看它们之间的差异。",
+      "from": "from",
+      "to": "to",
+      "noDiff": "from 和 to 完全一致",
+      "loadFailed": "加载失败"
+    },
+    "readme": "README",
+    "settingsLink": "设置"
+  },
+  "pat": {
+    "title": "Personal Access Tokens",
+    "subtitle": "用于 git push 和 API 调用。颁发时只显示一次，存好保存。",
+    "create": "新建 token",
+    "name": "名称",
+    "nameHint": "1–64 字符，给自己看的标签",
+    "scopes": "权限",
+    "scopeRead": "repo:read（可 clone / 读 API）",
+    "scopeWrite": "repo:write（可 push）",
+    "expiresAt": "过期时间",
+    "expiresAtHint": "留空 = 永不过期",
+    "submit": "创建",
+    "submitting": "创建中…",
+    "createFailed": "创建失败",
+    "plaintextTitle": "你的新 Token",
+    "plaintextWarning": "这是你唯一一次看到完整 Token。关闭这个窗口后就再也读不到了，丢了就只能重新建一个。",
+    "copy": "复制",
+    "copied": "已复制",
+    "acknowledge": "我已保存",
+    "revoke": "撤销",
+    "revokeConfirm": "确定撤销 Token \"{name}\"？现在用它的客户端会立刻无法 push / 拉取。",
+    "revokeFailed": "撤销失败",
+    "table": {
+      "name": "名称",
+      "prefix": "前缀",
+      "scopes": "权限",
+      "lastUsed": "最后使用",
+      "expires": "过期",
+      "created": "创建于",
+      "status": "状态",
+      "actions": "操作"
+    },
+    "neverUsed": "—",
+    "neverExpires": "永不过期",
+    "statusActive": "可用",
+    "statusRevoked": "已撤销",
+    "statusExpired": "已过期",
+    "empty": "还没有 token",
+    "emptyHint": "至少新建一个 repo:write token 才能 git push。"
+  },
+  "validation": {
+    "required": "此项为必填",
+    "invalidType": "类型不正确，应为 {expected}",
+    "invalidEnum": "取值不在允许的枚举范围内",
+    "string": {
+      "min": "至少 {min} 个字符",
+      "max": "至多 {max} 个字符",
+      "email": "邮箱格式不正确",
+      "url": "URL 格式不正确",
+      "uuid": "UUID 格式不正确",
+      "regex": "格式不正确"
+    },
+    "number": {
+      "min": "不能小于 {min}",
+      "max": "不能大于 {max}"
+    },
+    "array": {
+      "min": "至少选择 {min} 项",
+      "max": "至多选择 {max} 项"
+    }
+  },
+  "errors": {
+    "unknown": "发生未知错误"
+  }
+}

@@ -3,16 +3,43 @@ package config
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
 
 type Config struct {
-	Server ServerConfig `mapstructure:"server"`
+	Server   ServerConfig   `mapstructure:"server"`
+	Database DatabaseConfig `mapstructure:"database"`
+	Redis    RedisConfig    `mapstructure:"redis"`
+	Auth     AuthConfig     `mapstructure:"auth"`
+	Storage  StorageConfig  `mapstructure:"storage"`
+}
+
+type StorageConfig struct {
+	// ReposPath is the directory under which bare repositories live, as
+	// `<ReposPath>/<owner>/<name>.git`. Created on demand at first use.
+	ReposPath string `mapstructure:"repos_path"`
 }
 
 type ServerConfig struct {
 	Addr string `mapstructure:"addr"`
+}
+
+type DatabaseConfig struct {
+	DSN string `mapstructure:"dsn"`
+}
+
+type RedisConfig struct {
+	Addr     string `mapstructure:"addr"`
+	Password string `mapstructure:"password"`
+	DB       int    `mapstructure:"db"`
+}
+
+type AuthConfig struct {
+	CookieName   string        `mapstructure:"cookie_name"`
+	CookieSecure bool          `mapstructure:"cookie_secure"`
+	SessionTTL   time.Duration `mapstructure:"session_ttl"`
 }
 
 // Load reads a YAML config file from path. Env vars with the API_ prefix
@@ -22,6 +49,14 @@ func Load(path string) (*Config, error) {
 	v.SetConfigFile(path)
 
 	v.SetDefault("server.addr", ":8080")
+	v.SetDefault("database.dsn", "postgres://hangrix:hangrix@localhost:5432/hangrix?sslmode=disable")
+	v.SetDefault("redis.addr", "localhost:6379")
+	v.SetDefault("redis.password", "")
+	v.SetDefault("redis.db", 0)
+	v.SetDefault("auth.cookie_name", "hangrix_session")
+	v.SetDefault("auth.cookie_secure", false)
+	v.SetDefault("auth.session_ttl", "168h") // 7 days
+	v.SetDefault("storage.repos_path", "./data/repos")
 
 	v.SetEnvPrefix("API")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))

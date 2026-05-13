@@ -60,8 +60,8 @@ func (m *Module) Provide(constructor any) *ModuleProviderBinder {
 		panic("constructor must return exactly one value")
 	}
 	returnType := constructorType.Out(0)
-	if returnType.Kind() != reflect.Ptr || returnType.Elem().Kind() != reflect.Struct {
-		panic("constructor return type must be a pointer to a struct")
+	if !isValidReturnType(returnType) {
+		panic("constructor return type must be a pointer to a struct or an interface, got: " + returnType.String())
 	}
 
 	if _, exists := m.providers[returnType]; exists {

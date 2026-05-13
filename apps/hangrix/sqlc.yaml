@@ -1,0 +1,52 @@
+version: "2"
+sql:
+  - engine: postgresql
+    queries: internal/modules/user/infra/queries.sql
+    schema: internal/modules/user/infra/migrations
+    gen:
+      go:
+        package: userdb
+        out: internal/modules/user/infra/userdb
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_empty_slices: true
+  - engine: postgresql
+    queries: internal/modules/repo/infra/queries.sql
+    # repo migrations reference users(id) via FK, so the schema input includes
+    # the user module's migrations too. sqlc parses the union as one DDL set;
+    # at runtime each module still applies only its own migrations via goose
+    # with a module-scoped version table.
+    schema:
+      - internal/modules/user/infra/migrations
+      - internal/modules/repo/infra/migrations
+    gen:
+      go:
+        package: repodb
+        out: internal/modules/repo/infra/repodb
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_empty_slices: true
+  - engine: postgresql
+    queries: internal/modules/token/infra/queries.sql
+    # token migrations FK users(id), same trick as repo: union the schemas so
+    # sqlc can resolve the reference; at runtime each module applies only its
+    # own migrations.
+    schema:
+      - internal/modules/user/infra/migrations
+      - internal/modules/token/infra/migrations
+    gen:
+      go:
+        package: tokendb
+        out: internal/modules/token/infra/tokendb
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_empty_slices: true

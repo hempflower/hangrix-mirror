@@ -1,0 +1,322 @@
+{
+  "app": {
+    "name": "Hangrix",
+    "tagline": "AI-agent-native Git platform"
+  },
+  "nav": {
+    "home": "Home",
+    "dashboard": "Dashboard",
+    "repos": "Repositories",
+    "profile": "Profile",
+    "settings": "Settings",
+    "users": "Users",
+    "logout": "Logout",
+    "toggleSidebar": "Toggle sidebar",
+    "backToWorkspace": "Back to workspace"
+  },
+  "sidebar": {
+    "workspace": "Workspace",
+    "manage": "Manage",
+    "account": "Account",
+    "language": "Language",
+    "switchAccount": "Switch account"
+  },
+  "common": {
+    "save": "Save",
+    "saving": "Saving…",
+    "loading": "Loading…",
+    "submit": "Submit",
+    "cancel": "Cancel",
+    "actions": "Actions",
+    "id": "ID",
+    "email": "Email",
+    "username": "Username",
+    "password": "Password",
+    "currentPassword": "Current password",
+    "newPassword": "New password",
+    "role": "Role",
+    "status": "Status",
+    "total": "{n} total",
+    "search": "Search",
+    "close": "Close",
+    "confirm": "Confirm",
+    "back": "Back"
+  },
+  "role": {
+    "admin": "admin",
+    "user": "user"
+  },
+  "status": {
+    "active": "active",
+    "disabled": "disabled"
+  },
+  "login": {
+    "title": "Sign in",
+    "description": "Use your Hangrix account credentials.",
+    "submit": "Sign in",
+    "submitting": "Signing in…",
+    "createAccount": "Create account",
+    "failed": "Login failed"
+  },
+  "register": {
+    "title": "Create account",
+    "description": "The first account becomes the administrator.",
+    "submit": "Create account",
+    "submitting": "Creating…",
+    "haveAccount": "Already have an account?",
+    "failed": "Register failed"
+  },
+  "profile": {
+    "title": "Profile",
+    "subtitle": "Manage your account info and credentials.",
+    "emailSection": "Email",
+    "emailDescription": "Change the address associated with this account.",
+    "passwordSection": "Password",
+    "passwordDescription": "Changing your password requires the current one.",
+    "saveProfile": "Save",
+    "savingProfile": "Saving…",
+    "changePassword": "Change password",
+    "changingPassword": "Saving…",
+    "profileSaved": "Profile updated.",
+    "passwordChanged": "Password changed.",
+    "updateFailed": "Update failed",
+    "changeFailed": "Change failed"
+  },
+  "admin": {
+    "section": "Admin",
+    "badge": "Admin",
+    "exit": "Back to workspace",
+    "users": {
+      "title": "Users",
+      "subtitle": "Manage every account on the platform.",
+      "cardTitle": "All accounts",
+      "cardDescription": "Toggle role or disabled state. Self-modifications are blocked by the server.",
+      "promote": "Promote",
+      "demote": "Demote",
+      "enable": "Enable",
+      "disable": "Disable",
+      "loadFailed": "Load failed",
+      "updateFailed": "Update failed"
+    }
+  },
+  "home": {
+    "title": "Dashboard",
+    "subtitle": "An overview of your workspace.",
+    "welcome": "Welcome, {name}",
+    "m1Title": "M1 — account foundations",
+    "m1Description": "Auth, sessions and a simple user / admin permission model are live. Repository and issue workflows arrive in later milestones.",
+    "stats": {
+      "role": "Your role",
+      "status": "Account status"
+    },
+    "quickActions": {
+      "title": "Quick actions",
+      "description": "Jump to common pages.",
+      "newRepo": "New repository",
+      "profile": "View profile",
+      "users": "Manage users"
+    }
+  },
+  "repo": {
+    "title": "Repositories",
+    "subtitle": "Repositories you own or collaborate on.",
+    "empty": "You have no repositories yet",
+    "emptyHint": "In Hangrix, every git collaboration starts with a repository.",
+    "create": "New repository",
+    "createTitle": "New repository",
+    "createSubtitle": "Create a repository and start cloning right away.",
+    "name": "Repository name",
+    "nameHint": "Letters, digits, `_`, `.`, `-`. 1–100 chars.",
+    "description": "Description",
+    "visibility": "Visibility",
+    "visibilityPublic": "Public",
+    "visibilityPrivate": "Private",
+    "visibilityPublicHint": "Visible to any signed-in user",
+    "visibilityPrivateHint": "Only you and admins can see it",
+    "defaultBranch": "Default branch",
+    "initReadme": "Initialize with a README commit",
+    "initReadmeHint": "Checked: the repo is immediately cloneable. Unchecked: you must push first.",
+    "submit": "Create",
+    "submitting": "Creating…",
+    "createFailed": "Create failed",
+    "loadFailed": "Load failed",
+    "notFound": "Repository not found or access denied",
+    "cloneUrl": "Clone URL",
+    "copy": "Copy",
+    "copied": "Copied",
+    "tabs": {
+      "files": "Files",
+      "commits": "Commits",
+      "branches": "Branches",
+      "tags": "Tags",
+      "compare": "Compare"
+    },
+    "files": {
+      "ref": "Branch / tag",
+      "rootBreadcrumb": "root",
+      "emptyRepo": "This repository has no commits yet",
+      "emptyRepoHint": "Clone the repo and push your first commit.",
+      "binary": "Binary file",
+      "tooLarge": "File is too large to preview online (> 1 MiB)",
+      "download": "Download",
+      "size": "{n} bytes",
+      "name": "Name",
+      "lastCommit": "Last commit",
+      "lastCommitMessage": "Commit message",
+      "lastCommitTime": "Commit time",
+      "commitsCount": "{n} commits",
+      "noLastCommit": "—",
+      "submoduleHint": "submodule (not browsable)",
+      "symlinkHint": "symlink"
+    },
+    "sidebarGroup": "This repo",
+    "nav": {
+      "code": "Code"
+    },
+    "time": {
+      "justNow": "just now",
+      "secondsAgo": "{n}s ago",
+      "minutesAgo": "{n}m ago",
+      "hoursAgo": "{n}h ago",
+      "daysAgo": "{n}d ago",
+      "weeksAgo": "{n}w ago",
+      "monthsAgo": "{n}mo ago",
+      "yearsAgo": "{n}y ago"
+    },
+    "commits": {
+      "title": "Commits",
+      "none": "No commits yet"
+    },
+    "commit": {
+      "title": "Commit",
+      "files": "Changed files",
+      "binaryDiff": "Binary diff",
+      "parents": "Parents"
+    },
+    "settings": {
+      "title": "Repository settings",
+      "general": "General",
+      "danger": "Danger zone",
+      "saveGeneral": "Save",
+      "saving": "Saving…",
+      "saved": "Saved",
+      "saveFailed": "Save failed",
+      "delete": "Delete repository",
+      "deleteHint": "Deleting removes both the metadata and the on-disk bare repo. This cannot be undone.",
+      "deleteConfirm": "To confirm, type {name}:",
+      "deleteAction": "Delete permanently",
+      "deleting": "Deleting…",
+      "deleteFailed": "Delete failed",
+      "transfer": "Transfer ownership",
+      "transferHint": "Coming soon."
+    },
+    "branches": {
+      "title": "Branches",
+      "subtitle": "Manage all branches of this repository.",
+      "create": "New branch",
+      "name": "Branch name",
+      "startRef": "Start point",
+      "submit": "Create",
+      "submitting": "Creating…",
+      "default": "default",
+      "setDefault": "Set as default",
+      "setDefaultFailed": "Failed to switch default branch",
+      "delete": "Delete",
+      "deleteConfirm": "Delete branch {name}?",
+      "deleteFailed": "Delete failed",
+      "deleteDefaultBlocked": "Cannot delete the default branch",
+      "empty": "No branches yet"
+    },
+    "tags": {
+      "title": "Tags",
+      "subtitle": "Pin an immutable reference to a commit.",
+      "create": "New tag",
+      "name": "Tag name",
+      "ref": "Start point",
+      "annotated": "Annotated tag",
+      "annotatedHint": "Writes a tag object (author + message). Use this for releases.",
+      "message": "Message",
+      "messageRequired": "Annotated tag requires a message",
+      "submit": "Create",
+      "submitting": "Creating…",
+      "delete": "Delete",
+      "deleteConfirm": "Delete tag {name}?",
+      "deleteFailed": "Delete failed",
+      "empty": "No tags yet"
+    },
+    "compare": {
+      "title": "Compare",
+      "subtitle": "Pick two refs to see what changed.",
+      "from": "from",
+      "to": "to",
+      "noDiff": "from and to are identical",
+      "loadFailed": "Load failed"
+    },
+    "readme": "README",
+    "settingsLink": "Settings"
+  },
+  "pat": {
+    "title": "Personal Access Tokens",
+    "subtitle": "Used for git push and API access. The token is shown exactly once at creation — store it safely.",
+    "create": "New token",
+    "name": "Name",
+    "nameHint": "1–64 characters; a label for yourself",
+    "scopes": "Scopes",
+    "scopeRead": "repo:read (clone / read APIs)",
+    "scopeWrite": "repo:write (push)",
+    "expiresAt": "Expires at",
+    "expiresAtHint": "Leave empty for no expiration",
+    "submit": "Create",
+    "submitting": "Creating…",
+    "createFailed": "Create failed",
+    "plaintextTitle": "Your new token",
+    "plaintextWarning": "This is the only time you'll see the full token. Once you close this dialog it cannot be retrieved — you'll have to create a new one.",
+    "copy": "Copy",
+    "copied": "Copied",
+    "acknowledge": "I've saved it",
+    "revoke": "Revoke",
+    "revokeConfirm": "Revoke token \"{name}\"? Clients using it will immediately lose push / pull access.",
+    "revokeFailed": "Revoke failed",
+    "table": {
+      "name": "Name",
+      "prefix": "Prefix",
+      "scopes": "Scopes",
+      "lastUsed": "Last used",
+      "expires": "Expires",
+      "created": "Created",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "neverUsed": "—",
+    "neverExpires": "Never",
+    "statusActive": "Active",
+    "statusRevoked": "Revoked",
+    "statusExpired": "Expired",
+    "empty": "No tokens yet",
+    "emptyHint": "You need at least one repo:write token to git push."
+  },
+  "validation": {
+    "required": "This field is required",
+    "invalidType": "Invalid type, expected {expected}",
+    "invalidEnum": "Value is not in the allowed set",
+    "string": {
+      "min": "Must be at least {min} characters",
+      "max": "Must be at most {max} characters",
+      "email": "Invalid email format",
+      "url": "Invalid URL",
+      "uuid": "Invalid UUID",
+      "regex": "Invalid format"
+    },
+    "number": {
+      "min": "Must be at least {min}",
+      "max": "Must be at most {max}"
+    },
+    "array": {
+      "min": "Select at least {min} item(s)",
+      "max": "Select at most {max} item(s)"
+    }
+  },
+  "errors": {
+    "unknown": "Unknown error"
+  }
+}

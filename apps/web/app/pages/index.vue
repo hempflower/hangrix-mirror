@@ -1,108 +1,104 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
+import { ArrowRight, BadgeCheck, FolderGit2, ShieldCheck, User as UserIcon, Users } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 
-const config = useRuntimeConfig()
-const { data, error, refresh, status } = await useFetch<{ message: string }>('/api/hello', {
-  baseURL: config.public.apiBase,
-  server: false,
-})
+const { t } = useI18n()
+const { user } = useCurrentUser()
 
-const name = ref('hangrix')
-const greeting = computed(() => `hello, ${name.value}`)
+const stats = computed(() => {
+  if (!user.value) return []
+  return [
+    {
+      key: 'role',
+      label: t('home.stats.role'),
+      value: t(`role.${user.value.role}`),
+      icon: ShieldCheck,
+    },
+    {
+      key: 'status',
+      label: t('home.stats.status'),
+      value: user.value.disabled ? t('status.disabled') : t('status.active'),
+      icon: BadgeCheck,
+    },
+  ]
+})
 </script>
 
 <template>
-  <main class="min-h-screen bg-background text-foreground">
-    <div class="mx-auto max-w-3xl space-y-8 p-8">
-      <header class="space-y-2">
-        <h1 class="text-3xl font-semibold tracking-tight">
-          {{ greeting }}
-        </h1>
-        <p class="text-muted-foreground">
-          Single Go binary serving the embedded Nuxt SPA + JSON API.
-        </p>
-        <div class="flex gap-2">
-          <Badge>Go {{ '1.26.1' }}</Badge>
-          <Badge variant="secondary">Nuxt 4</Badge>
-          <Badge variant="outline">shadcn-vue</Badge>
-          <Badge variant="destructive">embedded</Badge>
-        </div>
-      </header>
+  <div class="space-y-6">
+    <header class="space-y-1">
+      <h1 class="text-2xl font-semibold tracking-tight">
+        {{ t('home.title') }}
+      </h1>
+      <p class="text-sm text-muted-foreground">
+        {{ t('home.welcome', { name: user?.username }) }} — {{ t('home.subtitle') }}
+      </p>
+    </header>
 
-      <Card>
+    <section class="grid gap-4 sm:grid-cols-2">
+      <Card v-for="s in stats" :key="s.key">
         <CardHeader>
-          <CardTitle>API ping</CardTitle>
-          <CardDescription>GET /api/hello — handled by the chi router inside the same binary.</CardDescription>
+          <CardDescription>{{ s.label }}</CardDescription>
+          <CardTitle class="text-xl font-semibold tabular-nums">
+            {{ s.value }}
+          </CardTitle>
+          <CardAction>
+            <component :is="s.icon" class="size-4 text-muted-foreground" />
+          </CardAction>
         </CardHeader>
-        <CardContent class="space-y-2">
-          <p v-if="status === 'pending'" class="text-sm text-muted-foreground">
-            Loading…
-          </p>
-          <p v-else-if="error" class="text-sm text-destructive">
-            {{ error.message }}
-          </p>
-          <p v-else-if="data" class="font-mono text-sm">
-            {{ data.message }}
-          </p>
-        </CardContent>
-        <CardFooter>
-          <Button @click="refresh()">
-            Refresh
-          </Button>
-        </CardFooter>
       </Card>
+    </section>
 
-      <Card>
+    <section class="grid gap-4 lg:grid-cols-3">
+      <Card class="lg:col-span-2">
         <CardHeader>
-          <CardTitle>Two-way binding</CardTitle>
-          <CardDescription>shadcn-vue Input with a reactive Vue ref.</CardDescription>
+          <CardTitle>{{ t('home.m1Title') }}</CardTitle>
+          <CardDescription>{{ t('home.m1Description') }}</CardDescription>
         </CardHeader>
-        <CardContent class="space-y-3">
-          <Input v-model="name" placeholder="Type a name…" />
-          <p class="text-sm">
-            Output:
-            <span class="font-mono">{{ greeting }}</span>
-          </p>
+        <CardContent class="flex items-center gap-2">
+          <Badge variant="secondary">M1</Badge>
+          <span class="text-xs text-muted-foreground">{{ t('app.tagline') }}</span>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Button variants</CardTitle>
-          <CardDescription>Sanity-check shadcn-vue + Tailwind v4 theming.</CardDescription>
+          <CardTitle>{{ t('home.quickActions.title') }}</CardTitle>
+          <CardDescription>{{ t('home.quickActions.description') }}</CardDescription>
         </CardHeader>
-        <CardContent class="flex flex-wrap gap-2">
-          <Button variant="default">
-            default
+        <CardContent class="flex flex-col gap-2">
+          <Button variant="outline" class="justify-between" as-child>
+            <NuxtLink to="/repos/new">
+              <span class="flex items-center gap-2">
+                <FolderGit2 class="size-4" />
+                {{ t('home.quickActions.newRepo') }}
+              </span>
+              <ArrowRight class="size-4" />
+            </NuxtLink>
           </Button>
-          <Button variant="secondary">
-            secondary
+          <Button variant="outline" class="justify-between" as-child>
+            <NuxtLink to="/profile">
+              <span class="flex items-center gap-2">
+                <UserIcon class="size-4" />
+                {{ t('home.quickActions.profile') }}
+              </span>
+              <ArrowRight class="size-4" />
+            </NuxtLink>
           </Button>
-          <Button variant="outline">
-            outline
-          </Button>
-          <Button variant="ghost">
-            ghost
-          </Button>
-          <Button variant="link">
-            link
-          </Button>
-          <Button variant="destructive">
-            destructive
+          <Button v-if="user?.role === 'admin'" variant="outline" class="justify-between" as-child>
+            <NuxtLink to="/admin/users">
+              <span class="flex items-center gap-2">
+                <Users class="size-4" />
+                {{ t('home.quickActions.users') }}
+              </span>
+              <ArrowRight class="size-4" />
+            </NuxtLink>
           </Button>
         </CardContent>
       </Card>
-    </div>
-  </main>
+    </section>
+  </div>
 </template>

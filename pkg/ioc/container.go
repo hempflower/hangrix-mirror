@@ -20,6 +20,23 @@ type serviceProvider struct {
 	constructor reflect.Value
 }
 
+// isValidReturnType reports whether a constructor return type is supported.
+// Two forms are allowed:
+//   - *Struct: the dominant case — a concrete pointer-to-struct that the
+//     module owns.
+//   - Interface: useful when the underlying value comes from a third-party
+//     library that returns an interface (e.g. redis.NewUniversalClient
+//     returns redis.UniversalClient, whose concrete type depends on config).
+func isValidReturnType(t reflect.Type) bool {
+	if t.Kind() == reflect.Ptr && t.Elem().Kind() == reflect.Struct {
+		return true
+	}
+	if t.Kind() == reflect.Interface {
+		return true
+	}
+	return false
+}
+
 // NewContainer creates a new IoC container
 func NewContainer() *Container {
 	return &Container{
@@ -65,13 +82,13 @@ func (c *Container) Provide(constructor any) *ProviderBinder {
 		panic("constructor must be a function")
 	}
 
-	// 返回值必须是一个结构体指针
+	// 返回值必须是一个 struct 指针，或者一个接口（用于外部库构造，例如返回 redis.UniversalClient）
 	if constructorType.NumOut() != 1 {
 		panic("constructor must return exactly one value")
 	}
 	returnType := constructorType.Out(0)
-	if returnType.Kind() != reflect.Ptr || returnType.Elem().Kind() != reflect.Struct {
-		panic("constructor return type must be a pointer to a struct")
+	if !isValidReturnType(returnType) {
+		panic("constructor return type must be a pointer to a struct or an interface, got: " + returnType.String())
 	}
 
 	// 检查是不是已经注册过了，每个类型只能有一个提供者

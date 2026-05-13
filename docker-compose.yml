@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: hangrix-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hangrix
+      POSTGRES_PASSWORD: hangrix
+      POSTGRES_DB: hangrix
+    ports:
+      - "5432:5432"
+    volumes:
+      - hangrix_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hangrix -d hangrix"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: hangrix-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - hangrix_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  hangrix_pgdata:
+  hangrix_redisdata:

@@ -1,2 +1,18 @@
 server:
   addr: ":8080"
+
+database:
+  dsn: "postgres://hangrix:hangrix@localhost:5432/hangrix?sslmode=disable"
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+
+auth:
+  cookie_name: "hangrix_session"
+  cookie_secure: false
+  session_ttl: "168h"
+
+storage:
+  repos_path: "./data/repos"
