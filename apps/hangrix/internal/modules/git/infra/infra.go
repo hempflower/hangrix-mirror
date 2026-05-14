@@ -153,7 +153,12 @@ func (g *GoGit) ListRefs(path string) (*domain.Refs, error) {
 		return nil, err
 	}
 
-	out := &domain.Refs{}
+	// Initialize slices so the JSON response is `[]` rather than `null` for
+	// an empty repo — the web client treats the response as an array.
+	out := &domain.Refs{
+		Branches: []*domain.Ref{},
+		Tags:     []*domain.Ref{},
+	}
 
 	// Default branch comes from the HEAD symref target.
 	headRef, err := repo.Reference(plumbing.HEAD, false)

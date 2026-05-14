@@ -42,9 +42,9 @@ type AuthConfig struct {
 	SessionTTL   time.Duration `mapstructure:"session_ttl"`
 }
 
-// Load reads a YAML config file from path. Env vars with the API_ prefix
+// NewConfig reads a YAML config file from path. Env vars with the API_ prefix
 // override file values: API_SERVER_ADDR overrides server.addr, etc.
-func Load(path string) (*Config, error) {
+func NewConfig(path string) (*Config, error) {
 	v := viper.New()
 	v.SetConfigFile(path)
 

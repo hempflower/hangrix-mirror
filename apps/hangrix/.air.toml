@@ -2,8 +2,8 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-cmd = "go build -o ./tmp/hangrix.exe ./cmd/hangrix"
-bin = "tmp/hangrix.exe"
+cmd = "go build -o ./bin/hangrix.exe ./cmd/hangrix"
+bin = "bin/hangrix.exe"
 include_ext = ["go", "yaml"]
 include_dir = ["cmd", "conf", "internal", "../../pkg"]
 exclude_dir = ["bin", "tmp", "scripts", "internal/web/dist"]

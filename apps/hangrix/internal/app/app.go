@@ -1,8 +1,9 @@
 package app
 
 import (
-	"flag"
 	"fmt"
+
+	"github.com/spf13/cobra"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/server"
@@ -25,21 +26,30 @@ func NewApp(deps *AppDeps) *App {
 }
 
 func (a *App) Run(args []string) error {
-	fs := flag.NewFlagSet("hangrix", flag.ExitOnError)
-	configPath := fs.String("config", "conf/config.yaml", "path to config file")
-	if err := fs.Parse(args); err != nil {
-		return err
+	var configPath string
+
+	rootCmd := &cobra.Command{
+		Use:           "hangrix",
+		Short:         "Hangrix server",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := config.NewConfig(configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+
+			a.container.Provide(func() *config.Config { return cfg }).ToSelf()
+
+			srv := ioc.Get[*server.Server](a.container)
+			return srv.ListenAndServe()
+		},
 	}
 
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
+	rootCmd.PersistentFlags().StringVarP(&configPath, "config", "c", "config.yaml", "path to config file")
 
-	a.container.Provide(func() *config.Config { return cfg }).ToSelf()
-
-	srv := ioc.Get[*server.Server](a.container)
-	return srv.ListenAndServe()
+	rootCmd.SetArgs(args)
+	return rootCmd.Execute()
 }
 
 func Module() *ioc.Module {

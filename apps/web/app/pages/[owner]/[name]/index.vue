@@ -12,7 +12,7 @@ import {
   KeyRound,
 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
@@ -31,7 +31,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import RepoReadme from '@/components/repo/RepoReadme.vue'
-import type { Commit, EntryWithCommit, RepoRefs, TreeEntry, TreeView } from '~/types/repo'
+import type { Commit, EntryWithCommit, TreeEntry, TreeView } from '~/types/repo'
 import { relativeTime } from '~/utils/time'
 
 definePageMeta({ layout: 'repo' })
@@ -45,8 +45,13 @@ const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
 
 const { repo, error: repoError, load: loadRepo } = useRepo(() => owner.value, () => name.value)
+const {
+  refs,
+  emptyRepo,
+  error: refsError,
+  load: loadRefsFetch,
+} = useRepoRefs(() => owner.value, () => name.value)
 
-const refs = ref<RepoRefs | null>(null)
 const tab = ref<'files' | 'commits'>((route.query.tab as any) === 'commits' ? 'commits' : 'files')
 
 const currentRef = ref<string>('')
@@ -55,13 +60,13 @@ const currentPath = ref<string>('')
 const treeView = ref<TreeView | null>(null)
 const treeError = ref<string | null>(null)
 const treeLoading = ref(false)
-const emptyRepo = ref(false)
 
 const commits = ref<Commit[]>([])
 const commitsLoading = ref(false)
 const commitsError = ref<string | null>(null)
 
 const copied = ref(false)
+const copiedKey = ref<string | null>(null)
 
 // Clone URL uses the browser origin so it works whether dev (:3001 proxy) or prod.
 const cloneUrl = computed(() => {
@@ -69,6 +74,24 @@ const cloneUrl = computed(() => {
   const origin = import.meta.client ? window.location.origin : ''
   return `${origin}/git/${repo.value.owner_username}/${repo.value.name}.git`
 })
+
+// Quick-setup snippets shown when the repo is empty. `main` matches the
+// init.defaultBranch most Git installs ship with today; the user can adapt.
+const createNewSnippet = computed(() => [
+  `echo "# ${name.value}" > README.md`,
+  `git init`,
+  `git add README.md`,
+  `git commit -m "first commit"`,
+  `git branch -M main`,
+  `git remote add origin ${cloneUrl.value}`,
+  `git push -u origin main`,
+].join('\n'))
+
+const pushExistingSnippet = computed(() => [
+  `git remote add origin ${cloneUrl.value}`,
+  `git branch -M main`,
+  `git push -u origin main`,
+].join('\n'))
 
 const canManage = computed(() => {
   if (!repo.value || !user.value) return false
@@ -94,21 +117,14 @@ const headCommit = computed<Commit | undefined>(() => treeView.value?.last_commi
 const totalCommits = computed<number>(() => treeView.value?.total_commits ?? 0)
 
 async function loadRefs() {
-  try {
-    refs.value = await $fetch<RepoRefs>(`/api/repos/${owner.value}/${name.value}/refs`, {
-      credentials: 'include',
-    })
-    if (!refs.value.default_branch_sha && refs.value.branches.length === 0) {
-      emptyRepo.value = true
-    } else {
-      emptyRepo.value = false
-    }
-    const qRef = route.query.ref ? String(route.query.ref) : ''
-    currentRef.value = qRef || refs.value.default_branch || ''
-    currentPath.value = route.query.path ? String(route.query.path) : ''
-  } catch (e: any) {
-    treeError.value = e?.data?.error ?? t('repo.loadFailed')
+  await loadRefsFetch(true)
+  if (refsError.value) {
+    treeError.value = refsError.value
+    return
   }
+  const qRef = route.query.ref ? String(route.query.ref) : ''
+  currentRef.value = qRef || refs.value?.default_branch || ''
+  currentPath.value = route.query.path ? String(route.query.path) : ''
 }
 
 async function loadTreeView() {
@@ -213,6 +229,17 @@ async function copyClone() {
     await navigator.clipboard.writeText(cloneUrl.value)
     copied.value = true
     setTimeout(() => { copied.value = false }, 1500)
+  } catch { /* ignore */ }
+}
+
+async function copySnippet(key: string, text: string) {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    copiedKey.value = key
+    setTimeout(() => {
+      if (copiedKey.value === key) copiedKey.value = null
+    }, 1500)
   } catch { /* ignore */ }
 }
 
@@ -337,17 +364,60 @@ onMounted(async () => {
         </div>
 
         <TabsContent value="files" class="space-y-4">
-          <div v-if="emptyRepo" class="rounded-lg border border-dashed p-10 text-center">
-            <GitBranch class="mx-auto size-10 text-muted-foreground" />
-            <h2 class="mt-4 text-lg font-medium">
-              {{ t('repo.files.emptyRepo') }}
-            </h2>
-            <p class="mt-1 text-sm text-muted-foreground">
-              {{ t('repo.files.emptyRepoHint') }}
-            </p>
-            <div class="mx-auto mt-4 max-w-md rounded-md border bg-muted/30 p-2 text-left">
-              <code class="block break-all font-mono text-xs">git clone {{ cloneUrl }}</code>
+          <div v-if="emptyRepo" class="space-y-4">
+            <div class="rounded-lg border border-dashed p-6 text-center">
+              <GitBranch class="mx-auto size-10 text-muted-foreground" />
+              <h2 class="mt-4 text-lg font-medium">
+                {{ t('repo.files.emptyRepo') }}
+              </h2>
+              <p class="mt-1 text-sm text-muted-foreground">
+                {{ t('repo.files.emptyRepoHint') }}
+              </p>
             </div>
+
+            <Card class="gap-0 py-0">
+              <CardHeader class="border-b px-4 py-3">
+                <CardTitle class="text-sm font-medium">
+                  {{ t('repo.files.createFromScratch') }}
+                </CardTitle>
+              </CardHeader>
+              <CardContent class="p-0">
+                <div class="relative">
+                  <pre class="overflow-x-auto bg-muted/30 p-4 pr-14 font-mono text-xs leading-relaxed"><code>{{ createNewSnippet }}</code></pre>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    class="absolute right-2 top-2 h-7 gap-1 px-2"
+                    @click="copySnippet('new', createNewSnippet)"
+                  >
+                    <component :is="copiedKey === 'new' ? Check : Copy" class="size-3" />
+                    {{ copiedKey === 'new' ? t('repo.copied') : t('repo.copy') }}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card class="gap-0 py-0">
+              <CardHeader class="border-b px-4 py-3">
+                <CardTitle class="text-sm font-medium">
+                  {{ t('repo.files.pushExisting') }}
+                </CardTitle>
+              </CardHeader>
+              <CardContent class="p-0">
+                <div class="relative">
+                  <pre class="overflow-x-auto bg-muted/30 p-4 pr-14 font-mono text-xs leading-relaxed"><code>{{ pushExistingSnippet }}</code></pre>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    class="absolute right-2 top-2 h-7 gap-1 px-2"
+                    @click="copySnippet('existing', pushExistingSnippet)"
+                  >
+                    <component :is="copiedKey === 'existing' ? Check : Copy" class="size-3" />
+                    {{ copiedKey === 'existing' ? t('repo.copied') : t('repo.copy') }}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
           </div>
 
           <template v-else>

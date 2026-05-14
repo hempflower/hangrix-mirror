@@ -45,13 +45,20 @@ const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
 
 const { repo, load } = useRepo(() => owner.value, () => name.value)
+const { emptyRepo, load: loadRefs } = useRepoRefs(() => owner.value, () => name.value)
 
 onMounted(() => {
-  if (owner.value && name.value) load()
+  if (owner.value && name.value) {
+    load()
+    loadRefs()
+  }
 })
 
 watch([owner, name], ([o, n]) => {
-  if (o && n) load(true)
+  if (o && n) {
+    load(true)
+    loadRefs(true)
+  }
 })
 
 const repoBase = computed(() => `/${owner.value}/${name.value}`)
@@ -73,10 +80,18 @@ const repoItems = computed<NavItem[]>(() => {
   const base = repoBase.value
   const items: NavItem[] = [
     { key: 'code', to: base, icon: Code, label: t('repo.nav.code'), exact: true },
+  ]
+  // On an empty repo there are no refs to browse, nothing to compare, and
+  // no useful settings — collapse the nav to just "Code" (which renders the
+  // Quick Setup panel) until the first push lands.
+  if (emptyRepo.value) {
+    return items
+  }
+  items.push(
     { key: 'branches', to: `${base}/branches`, icon: GitBranch, label: t('repo.tabs.branches') },
     { key: 'tags', to: `${base}/tags`, icon: Tag, label: t('repo.tabs.tags') },
     { key: 'compare', to: `${base}/compare`, icon: Diff, label: t('repo.tabs.compare') },
-  ]
+  )
   if (canManage.value) {
     items.push({ key: 'settings', to: `${base}/settings`, icon: Settings, label: t('repo.settingsLink') })
   }
