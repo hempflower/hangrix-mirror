@@ -8,16 +8,16 @@ const here = dirname(fileURLToPath(import.meta.url))
 const src = resolve(here, '../../web/.output/public')
 const dst = resolve(here, '../internal/web/dist')
 
-if (!existsSync(src)) {
-  console.error(`source not found: ${src}`)
-  console.error('run "pnpm --filter web generate" first')
-  process.exit(1)
-}
-
 mkdirSync(dst, { recursive: true })
 for (const entry of readdirSync(dst)) {
   rmSync(join(dst, entry), { recursive: true, force: true })
 }
-cpSync(src, dst, { recursive: true })
+
+if (existsSync(src)) {
+  cpSync(src, dst, { recursive: true })
+  console.log(`copied ${src} -> ${dst}`)
+} else {
+  console.warn(`source not found: ${src} (skipping copy)`)
+}
+
 writeFileSync(join(dst, '.gitkeep'), '')
-console.log(`copied ${src} -> ${dst}`)
