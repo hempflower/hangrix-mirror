@@ -21,14 +21,15 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 
 1. **Issue 是工作流的最小单位。** 任何代码变更都必须有一个 issue 承载它。没有"游离的分支"或"无 issue 的 PR"。这给了 agent 一个稳定的上下文锚点。
 2. **每个 git 实体都有 agent-friendly 表达。** 仓库、commit、diff、issue 既要给人看的 UI，也要给 agent 用的结构化形式（流式 diff、语义化摘要、可寻址的 anchor）。
-3. **agent 是 first-class identity，不是 webhook。** agent 有账号、有权限、有 audit log；它的提交、评论与人类账号同形。但 **agent identity 与 user 是不同实体**——用户表只代表人类，agent 走独立的模型（见 M5）。
-4. **能力以工具暴露，不是以 prompt 注入。** 平台对外暴露明确的工具集（read repo / commit to issue branch / comment on issue / merge issue …），agent 通过工具调用与平台交互；不依赖把整个仓库塞进上下文。
-5. **审计与可回滚优先。** agent 写权限受 policy 约束，所有写操作可被快速 revert；越是自动化的动作，越要可见、可暂停。
+3. **agent 是 first-class identity，不是 webhook。** agent 有账号、有权限、有 audit log；它的提交、评论与人类账号同形。但 **agent identity 与 user 是不同实体**——用户表只代表人类，agent 走独立的模型（见 M6 的 agent-as-repo）。
+4. **平台能力以工具暴露，git 能力以 CLI 暴露。** 平台动作（issue 评论 / 看 diff / merge）走明确的工具集，agent 通过 MCP-style 调用；仓库读写直接用容器里的 `git` CLI —— 不把 git 包成一层平台工具，也不依赖把整个仓库塞进上下文。
+5. **可见 / 可停 / 可 revert，不做事前门禁。** agent 所有写操作（commit / merge / 评论）落审计，能快速 revert；admin / repo owner 能一键停某 agent 或关闭仓库的自动 session。不做"diff 行数限制 / 文件白名单 / 先批准再做"这类事前门禁 —— 安全靠事后约束。
 6. **本地优先的形态。** 当前以单二进制 + 嵌入式 SPA 形态运行；多租户/SaaS 形态是后续选项，不是前提。
+7. **Agent 运行环境由 host 仓库定义，agent 不可自决。** 同一 agent 在 Go 项目和 Node 项目跑的环境不同 —— 这是 host 该说的话。Agent 仓库（M6 的 agent-as-repo）只声明 prompt + 工具偏好，不声明镜像 / 包 / 解释器版本；host 仓库通过 `.hangrix/agents.yml` 声明容器（image 或 build）+ env + secrets + volumes。Agent 跨仓库可复用，host 各自管自己的工具链。
 
-## 当前状态（M3 完成）
+## 当前状态（M4 完成）
 
-**M3 全部闭环。** Hangrix 现在是一个能正常 push / pull / 建分支 / 打 tag / 改设置、还能配分支保护和下载 archive 的 git 平台 —— 形态接近 Gitea，只是还没有 issue 概念。
+**M4 全部闭环。** Hangrix 已经把 issue 立成了产品主入口：一个 issue 同时是「对话 + git 分支 + （未来的）agent 会话」三位一体。所有非默认分支的 push 必须挂在某个开放 issue 下，默认分支只能被 issue merge 推进 —— 钩子和 web API 两侧都拒掉游离分支。形态上从 Gitea-like 切到了"issue-centric"，但 agent 还没接入，下一步从 M5a 的 LLM proxy 起步，沿 M5b（agent runtime）→ M5c（runner & 容器）的顺序把执行链路立起来。
 
 已就绪：
 - **脚手架（M0）**：Go 1.26 + Nuxt 4 单二进制；`pkg/ioc` DI；chi、viper、air、Turborepo。
@@ -36,8 +37,9 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 - **Git 内核（M2）**：`modules/git`（go-git 读封装）+ `modules/repo`（元数据 + bare repo）+ smart HTTP `git-upload-pack`。
 - **Git 平台（M3 核心）**：`modules/token` PAT + `git-receive-pack` 写路径 + 分支 / Tag CRUD + 仓库设置 + Compare + README 渲染。`resolveRef` 透明 peel annotated tag。
 - **协作辅助（M3 stretch）**：`branch_protections` 表 + `pre-receive` 钩子（force-push / delete 拦截）+ commit 包含查询 + archive 下载（zip / tar.gz）。
+- **Issue 容器（M4）**：`modules/issue` 完整模块 —— Issue / Comment / Event 三张表 + `issue_counters` per-repo 单调编号 + sub-issue（parent_id / parent_number）。Issue API：list / create / patch / merge / sync / timeline / diff / commits / children + 评论 create / list（**评论删除已撤回**——issue 时间线只追加不删除，删除按钮和后端路由都已移除）。**写入收紧**：`repodomain.BranchWriteGuard` + `PushObserver` 两个跨模块接口，issue 模块挂上去；`hangrix-issue-mode` sidecar 同步开放 issue 编号给 pre-receive 钩子，钩子里 base 锁定 + `issue/<n>` 校验双线生效；web API 的 `createBranch` / `deleteBranch` / receive-pack 也都跑同一份 guard。`MergeBranch` 三方合并实现进 `modules/git`（FF / merge-commit / up-to-date 三态 + 冲突哨兵 `ErrMergeConflict`）。前端：Issues 列表 / 详情 / 新建（含 `?parent=N` 子 issue 入口）；详情页 conversation + commits + diff 三 tab（tab 状态写进 `?tab=` URL 可分享 / 可回退）、GitHub 风格评论卡（avatar header strip + 相对时间 + tooltip 显示绝对时间戳）、评论 / 系统事件混排时间线、15s 自动刷新（hidden tab 自动暂停 —— 取代了原来的"手动 Sync 按钮"）、合并按钮、parent / children 侧栏 + 「Changes」(+N −M / files changed) 卡。FileDiffList 重写成 GitHub 风格：行号 gutter + emerald/red 行底 + sky hunk header + 折叠 + 每个文件 +N −M 徽章 + "view before / view after" blob 链接（commit 详情页和 issue diff tab 共用）。
 - **数据库迁移系统**：`goose v3` 库模式 + 每模块独立 `goose_<module>` 版本表，启动时 sequential 应用。
-- **前端基础**：shadcn-vue + Tailwind v4 + 5 套布局矩阵；vee-validate + zod + 全局 i18n errorMap；中英双语；独立 Admin Sidebar。新增组件 `dialog` / `textarea` 给 PAT / 设置 / 分支 / Tag / Compare 用，新依赖 `marked` + `dompurify` 给 README 渲染。
+- **前端基础**：shadcn-vue + Tailwind v4 + 5 套布局矩阵；vee-validate + zod + 全局 i18n errorMap；中英双语；独立 Admin Sidebar。新增组件 `dialog` / `textarea` 给 PAT / 设置 / 分支 / Tag / Compare / Issue 表单复用；`marked` + `dompurify` 给 README 渲染。M4 还接入了 RepoSidebar Issues 入口（即使空仓库也可见）。
 
 ## 里程碑
 
@@ -65,7 +67,7 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 - 全局 zod errorMap：表单校验文案不在 schema 里硬编码，统一走 `validation.*` i18n 键。
 
 **计划里删掉的事**：
-- 原计划在 user 表里加 `kind = human | agent` 字段（当时为 agent 那一步铺路），已删除。决定改为"users 只代表人类，agent identity 在 M5 用独立模型"——避免账号系统在 password / 邮箱 / 登录等地方对人和 agent 拧着说。
+- 原计划在 user 表里加 `kind = human | agent` 字段（当时为 agent 那一步铺路），已删除。决定改为"users 只代表人类，agent identity 走独立路径"（M6 落到 agent-as-repo + role key）——避免账号系统在 password / 邮箱 / 登录等地方对人和 agent 拧着说。
 
 **退出条件（已通过）**：
 1. 启动空库 → 注册第一个账号自动 admin → 登录 → 改资料 → 注册第二个账号是普通用户 → admin 能在管理页禁用第二个用户 → 被禁用的用户登录失败。✅
@@ -121,7 +123,7 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 #### 不在 M3 内的事
 
 - **多协作者 / 组织** — 仍然只 `owner / admin`，不引入 collaborator 表。
-- **Web UI 直接编辑文件 / 在线 commit** — agent 接入后（M5）才有自动化写入路径，人类先用 git CLI。
+- **Web UI 直接编辑文件 / 在线 commit** — agent 接入后（M6）才有自动化写入路径，人类先用 git CLI。
 - **issue / PR / discussion** — M4 的事。
 - **SSH 协议** — 永久不做，见「不在路线图内的事」。
 
@@ -141,7 +143,7 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 
 **全程没有"issue"、"agent"、"PR"这些词出现在 UI 上。** ✅ 边界守住。
 
-### M4 — Issue 作为唯一工作单元
+### M4 — Issue 作为唯一工作单元 ✅
 
 把 issue 立成产品主入口，但 agent 还没接入；先让 issue 的对话 + 分支 + 合并都能用人类账号跑通，下个里程碑再把 agent 塞进同一个容器。
 
@@ -150,55 +152,594 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 | 切面 | 内容 |
 | --- | --- |
 | 对话 | 标题 + 描述 + 评论流（按时间线，含人类评论、agent 消息、系统事件如 commit/merge） |
-| 分支 | 自动绑定一条 git 分支 `issue/<id>`（懒创建——首次有提交时才建） |
-| 会话 | 一个 agent session（懒创建——首次 @agent 时才建；纯讨论 issue 可以没有） |
+| 分支 | 自动绑定一条 git 分支 `issue/<n>`（**create 时即落库**，首次 push 才在磁盘出现 commit） |
+| 会话 | 一个 agent session（M6 才接入；M4 阶段 issue 可以没有 session） |
+
+#### 已完成
+
+- [x] `modules/issue`：四张表
+  - `issues`（id、repo_id、number、author_id、title、body、state `open | merged | closed`、branch_name、base_branch、head_sha、parent_id、parent_number、merge_commit_sha、merged_at、created/updated_at；UNIQUE(repo_id, number)）。
+  - `issue_counters`（per-repo 单调 issue number，create 走 UPSERT + RETURNING 在同一事务里 mint，杜绝并发竞争）。
+  - `issue_comments`（含 `file_path` + `line` —— 行内评论是 IssueComment 的一种，不是另一个实体）。
+  - `issue_events`（kind + JSONB payload，承载 `commit_pushed` / `branch_merged` / `state_changed` / `title_changed`）。
+- [x] Issue API（全部挂在 `/api/repos/{owner}/{name}/issues` 下）：
+  - `POST /issues`（可选 `parent_number` 走子 issue 路径）
+  - `GET /issues?state=&offset=&limit=` / `GET /issues/{n}` / `PATCH /issues/{n}`（title / body / state）
+  - `GET /issues/{n}/timeline`（评论 + 事件 union，前端按 created_at 排序混排）
+  - `GET /issues/{n}/diff`（base..issue_branch；空分支返回 `[]`）
+  - `GET /issues/{n}/commits`（base..issue_branch 的 commit 列表，从 head 走 ListCommits + IsAncestor 提前停，上限 200）
+  - `GET /issues/{n}/children`
+  - `POST /issues/{n}/comments`（评论只追加；**不开放删除接口** —— issue 时间线视作 append-only 审计流，避免事后改史）
+  - `POST /issues/{n}/merge`（owner / admin 触发；冲突返回 409 + `ErrMergeConflict`）
+  - `POST /issues/{n}/sync`（手动驱动一次 HeadSHA 同步 + `commit_pushed` 事件补录；M4 UI 不再用，留作给 agent / 外部调用方用）
+- [x] **Issue 分支与 push 的关系（核心收紧，已上线）**：
+  - **跨模块接口**：`repodomain.BranchWriteGuard` + `repodomain.PushObserver` 进 repo domain；repo handler 依赖 `[]Guard` / `[]Observer`，issue 模块通过 ioc 把自己的实现挂进去。
+  - **API 侧**：`createBranch` / `deleteBranch` 都过 guard chain，违规返回 403 + `ErrBranchWriteDenied`。
+  - **CLI 侧**：在 receive-pack handler 里 PreReceive 阶段把当前开放 issue 编号写到 `hangrix-issue-mode` sidecar；pre-receive 钩子脚本读 sidecar 后：
+    - 推到 base branch → 拒（only-merge）
+    - 推到不匹配 `issue/<n>` 的任何分支 → 拒
+    - 推到 `issue/<n>` 但 n 不在开放 issue 集合 → 拒
+  - **PostReceive**：在 detached context 里跑 issue 的 `SyncIssueBranch`，比对 head_sha 后写 `commit_pushed` 事件。
+  - **Merge 内部豁免**：merge API 通过 `BranchWriteOp.IsInternal = true` 绕过 guard，让 owner 可以把 issue 分支推进 base branch。
+- [x] **三方合并实现进 `modules/git`**：`MergeBranch(intoBranch, fromRef, message, author)` 返回 `(sha, mode)`，mode 是 `fast-forward` / `merge-commit` / `up-to-date`。
+  - FF / up-to-date 路径直接走 ref 更新。
+  - 真正三方合并：flatten 三棵 tree → 逐 path 三方对比 → 单边修改取该边、双边相同合并取任意一边、双边发散返回 `ErrMergeConflict`（M4 不做行级解决，留给"先 rebase 再合"的人工流程或 M6 agent）。
+  - 同步新增 `ResolveCommit(path, ref)` —— 空仓 / 不存在的分支返回空字符串而不是 error，便于 guard / sync 处理"新建 branch"路径。
+- [x] **子 issue（计划外但已上线）**：父 issue 的 `issue/<n>` branch 成为子 issue 的 base branch；合并子 issue 是把 commit 推进父分支，再合并父 issue 时把整组 commit 一并带进 default branch。父 / 子关系靠 `parent_id` 外键 + 冗余 `parent_number` 实现，避免列表视图二次查询。
+- [x] **前端**：
+  - RepoSidebar 加 Issues 入口（即使空仓也可见 —— 第一个动作可以是开 issue 而不是 push）。
+  - Issues 列表（state 过滤 + 卡片视图）+ 新建页面（无 base-branch 选择器：top-level 用 default、子 issue 用父分支，base 是隐含上下文；轻量 card padding、占位符不写要求文案）+ 详情页：
+    - 三 tab：`Conversation` / `Commits` / `Diff`，tab 状态映射进 `?tab=` query 参数（默认 conversation 时 query 留空），URL 可分享 / 浏览器前进后退 / 刷新都能保持选中态。
+    - GitHub 风格评论卡：avatar header strip + 作者名 + 动词（`opened` / `commented`）+ 相对时间（hover 显示绝对时间）；系统事件（commit_pushed / branch_merged / state_changed）退到细行内 strip + 圆点 marker，不抢评论的视觉。
+    - 评论框：avatar header + 大尺寸 textarea（`rows="8"` + `min-h-44`）+ 紧凑内边距。
+    - 15s 自动刷新（拉取 issue + timeline + diff + commits + children），hidden tab 自动暂停 —— 取代了原来的手动 Sync 按钮。
+    - Parent / sub-issues 侧栏 + 「Changes」卡（diff 行数 +N −M / 改了 N 个文件）+ merge / close / reopen 操作。
+  - `FileDiffList` 重写成 GitHub 风格 unified diff：table 布局 + 旧/新行号双 gutter + emerald/red 行底 + sky hunk header + 文件级 +N −M 徽章 + 文件级折叠开关 + 「view before」/「view after」blob 链接（commit 详情页和 issue diff tab 共用同一组件）。
+  - 中英双语 i18n 完整接入。
+- [x] **权限**：依然只用 M1 的 `user / admin` 二分。public 仓库的 issue / 评论对任何登录用户开放；merge / state 变更归 owner 或 admin。
+
+#### 计划里改掉的事
+
+- **issue 分支不再"懒创建"**：原计划"首次 push 才建分支"，实际改为 create 时立刻落 `branch_name`、磁盘上不创建 ref，等首次 push（受 guard 校验）落盘。代价是磁盘和元数据短暂错位（issue 已存在但 `issue/<n>` ref 不存在），收益是 guard 的判断只看 DB，pre-receive 钩子也不用查"分支是否预创建"这种态。
+- **行内评论 UI 暂未做**：API 支持 `file_path` + `line` 字段，前端 diff tab 暂时只渲染 patch，没接评论锚点。下个 milestone 顺手补。
+- **issue 状态机简化**：不允许从 `merged` 反向。`closed ↔ open` 自由切换；进入 `merged` 只走 `/merge` 端点。
+- **评论不允许删除**：原本提供了删除评论的 UI 和 `DELETE /issues/{n}/comments/{id}` 路由，落地时撤回。理由：issue 时间线本身就是审计流（M6 起 agent 会把动作落到这里），让作者后期改史会破坏可追溯性。需要纠正的话再发一条评论说明就行。前端 UI / 后端路由 / Store 接口三处都已清理掉。
+- **手动 Sync 按钮替换成自动轮询**：原侧栏的「Sync」按钮拿掉，换成 15s 间隔的 auto-refresh（hidden tab 不跑）。`POST /sync` 端点保留 —— 给将来的 agent / 外部脚本用。
+
+#### 退出条件（已通过）
+
+1. ✅ 用户登录 → 在自己仓库开一个 issue「修一下登录页 bug」→ 拿到分支名 `issue/1`。
+2. ✅ 用 git CLI checkout `issue/1` → 改代码 → push → receive-pack 钩子放行（issue 开放）→ post-receive 写入 `commit_pushed` 事件 → 浏览器刷新可见。
+3. ✅ 在 issue diff tab 看到分支 vs base 的文件级 diff。
+4. ✅ 点 merge → MergeBranch 走 FF（issue 分支以 base 为起点的情况下）或写出 merge-commit；issue state 转 `merged`，timeline 多两条 event（branch_merged + state_changed）。
+5. ✅ 尝试 `git push origin random-branch` → 被 pre-receive 钩子拒，错误信息明确指向"open issue 才能 push"。
+6. ✅ 尝试 `git push origin main` → 被钩子拒（只能 merge）。
+7. ✅ 在 issue 详情页点「New sub-issue」→ 子 issue base 自动是父 issue 的分支；合并子 issue 把 commit 推进父分支。
+8. ✅ 全程 UI 中没有"PR"这个词。
+
+### M5a — LLM provider & proxy
+
+平台第一步要能跟 LLM 说话。这一步**完全独立于 runner、agent、issue**：admin 配 provider → 平台跑代理 → 任何能发 HTTP 的客户端用 OpenAI SDK 都能调 → 用量落表。
+
+> **为什么先做：** LLM proxy 是个零依赖的纯 HTTP 子系统，能用 curl 全验完。M5b 写 agent binary 时直接对着 proxy 写，不用同时调试两层；M5c 起 runner 才把它接进容器里。
+
+核心模型：
+
+- **Platform LLM 端点 registry**：admin-only 资源，配置多个 provider 实例（不同 type、不同 key、不同允许模型集）。
+- **平台 LLM proxy**：HTTP 端点 `/api/llm/<provider_name>/v1/*`，OpenAI Response API 兼容前端。后端按 provider type 翻译到上游 —— agent 端零 provider 知识、平台拿完整观测面、master key 永远不进容器。
+- **Provider 类型（v1 ship 三种）**：
+  - `openai` —— OpenAI 原生 Response API，零翻译
+  - `anthropic` —— OpenAI Response API ↔ Messages API 翻译层
+  - `openai-compat` —— 转发到自定 `base_url`（覆盖 OpenRouter / vLLM / Ollama-via-openai / Together / Groq 等绝大多数第三方）
 
 需要做的：
 
-- [ ] `modules/issue`：issue 实体（id、repo_id、author_id、title、body、state `open | merged | closed`、branch_name、base_branch、created_at、updated_at）。
-  - `domain/`：`Issue` + `IssueComment` + `IssueEvent`（系统事件，比如 commit-pushed、branch-merged，与人类评论混在同一时间线里）。
-  - 评论流是 union 视图：人类评论 + 系统事件 + （M5 起）agent 消息按时间序排列。
-- [ ] Issue API：
-  - `POST /api/repos/{owner}/{name}/issues` — 开 issue（自动分配 `issue/<id>` 分支名，不立即建分支）
-  - `GET /api/repos/{owner}/{name}/issues` — 列表（按状态/作者/关键字筛选）
-  - `GET /api/repos/{owner}/{name}/issues/{id}` — 详情（含时间线）
-  - `POST /api/repos/{owner}/{name}/issues/{id}/comments` — 评论
-  - `PATCH /api/repos/{owner}/{name}/issues/{id}` — 改标题/正文/状态
-  - `POST /api/repos/{owner}/{name}/issues/{id}/merge` — 把 issue 分支合并回 `base_branch`，成功后 state 转 `merged`
-  - `GET /api/repos/{owner}/{name}/issues/{id}/diff` — issue 分支 vs base 的 diff（即"PR 视图"，但只是 issue 的一个 tab）
-- [ ] **Issue 分支与 push 的关系——核心收紧**（兑现"Issue 是工作流最小单位"原则）：
-  - 用户用 git CLI push 到 `issue/<id>` 分支时，自动在该 issue 时间线写入 `commit-pushed` 事件并附 commit 列表。
-  - **push 到不存在 issue 的分支：拒绝。** `main` / 默认分支也只能通过 issue merge 进入，**不允许直接 push**。M3 预埋的 `BranchWriteGuard` hook 在这里换成"必须有 issue"的实现。
-  - 在 receive-pack 服务端 hook 里检查目标分支名 → 若不是 `issue/<id>` 或不是受保护的 merge-only 分支，返回 pre-receive 拒绝。
-  - 仓库设置里的"直接 push 默认分支"开关被强制关闭并隐藏；M3 的"分支保护规则"实质上**全部 default-on**。
-- [ ] 前端：issue 列表页、issue 详情页（左侧时间线 + 右侧元数据/分支/diff tab）、新建 issue 表单、合并按钮、行级评论（行评论也是 IssueComment 的一种，带 `file_path` + `line` 字段）。Sidebar 工作区组加 "Issues" 入口；仓库详情页加 Issues tab，与文件 / 提交记录并列。
-- [ ] 权限：依然只用 M1 的 `user / admin` 二分。仓库 owner 对自己仓库的 issue / 分支 / merge 有完全权限；其他登录用户在 public 仓库可读、可评论、可开 issue，但 push / merge 仍仅限 owner（或 owner 明确指派——多协作者延后）。
+- [ ] **`modules/llm_provider`**：admin-only 资源。
+  - 字段：name（唯一，进 URL path）、type（`openai` / `anthropic` / `openai-compat`）、base_url、api_key（db 加密）、allowed_models（list）、visibility（`platform | restricted`）、allowed_repos（restricted 时的 glob 列表）、rate_limit_rpm。
+  - Admin 表单**必填**一个 platform default provider + default model —— host 仓库不写 `llm:` 时 fallback 到这组。
+- [ ] **`modules/llm_proxy`**：HTTP 端点 `/api/llm/<provider_name>/v1/*`，OpenAI Response API 兼容。
+  - 路由：`<provider_name>` 查 provider → 按 type 走翻译层（v1 ship `openai` 零翻译 / `anthropic` OpenAI↔Messages 翻译 / `openai-compat` 转自定 base_url）。
+  - Auth：`Authorization: Bearer $HANGRIX_SESSION_TOKEN` 验三件事 —— token 绑 session + session role 的 `llm.provider` 跟 URL path 匹配 + 请求 body 的 model 在 provider `allowed_models` 里；任一失败 403。
+  - 落用量表：每次请求记 session_id / role / token usage / latency / 错误码，供 M9+ 成本 dashboard 用。
+- [ ] **测试用 session token 颁发**：M5a 阶段没有真 agent session，提供一个 admin API 颁发"假 session token"绑死到一对 (provider, model)，让 curl / 测试客户端能调 proxy 通完整鉴权链。这同一种 token 在 M6b 的 MCP server + M5c 的 git push 都通用，M5c 起这个测试口让位给真 session 颁发。
 
-**退出条件：** 用户登录 → 在自己仓库开一个 issue「修一下登录页 bug」→ 用 git CLI checkout `issue/<id>` 分支 → 改代码 → push → issue 时间线出现 commit 事件 → 在 issue 里看 diff → 点 merge → main 分支收到改动，issue state 变 `merged`。**尝试 push 一个没有 issue 的分支被拒**。全程没有"PR"这个词。
+退出条件：admin 配一个 LLM provider（勾选 platform default）+ 用 admin API 颁一张测试 session token → 本机 `curl` 用任意 OpenAI 客户端连 `/api/llm/<provider_name>/v1/responses` 拿到一句模型响应 → proxy 路由到正确上游 + 鉴权三件事都验过 + 用量落表。
 
-### M5 — Agent 一等公民（在 issue 内响应）
+### M5b — Agent runtime（Go binary）
 
-把 agent 塞进 M4 的 issue 容器。**这是项目区别于其他 git 平台的核心。** Agent 的工作完全发生在某个具体 issue 里：读这个 issue 的对话、在这个 issue 的分支上写代码、把进展回流到这个 issue 的时间线。
+立一个独立的 agent 二进制（**用 Go 从头写，不依赖任何现成的 agent SDK**），跑在容器里跟 M5a 的 LLM proxy + 平台 API + git CLI 三方说话。M5c 把这个二进制 bind-mount 进 runner 调度的容器里。
 
-- [ ] **Agent identity（独立模型）**：新建 `modules/agent` 维护 agent 实体（id、name、owner_user_id、runtime、policy、disabled、created_at）。agent **不复用 users 表**——它没有 email / password，认证靠平台颁发的 agent token，签名规则与 personal access token 不同。agent 的提交以独立 author 身份出现（不冒充人类）。所有跟"账号"相关的概念（登录、邮箱、密码修改、admin 面板里"用户"列表）继续只代表人类。
-- [ ] **`modules/agent_session`**：每个 issue 至多一个 active session（懒创建）。Session 持有：关联 issue id、关联 agent id、runtime 类型、累积的对话上下文、tool call 历史、当前状态（idle / running / waiting-for-input / failed）。Session 与 issue 是 1:1，关闭 issue 时 session 归档。
-- [ ] **触发方式**：用户在 issue 评论里 `@agent` 或点"让 agent 处理"按钮；这条评论被路由进 agent_session 作为新一轮 input。
-- [ ] **平台工具集（platform tools）**：暴露给 agent 调用，**作用域绑死在 session 所属的 issue 上**——agent 不能跨 issue 写：
-  - `issue.read` / `issue.comment`（在当前 issue 时间线留言）
-  - `repo.tree` / `repo.read_file` / `repo.search`（在当前 issue 所属仓库内）
-  - `branch.commit`（只能 commit 到当前 issue 的分支）
-  - `issue.diff`（看自己改了什么）
-  - `issue.request_merge`（请求人类 merge——agent 自己不能 merge）
-  - 协议：MCP 兼容是首选；具体形式在 M5 启动时确定。
-- [ ] **Agent runtime 适配层**：平台不内置 LLM provider，只定义 runtime 抽象（接收 session input、返回结果、流式状态）。第一版接入一种 runtime（Claude Agent SDK 或本地子进程），其它后续。
-- [ ] **时间线统一**：agent 的每条消息、每次 tool call 都作为 `IssueEvent` 落入 issue 时间线，与人类评论混排。用户随时能看到 agent "正在做什么"。
-- [ ] **policy 与 audit**：agent 的写操作可配置门禁（最大 diff 行数、改文件白名单、必须先 propose 再 commit）；所有 tool call 落 audit log。Admin 能一键停用某 agent 或暂停某 issue 的 session。前端 admin 面板新增"agent 管理"——和"用户管理"并列、但是独立的视图，因为它们是不同实体。
+> **为什么从头写：** 现有 SDK（Claude Agent SDK / OpenAI Assistants / LangChain agent runner）都是 opinionated 的 high-level 抽象，对 prompt 拼装 / tool call 协议 / 重试 / 上下文管理留的口子有限。Hangrix 要把 audit、role identity、prompt 来源（base + host addendum）、git 工作流深度嵌进 loop，control 全攥手里更划算。**单二进制 Go 实现 + OpenAI Response API HTTP 客户端 hand-rolled + git CLI shell-out** —— 没有 third-party agent framework 依赖。
 
-退出条件：用户在 issue 里写「帮我把登录按钮居中」 → @agent → agent 在该 issue 的时间线里逐步发消息（"我在看 LoginPage.vue …""我改了样式 …"）→ commit 自动出现在 issue 分支 → 用户点 merge。全程在同一个 issue 页面内完成，无需切到别的页面。
+#### 角色与边界
 
-### M6 — 围绕 AI 重塑 issue 体验
+- **进程级 agent runner**：每个 role 在容器里跑一个 `hangrix-agent` 进程，存活到 issue 归档或 idle 超时。
+- 通过 **stdin / stdout JSON-Lines** 跟外层 runner（M5c）通信：runner 喂事件，agent 报告 tool call / 状态 / 日志。
+- 通过 HTTP 跟 **M5a 的 LLM proxy** + **平台 API** 通信，凭证从 env 拿。
+- 通过 **shell-out** 调容器内 `git` CLI 处理仓库读写。
+- **无状态执行器**：session 状态归 Hangrix 平台管，agent 进程重启时从平台拉历史重建上下文。
 
-把 M5 的能力反过来打磨 issue 自身——这是 issue 真正"AI-Native"的部分，不只是把 chat 嵌进来。
+#### 二进制构成
+
+```
+hangrix-agent/                       # Go module
+├── cmd/hangrix-agent/main.go        # 入口：读 env，初始化 loop
+├── pkg/
+│   ├── llm/                         # OpenAI Response API HTTP 客户端（hand-rolled）
+│   ├── mcp/                         # HTTP MCP client（连平台 MCP server 拉 issue.* / roster.*）
+│   ├── tools/                       # 工具注册表 —— 本地工具 in-process + 平台工具走 pkg/mcp
+│   │   └── local/                   # read / write / edit / glob / grep / bash / webfetch 本地实现
+│   ├── prompt/                      # 三层 system prompt 拼装
+│   │   ├── baseline.md              # 内置 runtime baseline（//go:embed）
+│   │   └── assemble.go              # baseline + agent base_prompt + host addendum 叠加
+│   ├── runtime/                     # 主循环 + 上下文管理
+│   └── ipc/                         # runner 通信（stdin/stdout JSON-Lines）
+└── go.mod
+```
+
+工具分两类，LLM 看到的是一个扁平 function-call 列表：
+
+- **本地工具**（agent binary 内置，容器内执行）：`read` / `write` / `edit` / `glob` / `grep` / `bash` / `webfetch`，参考 Claude Code 同名工具的语义（`read` 行号 + offset/limit / `edit` 强制先读 / `bash` 含 stdout-stderr-exit_code / `grep` 用 ripgrep / 等）。Agent 不包装 git —— 仓库操作（clone / pull --rebase / commit / push）由 LLM 通过 `bash` 直接调 `/usr/bin/git`，凭证由 M5c runner 在容器启动时通过 credential helper 预配置。
+- **平台工具**（Hangrix 平台通过 HTTP MCP 暴露）：`issue.*` / `roster.*`，agent 用 `pkg/mcp` 的标准 MCP client 调远端服务端点（M6b 起 ship 的平台 MCP server）。M5b 期间这类工具走 stub —— 没有真平台 MCP server 也能跑本地工具自检。
+
+#### 启动期环境（由 M5c runner 注入）
+
+| Env | 含义 |
+|---|---|
+| `HANGRIX_SESSION_TOKEN` | **统一 session-scope 凭证** —— 同一个 token 同时用于：LLM proxy（Bearer）、平台 MCP server（Bearer）、git HTTPS push（HTTP Basic 的 password 字段，username 任意）。session 结束即过期 |
+| `HANGRIX_LLM_ENDPOINT` / `HANGRIX_LLM_MODEL` | LLM proxy 端点 + 已 resolve 的具体 model 名 |
+| `HANGRIX_PLATFORM_MCP_ENDPOINT` | 平台 HTTP MCP server endpoint |
+| `HANGRIX_SESSION_ID` | session uuid |
+| `HANGRIX_ROLE` | 当前 role key |
+| `HANGRIX_HOST_REPO` | host 仓库 `<owner>/<name>` |
+| `HANGRIX_ISSUE_NUMBER` / `HANGRIX_WORKING_BRANCH` / `HANGRIX_BASE_BRANCH` | 关联 issue 上下文 |
+| `HANGRIX_AGENT_BUNDLE` | 容器内 agent 仓库展开路径（含 `agent.yml` + `prompts/`）|
+| `HANGRIX_HOST_ADDENDUM` | host prompt addendum 文件路径（runner 写到容器内临时文件，agent 读）—— 不假设长度，避免 env 上限风险 |
+| `HANGRIX_TOOL_CATALOG` | 该 role `can:` 允许的工具名 JSON 数组 |
+
+#### IPC 协议（stdin / stdout JSON-Lines）
+
+Runner → agent（stdin）：
+
+```json
+{"kind": "history", "messages": [...]}      // 第一条，session 历史回放
+{"kind": "event", "event": "issue.comment.mentioned", "payload": {...}}
+{"kind": "control", "op": "shutdown"}
+```
+
+`history.messages` 是 OpenAI Response API 风格的扁平消息数组，按时间排：
+
+```json
+[
+  {"role": "user", "kind": "event", "event": "issue.comment.mentioned", "content": "..."},
+  {"role": "assistant", "content": "...", "tool_calls": [{"id": "tc-1", ...}]},
+  {"role": "tool", "tool_call_id": "tc-1", "content": "...result..."},
+  {"role": "assistant", "content": "..."},
+  ...
+]
+```
+
+Agent → runner（stdout）：
+
+```json
+{"kind": "status", "phase": "thinking"}
+{"kind": "message", "role": "assistant", "content": "...", "tool_calls": [...]}
+{"kind": "tool_call", "name": "issue.comment", "args": {...}, "result": {...}, "tool_call_id": "tc-1"}
+{"kind": "log", "level": "info", "msg": "..."}
+{"kind": "done", "turn_id": "..."}
+```
+
+Runner 实时把 `message` + `tool_call` 落到该 session 的消息日志（含 LLM 完整对话历史，是 audit 的一部分），同时把语义事件（commit / merge / review_vote）转回平台事件总线。容器下次重启时，runner 从消息日志里取出全部历史回放为一条 `history` IPC 消息。
+
+#### 主循环
+
+```
+systemPrompt := prompt.Assemble(env)              // baseline + agent base + host addendum
+
+// 首条 stdin 必须是 history（可能为空数组，新 session 时）
+history := ipc.ReadHistory(stdin)
+ctx := context.New(systemPrompt, history)         // 用历史预填消息列表
+
+for {
+  event := ipc.ReadEvent(stdin)                   // 等下一个事件
+  if event.IsShutdown() { return }
+  ctx.AppendEvent(event)
+
+  for {                                           // 单轮可能多 tool round-trip
+    resp := llm.CreateResponse(model, ctx.Messages(), tools.CatalogForRole(role))
+    ctx.AppendAssistant(resp)
+    ipc.ReportMessage(resp)                       // → runner 落入 session 消息日志
+    ipc.ReportStatus("thinking")
+
+    if !resp.HasToolCalls() { break }
+
+    for _, call := range resp.ToolCalls {
+      result := tools.Execute(call)
+      ctx.AppendToolResult(call.ID, result)
+      ipc.ReportToolCall(call, result)            // → runner 落入 session 消息日志
+    }
+    // 把 tool 结果喂回 LLM
+  }
+
+  ipc.ReportDone()
+}
+```
+
+#### 需要做的
+
+- [ ] **`pkg/llm`**：手写 OpenAI Response API HTTP 客户端 + SSE 流解析（增量 token / tool call delta）+ exponential backoff retry。**不引第三方 LLM SDK**。
+- [ ] **`pkg/mcp`**：HTTP MCP client。`Authorization: Bearer $HANGRIX_SESSION_TOKEN`，连 `$HANGRIX_PLATFORM_MCP_ENDPOINT`，启动时调 `tools/list` 拿当前 session 可见的平台工具列表，运行时调 `tools/call` 触发。失败 / 超时按 exponential backoff 重试。
+- [ ] **`pkg/tools/local`**：本地工具实现，参考 Claude Code 语义：
+  - `read(path, offset?, limit?)` —— UTF-8 文件 + 行号 prefix（`<n>\t<line>`），默认前 2000 行
+  - `write(path, content, overwrite?)` —— 创建文件
+  - `edit(path, mode, ...)` —— `replace` / `insert` / `delete` 三种 mode；强制要求同 session 先 `read` 过
+  - `glob(pattern)` —— glob 文件发现，按 mtime 排序
+  - `grep(pattern, path?, ...)` —— 优先 ripgrep + .gitignore-aware
+  - `bash(command, working_dir?, timeout_seconds?, run_in_background?)` —— `{stdout, stderr, exit_code, timed_out}`；后台模式返 `taskId` 让 agent 后续轮询
+  - `webfetch(url, raw?)` —— 默认 HTML → markdown；`raw=true` 取原始 body
+- [ ] **`pkg/tools` registry**：合并本地 + 远端工具源，按 `HANGRIX_TOOL_CATALOG` 过滤；统一 `Call(name, args) → (result, error)` 签名；非法调用返 `ToolNotAllowed` 让 LLM 自我修正。Tool descriptor schema 跟 OpenAI function-calling 对齐，启动时生成给 `pkg/llm` 用。
+- [ ] **"push 前自行 rebase"靠 prompt 教**：不在 agent 代码里做 git 重试 —— host prompt addendum 或 agent base prompt 写明"push 失败先 `git pull --rebase` 再重推"，LLM 通过 `bash` 完成。force-push 已被 receive-pack 钩子禁掉，自然逼着 agent 走这套流程。
+- [ ] **`pkg/prompt/baseline.md`**：runtime 内置的 baseline prompt（通过 `//go:embed` 编译进二进制）—— 跟版本绑死、跨所有 agent 实例共用。内容覆盖以下要点：
+  - **工具使用纪律**：`edit` 前必先 `read`；长输出靠 `grep` / `read offset+limit` 收口；`bash` 长任务用 `run_in_background`；用平台工具（`issue.*` / `roster.*`）做跨 role 协调而不是 `bash` 直连。
+  - **Git 协作约定**：凭证已预配置（credential helper 用 `HANGRIX_SESSION_TOKEN` 作 HTTP Basic password），`git push` 直接走 HTTPS；force-push 被钩子拒，push 失败先 `git pull --rebase origin issue/<n>` 再重推；commit author 由 runner 强制，不要自己改 `--author`；不要切到其它分支（已 checkout 到 `HANGRIX_WORKING_BRANCH`）。
+  - **行为约束**：不修改 `.hangrix/**` 除非任务明确要求；不写 secret 到任何文件 / commit；所有 tool call 落 audit，行为要 deliberate。
+  - **环境感知**：工作目录是 `/workspace`、host repo 已在目标分支、平台 MCP 在 `$HANGRIX_PLATFORM_MCP_ENDPOINT`、LLM 在 `$HANGRIX_LLM_ENDPOINT`。
+  - 这份内容是平台对所有 agent 的"操作系统约束"，agent 作者和 host 都不能在上层 prompt 里覆盖。
+- [ ] **`pkg/prompt/assemble`**：按固定顺序叠三层 system prompt：
+  ```
+  <baseline.md 内置内容>                       ← runtime 强制纪律
+  
+  ===== AGENT BASE PROMPT =====
+  <HANGRIX_AGENT_BUNDLE 里 entry.base_prompt 的文件内容>   ← agent 作者写的身份与方法论
+  
+  ===== HOST REPO ADDENDUM =====
+  <HANGRIX_HOST_ADDENDUM 指向的文件内容>        ← host 给本次部署的微调
+  ```
+  外加 role / scope / branch / 工具描述等 runtime 上下文。**前一层不能被后一层 override**（schema 层面没法防，靠 baseline 提示词和 audit 兜底）。
+- [ ] **`pkg/runtime/loop`**：主循环 + 上下文管理 + 单轮 token 上限 + 重试 + fatal error 处理。
+- [ ] **会话历史回放**：启动时**先**读 stdin 上的 `{"kind": "history", ...}` 一帧（runner 保证作为首条），用它预填 `pkg/runtime/context` 的消息列表；之后才进入事件循环。新 session 时 `messages: []` 也合法。
+- [ ] **新消息回报**：每次 LLM 返回 assistant 消息 / 每次 tool call + result 都通过 stdout 的 `message` / `tool_call` 实时写给 runner —— runner 是消息日志的唯一持久化者，agent 自己**不写盘**。
+- [ ] **上下文窗口裁剪**：组装下一轮 LLM 请求时按"最近 N 条 + 总 token 上限"裁剪发送的消息（裁剪只影响发给 LLM 的内容，不丢日志）。具体策略 v1 用简单的尾窗口截断，更聪明的摘要 / RAG 留给 M8。
+- [ ] **`pkg/ipc/jsonl`**：stdin 行读 + stdout 行写；事件、tool call、状态、日志四种结构化 message。
+- [ ] **`cmd/hangrix-agent/main`**：env 解析 + 模块组装 + 信号处理（SIGTERM → graceful shutdown）。
+- [ ] **冒烟测试**：本机起一个 mock HTTP MCP server（只实现 `tools/list` 返几个 stub 平台工具）+ `docker run -v $PWD/hangrix-agent:/agent -e HANGRIX_LLM_ENDPOINT=... -e HANGRIX_PLATFORM_MCP_ENDPOINT=... ... hangrix-agent` 注入 mock env + stdin 喂一条事件 → 完成一轮 LLM + 调本地工具（`bash` 跑 `git push` / `read` 读文件等）+ stdout 报 done。**M5b 期间只验本地工具 + MCP 客户端握手**，平台真工具实现在 M6b。
+
+退出条件：M5a 配好一个 provider + 本机起 mock HTTP MCP server + sandbox host repo → 本机 `docker run` 启动 `hangrix-agent` + 注入完整 env + stdin 喂一条事件 → agent 拉系统 prompt + 调一次 LLM + 解析 tool call → 调本地工具（如 `bash git push` / `read` 看文件）+ 调 mock 平台工具（`tools/call`）成功 + stdout 报告 done。**纯 agent binary 验证，不依赖 runner、平台 MCP server 走 mock**。
+
+### M5c — Runner & 容器底盘
+
+把 agent 的部署 / 执行 / 凭证供给立起来。让 M5b 的 `hangrix-agent` 真正以"一个 runner 上一个隔离容器"的方式跑起来，凭证（**一张统一的 session token** 同时供 LLM proxy / 平台 MCP / git push 三处使用，外加 repo secrets）由 runner outbound 注入，目标 host repo 和 issue 由调度层指定。
+
+核心模型：
+
+- **Runner 节点**：独立进程，部署在任何能跑容器（Docker / containerd）的机器上，**outbound** 连接服务端注册并领任务（不要求 runner 暴露端口）。
+  - 可见度分两级：
+    - **平台级（platform）**：所有用户的 agent 都可调度到上面，由 admin 注册。
+    - **用户级（user）**：只服务注册它的用户自己的 agent。
+  - Runner 自报能力（CPU / 内存 / 并发上限 / 容器运行时），服务端按"可见度 + 容量"选 runner。
+- **Agent 容器**：runner 为每个 agent session 拉起一个隔离容器。
+  - **第一版固定一个容器镜像**（含 `git` CLI + 必要依赖），M6 起改成由 host 仓库 `.hangrix/agents.yml` 的 `container:` 块声明（image 或 build）。
+  - **M5b 的 `hangrix-agent` 二进制 + 配套文件由 runner 通过 bind mount 注入到容器**，不打进镜像。agent 升级走 runner 拉新二进制即可，不重建镜像。
+  - 容器启动时由 runner 注入完整 env（M5b 启动期约定那张表）—— LLM endpoint + 已 resolve model + 平台 MCP endpoint + **统一 session token**（同时鉴权 LLM / MCP / git push）+ repo secrets + 业务上下文。
+- Agent 在容器里 **直接用 `git` CLI** 操作仓库（clone / commit / push）—— 平台 **不** 提供 `repo.tree` / `repo.read_file` / `branch.commit` 这类 git 包装工具。
+
+需要做的：
+
+- [ ] `modules/runner`：runner 实体（id、name、owner_user_id NULL=平台级、visibility `platform | user`、status、last_heartbeat_at、capabilities JSON、enroll_token_hash、created_at）。Admin 注册平台级；普通用户注册自己的 user 级。
+- [ ] Runner enrollment：web 上点"新建 runner" → 拿一次性 enroll token → 目标机器跑 `hangrix runner enroll --token <...>` → runner 落盘长期凭证后 outbound 连回服务端。
+- [ ] Runner ↔ 服务端协议（outbound-only，websocket 或 long-poll）：
+  - 心跳（capabilities + 当前负载）
+  - 任务下发：`agent.session.start` / `agent.session.stop` / `agent.session.input`
+  - 事件上报：agent stdout 的 tool call / status / log / done 转发给平台事件总线 + audit
+- [ ] **容器编排**：拉镜像（v1 固定）→ bind mount M5b 的 `hangrix-agent` binary → bind mount agent bundle 到 `HANGRIX_AGENT_BUNDLE` 路径（agent 仓库 pinned sha 解出的目录）→ **写 host prompt addendum 到容器内临时文件**（路径填到 `HANGRIX_HOST_ADDENDUM` env，**不假设 prompt 长度**）→ 注入完整 env（含 `HANGRIX_SESSION_TOKEN` 统一凭证）→ **预配置 git credential helper**（用 `HANGRIX_SESSION_TOKEN` 作 HTTP Basic password，让容器内任何 `git push` 走 HTTPS 推到目标 issue 分支）→ **预 clone host repo 到工作目录**（`/workspace`，checkout 到 `HANGRIX_WORKING_BRANCH`）→ 启动容器、attach stdio。
+- [ ] **凭证调度**：服务端在 session 启动时为该次 session 颁发**一张统一的短期 session token**（同时鉴权 LLM proxy / 平台 MCP / git push 三处；token 跟 session 绑死、issue 关闭即过期、admin 可一键吊销）。三类资源各自的授权检查走服务端 session resolver：LLM proxy 查 provider+model 命中、MCP 查 `can:` 过滤、receive-pack 查目标分支限定 `issue/<n>`。token 本身不编码权限，只标识 session。
+- [ ] **Agent 二进制分发**：runner 持有版本化的 `hangrix-agent` binary（从服务端拉），启动容器时 bind mount 到固定路径，容器入口直接 exec。
+- [ ] **stdin / stdout 转发**：runner 把"平台事件 → agent stdin"和"agent stdout → 平台事件总线 + audit"两条管道接通；agent 退出码 / 异常上报。
+- [ ] **会话历史持久化 + 回放**：
+  - Runner 维护 per-session 消息日志（OpenAI Response API 格式的扁平消息数组，含 user 事件 / assistant 消息 / tool call + result / 系统事件混排，按时间排）。
+  - Agent stdout 的 `message` / `tool_call` 实时 append 到日志；语义事件（commit / merge / review_vote）也插入到对应时间点。
+  - **容器启动时**：runner 从平台读出该 session 的完整日志 → 转换成 `{"kind": "history", "messages": [...]}` → 作为首条 IPC 消息写到 agent stdin。新 session 也发，只是 `messages: []`。
+  - 日志存储格式：v1 走 Postgres JSONB 列（`agent_session_messages` 表 per row 一条消息，或 `agent_session.messages JSONB[]`，按性能选）；session 归档时只标记，不删，留作 audit。
+- [ ] **Session 任务参数模型**：M5c 的 runner 协议参数 = 容器镜像 + agent binary 版本 + 完整 env（M5b 那张表）+ 目标仓库 + 目标分支。M6a 起 agent-as-repo 解析层坐在这之上，把 host yaml + role 配置翻译成这组参数。
+
+退出条件：admin 注册一个平台 runner → admin API 触发一次测试 session → runner 拉起容器、bind mount M5b 的 `hangrix-agent`、注入完整 env、把一条 mock `issue.comment.mentioned` 事件通过 stdin 喂进去 → 容器内 agent 完成一轮 LLM 调用 + tool call（`issue.comment`）+ `git push` + 通过 stdout 把 tool call / done 报回 runner → runner 转发到平台 audit + 事件总线。**全链路 verified，不碰 issue UI，不接 host yaml 解析**（那是 M6a）。
+
+### M6a — 多 role 基础设施
+
+把 agent / role / team 这套抽象立起来：识别 agent 仓库、解析 host yaml、起 per-role session、commit author 落 role key、audit 链跑通 —— **不接 mention 协议、不上完整工具集、不动 UI**。M6b 把协作层补齐，M6c 把 UI 和官方预设 agent 收尾。
+
+#### 核心抽象
+
+| 概念 | 定义 |
+|---|---|
+| **Agent** | 一个 Hangrix 仓库（根目录有 `agent.yml`），含 base prompt / 声明的工具集 / 元数据 |
+| **Role** | host 仓库 `.hangrix/agents.yml` 里的本地标签 = agent 引用 + 触发器 + 工具白名单 + scope hint + 可选 host prompt addendum + mention 授权 |
+| **Team** | 一个 issue 上所有已激活 role sessions 的集合（取代原"1 issue 1 session"）|
+| **Mention** | `@agent-<role-key>` 评论语法，是唯一的 role 唤醒方式（协议本身在 M6b 实现）|
+
+#### Agent-as-repo
+
+Agent 以 Hangrix 仓库形态维护、版本化、复用 —— 跟代码仓库走同一套 visibility / git log / issue 流程。
+
+仓库结构：
+
+```
+hangrix/reviewer/
+├── agent.yml                     # 清单
+├── prompts/
+│   └── system.md                 # base prompt
+└── README.md
+```
+
+`agent.yml`：
+
+```yaml
+version: 1
+kind: agent
+runtime: claude-agent-sdk
+entry:
+  base_prompt: prompts/system.md
+declared_tools:                    # 推荐 / 文档，host 的 can: 才是真授权
+  - issue.read
+  - issue.comment
+  - issue.review_vote
+```
+
+仓库识别：根目录有 `agent.yml` 即识别为 agent；可见度规则跟普通 repo 一致（public 谁都引、private 同 owner 仓库引）。`agent.yml` 的 schema **拒绝**任何镜像 / 环境 / secret 字段 —— 那是 host 仓库的事，落实原则 7。
+
+#### Host 仓库配置：`.hangrix/agents.yml`
+
+仓库根的 `.hangrix/agents.yml` 是 team 行为的单一真相来源。配套 `.hangrix/agents.lock` 把 `@<tag>` / `@<branch>` 解到 sha（package-lock 模型）；runner 实际拉的是 sha。
+
+```yaml
+version: 1
+
+container:                        # host 声明的容器环境
+  # image / build 二选一
+  image: ghcr.io/acme/dev:1.2.3
+  # build:
+  #   dockerfile: .hangrix/agent.Dockerfile
+  #   context: .
+  #   args: { GO_VERSION: "1.26" }
+
+  env:                            # 明文环境变量，入 git
+    NODE_ENV: development
+    GOFLAGS: "-mod=readonly"
+
+  secrets:                        # 只列名字，值在仓库设置的"机密"页面配
+    - GITHUB_TOKEN
+    - NPM_AUTH_TOKEN
+
+  volumes:                        # repo-scope 共享缓存（runner 本地 bind mount）
+    - { name: pnpm-store, mount: /caches/pnpm }
+    - { name: go-mod, mount: /go/pkg/mod }
+
+llm:                              # team 默认 LLM（可选；省略则走 admin 配的 platform default）
+  provider: anthropic-prod        # 引用 admin 配的 provider name
+  model: claude-sonnet-4-6
+
+roles:
+  dispatcher:
+    agent: hangrix/dispatcher@v1.2.0
+    triggers: [issue.opened, issue.comment.any]
+    can: [issue.read, issue.comment, roster.list]
+
+  backend:
+    agent: acme/backend-coder@v0.3.1
+    triggers: [issue.comment.mentioned]
+    scope: { paths: ["apps/api/**", "internal/**"] }
+    can:
+      - issue.read
+      - issue.diff
+      - issue.comment
+      - read                      # 本地文件读
+      - write                     # 本地文件创建
+      - edit                      # 本地文件改
+      - glob                      # 找文件
+      - grep                      # 搜内容
+      - bash                      # 跑命令 / git push
+    mention_by: collaborators
+    prompt: |                     # host addendum，追加到 agent base prompt
+      Always git pull --rebase against issue/<n> before push.
+      Cross-module imports MUST go through pkg/ioc DI.
+
+  reviewer:
+    agent: hangrix/reviewer@v1.0.0
+    triggers: [commit.pushed, issue.comment.mentioned]
+    can:
+      - issue.read
+      - issue.diff
+      - issue.comment
+      - issue.review_vote
+      - read                      # 看完整文件不仅是 diff
+      - glob
+      - grep
+    mention_by: collaborators
+    prompt_file: .hangrix/prompts/reviewer.md
+    llm:                          # per-role 覆盖：reviewer 要更强推理
+      model: claude-opus-4-7
+
+  maintainer:
+    agent: hangrix/maintainer@v1.0.0
+    triggers: [review_vote.posted, ci.status_changed, commit.pushed, issue.comment.mentioned]
+    can: [issue.read, issue.diff, issue.comment, issue.checks, issue.merge]
+    mention_by: owner
+    prompt: |
+      Merge policy: ≥1 reviewer approval for apps/api/**, all required CI checks green,
+      docs-only self-merge, "urgent"-labeled bypass review if CI green.
+    llm:                          # 整组 provider+model 都换
+      provider: openai-team-a
+      model: gpt-5
+```
+
+字段语义：
+
+- `agent: <owner>/<name>@<ref>` —— **必须有 `@<ref>`**（拒空 ref，避免跟着上游漂移）。`<ref>` 可以是 tag / branch / sha；lock 文件统一解析到 sha。
+- `triggers:` —— 事件订阅。Dispatcher 通常订 `issue.comment.any`（充当路由器）；其它 role 订 `issue.comment.mentioned` 等待被 @。强制列具体事件。
+- `can:` —— 平台工具白名单。Agent 仓库的 `declared_tools` 是文档，host 的 `can:` 才是真授权。
+- `scope.paths:` —— 软约束（写进 role 的初始 prompt 让 dispatcher 知道分派给谁），不在 pre-receive 强制。
+- `mention_by:` —— 谁的 @ 能唤醒：`owner` / `collaborators`（默认）/ `anyone`。违反者的 @-mention 进时间线但不投递事件，UI chip 灰色提示"未触发"。
+- `prompt:` 或 `prompt_file:` —— host 给该 role 的 prompt addendum，**追加**到 agent base prompt 末尾。二选一（schema mutual exclusive）；`prompt_file:` 必须以 `.hangrix/prompts/` 开头。
+- `llm:` —— 团队级 + per-role 两层；role 级覆盖团队级，团队级覆盖 admin 的 platform default。字段 `provider`（必须是 host 看得见的 provider name）+ `model`（必须在该 provider 的 `allowed_models` 里）+ 可选 `max_tokens` / `temperature` / `top_p`。Spawn session 时把"resolved provider + model"缓存到 session 元数据，runner 注入 env 时直接读。
+- Runner 默认给每个 role 容器注入一张**统一的 session token**（同时鉴权 LLM proxy / 平台 MCP / git push，目标 issue 分支可写）—— **每个 role 默认有 push 权限**，无需显式配置。LLM endpoint + model 也是默认注入。
+
+#### Session 模型
+
+- **`modules/agent_session`**：一个 issue 内每个被唤醒过的 role 各一个 session（取代原"1 issue 1 session"）。
+  - 字段：issue id、role key、agent_ref + agent_sha、host_prompt_sha、runtime_version、runner id、container id、状态（`pending | running | idle | archived | failed`）。
+  - 配套 `agent_session_messages`（或 JSONB 数组）存完整对话历史 —— OpenAI Response API 风格的消息序列（user 事件 / assistant 消息 / tool call + result / 系统事件混排），按 `created_at` 排序；session 归档时只标记不删，长留作 audit。
+  - **issue 关闭时全部 session 同步归档**，state → `archived`，容器回收。已归档不允许人为重启 —— 想继续就开新 issue。
+- **单 role 单容器串行（v1）**：同 role 在同 issue 上同一时刻只跑一个容器，多 trigger 排队消化。多并发后续 milestone。
+- **冲突自治**：多 role 同时在 `issue/<n>` 上工作时，agent push 前自行 `git pull --rebase`。force-push 已禁，push 失败自然逼迫先 rebase —— 无需平台层协调机制。
+
+#### Identity 与 Audit
+
+- commit author name = role key（如 `backend`），email = `<role-key>@agents.<host-domain>`
+- 每次 session 启动落三件版本信息进 audit：
+  - `runtime_version`：`hangrix-agent` 二进制版本（baseline prompt 跟它绑死）
+  - `agent_sha`：agent 仓库 pinned 版本
+  - `host_prompt_sha`：host 仓库 base 分支当时的 commit（含 `.hangrix/agents.yml` + `prompts/`）
+- audit 完整链路：`role=backend → runtime=hangrix-agent@v1.2 → agent=acme/backend-coder@<sha> → host_prompt=<sha> → session=<uuid>`
+- 任何 commit / merge 都能 trace 回 cause `comment_id` —— M4 时间线 append-only 审计流的覆盖面延伸到 agent 全部动作。三层 prompt 内容都可按 sha 精确复原。
+
+#### 需要做的
+
+- [ ] **Agent 仓库识别**：repo 模块加"根有 `agent.yml` 判定为 agent"逻辑；仓库列表 / 搜索过滤支持 `kind=agent`。`agent.yml` schema 校验拒容器 / 环境 / secret 字段（原则 7）。
+- [ ] **`modules/agents_config`**：解析 host 仓库 `.hangrix/agents.yml`（container / env / secrets / volumes / llm / roles 各块）+ `.hangrix/agents.lock` 自动维护（agent ref → sha 解析）。
+- [ ] **`modules/agent_session`**：per-role session 表 + 状态机；issue 创建 / 关闭事件钩进生命周期；session 启动时落 runtime_version / agent_sha / host_prompt_sha 进 audit。
+- [ ] **Session spawn 编排**：host yaml 解析 → 选 runner（visibility + 容量）→ 准备容器（pull image 或 build）→ 注入 M5 凭证 + 缓存好的 LLM 配置 → 启动容器。
+- [ ] **Identity 落地**：commit author = role key、email = `<role-key>@agents.<host-domain>`，receive-pack 路径下接受这种 author 写入。
+- [ ] **Audit 链路**：role / agent_ref / agent_sha / host_prompt_sha / runtime_version / session uuid / cause_id 落审计表。
+
+#### 退出条件
+
+写一份 `.hangrix/agents.yml` 只声明一个测试 role（agent 指向自己仓库里临时塞的一个 `agent.yml`）+ image 容器 + LLM 配置 → 开 issue → 该 role session 自动起、容器在某 runner 上拉起 → 容器内 agent 用本地工具完成 `git clone` + 改文件 + `git commit` + `git push`（commit author 显示为 role key）→ audit log 完整记录 session + runtime_version + agent_sha + host_prompt_sha + cause `comment_id` → 关 issue → session 归档容器回收。**平台工具（`issue.*` / `roster.*`）在 M6b 起才真正可用**；M6a 不接 mention 路由、不动 UI。
+
+### M6b — Mention 协议、完整工具集、事件总线
+
+骨架立稳后铺协作层：mention 解析 + 完整工具集 + 事件总线 + 三层分发架构。让多 role 真正能协作（dispatcher 路由 + reviewer 投票 + maintainer 合并），但 UI 还是 M4 的单一时间线（swim-lane 留给 M6c）。
+
+#### Mention 协议
+
+- 语法：`@agent-<role-key>`（如 `@agent-backend`）。`agent-` 前缀预留未来人类 `@<username>` 不撞名。
+- 评论入库时 tokenize body 匹配 `@agent-([a-z0-9-]+)`，跳过 markdown 代码块与引用块。匹配到的 role key 去 base 分支的 `.hangrix/agents.yml` 查；存在且通过 `mention_by` 校验则投递 `issue.comment.mentioned` 事件给该 role。
+- 同评论 @ 多个 role 投递 N 个独立事件（同 comment_id），各 role 串自己的流。
+- 人类直接 `@agent-backend please fix X` 跟 dispatcher 发同样评论效果完全一致 —— "评论 + mention"是人、dispatcher、其它 agent 三方共用的同一协议，没有第二种唤醒方式。
+
+#### 工具集（v1）
+
+| 工具 | 含义 | 典型持有者 |
+|---|---|---|
+| `issue.read` | 读时间线 | 几乎所有 role |
+| `issue.diff` | issue 分支 vs base 的 diff | coder / reviewer / maintainer |
+| `issue.children` | 列 sub-issue | dispatcher / maintainer |
+| `issue.checks` | 当前 issue 所有 check 的最新 state（M7 起填充）| maintainer |
+| `issue.comment` | 留言 | 几乎所有 role |
+| `issue.review_vote` | 投票（approve / request_changes / abstain）→ 结构化事件 | reviewer |
+| `issue.merge` | 合并到 base —— 默认无人能调，仅显式 `can:` 授权 | maintainer |
+| `issue.close` | 关 issue | maintainer / dispatcher |
+| `roster.list` | 列当前 team 已激活 role | dispatcher |
+| `read` / `write` / `edit` / `glob` / `grep` | 本地文件读写 / 查找 / 替换（语义参考 Claude Code 同名工具） | 任何动代码的 role |
+| `bash` | 容器内执行 shell（含 `git` / 测试 / 包管理）；`{command, working_dir?, timeout_seconds?, run_in_background?}` → `{stdout, stderr, exit_code, timed_out}` | 任何需要跑命令的 role |
+| `webfetch` | 拉远端 URL，默认 HTML → markdown，`raw=true` 取原始 body | 需要查文档 / 外部 API 的 role |
+
+**两种工具来源**：
+
+- **本地工具**（`read` / `write` / `edit` / `glob` / `grep` / `bash` / `webfetch`）—— 由 M5b 的 `hangrix-agent` 二进制内置，容器内 in-process 执行，**不经过 HTTP**。
+- **平台工具**（`issue.*` / `roster.*`）—— 由 M6b 的 `modules/platform_mcp` 通过 **HTTP MCP server** 暴露在 `/api/mcp/v1/`，agent 用 MCP client 调；session-scope bearer token 鉴权。
+
+git 凭证由 M5c runner 在容器启动时预配置（credential helper），agent 用 `bash` 调 `git push` 即可 —— **没有 git 专用工具**。
+
+#### 事件集（v1，平台事件总线）
+
+| 事件 | 时机 |
+|---|---|
+| `issue.opened` | 新 issue |
+| `issue.closed` | issue 关闭 |
+| `issue.comment.any` | 任何评论入时间线 |
+| `issue.comment.mentioned` | 评论 @ 了某 role（每个 mentioned role 一个独立事件） |
+| `commit.pushed` | issue 分支收到 push |
+| `review_vote.posted` | 某 reviewer 投票 |
+| `ci.status_changed` | CI 状态变化（由 M7 CI 子系统产生）|
+
+#### 事件的三层分发
+
+平台 schema 只定义第 1 层（事件总线 JSON payload），各层消费者分工：
+
+```
+[平台事件总线]                ← schema 在这一层（structured JSON，命名严谨、可版本化）
+    ├→ [M5c runner → M5b agent stdin]  翻译成 agent 输入事件 → agent 看到
+    ├→ [时间线 UI]            渲染成 swim-lane 条目     → 人类看到
+    ├→ [audit log]            原样落表                  → 事后查询
+    └→ [外部 webhook]         原样投递（M9+）          → 第三方
+```
+
+Agent stdin 看到的具体 prose 格式由 M5b 的 `hangrix-agent` 内部 `pkg/prompt` + `pkg/ipc` 决定，**不进 schema 也不在 ROADMAP 锁**。事件 payload 保留所有下游消费者可能要的字段（如 `comment_id` agent 用不上但 audit / webhook 要 —— **schema 偏全，adapter 偏简**）。
+
+#### 需要做的
+
+- [ ] **Mention 解析**：评论入库时 tokenize body 匹配 `@agent-([a-z0-9-]+)`，跳过 markdown 代码块和引用块。匹配 role key → 查 host yaml → 通过 `mention_by` 校验 → 投递 `issue.comment.mentioned` 事件。匹配但不通过校验的 chip 信息落 metadata（UI 在 M6c 渲染）。
+- [ ] **`issue_comments.mentioned_roles JSONB[]` 列** + 入库时填充。
+- [ ] **平台事件总线**：定义 v1 事件 payload schema（structured JSON），落 `event_log` 表 + in-process 分发到多 consumer（M5c runner 喂 agent stdin / audit log / UI 监听 / webhook stub）。
+- [ ] **`modules/platform_mcp`**：HTTP MCP server，路径 `/api/mcp/v1/`（`tools/list` + `tools/call` 等 MCP 标准 RPC）。`Authorization: Bearer $HANGRIX_SESSION_TOKEN` —— 这跟 LLM proxy / git push 共用的同一张 session token；`tools/list` 返回当前 session role 的 `can:` 与已激活平台工具的交集；`tools/call` 走对应平台 handler。
+- [ ] **平台工具实现**：`issue.diff` / `issue.children` / `issue.checks`（M7 前返空）/ `issue.review_vote` / `issue.merge` / `issue.close` / `roster.list` —— 每个都在 platform MCP server 后面挂 handler。本地工具（`read` / `write` / `edit` / `glob` / `grep` / `bash` / `webfetch`）由 M5b agent 自带，**不走 MCP server**。
+- [ ] **Agent ↔ 平台事件桥接**：M5c runner 把平台事件总线的事件翻译成 M5b agent 的 stdin JSON-Lines；反向把 agent stdout 的 tool call 报告写回事件总线 + audit（注：tool call 的执行已由 agent 自己经 MCP 完成，runner 这里只是落审计 + 转发状态）。
+- [ ] **结构化事件 payload schema**：
+  - `issue.review_vote`: `{state: approve|request_changes|abstain, body?: text}`
+  - `ci.status_changed`: `{check_name, state, url?}`（M7 才有产生方，M6b 先定 schema 留口）
+
+#### 退出条件
+
+基于 M6a 的 host yaml，加上 dispatcher / backend / reviewer / maintainer 四个 role → 开 issue「加 health check 端点」→ dispatcher 自动起、调 `issue.comment` 发 `@agent-backend please add /healthz` → backend session 自动唤醒（无人手动触发）、写代码 + push → reviewer 因 `commit.pushed` 自动唤醒、调 `issue.review_vote` 投 approve → maintainer 因 `review_vote.posted` 唤醒、调 `issue.checks`（返空，stub 接受）+ `issue.merge` 合并 → issue 自动转 `merged`。**全程通过现有 M4 timeline tab 可见**（没有 swim-lane）。
+
+### M6c — 前端 swim-lane + 平台预设 agent
+
+最后一步把体验做出来：issue 详情页两个 tab + role swim-lane + mention chip + admin agent 仓库页；同时 ship 两个官方 agent 仓库让用户开盒即用。
+
+#### 前端
+
+- **Issue 详情页两个 tab：「智能体」/「人类」**。
+- 「智能体」tab 按 role 分 swim-lane（dispatcher / backend / frontend / reviewer / maintainer / ...），每 role 一列；tool call / commit 触发 / 消息分块、可折叠。
+- 「人类」tab：人类评论 + 真正由人触发的事件（人类 `git push` / 人类手动 merge 等）。
+- 评论里的 `@agent-<role>` 渲染成 chip；点击跳到对应 swim-lane 当前位置；被 mention 的事件在 receiving role 的 swim-lane 起一段新工作。`mention_by` 校验未通过的 chip 灰色显示"未触发"。
+- 两 tab 共享时间轴坐标，可跨 tab 跳同一时刻。
+- Admin 后台新增 **"agent 仓库"列表 + 平台禁用表**视图，与"用户管理"并列。
+
+#### 平台预设
+
+Installer 首次启动 seed 两份官方 agent 仓库（进 db + 磁盘，owner 是 platform admin）：
+
+- `hangrix/dispatcher` —— 路由器，识别任务 → @ 相关 role
+- `hangrix/maintainer` —— 看 review / CI 状态 → 决定何时调 `issue.merge`；自带一份保守的 merge policy（要 reviewer approval + CI green + 文档可自合并），host 用 prompt addendum 调整。
+
+其它角色（`coder` / `reviewer` 等）由用户自己写或装第三方。两个官方 agent 仓库后续走正常 git 流程升级 —— 平台吃自己的狗粮。
+
+#### 需要做的
+
+- [ ] **Issue 详情页改两 tab**：「智能体」/「人类」替换 M4 的单一时间线；两 tab 共享时间轴坐标。
+- [ ] **「智能体」tab swim-lane**：按 role 分列；每 role 的 tool call / commit / 消息渲染为可折叠 block；跨 swim-lane 跳转。
+- [ ] **「人类」tab**：人类评论 + 真正由人触发的事件；过滤掉 agent 的高频 tool call 噪音。
+- [ ] **Mention chip 渲染**：评论体内 `@agent-<role>` 高亮 + 可点击跳 swim-lane；未通过 `mention_by` 校验的 chip 灰色显示。
+- [ ] **Admin "agent 仓库" 列表**：列出系统内识别为 agent 的仓库 + 平台禁用表 + 启用 / 禁用开关，跟"用户管理"并列。
+- [ ] **Installer seed `hangrix/dispatcher` + `hangrix/maintainer`**：首次启动 seed 进 db + 磁盘，带 base prompt + agent.yml + README。
+- [ ] **`hangrix/maintainer` 的默认 merge prompt**：内置一份保守 merge policy。
+
+#### 退出条件
+
+用户在自己仓库写 host yaml 引用 `hangrix/dispatcher@latest` + `hangrix/maintainer@latest` + 自己写的 coder / reviewer → 开 issue → 全程在 UI 上看 swim-lane 流动：dispatcher 派单到 backend → backend 写代码 push → reviewer 投票 → maintainer 合并。「人类」tab 干净（只有用户开 issue 那条）；「智能体」tab 完整展示协作过程；admin 后台可看到三个 agent 仓库注册；`git log` 看到不同 role 的 commit author 区分。
+
+### M7 — CI / Workflow 子系统
+
+独立于 agent 协作的检查执行系统，类比 GitHub Actions。M6 通过两个接口跟 CI 协作：
+
+- 平台事件 **`ci.status_changed`**（多 check 支持，每个 `(issue_id, commit_sha, check_name)` 一条独立状态：`green | red | pending | skipped`）
+- 工具 **`issue.checks`**（maintainer 一次性拿到当前 issue 所有 check 的最新 state，决定是否 merge）
+
+完整设计在本 milestone 展开 —— 包含 workflow 定义文件位置（候选 `.hangrix/workflows/*.yml`）、trigger 模型、job runner 是否复用 M5 的 agent runner pool、check 数据模型与 panel UI、credential 注入路径等。详细规划等 M6 落地后再拆。
+
+### M8 — 围绕 AI 重塑 issue 体验
+
+把 M6 的 agent 能力反过来打磨 issue 自身——这是 issue 真正"AI-Native"的部分，不只是把 chat 嵌进来。
 
 - [ ] **结构化的 agent 时间线视图**：把 agent 的 tool call、思考、commit、问题分成可折叠的块，不要单纯流式文本。用户能快速扫到"agent 改了什么 / 卡在哪 / 在等我什么"。
 - [ ] **Diff 的 AI 视角**：issue diff tab 除了行级 diff，提供按"意图块"分组的视图（agent 生成时附带语义标签）。人类直接 push 的 commit 退化到普通行级视图。
@@ -209,16 +750,19 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 
 退出条件：用户在平台上的日常路径是"开 issue → 和 agent 来回几轮 → merge"，绕开 agent 反而更费劲。
 
-### M7+ — 待定
+### M9+ — 待定
 
 候选方向，下一阶段再裁剪：
 
-- CI / runner（agent 的"跑测试"工具需要它，但可以先借外部 CI）
 - 多租户、组织、SSO
 - Federation / mirror
 - 桌面客户端（已有单二进制形态，做包装就行）
 - 多协作者 / collaborator 表（M3 的 owner-only 模型显出局限时再做）
 - Transfer ownership（M3 仓库设置里占位的"coming soon"按钮）
+- 外部 webhook 订阅（让事件总线对第三方开放）
+- LLM 成本追踪 dashboard + per-host 配额（M5a 的 LLM proxy 已经在记用量表，到这一步是把它做成可视化 + 限额）
+- User-BYOK（用户带自己的 API key 给某些 role 用）
+- 更多 LLM provider 类型（Google Vertex / AWS Bedrock / Azure OpenAI 等需要自己签名协议的，单独翻译层）
 
 ## 不在路线图内的事
 
@@ -226,9 +770,9 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 - **不允许游离的分支（M4 起强制）。** 产品稳态下任何非 default 分支必须挂在某个 issue 下，push 到没有 issue 的分支会被拒。**M3 是过渡期，允许直接 push**——M4 引入 issue 后 `BranchWriteGuard` hook 切换实现，把该规则强制开起来。
 - **不做 GitHub/GitLab 的功能补全。** 缺什么功能要先回答"AI agent 怎么用它"；只对人有用的功能优先级靠后。M3 的 push / 分支 / 设置 / compare / README 渲染是 "agent 需要这些 git 抽象作为底座" 的最小集合，而不是为了对标其他平台。
 - **不做通用 LLM 中台。** 平台只负责把 git 能力以工具形态暴露给 agent，不替 agent 选模型、不做 prompt 编排。
-- **不做无沙箱的 agent 自治。** 任何 M5 之后的 agent 写权限都必须能在 admin 面板里一键吊销；agent 自己不能 merge，只能 request merge。
-- **不让 agent 复用 users 表。** users 表只代表人类。agent 在 M5 走独立实体（独立认证、独立 admin 视图、独立 audit log），避免"账号系统"在 password / 邮箱 / 登录态这些地方对人和 agent 拧着说。
-- **权限模型在 M5 之前不复杂化。** 一直只用 `user / admin`；仓库 owner 通过 handler 内部判断处理。真到了多协作者、组织、分支保护这类需求时再设计 ACL，不预留字段。M3 的"分支保护规则"是 repo-local 的简单规则，**不是** RBAC。
+- **不做无沙箱的 agent 自治。** agent 跑在 runner 节点的隔离容器里，凭证（**一张统一的 session token**，同时鉴权 LLM / MCP / git push）按 session 维度一次性下发、过期回收；admin 能一键吊销某 agent 或关闭某仓库的自动 session。**agent 可以直接 commit / merge**（M6 起）—— 安全靠"可见 + 可停 + 可 revert"的事后约束，不靠"先批准再做"的事前门禁。
+- **不让 agent 复用 users 表。** users 表只代表人类。Agent identity 走独立路径（M6 的 agent-as-repo）：commit author 是 role key、认证靠 runner 注入的 session 范围凭证、admin 视图是"agent 仓库列表 + 平台禁用表"——避免账号系统在 password / 邮箱 / 登录态这些地方对人和 agent 拧着说。
+- **权限模型刻意简单。** 始终只用 `user / admin`；仓库 owner 通过 handler 内部判断处理。真到了多协作者、组织这类需求时再设计 ACL，不预留字段。M3 的"分支保护规则"和 M6 的"role / can / mention_by"都是 repo-local 配置，**不是** user 级 RBAC。
 - **不做 SSH 协议。** 本地优先 + agent-native 的形态下，HTTP + PAT 已经覆盖所有 git push/pull / API 调用场景：浏览器、git CLI、agent runtime 共用一种凭证模型。SSH 要再维护一套 key 管理 + auth_keys 配置 + 端口暴露，回报很低；用户真需要 SSH 体验时大概率说明用错了产品（应该选 Gitea / GitHub），不是该补的功能。
 - **不做 Git LFS。** Hangrix 的主轴是 "agent 在 issue 里读 / 改 / 评论代码"——大文件（视频、模型权重、设计稿二进制）对 agent 工作流没有价值，agent 既不能 diff 也不能 patch。引入 LFS 意味着 storage 后端、pointer 文件协议、独立鉴权三层额外复杂度，且会鼓励用户把不该入 git 的资产塞进来。需要存大文件的项目应当外挂对象存储 + 在 issue 里引用链接。
 
