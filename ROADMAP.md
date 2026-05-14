@@ -26,15 +26,16 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 5. **审计与可回滚优先。** agent 写权限受 policy 约束，所有写操作可被快速 revert；越是自动化的动作，越要可见、可暂停。
 6. **本地优先的形态。** 当前以单二进制 + 嵌入式 SPA 形态运行；多租户/SaaS 形态是后续选项，不是前提。
 
-## 当前状态（M3 核心完成）
+## 当前状态（M3 完成）
 
-**M3 核心闭环。** Hangrix 现在是一个能正常 push / pull / 建分支 / 打 tag / 改设置的 git 平台 —— 形态接近 Gitea，只是还没有 issue 概念。
+**M3 全部闭环。** Hangrix 现在是一个能正常 push / pull / 建分支 / 打 tag / 改设置、还能配分支保护和下载 archive 的 git 平台 —— 形态接近 Gitea，只是还没有 issue 概念。
 
 已就绪：
 - **脚手架（M0）**：Go 1.26 + Nuxt 4 单二进制；`pkg/ioc` DI；chi、viper、air、Turborepo。
 - **账号基础设施（M1）**：用户 / 角色 / 会话 / admin 后台。
 - **Git 内核（M2）**：`modules/git`（go-git 读封装）+ `modules/repo`（元数据 + bare repo）+ smart HTTP `git-upload-pack`。
-- **Git 平台（M3 核心）**：`modules/token` PAT + `git-receive-pack` 写路径 + 分支 / Tag CRUD + 仓库设置 + Compare + README 渲染。`resolveRef` 透明 peel annotated tag。M3 的协作辅助子项（分支保护规则、分支包含查询、archive 下载）作为 stretch 留到下个窗口。
+- **Git 平台（M3 核心）**：`modules/token` PAT + `git-receive-pack` 写路径 + 分支 / Tag CRUD + 仓库设置 + Compare + README 渲染。`resolveRef` 透明 peel annotated tag。
+- **协作辅助（M3 stretch）**：`branch_protections` 表 + `pre-receive` 钩子（force-push / delete 拦截）+ commit 包含查询 + archive 下载（zip / tar.gz）。
 - **数据库迁移系统**：`goose v3` 库模式 + 每模块独立 `goose_<module>` 版本表，启动时 sequential 应用。
 - **前端基础**：shadcn-vue + Tailwind v4 + 5 套布局矩阵；vee-validate + zod + 全局 i18n errorMap；中英双语；独立 Admin Sidebar。新增组件 `dialog` / `textarea` 给 PAT / 设置 / 分支 / Tag / Compare 用，新依赖 `marked` + `dompurify` 给 README 渲染。
 
@@ -89,7 +90,7 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 
 **退出条件（已通过）**：登录用户在 UI 创建仓库（init_readme 勾上）→ `git clone http://.../{owner}/{name}.git` 拿到 README 和 initial commit → 在网页上看到文件树、commit 列表、单 commit diff。✅
 
-### M3 — Git 平台（push / 分支 / Tag / 设置 / 协作辅助） ✅ 核心完成
+### M3 — Git 平台（push / 分支 / Tag / 设置 / 协作辅助） ✅
 
 把 M2 的"只读 git 形态"升级成完整的 git 协作平台：用户能 push、建分支、打 tag、改仓库设置、看 ref 对比、读 README。**这是 M4（Issue）之前最后一步通用 Git 形态**——之后所有写入都要挂在 issue 下，M3 是平台仍像 Gitea/GitHub 一样自由的最后窗口。
 
@@ -107,9 +108,9 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 
 #### 协作辅助（核心写完再做，不阻塞 M4）
 
-- [ ] **分支保护规则**：`modules/repo` 加 `branch_protections` 表（repo_id、pattern、forbid_force_push、forbid_delete、forbid_direct_push（owner 也得绕道——M3 阶段不强制，M4 默认启用））。default branch 默认隐式保护：不能删 + 不能 force-push。UI：仓库设置页加"分支保护"section。
-- [ ] **分支包含查询**：API `GET /api/repos/{owner}/{name}/commits/{sha}/contains` → 返回包含该 commit 的分支 + tag 名列表（`git branch --contains` 语义；用 go-git 的 `IsAncestor` 或 commit-graph 遍历）。UI：commit 详情页加"在以下 ref 中"小块。
-- [ ] **Archive 下载**：`GET /api/repos/{owner}/{name}/archive/{ref}.{zip|tar.gz}` shell-out `git archive`。一行 handler 的事，可有可无。
+- [x] **分支保护规则**：`modules/repo` 加 `branch_protections` 表（repo_id、pattern、forbid_force_push、forbid_delete、forbid_direct_push（owner 也得绕道——M3 阶段不强制，M4 默认启用））。Web 上：仓库设置页「分支保护」section（CRUD）。强制点：`git push` 走 bare repo 的 `pre-receive` 钩子 + `hangrix-protections` sidecar，禁止 force-push 与 delete；`DELETE /branches/*` API 也走同一份规则。default branch 仍由 `ErrCannotDeleteHEAD` 兜底（独立于规则表）。`forbid_direct_push` UI 上标 M4 标签，M3 不强制。
+- [x] **分支包含查询**：API `GET /api/repos/{owner}/{name}/commits/{sha}/contains` → 返回包含该 commit 的分支 + tag 名列表（用 go-git 的 `IsAncestor` 遍历）。UI：commit 详情页「在以下 ref 中」小卡片。
+- [x] **Archive 下载**：`GET /api/repos/{owner}/{name}/archive/{ref}.{zip|tar.gz}` shell-out `git archive`，文件名 `<repo>-<ref>.<ext>`。UI：仓库主页 ref 选择器旁的下载下拉。
 
 #### 计划外但已经做了的事
 
@@ -127,11 +128,16 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 **退出条件（核心 7 条已通过）**：
 1. ✅ 用户在 web 上注册 → 创建 PAT → 用 PAT 通过 HTTP basic auth `git push` 到一个新建仓库的 main 分支。
 2. ✅ 创建非 default 分支 `feature/x`，在仓库 branches 页看到它，切默认分支，看到旧 default 还在但不是默认了。
-3. ✅ 在分支页删除一个分支；尝试删除当前 HEAD 分支，被 409 拦下。（**注**：M3 的「默认分支保护」由 HEAD-equals-current 兜底；正式 branch_protections 表是协作辅助 stretch 留给后续。）
+3. ✅ 在分支页删除一个分支；尝试删除当前 HEAD 分支，被 409 拦下。
 4. ✅ 打一个 annotated tag `v0.1`，refs 列表里能看到，且 `compare?from=<commit>&to=v0.1` 正确出 diff。
 5. ✅ 在 compare 页选两个 ref，看到全部 diff。
 6. ✅ README.md 在仓库主页被渲染成 markdown。
 7. ✅ 在仓库设置页双确认删除整个仓库；DB 行和磁盘 bare repo 都消失。
+
+**协作辅助退出条件**：
+8. ✅ 给 `main` 配 force-push 保护规则，本地 `git push --force` 被 `pre-receive` 钩子拒绝；删除 `main` 也被拒。Web 上删除受 forbid_delete 保护的分支返回 409。
+9. ✅ commit 详情页能看到「在以下 ref 中」列出包含该 commit 的分支 + tag。
+10. ✅ 仓库主页点「Download」可下载当前 ref 的 `.zip` / `.tar.gz`。
 
 **全程没有"issue"、"agent"、"PR"这些词出现在 UI 上。** ✅ 边界守住。
 

@@ -15,6 +15,7 @@ import (
 func Module() *ioc.Module {
 	m := ioc.NewModule()
 	m.Provide(infra.NewPostgresStore).ToInterface(new(domain.Store))
+	m.Provide(infra.NewPostgresProtectionStore).ToInterface(new(domain.ProtectionStore))
 	m.Provide(infra.NewStorage).ToSelf()
 	m.Provide(handler.NewHandler).ToInterface(new(server.RouteProvider))
 	return m

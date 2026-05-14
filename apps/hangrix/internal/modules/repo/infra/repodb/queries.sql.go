@@ -30,6 +30,42 @@ func (q *Queries) CountReposByOwner(ctx context.Context, arg CountReposByOwnerPa
 	return count, err
 }
 
+const createBranchProtection = `-- name: CreateBranchProtection :one
+INSERT INTO branch_protections (repo_id, pattern, forbid_force_push, forbid_delete, forbid_direct_push)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, repo_id, pattern, forbid_force_push, forbid_delete, forbid_direct_push, created_at, updated_at
+`
+
+type CreateBranchProtectionParams struct {
+	RepoID           int64
+	Pattern          string
+	ForbidForcePush  bool
+	ForbidDelete     bool
+	ForbidDirectPush bool
+}
+
+func (q *Queries) CreateBranchProtection(ctx context.Context, arg CreateBranchProtectionParams) (BranchProtection, error) {
+	row := q.db.QueryRow(ctx, createBranchProtection,
+		arg.RepoID,
+		arg.Pattern,
+		arg.ForbidForcePush,
+		arg.ForbidDelete,
+		arg.ForbidDirectPush,
+	)
+	var i BranchProtection
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.Pattern,
+		&i.ForbidForcePush,
+		&i.ForbidDelete,
+		&i.ForbidDirectPush,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createRepo = `-- name: CreateRepo :one
 INSERT INTO repos (owner_id, name, description, visibility, default_branch)
 VALUES ($1, $2, $3, $4, $5)
@@ -66,6 +102,23 @@ func (q *Queries) CreateRepo(ctx context.Context, arg CreateRepoParams) (Repo, e
 	return i, err
 }
 
+const deleteBranchProtection = `-- name: DeleteBranchProtection :execrows
+DELETE FROM branch_protections WHERE id = $1 AND repo_id = $2
+`
+
+type DeleteBranchProtectionParams struct {
+	ID     int64
+	RepoID int64
+}
+
+func (q *Queries) DeleteBranchProtection(ctx context.Context, arg DeleteBranchProtectionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteBranchProtection, arg.ID, arg.RepoID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteRepo = `-- name: DeleteRepo :execrows
 DELETE FROM repos WHERE id = $1
 `
@@ -94,6 +147,33 @@ func (q *Queries) ExistsRepoNameForOwner(ctx context.Context, arg ExistsRepoName
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const getBranchProtection = `-- name: GetBranchProtection :one
+SELECT id, repo_id, pattern, forbid_force_push, forbid_delete, forbid_direct_push, created_at, updated_at
+FROM branch_protections
+WHERE id = $1 AND repo_id = $2
+`
+
+type GetBranchProtectionParams struct {
+	ID     int64
+	RepoID int64
+}
+
+func (q *Queries) GetBranchProtection(ctx context.Context, arg GetBranchProtectionParams) (BranchProtection, error) {
+	row := q.db.QueryRow(ctx, getBranchProtection, arg.ID, arg.RepoID)
+	var i BranchProtection
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.Pattern,
+		&i.ForbidForcePush,
+		&i.ForbidDelete,
+		&i.ForbidDirectPush,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getRepoByID = `-- name: GetRepoByID :one
@@ -173,6 +253,42 @@ func (q *Queries) GetRepoByOwnerAndName(ctx context.Context, arg GetRepoByOwnerA
 	return i, err
 }
 
+const listBranchProtectionsByRepo = `-- name: ListBranchProtectionsByRepo :many
+SELECT id, repo_id, pattern, forbid_force_push, forbid_delete, forbid_direct_push, created_at, updated_at
+FROM branch_protections
+WHERE repo_id = $1
+ORDER BY pattern
+`
+
+func (q *Queries) ListBranchProtectionsByRepo(ctx context.Context, repoID int64) ([]BranchProtection, error) {
+	rows, err := q.db.Query(ctx, listBranchProtectionsByRepo, repoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BranchProtection{}
+	for rows.Next() {
+		var i BranchProtection
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepoID,
+			&i.Pattern,
+			&i.ForbidForcePush,
+			&i.ForbidDelete,
+			&i.ForbidDirectPush,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listReposByOwner = `-- name: ListReposByOwner :many
 SELECT r.id, r.owner_id, r.name, r.description, r.visibility, r.default_branch, r.created_at, r.updated_at, u.username AS owner_username
 FROM repos r
@@ -235,6 +351,49 @@ func (q *Queries) ListReposByOwner(ctx context.Context, arg ListReposByOwnerPara
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateBranchProtection = `-- name: UpdateBranchProtection :one
+UPDATE branch_protections
+SET pattern             = $3,
+    forbid_force_push   = $4,
+    forbid_delete       = $5,
+    forbid_direct_push  = $6,
+    updated_at          = NOW()
+WHERE id = $1 AND repo_id = $2
+RETURNING id, repo_id, pattern, forbid_force_push, forbid_delete, forbid_direct_push, created_at, updated_at
+`
+
+type UpdateBranchProtectionParams struct {
+	ID               int64
+	RepoID           int64
+	Pattern          string
+	ForbidForcePush  bool
+	ForbidDelete     bool
+	ForbidDirectPush bool
+}
+
+func (q *Queries) UpdateBranchProtection(ctx context.Context, arg UpdateBranchProtectionParams) (BranchProtection, error) {
+	row := q.db.QueryRow(ctx, updateBranchProtection,
+		arg.ID,
+		arg.RepoID,
+		arg.Pattern,
+		arg.ForbidForcePush,
+		arg.ForbidDelete,
+		arg.ForbidDirectPush,
+	)
+	var i BranchProtection
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.Pattern,
+		&i.ForbidForcePush,
+		&i.ForbidDelete,
+		&i.ForbidDirectPush,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const updateRepoMeta = `-- name: UpdateRepoMeta :one

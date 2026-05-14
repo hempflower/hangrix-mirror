@@ -8,6 +8,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type BranchProtection struct {
+	ID               int64
+	RepoID           int64
+	Pattern          string
+	ForbidForcePush  bool
+	ForbidDelete     bool
+	ForbidDirectPush bool
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+}
+
 type Repo struct {
 	ID            int64
 	OwnerID       int64

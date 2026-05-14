@@ -5,6 +5,7 @@ import {
   Check,
   ChevronRight,
   Copy,
+  Download,
   FileText,
   Folder,
   GitBranch,
@@ -14,6 +15,12 @@ import {
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Select,
@@ -247,6 +254,22 @@ function shortSha(sha: string) {
   return sha.slice(0, 7)
 }
 
+// archiveHref builds the `/api/repos/{owner}/{name}/archive/{ref}.{ext}`
+// URL the backend's getArchive handler streams. Segments of the ref are
+// encoded individually so `feature/x` stays readable in the URL.
+function archiveHref(format: 'zip' | 'targz'): string {
+  if (!currentRef.value) return ''
+  const encRef = currentRef.value.split('/').map(encodeURIComponent).join('/')
+  const ext = format === 'zip' ? 'zip' : 'tar.gz'
+  return `/api/repos/${owner.value}/${name.value}/archive/${encRef}.${ext}`
+}
+
+function archiveFilename(format: 'zip' | 'targz'): string {
+  const safeRef = (currentRef.value || 'HEAD').replace(/\//g, '-')
+  const ext = format === 'zip' ? 'zip' : 'tar.gz'
+  return `${name.value}-${safeRef}.${ext}`
+}
+
 function firstLine(msg: string | undefined) {
   if (!msg) return ''
   return msg.split('\n', 1)[0]
@@ -444,6 +467,27 @@ onMounted(async () => {
                   </SelectContent>
                 </Select>
               </div>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger as-child>
+                  <Button size="sm" variant="outline" :disabled="!currentRef">
+                    <Download class="size-3" />
+                    {{ t('repo.archive.download') }}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem as-child>
+                    <a :href="archiveHref('zip')" :download="archiveFilename('zip')">
+                      {{ t('repo.archive.zip') }}
+                    </a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem as-child>
+                    <a :href="archiveHref('targz')" :download="archiveFilename('targz')">
+                      {{ t('repo.archive.targz') }}
+                    </a>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
 
               <nav class="flex flex-wrap items-center gap-1 text-sm">
                 <button

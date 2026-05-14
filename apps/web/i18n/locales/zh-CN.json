@@ -254,6 +254,37 @@
       "noDiff": "from 和 to 完全一致",
       "loadFailed": "加载失败"
     },
+    "protections": {
+      "title": "分支保护",
+      "subtitle": "规则按分支名 glob 匹配（`*` 匹配一段，`?` 匹配一个字符）。",
+      "create": "新建规则",
+      "empty": "暂无保护规则。默认分支仍有隐式保护。",
+      "pattern": "模式",
+      "patternHint": "示例：main、release/*、hotfix/?",
+      "patternRequired": "需要填写模式",
+      "forbidForcePush": "禁止 force-push",
+      "forbidDelete": "禁止删除",
+      "forbidDirectPush": "禁止直推",
+      "hint": "M3 阶段 force-push 与禁止删除在 git push 和 Web 操作里都生效；禁止直推会在 M4 引入 issue 工作流后启用。",
+      "submit": "创建",
+      "submitting": "创建中…",
+      "saveFailed": "保存失败",
+      "loadFailed": "加载失败",
+      "deleteConfirm": "删除 `{pattern}` 的保护规则？",
+      "deleteFailed": "删除失败"
+    },
+    "containsRefs": {
+      "title": "已在以下 ref",
+      "branches": "分支",
+      "tags": "Tag",
+      "none": "尚未进入任何分支或 tag。",
+      "loadFailed": "加载失败"
+    },
+    "archive": {
+      "download": "下载",
+      "zip": "源码 (zip)",
+      "targz": "源码 (tar.gz)"
+    },
     "readme": "README",
     "settingsLink": "设置"
   },

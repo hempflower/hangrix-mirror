@@ -2,10 +2,12 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { toTypedSchema } from '@vee-validate/zod'
 import * as z from 'zod'
-import { AlertTriangle } from 'lucide-vue-next'
+import { AlertTriangle, Plus, Shield, Trash2 } from 'lucide-vue-next'
 
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -25,7 +27,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import type { PublicRepo, RepoRefs } from '~/types/repo'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import type { BranchProtection, PublicRepo, RepoRefs } from '~/types/repo'
 
 definePageMeta({ layout: 'repo' })
 
@@ -48,6 +58,18 @@ const deleteOpen = ref(false)
 const deleteConfirmInput = ref('')
 const deleteError = ref<string | null>(null)
 const deleting = ref(false)
+
+const protections = ref<BranchProtection[]>([])
+const protectionError = ref<string | null>(null)
+const protectionOpen = ref(false)
+const protectionForm = ref({
+  pattern: '',
+  forbid_force_push: true,
+  forbid_delete: true,
+  forbid_direct_push: false,
+})
+const protectionSubmitError = ref<string | null>(null)
+const protectionSubmitting = ref(false)
 
 const branches = computed(() => refs.value?.branches ?? [])
 const fullName = computed(() => `${owner.value}/${name.value}`)
@@ -86,10 +108,104 @@ async function load() {
         default_branch: repo.value.default_branch,
       }
     }
+    await loadProtections()
   } catch (e: any) {
     loadError.value = e?.data?.error ?? t('repo.notFound')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadProtections() {
+  protectionError.value = null
+  try {
+    const data = await $fetch<BranchProtection[]>(
+      `/api/repos/${owner.value}/${name.value}/branch-protections`,
+      { credentials: 'include' },
+    )
+    protections.value = data ?? []
+  } catch (e: any) {
+    protectionError.value = e?.data?.error ?? t('repo.protections.loadFailed')
+    protections.value = []
+  }
+}
+
+function resetProtectionForm() {
+  protectionForm.value = {
+    pattern: '',
+    forbid_force_push: true,
+    forbid_delete: true,
+    forbid_direct_push: false,
+  }
+  protectionSubmitError.value = null
+}
+
+function openProtectionDialog() {
+  resetProtectionForm()
+  protectionOpen.value = true
+}
+
+async function onCreateProtection() {
+  if (!protectionForm.value.pattern.trim()) {
+    protectionSubmitError.value = t('repo.protections.patternRequired')
+    return
+  }
+  protectionSubmitting.value = true
+  protectionSubmitError.value = null
+  try {
+    await $fetch(`/api/repos/${owner.value}/${name.value}/branch-protections`, {
+      method: 'POST',
+      credentials: 'include',
+      body: {
+        pattern: protectionForm.value.pattern.trim(),
+        forbid_force_push: protectionForm.value.forbid_force_push,
+        forbid_delete: protectionForm.value.forbid_delete,
+        forbid_direct_push: protectionForm.value.forbid_direct_push,
+      },
+    })
+    protectionOpen.value = false
+    resetProtectionForm()
+    await loadProtections()
+  } catch (e: any) {
+    protectionSubmitError.value = e?.data?.error ?? t('repo.protections.saveFailed')
+  } finally {
+    protectionSubmitting.value = false
+  }
+}
+
+async function onToggleProtection(rule: BranchProtection, field: 'forbid_force_push' | 'forbid_delete' | 'forbid_direct_push', next: boolean) {
+  try {
+    const updated = await $fetch<BranchProtection>(
+      `/api/repos/${owner.value}/${name.value}/branch-protections/${rule.id}`,
+      {
+        method: 'PATCH',
+        credentials: 'include',
+        body: {
+          pattern: rule.pattern,
+          forbid_force_push: field === 'forbid_force_push' ? next : rule.forbid_force_push,
+          forbid_delete: field === 'forbid_delete' ? next : rule.forbid_delete,
+          forbid_direct_push: field === 'forbid_direct_push' ? next : rule.forbid_direct_push,
+        },
+      },
+    )
+    const idx = protections.value.findIndex(p => p.id === rule.id)
+    if (idx >= 0) protections.value[idx] = updated
+  } catch (e: any) {
+    protectionError.value = e?.data?.error ?? t('repo.protections.saveFailed')
+  }
+}
+
+async function onDeleteProtection(rule: BranchProtection) {
+  // eslint-disable-next-line no-alert
+  if (!window.confirm(t('repo.protections.deleteConfirm', { pattern: rule.pattern }))) return
+  try {
+    await $fetch(`/api/repos/${owner.value}/${name.value}/branch-protections/${rule.id}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    await loadProtections()
+  } catch (e: any) {
+    protectionError.value = e?.data?.error ?? t('repo.protections.deleteFailed')
   }
 }
 
@@ -254,6 +370,130 @@ onMounted(load)
           </CardFooter>
         </Form>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div class="space-y-1">
+              <CardTitle class="flex items-center gap-2">
+                <Shield class="size-5" />
+                {{ t('repo.protections.title') }}
+              </CardTitle>
+              <CardDescription>{{ t('repo.protections.subtitle') }}</CardDescription>
+            </div>
+            <Button size="sm" @click="openProtectionDialog">
+              <Plus class="size-4" />
+              {{ t('repo.protections.create') }}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent class="space-y-3">
+          <p v-if="protectionError" class="text-sm text-destructive">
+            {{ protectionError }}
+          </p>
+          <p v-if="protections.length === 0" class="text-sm text-muted-foreground">
+            {{ t('repo.protections.empty') }}
+          </p>
+          <Table v-else>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{{ t('repo.protections.pattern') }}</TableHead>
+                <TableHead class="text-center">{{ t('repo.protections.forbidForcePush') }}</TableHead>
+                <TableHead class="text-center">{{ t('repo.protections.forbidDelete') }}</TableHead>
+                <TableHead class="text-center">{{ t('repo.protections.forbidDirectPush') }}</TableHead>
+                <TableHead class="text-right">{{ t('common.actions') }}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow v-for="rule in protections" :key="rule.id">
+                <TableCell class="font-mono text-sm">
+                  {{ rule.pattern }}
+                </TableCell>
+                <TableCell class="text-center">
+                  <Checkbox
+                    :model-value="rule.forbid_force_push"
+                    @update:model-value="(v) => onToggleProtection(rule, 'forbid_force_push', Boolean(v))"
+                  />
+                </TableCell>
+                <TableCell class="text-center">
+                  <Checkbox
+                    :model-value="rule.forbid_delete"
+                    @update:model-value="(v) => onToggleProtection(rule, 'forbid_delete', Boolean(v))"
+                  />
+                </TableCell>
+                <TableCell class="text-center">
+                  <div class="inline-flex items-center gap-1">
+                    <Checkbox
+                      :model-value="rule.forbid_direct_push"
+                      @update:model-value="(v) => onToggleProtection(rule, 'forbid_direct_push', Boolean(v))"
+                    />
+                    <Badge variant="outline" class="text-[10px]">M4</Badge>
+                  </div>
+                </TableCell>
+                <TableCell class="text-right">
+                  <Button size="sm" variant="outline" @click="onDeleteProtection(rule)">
+                    <Trash2 class="size-3" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+          <p class="text-xs text-muted-foreground">
+            {{ t('repo.protections.hint') }}
+          </p>
+        </CardContent>
+      </Card>
+
+      <Dialog v-model:open="protectionOpen">
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{{ t('repo.protections.create') }}</DialogTitle>
+            <DialogDescription>{{ t('repo.protections.subtitle') }}</DialogDescription>
+          </DialogHeader>
+          <div class="space-y-4">
+            <div class="space-y-2">
+              <Label for="protection-pattern">{{ t('repo.protections.pattern') }}</Label>
+              <Input
+                id="protection-pattern"
+                v-model="protectionForm.pattern"
+                autocomplete="off"
+                placeholder="main"
+              />
+              <p class="text-xs text-muted-foreground">
+                {{ t('repo.protections.patternHint') }}
+              </p>
+            </div>
+            <div class="space-y-2">
+              <Label class="flex items-center gap-2">
+                <Checkbox v-model="protectionForm.forbid_force_push" />
+                <span>{{ t('repo.protections.forbidForcePush') }}</span>
+              </Label>
+              <Label class="flex items-center gap-2">
+                <Checkbox v-model="protectionForm.forbid_delete" />
+                <span>{{ t('repo.protections.forbidDelete') }}</span>
+              </Label>
+              <Label class="flex items-center gap-2">
+                <Checkbox v-model="protectionForm.forbid_direct_push" />
+                <span class="flex items-center gap-2">
+                  {{ t('repo.protections.forbidDirectPush') }}
+                  <Badge variant="outline" class="text-[10px]">M4</Badge>
+                </span>
+              </Label>
+            </div>
+            <p v-if="protectionSubmitError" class="text-sm text-destructive">
+              {{ protectionSubmitError }}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" @click="protectionOpen = false">
+              {{ t('common.cancel') }}
+            </Button>
+            <Button :disabled="protectionSubmitting" @click="onCreateProtection">
+              {{ protectionSubmitting ? t('repo.protections.submitting') : t('repo.protections.submit') }}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card class="border-destructive/40">
         <CardHeader>

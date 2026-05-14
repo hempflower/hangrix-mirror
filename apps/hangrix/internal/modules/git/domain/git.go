@@ -90,6 +90,18 @@ type Git interface {
 	// for annotated tags — gc cleans up eventually). Returns ErrRefNotFound
 	// if missing.
 	DeleteTag(path, tagName string) error
+
+	// ContainsCommit returns the branch and tag refs whose tip commits have
+	// sha as an ancestor (or equal to sha). Equivalent to the union of
+	// `git branch --contains <sha>` and `git tag --contains <sha>`. Returns
+	// ErrRefNotFound if sha cannot be resolved.
+	ContainsCommit(path, sha string) (*ContainingRefs, error)
+
+	// IsAncestor reports whether ancestor is reachable from descendant via
+	// the parent chain (i.e. fast-forward is possible from ancestor to
+	// descendant). Both inputs may be any ref or SHA. ErrRefNotFound if
+	// either cannot be resolved.
+	IsAncestor(path, ancestor, descendant string) (bool, error)
 }
 
 // JSON tags are intentionally on these domain types because the repo handler
@@ -102,6 +114,15 @@ type Refs struct {
 	DefaultBranchSHA string `json:"default_branch_sha"` // empty when repo has no commits
 	Branches         []*Ref `json:"branches"`
 	Tags             []*Ref `json:"tags"`
+}
+
+// ContainingRefs is the answer to "which refs contain this commit?": the
+// branch and tag names whose tip has the queried commit as an ancestor (or
+// is that commit). Lightweight and annotated tags are mixed in the same Tags
+// slice — at this UI level the distinction doesn't matter.
+type ContainingRefs struct {
+	Branches []*Ref `json:"branches"`
+	Tags     []*Ref `json:"tags"`
 }
 
 type Ref struct {

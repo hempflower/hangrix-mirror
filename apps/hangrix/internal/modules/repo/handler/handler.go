@@ -9,7 +9,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -41,31 +43,34 @@ var repoNameRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$`)
 var usernameRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$`)
 
 type Handler struct {
-	store      domain.Store
-	storage    *infra.Storage
-	git        gitdomain.Git
-	users      userdomain.Repo
-	tokens     tokendomain.Validator
-	middleware authdomain.Middleware
+	store       domain.Store
+	protections domain.ProtectionStore
+	storage     *infra.Storage
+	git         gitdomain.Git
+	users       userdomain.Repo
+	tokens      tokendomain.Validator
+	middleware  authdomain.Middleware
 }
 
 type HandlerDeps struct {
-	Store      domain.Store
-	Storage    *infra.Storage
-	Git        gitdomain.Git
-	Users      userdomain.Repo
-	Tokens     tokendomain.Validator
-	Middleware authdomain.Middleware
+	Store       domain.Store
+	Protections domain.ProtectionStore
+	Storage     *infra.Storage
+	Git         gitdomain.Git
+	Users       userdomain.Repo
+	Tokens      tokendomain.Validator
+	Middleware  authdomain.Middleware
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
-		store:      deps.Store,
-		storage:    deps.Storage,
-		git:        deps.Git,
-		users:      deps.Users,
-		tokens:     deps.Tokens,
-		middleware: deps.Middleware,
+		store:       deps.Store,
+		protections: deps.Protections,
+		storage:     deps.Storage,
+		git:         deps.Git,
+		users:       deps.Users,
+		tokens:      deps.Tokens,
+		middleware:  deps.Middleware,
 	}
 }
 
@@ -81,10 +86,15 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Get("/{owner}/{name}/refs", h.getRefs)
 		r.Get("/{owner}/{name}/commits", h.listCommits)
 		r.Get("/{owner}/{name}/commits/{sha}", h.getCommit)
+		r.Get("/{owner}/{name}/commits/{sha}/contains", h.getContainingRefs)
 		r.Get("/{owner}/{name}/tree", h.getTree)
 		r.Get("/{owner}/{name}/tree-view", h.getTreeView)
 		r.Get("/{owner}/{name}/blob", h.getBlob)
 		r.Get("/{owner}/{name}/diff", h.getDiff)
+		// Archive uses a trailing wildcard so refs containing "/" (e.g.
+		// "feature/foo.zip") survive the URL. Extension is parsed off the
+		// captured value.
+		r.Get("/{owner}/{name}/archive/*", h.getArchive)
 
 		// Branch / tag write operations. The DELETE routes use chi's
 		// trailing-wildcard pattern so names containing "/" (e.g.
@@ -93,6 +103,13 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Delete("/{owner}/{name}/branches/*", h.deleteBranch)
 		r.Post("/{owner}/{name}/tags", h.createTag)
 		r.Delete("/{owner}/{name}/tags/*", h.deleteTag)
+
+		// Branch protection rules. Listed by any repo reader; mutated only
+		// by owner / admin (resolveRepoForWrite is called in each handler).
+		r.Get("/{owner}/{name}/branch-protections", h.listProtections)
+		r.Post("/{owner}/{name}/branch-protections", h.createProtection)
+		r.Patch("/{owner}/{name}/branch-protections/{id}", h.updateProtection)
+		r.Delete("/{owner}/{name}/branch-protections/{id}", h.deleteProtection)
 	})
 
 	r.Route("/api/users/{username}/repos", func(r chi.Router) {
@@ -433,6 +450,102 @@ func (h *Handler) getCommit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, cwd)
+}
+
+func (h *Handler) getContainingRefs(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForRead(w, r)
+	if !ok {
+		return
+	}
+	path, ok := h.resolveFsPath(w, repo)
+	if !ok {
+		return
+	}
+	sha := chi.URLParam(r, "sha")
+	if sha == "" {
+		writeError(w, http.StatusBadRequest, "missing sha")
+		return
+	}
+	refs, err := h.git.ContainsCommit(path, sha)
+	if err != nil {
+		if mapGitErr(w, err) {
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, refs)
+}
+
+// getArchive shells out to `git archive` to produce a zip or tar.gz of the
+// requested ref. The captured path looks like "main.zip" or
+// "release/v1.tar.gz" — we split off the extension, leaving the ref to
+// resolve via the standard git grammar.
+func (h *Handler) getArchive(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForRead(w, r)
+	if !ok {
+		return
+	}
+	fsPath, ok := h.resolveFsPath(w, repo)
+	if !ok {
+		return
+	}
+
+	raw := strings.TrimSpace(chi.URLParam(r, "*"))
+	if raw == "" {
+		writeError(w, http.StatusBadRequest, "missing ref")
+		return
+	}
+	ref, format, contentType, ok := parseArchiveTarget(raw)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unsupported archive format (use .zip or .tar.gz)")
+		return
+	}
+
+	// `git archive` understands ref names and SHAs directly, but we still
+	// validate the ref-name shape so a caller can't smuggle in shell-active
+	// characters even though we go through exec.Command's argv.
+	if !isSafeArchiveRef(ref) {
+		writeError(w, http.StatusBadRequest, "invalid ref")
+		return
+	}
+
+	// Prefix archive entries with "<repo>-<short>/" the way GitHub /
+	// Gitea do, so unpacking is predictable. The shortRef helper trims
+	// "refs/heads/" / "refs/tags/" prefixes if a caller passes a fully
+	// qualified ref.
+	prefix := repo.Name + "-" + shortRef(ref) + "/"
+	filename := repo.Name + "-" + shortRef(ref) + "." + format
+
+	cmd := exec.CommandContext(r.Context(),
+		"git",
+		"--git-dir="+fsPath,
+		"archive",
+		"--format="+format,
+		"--prefix="+prefix,
+		ref,
+	)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "archive: "+err.Error())
+		return
+	}
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		writeError(w, http.StatusInternalServerError, "archive: "+err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	if _, err := io.Copy(w, stdout); err != nil {
+		// We've already begun streaming, so we can't change the status code.
+		// Best-effort cleanup; the underlying TCP error will surface to the
+		// client.
+		_ = cmd.Wait()
+		return
+	}
+	_ = cmd.Wait()
 }
 
 func (h *Handler) getTree(w http.ResponseWriter, r *http.Request) {
@@ -803,6 +916,19 @@ func (h *Handler) deleteBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Honor branch_protections.forbid_delete from the API side. The
+	// receive-pack hook does the same check for git-CLI deletes; this
+	// branch covers the web button.
+	rule, err := h.matchedProtection(r, repo.ID, name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if rule != nil && rule.ForbidDelete {
+		writeError(w, http.StatusConflict, "branch is protected against deletion")
+		return
+	}
+
 	if err := h.git.DeleteBranch(path, name); err != nil {
 		if mapGitErr(w, err) {
 			return
@@ -931,4 +1057,237 @@ func lookupTagSHA(g gitdomain.Git, path, name string) string {
 		}
 	}
 	return ""
+}
+
+// ---- Archive helpers ----
+
+// parseArchiveTarget splits a captured path like "main.zip" or
+// "feature/x.tar.gz" into (ref, gitFormatName, contentType). Only .zip and
+// .tar.gz are accepted — the two formats `git archive` ships out of the box
+// and the two web clients actually want.
+func parseArchiveTarget(raw string) (ref, format, contentType string, ok bool) {
+	switch {
+	case strings.HasSuffix(raw, ".tar.gz"):
+		return strings.TrimSuffix(raw, ".tar.gz"), "tar.gz", "application/gzip", true
+	case strings.HasSuffix(raw, ".zip"):
+		return strings.TrimSuffix(raw, ".zip"), "zip", "application/zip", true
+	}
+	return "", "", "", false
+}
+
+// isSafeArchiveRef applies the same conservative gate as branch / tag names
+// plus a "no leading dash" check (so a ref name can't be misread as a flag
+// by `git archive` — argv-based exec means this is belt-and-braces, not
+// load-bearing, but the cost is one line).
+func isSafeArchiveRef(ref string) bool {
+	if ref == "" || len(ref) > 200 {
+		return false
+	}
+	if strings.HasPrefix(ref, "-") {
+		return false
+	}
+	if strings.Contains(ref, "..") {
+		return false
+	}
+	for _, r := range ref {
+		if r <= 0x20 || r == 0x7f {
+			return false
+		}
+		switch r {
+		case '~', '^', ':', '?', '*', '[', '\\', ' ', ';', '|', '&', '$', '`', '"', '\'':
+			return false
+		}
+	}
+	return true
+}
+
+// shortRef strips "refs/heads/" or "refs/tags/" if a fully qualified ref
+// slipped through, so the archive filename stays readable.
+func shortRef(ref string) string {
+	for _, p := range []string{"refs/heads/", "refs/tags/", "refs/"} {
+		if strings.HasPrefix(ref, p) {
+			return strings.TrimPrefix(ref, p)
+		}
+	}
+	return ref
+}
+
+// ---- Branch protection handlers ----
+
+type publicProtection struct {
+	ID               int64     `json:"id"`
+	RepoID           int64     `json:"repo_id"`
+	Pattern          string    `json:"pattern"`
+	ForbidForcePush  bool      `json:"forbid_force_push"`
+	ForbidDelete     bool      `json:"forbid_delete"`
+	ForbidDirectPush bool      `json:"forbid_direct_push"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+func toPublicProtection(p *domain.BranchProtection) publicProtection {
+	return publicProtection{
+		ID:               p.ID,
+		RepoID:           p.RepoID,
+		Pattern:          p.Pattern,
+		ForbidForcePush:  p.ForbidForcePush,
+		ForbidDelete:     p.ForbidDelete,
+		ForbidDirectPush: p.ForbidDirectPush,
+		CreatedAt:        p.CreatedAt,
+		UpdatedAt:        p.UpdatedAt,
+	}
+}
+
+type protectionReq struct {
+	Pattern          string `json:"pattern"`
+	ForbidForcePush  bool   `json:"forbid_force_push"`
+	ForbidDelete     bool   `json:"forbid_delete"`
+	ForbidDirectPush bool   `json:"forbid_direct_push"`
+}
+
+func (h *Handler) listProtections(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForRead(w, r)
+	if !ok {
+		return
+	}
+	rules, err := h.protections.List(r.Context(), repo.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]publicProtection, 0, len(rules))
+	for _, p := range rules {
+		out = append(out, toPublicProtection(p))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) createProtection(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForWrite(w, r)
+	if !ok {
+		return
+	}
+	var req protectionReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	pattern := strings.TrimSpace(req.Pattern)
+	if !isValidProtectionPattern(pattern) {
+		writeError(w, http.StatusBadRequest, "invalid pattern")
+		return
+	}
+	created, err := h.protections.Create(r.Context(), repo.ID, pattern, req.ForbidForcePush, req.ForbidDelete, req.ForbidDirectPush)
+	if err != nil {
+		if errors.Is(err, domain.ErrProtectionConflict) {
+			writeError(w, http.StatusConflict, "pattern already protected")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, toPublicProtection(created))
+}
+
+func (h *Handler) updateProtection(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForWrite(w, r)
+	if !ok {
+		return
+	}
+	id, ok := parsePathID(w, r, "id")
+	if !ok {
+		return
+	}
+	var req protectionReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	pattern := strings.TrimSpace(req.Pattern)
+	if !isValidProtectionPattern(pattern) {
+		writeError(w, http.StatusBadRequest, "invalid pattern")
+		return
+	}
+	updated, err := h.protections.Update(r.Context(), id, repo.ID, pattern, req.ForbidForcePush, req.ForbidDelete, req.ForbidDirectPush)
+	if err != nil {
+		if errors.Is(err, domain.ErrProtectionNotFound) {
+			writeError(w, http.StatusNotFound, "protection not found")
+			return
+		}
+		if errors.Is(err, domain.ErrProtectionConflict) {
+			writeError(w, http.StatusConflict, "pattern already protected")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, toPublicProtection(updated))
+}
+
+func (h *Handler) deleteProtection(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForWrite(w, r)
+	if !ok {
+		return
+	}
+	id, ok := parsePathID(w, r, "id")
+	if !ok {
+		return
+	}
+	if err := h.protections.Delete(r.Context(), id, repo.ID); err != nil {
+		if errors.Is(err, domain.ErrProtectionNotFound) {
+			writeError(w, http.StatusNotFound, "protection not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// isValidProtectionPattern accepts glob patterns suitable for path.Match.
+// The set is the union of safe branch-name characters with the two glob
+// metas we actually want: `*` and `?`. Square-bracket classes are not
+// allowed — they're rarely worth the parsing risk and the user can always
+// add separate rules.
+func isValidProtectionPattern(p string) bool {
+	if p == "" || len(p) > 200 {
+		return false
+	}
+	if strings.HasPrefix(p, "-") || strings.HasPrefix(p, "/") || strings.HasSuffix(p, "/") {
+		return false
+	}
+	if strings.Contains(p, "..") || strings.Contains(p, "//") {
+		return false
+	}
+	for _, r := range p {
+		if r <= 0x20 || r == 0x7f {
+			return false
+		}
+		switch r {
+		case '~', '^', ':', '[', '\\', ' ':
+			return false
+		}
+	}
+	return true
+}
+
+func parsePathID(w http.ResponseWriter, r *http.Request, param string) (int64, bool) {
+	raw := chi.URLParam(r, param)
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid "+param)
+		return 0, false
+	}
+	return id, true
+}
+
+// matchedProtection returns the rule whose pattern matches branchName, or
+// nil. Used by createBranch / deleteBranch / receive-pack to honor rules
+// without each call re-doing the List → Match dance.
+func (h *Handler) matchedProtection(r *http.Request, repoID int64, branchName string) (*domain.BranchProtection, error) {
+	rules, err := h.protections.List(r.Context(), repoID)
+	if err != nil {
+		return nil, err
+	}
+	return domain.MatchProtection(rules, branchName), nil
 }

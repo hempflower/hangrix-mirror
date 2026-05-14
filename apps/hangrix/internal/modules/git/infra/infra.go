@@ -771,6 +771,105 @@ func isSafeRefSegment(name string) bool {
 	return true
 }
 
+// ContainsCommit returns every branch / tag whose tip is descended from
+// (or equal to) the supplied commit. Lightweight tags pointing directly at
+// a commit and annotated tags whose target commit matches are both included.
+// O(refs) MergeBase calls — fine for M3 scale; if/when ref counts explode
+// we can swap in a commit-graph traversal.
+func (g *GoGit) ContainsCommit(path, sha string) (*domain.ContainingRefs, error) {
+	repo, err := openRepo(path)
+	if err != nil {
+		return nil, err
+	}
+	targetHash, err := resolveRef(repo, sha)
+	if err != nil {
+		return nil, err
+	}
+	targetCommit, err := repo.CommitObject(targetHash)
+	if err != nil {
+		return nil, domain.ErrRefNotFound
+	}
+
+	out := &domain.ContainingRefs{
+		Branches: []*domain.Ref{},
+		Tags:     []*domain.Ref{},
+	}
+
+	iter, err := repo.References()
+	if err != nil {
+		return nil, fmt.Errorf("contains: refs: %w", err)
+	}
+	defer iter.Close()
+
+	err = iter.ForEach(func(ref *plumbing.Reference) error {
+		if ref.Type() == plumbing.SymbolicReference {
+			return nil
+		}
+		name := ref.Name()
+		if !name.IsBranch() && !name.IsTag() {
+			return nil
+		}
+		// Peel annotated tags down to a commit; lightweight tags and
+		// branches already point at one. Anything that doesn't peel to a
+		// commit (e.g. a tag-of-tag, very rare) we just skip.
+		tipHash, err := peelHashToCommit(repo, ref.Hash())
+		if err != nil {
+			return nil
+		}
+		tipCommit, err := repo.CommitObject(tipHash)
+		if err != nil {
+			return nil
+		}
+		isAncestor, err := targetCommit.IsAncestor(tipCommit)
+		if err != nil {
+			return nil
+		}
+		if !isAncestor {
+			return nil
+		}
+		entry := &domain.Ref{Name: name.Short(), SHA: tipHash.String()}
+		if name.IsBranch() {
+			out.Branches = append(out.Branches, entry)
+		} else {
+			out.Tags = append(out.Tags, entry)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("contains: foreach: %w", err)
+	}
+
+	sort.Slice(out.Branches, func(i, j int) bool { return out.Branches[i].Name < out.Branches[j].Name })
+	sort.Slice(out.Tags, func(i, j int) bool { return out.Tags[i].Name < out.Tags[j].Name })
+	return out, nil
+}
+
+// IsAncestor checks whether ancestor is reachable from descendant. Both
+// inputs are resolved through the standard ref/SHA fallback chain.
+func (g *GoGit) IsAncestor(path, ancestor, descendant string) (bool, error) {
+	repo, err := openRepo(path)
+	if err != nil {
+		return false, err
+	}
+	aHash, err := resolveRef(repo, ancestor)
+	if err != nil {
+		return false, err
+	}
+	dHash, err := resolveRef(repo, descendant)
+	if err != nil {
+		return false, err
+	}
+	aCommit, err := repo.CommitObject(aHash)
+	if err != nil {
+		return false, domain.ErrRefNotFound
+	}
+	dCommit, err := repo.CommitObject(dHash)
+	if err != nil {
+		return false, domain.ErrRefNotFound
+	}
+	return aCommit.IsAncestor(dCommit)
+}
+
 // DiffRefs computes the changes going from from to to. Either side may be
 // a branch, tag, or SHA.
 func (g *GoGit) DiffRefs(path, from, to string) ([]*domain.FileDiff, error) {

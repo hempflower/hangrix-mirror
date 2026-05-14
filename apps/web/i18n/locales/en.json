@@ -254,6 +254,37 @@
       "noDiff": "from and to are identical",
       "loadFailed": "Load failed"
     },
+    "protections": {
+      "title": "Branch protection",
+      "subtitle": "Rules apply to branches whose name matches the pattern (glob: `*` matches a segment, `?` matches a single char).",
+      "create": "New rule",
+      "empty": "No protection rules yet. Default branch still has implicit protection.",
+      "pattern": "Pattern",
+      "patternHint": "Examples: main, release/*, hotfix/?",
+      "patternRequired": "Pattern is required",
+      "forbidForcePush": "Forbid force-push",
+      "forbidDelete": "Forbid delete",
+      "forbidDirectPush": "Forbid direct push",
+      "hint": "M3 enforces force-push and delete protections on git push and the web UI. Forbid-direct-push lights up when M4 introduces issue-bound writes.",
+      "submit": "Create rule",
+      "submitting": "Creating…",
+      "saveFailed": "Save failed",
+      "loadFailed": "Load failed",
+      "deleteConfirm": "Delete protection for `{pattern}`?",
+      "deleteFailed": "Delete failed"
+    },
+    "containsRefs": {
+      "title": "In refs",
+      "branches": "Branches",
+      "tags": "Tags",
+      "none": "Not yet reachable from any branch or tag.",
+      "loadFailed": "Load failed"
+    },
+    "archive": {
+      "download": "Download",
+      "zip": "Source code (zip)",
+      "targz": "Source code (tar.gz)"
+    },
     "readme": "README",
     "settingsLink": "Settings"
   },

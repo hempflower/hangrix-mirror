@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { GitCommit } from 'lucide-vue-next'
+import { GitBranch, GitCommit, Tag } from 'lucide-vue-next'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import FileDiffList from '@/components/repo/FileDiffList.vue'
-import type { CommitWithDiff } from '~/types/repo'
+import type { CommitWithDiff, ContainingRefs } from '~/types/repo'
 
 definePageMeta({ layout: 'repo' })
 
@@ -18,6 +19,8 @@ const payload = ref<CommitWithDiff | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
 
+const contains = ref<ContainingRefs | null>(null)
+
 async function load() {
   loading.value = true
   error.value = null
@@ -26,6 +29,16 @@ async function load() {
       `/api/repos/${owner.value}/${name.value}/commits/${sha.value}`,
       { credentials: 'include' },
     )
+    // Load "contained in" lazily after the commit body — never block the
+    // page render on it; on failure we just don't show the panel.
+    try {
+      contains.value = await $fetch<ContainingRefs>(
+        `/api/repos/${owner.value}/${name.value}/commits/${sha.value}/contains`,
+        { credentials: 'include' },
+      )
+    } catch {
+      contains.value = null
+    }
   } catch (e: any) {
     error.value = e?.data?.error ?? t('repo.loadFailed')
   } finally {
@@ -99,6 +112,50 @@ onMounted(load)
           >
             {{ shortSha(p) }}
           </NuxtLink>
+        </CardContent>
+      </Card>
+
+      <Card v-if="contains" class="gap-2 py-4">
+        <CardHeader class="px-4">
+          <CardTitle class="text-sm font-medium">
+            {{ t('repo.containsRefs.title') }}
+          </CardTitle>
+        </CardHeader>
+        <CardContent class="space-y-2 px-4">
+          <div v-if="contains.branches.length > 0" class="flex flex-wrap items-center gap-2">
+            <span class="text-xs text-muted-foreground">{{ t('repo.containsRefs.branches') }}:</span>
+            <Badge
+              v-for="b in contains.branches"
+              :key="`b-${b.name}`"
+              variant="secondary"
+              class="font-mono text-xs"
+            >
+              <GitBranch class="size-3" />
+              <NuxtLink :to="`/${owner}/${name}?ref=${encodeURIComponent(b.name)}`" class="hover:underline">
+                {{ b.name }}
+              </NuxtLink>
+            </Badge>
+          </div>
+          <div v-if="contains.tags.length > 0" class="flex flex-wrap items-center gap-2">
+            <span class="text-xs text-muted-foreground">{{ t('repo.containsRefs.tags') }}:</span>
+            <Badge
+              v-for="tg in contains.tags"
+              :key="`t-${tg.name}`"
+              variant="outline"
+              class="font-mono text-xs"
+            >
+              <Tag class="size-3" />
+              <NuxtLink :to="`/${owner}/${name}?ref=${encodeURIComponent(tg.name)}`" class="hover:underline">
+                {{ tg.name }}
+              </NuxtLink>
+            </Badge>
+          </div>
+          <p
+            v-if="contains.branches.length === 0 && contains.tags.length === 0"
+            class="text-xs text-muted-foreground"
+          >
+            {{ t('repo.containsRefs.none') }}
+          </p>
         </CardContent>
       </Card>
 

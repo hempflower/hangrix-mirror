@@ -84,3 +84,19 @@ export interface BlobResp {
   binary: boolean
   size: number
 }
+
+export interface BranchProtection {
+  id: number
+  repo_id: number
+  pattern: string
+  forbid_force_push: boolean
+  forbid_delete: boolean
+  forbid_direct_push: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface ContainingRefs {
+  branches: RepoRef[]
+  tags: RepoRef[]
+}

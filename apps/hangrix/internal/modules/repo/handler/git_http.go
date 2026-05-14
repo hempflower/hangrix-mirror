@@ -106,8 +106,20 @@ func (h *Handler) gitUploadPack(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
-	_, fsPath, ok := h.authorizeGitWrite(w, r)
+	repo, fsPath, ok := h.authorizeGitWrite(w, r)
 	if !ok {
+		return
+	}
+	// Refresh the protection rules sidecar so the pre-receive hook sees the
+	// current ruleset. Idempotently re-installs the hook script too, which
+	// lets repos predating this feature pick it up on first push.
+	rules, err := h.protections.List(r.Context(), repo.ID)
+	if err != nil {
+		http.Error(w, "load protections: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := h.storage.SyncProtectionRules(fsPath, rules); err != nil {
+		http.Error(w, "sync protections: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	h.runStatelessRPC(w, r, "receive-pack", fsPath)
