@@ -102,6 +102,23 @@ type Git interface {
 	// descendant). Both inputs may be any ref or SHA. ErrRefNotFound if
 	// either cannot be resolved.
 	IsAncestor(path, ancestor, descendant string) (bool, error)
+
+	// ResolveCommit returns the commit SHA the ref resolves to. Empty string
+	// (no error) is reserved for the "unborn branch" case so callers can
+	// branch on it. ErrRefNotFound when the ref does not exist at all.
+	ResolveCommit(path, ref string) (string, error)
+
+	// MergeBranch merges fromRef into intoBranch. Behavior:
+	//   - intoBranch is unborn → intoBranch is created pointing at fromRef
+	//     (mode "fast-forward").
+	//   - intoBranch == fromRef commit → no-op (mode "up-to-date").
+	//   - intoBranch is an ancestor of fromRef → intoBranch is advanced to
+	//     fromRef (mode "fast-forward").
+	//   - otherwise → a merge commit is written joining both sides; conflict
+	//     between trees yields ErrMergeConflict.
+	//
+	// Returns the resulting commit SHA on intoBranch and the mode.
+	MergeBranch(path, intoBranch, fromRef, message string, author Signature) (sha, mode string, err error)
 }
 
 // JSON tags are intentionally on these domain types because the repo handler
@@ -212,4 +229,5 @@ var (
 	ErrTagExists        = errors.New("git: tag already exists")
 	ErrCannotDeleteHEAD = errors.New("git: cannot delete current HEAD branch")
 	ErrInvalidRefName   = errors.New("git: invalid ref name")
+	ErrMergeConflict    = errors.New("git: merge conflict")
 )

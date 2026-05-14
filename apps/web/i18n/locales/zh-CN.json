@@ -193,7 +193,9 @@
       "title": "提交详情",
       "files": "文件变更",
       "binaryDiff": "二进制差异",
-      "parents": "父提交"
+      "parents": "父提交",
+      "viewBefore": "查看变更前的文件",
+      "viewAfter": "查看变更后的文件"
     },
     "settings": {
       "title": "仓库设置",
@@ -286,7 +288,93 @@
       "targz": "源码 (tar.gz)"
     },
     "readme": "README",
-    "settingsLink": "设置"
+    "settingsLink": "设置",
+    "tabs2": {
+      "issues": "Issue"
+    }
+  },
+  "issue": {
+    "title": "Issue",
+    "subtitle": "一切从一个 issue 开始 —— 一段对话、一条分支、（很快）一个 agent 会话。",
+    "new": "新建 issue",
+    "newTitle": "新建 issue",
+    "newSubtitle": "一个 issue 把你的需求、对应的分支、围绕它的讨论打包到一起。",
+    "fields": {
+      "title": "标题",
+      "titleHint": "简短具体，1–200 字符。",
+      "titlePlaceholder": "标题",
+      "body": "描述",
+      "bodyHint": "支持 Markdown —— 人和 agent 都会读。",
+      "bodyPlaceholder": "补充描述…",
+      "baseBranch": "目标分支"
+    },
+    "submit": "创建",
+    "submitting": "创建中…",
+    "createFailed": "创建失败",
+    "empty": "还没有 issue",
+    "emptyHint": "开第一个 issue，围绕仓库展开协作。",
+    "listFailed": "加载失败",
+    "filters": {
+      "all": "全部",
+      "open": "进行中",
+      "merged": "已合并",
+      "closed": "已关闭"
+    },
+    "state": {
+      "open": "进行中",
+      "merged": "已合并",
+      "closed": "已关闭"
+    },
+    "openedBy": "由 {name} 开启 · {time}",
+    "branch": "分支",
+    "base": "目标",
+    "headSHA": "Head",
+    "mergedSHA": "合并提交",
+    "noHead": "尚未有提交",
+    "pushHint": "切到分支并推送 commit：",
+    "tabs": {
+      "conversation": "对话",
+      "commits": "提交",
+      "diff": "Diff"
+    },
+    "commitsEmpty": "暂无提交。推送到 {branch} 来引入变更。",
+    "commentForm": {
+      "placeholder": "写一条评论",
+      "submit": "提交",
+      "submitting": "发送中…",
+      "failed": "评论失败",
+      "title": "添加评论"
+    },
+    "opened": "创建了这个 issue",
+    "commented": "发表了评论",
+    "close": "关闭 issue",
+    "reopen": "重新打开",
+    "stateChangeFailed": "状态切换失败",
+    "merge": "合并",
+    "merging": "合并中…",
+    "mergeConfirm": "把 issue #{n} 合并到 {base}？",
+    "mergeFailed": "合并失败",
+    "mergeOk": "已合并到 {base}（{mode}）。",
+    "diffEmpty": "暂无变更 —— 推一些 commit 到 {branch} 就能看到 diff。",
+    "diffStats": "变更",
+    "filesChanged": "{n} 个文件",
+    "diffLoadFailed": "Diff 加载失败",
+    "timeline": {
+      "commitPushed": "{name} 推送了 {n} 个 commit",
+      "branchMerged": "{name} 把 {from} 合并到了 {into}（{mode}）",
+      "stateChanged": "{name} {transition}了这个 issue",
+      "transitionOpenedFromClosed": "重新打开",
+      "transitionClosed": "关闭",
+      "transitionMerged": "合并",
+      "transitionOpened": "打开",
+      "titleChanged": "{name} 修改了标题"
+    },
+    "you": "你",
+    "parent": "父 issue",
+    "subIssueOf": "子 issue，归属于",
+    "subIssues": "子 issue",
+    "newSubIssue": "新建子 issue",
+    "noSubIssues": "暂无子 issue。"
   },
   "pat": {
     "title": "Personal Access Tokens",

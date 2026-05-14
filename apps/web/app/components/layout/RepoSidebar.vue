@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 import {
   ArrowLeft,
   BookOpen,
+  CircleDot,
   Code,
   Diff,
   GitBranch,
@@ -81,9 +82,12 @@ const repoItems = computed<NavItem[]>(() => {
   const items: NavItem[] = [
     { key: 'code', to: base, icon: Code, label: t('repo.nav.code'), exact: true },
   ]
+  // Issues are available even on an empty repo — opening a placeholder
+  // issue is a perfectly valid first action.
+  items.push({ key: 'issues', to: `${base}/issues`, icon: CircleDot, label: t('repo.tabs2.issues') })
   // On an empty repo there are no refs to browse, nothing to compare, and
-  // no useful settings — collapse the nav to just "Code" (which renders the
-  // Quick Setup panel) until the first push lands.
+  // no useful settings — collapse the nav to issues only until the first
+  // push lands.
   if (emptyRepo.value) {
     return items
   }

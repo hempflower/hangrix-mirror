@@ -11,6 +11,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/git"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/healthz"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/hello"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/token"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/user"
@@ -34,6 +35,7 @@ func main() {
 		token.Module(),
 		git.Module(),
 		repo.Module(),
+		issue.Module(),
 		web.Module(),
 	)
 

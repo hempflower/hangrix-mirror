@@ -6,6 +6,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -50,6 +51,8 @@ type Handler struct {
 	users       userdomain.Repo
 	tokens      tokendomain.Validator
 	middleware  authdomain.Middleware
+	guards      []domain.BranchWriteGuard
+	observers   []domain.PushObserver
 }
 
 type HandlerDeps struct {
@@ -60,6 +63,14 @@ type HandlerDeps struct {
 	Users       userdomain.Repo
 	Tokens      tokendomain.Validator
 	Middleware  authdomain.Middleware
+	// Guards is injected as the slice of every BranchWriteGuard registered
+	// in the ioc container — currently 0 or 1 element (the issue module's
+	// guard). The handler iterates in order; first non-nil error wins.
+	Guards []domain.BranchWriteGuard
+	// Observers receive pre/post-receive callbacks for the smart-HTTP push
+	// pipeline. M4's issue module uses this to sync its sidecar before each
+	// push and append commit_pushed events afterwards.
+	Observers []domain.PushObserver
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
@@ -71,6 +82,8 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		users:       deps.Users,
 		tokens:      deps.Tokens,
 		middleware:  deps.Middleware,
+		guards:      deps.Guards,
+		observers:   deps.Observers,
 	}
 }
 
@@ -885,6 +898,22 @@ func (h *Handler) createBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	startSHA, _ := h.git.ResolveCommit(path, start)
+	if err := h.runGuards(r.Context(), domain.BranchWriteOp{
+		RepoID:   repo.ID,
+		Branch:   name,
+		OldSHA:   "",
+		NewSHA:   startSHA,
+		IsCreate: true,
+	}); err != nil {
+		if errors.Is(err, domain.ErrBranchWriteDenied) {
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	if err := h.git.CreateBranch(path, name, start); err != nil {
 		if mapGitErr(w, err) {
 			return
@@ -926,6 +955,22 @@ func (h *Handler) deleteBranch(w http.ResponseWriter, r *http.Request) {
 	}
 	if rule != nil && rule.ForbidDelete {
 		writeError(w, http.StatusConflict, "branch is protected against deletion")
+		return
+	}
+
+	oldSHA, _ := h.git.ResolveCommit(path, name)
+	if err := h.runGuards(r.Context(), domain.BranchWriteOp{
+		RepoID:   repo.ID,
+		Branch:   name,
+		OldSHA:   oldSHA,
+		NewSHA:   "",
+		IsDelete: true,
+	}); err != nil {
+		if errors.Is(err, domain.ErrBranchWriteDenied) {
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -1290,4 +1335,16 @@ func (h *Handler) matchedProtection(r *http.Request, repoID int64, branchName st
 		return nil, err
 	}
 	return domain.MatchProtection(rules, branchName), nil
+}
+
+// runGuards walks every registered BranchWriteGuard. The first one that
+// rejects short-circuits the chain. Returning ErrBranchWriteDenied (possibly
+// wrapped) signals the caller to emit a 403; anything else is a 500.
+func (h *Handler) runGuards(ctx context.Context, op domain.BranchWriteOp) error {
+	for _, g := range h.guards {
+		if err := g.CheckBranchWrite(ctx, op); err != nil {
+			return err
+		}
+	}
+	return nil
 }

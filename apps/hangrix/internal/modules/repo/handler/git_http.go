@@ -2,11 +2,13 @@ package handler
 
 import (
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/bcrypt"
@@ -122,7 +124,27 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sync protections: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// PreReceive observers (M4 issue module) get a chance to refresh their
+	// sidecars before the subprocess runs. Failures abort the push — a
+	// stale issue-mode file would let the hook accept a push that the
+	// server-side state should reject.
+	for _, obs := range h.observers {
+		if err := obs.PreReceive(r.Context(), repo, fsPath); err != nil {
+			http.Error(w, "pre-receive: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	h.runStatelessRPC(w, r, "receive-pack", fsPath)
+	// PostReceive observers run after the subprocess returns. The client has
+	// already received its response by this point so errors are swallowed —
+	// we accept temporarily losing a commit_pushed event over corrupting
+	// the wire protocol. Use a detached context so a client disconnect
+	// doesn't immediately cancel the observer DB writes.
+	postCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, obs := range h.observers {
+		_ = obs.PostReceive(postCtx, repo, fsPath)
+	}
 }
 
 // runStatelessRPC streams the request body into `git <sub> --stateless-rpc`

@@ -261,7 +261,8 @@ func (g *GoGit) ListCommits(path, ref string, offset, limit int) ([]*domain.Comm
 var storerStop = errors.New("stop")
 
 // CommitByID loads a commit by SHA and returns it along with the diff against
-// its first parent (empty diff for root commits).
+// its first parent. Root commits are diffed against an empty tree so the
+// initial commit's files show up as additions instead of an empty changeset.
 func (g *GoGit) CommitByID(path, sha string) (*domain.CommitWithDiff, error) {
 	repo, err := openRepo(path)
 	if err != nil {
@@ -279,14 +280,30 @@ func (g *GoGit) CommitByID(path, sha string) (*domain.CommitWithDiff, error) {
 
 	out := &domain.CommitWithDiff{Commit: toDomainCommit(commit)}
 
-	if commit.NumParents() == 0 {
-		return out, nil
-	}
-	parent, err := commit.Parent(0)
+	currTree, err := commit.Tree()
 	if err != nil {
-		return nil, fmt.Errorf("commit by id: parent: %w", err)
+		return nil, fmt.Errorf("commit by id: tree: %w", err)
 	}
-	patch, err := parent.Patch(commit)
+
+	var parentTree *object.Tree
+	if commit.NumParents() > 0 {
+		parent, err := commit.Parent(0)
+		if err != nil {
+			return nil, fmt.Errorf("commit by id: parent: %w", err)
+		}
+		parentTree, err = parent.Tree()
+		if err != nil {
+			return nil, fmt.Errorf("commit by id: parent tree: %w", err)
+		}
+	} else {
+		// Root commit: diff against an empty tree so every file in the
+		// commit is reported as added. go-git's NewTreeRootNode treats a
+		// nil/empty *Tree as a node with no children, which is exactly
+		// what we want here.
+		parentTree = &object.Tree{}
+	}
+
+	patch, err := parentTree.Patch(currTree)
 	if err != nil {
 		return nil, fmt.Errorf("commit by id: patch: %w", err)
 	}
@@ -868,6 +885,330 @@ func (g *GoGit) IsAncestor(path, ancestor, descendant string) (bool, error) {
 		return false, domain.ErrRefNotFound
 	}
 	return aCommit.IsAncestor(dCommit)
+}
+
+// ResolveCommit returns the commit SHA the ref resolves to. Unborn branches
+// (HEAD pointing at an unborn ref, or an explicit branch name that hasn't been
+// created yet for a fresh repo) yield an empty string with no error so callers
+// can disambiguate "doesn't exist anywhere" (ErrRefNotFound) from "branch
+// doesn't have a commit yet" (empty).
+func (g *GoGit) ResolveCommit(path, ref string) (string, error) {
+	repo, err := openRepo(path)
+	if err != nil {
+		return "", err
+	}
+	hash, err := resolveRef(repo, ref)
+	if err != nil {
+		if errors.Is(err, domain.ErrRefNotFound) && isEmptyRepo(repo) {
+			return "", nil
+		}
+		return "", err
+	}
+	return hash.String(), nil
+}
+
+// MergeBranch merges fromRef into intoBranch on the bare repo at path. See
+// the domain interface comment for the supported modes. The implementation
+// uses go-git's merge-base + the in-memory three-way merge over the trees,
+// then writes a new commit object and updates the branch ref atomically.
+//
+// Conflicts surface as domain.ErrMergeConflict; callers should report a
+// user-facing 409 rather than treating this as an unexpected error.
+func (g *GoGit) MergeBranch(path, intoBranch, fromRef, message string, author domain.Signature) (string, string, error) {
+	repo, err := openRepo(path)
+	if err != nil {
+		return "", "", err
+	}
+
+	fromHash, err := resolveRef(repo, fromRef)
+	if err != nil {
+		return "", "", err
+	}
+	fromCommit, err := repo.CommitObject(fromHash)
+	if err != nil {
+		return "", "", fmt.Errorf("merge: from commit: %w", err)
+	}
+
+	intoRefName := plumbing.NewBranchReferenceName(intoBranch)
+
+	// Case 1: unborn base — just point the branch at fromRef.
+	intoRef, err := repo.Reference(intoRefName, false)
+	if err != nil {
+		if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return "", "", fmt.Errorf("merge: lookup base: %w", err)
+		}
+		if err := repo.Storer.SetReference(plumbing.NewHashReference(intoRefName, fromHash)); err != nil {
+			return "", "", fmt.Errorf("merge: set base: %w", err)
+		}
+		return fromHash.String(), "fast-forward", nil
+	}
+
+	intoHash := intoRef.Hash()
+	intoCommit, err := repo.CommitObject(intoHash)
+	if err != nil {
+		return "", "", fmt.Errorf("merge: into commit: %w", err)
+	}
+
+	// Case 2: already at the same commit.
+	if intoHash == fromHash {
+		return intoHash.String(), "up-to-date", nil
+	}
+
+	// Case 3: from is an ancestor of into → nothing to do.
+	fromIsAncestor, err := fromCommit.IsAncestor(intoCommit)
+	if err != nil {
+		return "", "", fmt.Errorf("merge: ancestor check (from): %w", err)
+	}
+	if fromIsAncestor {
+		return intoHash.String(), "up-to-date", nil
+	}
+
+	// Case 4: into is an ancestor of from → fast-forward.
+	intoIsAncestor, err := intoCommit.IsAncestor(fromCommit)
+	if err != nil {
+		return "", "", fmt.Errorf("merge: ancestor check (into): %w", err)
+	}
+	if intoIsAncestor {
+		if err := repo.Storer.SetReference(plumbing.NewHashReference(intoRefName, fromHash)); err != nil {
+			return "", "", fmt.Errorf("merge: ff set: %w", err)
+		}
+		return fromHash.String(), "fast-forward", nil
+	}
+
+	// Case 5: real three-way merge.
+	bases, err := intoCommit.MergeBase(fromCommit)
+	if err != nil {
+		return "", "", fmt.Errorf("merge: merge-base: %w", err)
+	}
+	var baseTree *object.Tree
+	if len(bases) > 0 {
+		baseTree, err = bases[0].Tree()
+		if err != nil {
+			return "", "", fmt.Errorf("merge: base tree: %w", err)
+		}
+	} else {
+		baseTree = &object.Tree{}
+	}
+	intoTree, err := intoCommit.Tree()
+	if err != nil {
+		return "", "", fmt.Errorf("merge: into tree: %w", err)
+	}
+	fromTree, err := fromCommit.Tree()
+	if err != nil {
+		return "", "", fmt.Errorf("merge: from tree: %w", err)
+	}
+
+	mergedTreeHash, err := mergeTrees(repo, baseTree, intoTree, fromTree)
+	if err != nil {
+		return "", "", err
+	}
+
+	when := author.When
+	if when.IsZero() {
+		when = time.Now()
+	}
+	sig := object.Signature{Name: author.Name, Email: author.Email, When: when}
+	if strings.TrimSpace(message) == "" {
+		message = fmt.Sprintf("Merge %s into %s", fromRef, intoBranch)
+	}
+	if !strings.HasSuffix(message, "\n") {
+		message += "\n"
+	}
+	mergeCommit := &object.Commit{
+		Author:       sig,
+		Committer:    sig,
+		Message:      message,
+		TreeHash:     mergedTreeHash,
+		ParentHashes: []plumbing.Hash{intoHash, fromHash},
+	}
+	obj := repo.Storer.NewEncodedObject()
+	if err := mergeCommit.Encode(obj); err != nil {
+		return "", "", fmt.Errorf("merge: encode commit: %w", err)
+	}
+	commitHash, err := repo.Storer.SetEncodedObject(obj)
+	if err != nil {
+		return "", "", fmt.Errorf("merge: store commit: %w", err)
+	}
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(intoRefName, commitHash)); err != nil {
+		return "", "", fmt.Errorf("merge: set ref: %w", err)
+	}
+	return commitHash.String(), "merge-commit", nil
+}
+
+// mergeTrees performs a three-way tree merge keyed by path. For each path
+// touched in either side relative to base:
+//   - identical changes on both sides → keep the result.
+//   - one side changed, other side untouched → keep the changed side.
+//   - both sides changed differently → ErrMergeConflict (we do not attempt
+//     line-level resolution; M4 leaves that to a future "rebase first"
+//     workflow).
+//
+// Paths absent from base but present in both sides are merged only if
+// identical; otherwise conflict.
+func mergeTrees(repo *git.Repository, base, into, from *object.Tree) (plumbing.Hash, error) {
+	flatten := func(t *object.Tree) (map[string]flatTreeEntry, error) {
+		out := map[string]flatTreeEntry{}
+		if t == nil {
+			return out, nil
+		}
+		w := object.NewTreeWalker(t, true, nil)
+		defer w.Close()
+		for {
+			name, e, err := w.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			if e.Mode == filemode.Dir {
+				continue
+			}
+			out[name] = flatTreeEntry{hash: e.Hash, mode: e.Mode}
+		}
+		return out, nil
+	}
+
+	baseMap, err := flatten(base)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("merge: walk base: %w", err)
+	}
+	intoMap, err := flatten(into)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("merge: walk into: %w", err)
+	}
+	fromMap, err := flatten(from)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("merge: walk from: %w", err)
+	}
+
+	paths := map[string]struct{}{}
+	for p := range baseMap {
+		paths[p] = struct{}{}
+	}
+	for p := range intoMap {
+		paths[p] = struct{}{}
+	}
+	for p := range fromMap {
+		paths[p] = struct{}{}
+	}
+
+	merged := map[string]flatTreeEntry{}
+	for p := range paths {
+		b, bok := baseMap[p]
+		i, iok := intoMap[p]
+		f, fok := fromMap[p]
+
+		intoChanged := iok != bok || (iok && (i.hash != b.hash || i.mode != b.mode))
+		fromChanged := fok != bok || (fok && (f.hash != b.hash || f.mode != b.mode))
+
+		switch {
+		case !intoChanged && !fromChanged:
+			if iok {
+				merged[p] = i
+			}
+		case intoChanged && !fromChanged:
+			if iok {
+				merged[p] = i
+			}
+		case !intoChanged && fromChanged:
+			if fok {
+				merged[p] = f
+			}
+		default:
+			// Both sides changed. Identical resolution OK; otherwise conflict.
+			if iok && fok && i.hash == f.hash && i.mode == f.mode {
+				merged[p] = i
+				continue
+			}
+			return plumbing.ZeroHash, domain.ErrMergeConflict
+		}
+	}
+
+	return buildTreeFromFlatMap(repo, merged)
+}
+
+type flatTreeEntry struct {
+	hash plumbing.Hash
+	mode filemode.FileMode
+}
+
+// buildTreeFromFlatMap rebuilds nested object.Tree objects from a flattened
+// "full path → entry" map. Recurses by grouping entries that share a leading
+// segment into subtrees, writing each tree to the storer and stitching the
+// hashes back up.
+func buildTreeFromFlatMap(repo *git.Repository, flat map[string]flatTreeEntry) (plumbing.Hash, error) {
+	return writeSubtree(repo, "", flat)
+}
+
+func writeSubtree(repo *git.Repository, prefix string, flat map[string]flatTreeEntry) (plumbing.Hash, error) {
+	type dirAccum struct {
+		entries map[string]flatTreeEntry
+	}
+	immediate := map[string]flatTreeEntry{}
+	subtrees := map[string]*dirAccum{}
+
+	for full, e := range flat {
+		var rel string
+		if prefix == "" {
+			rel = full
+		} else if strings.HasPrefix(full, prefix+"/") {
+			rel = strings.TrimPrefix(full, prefix+"/")
+		} else {
+			continue
+		}
+		if rel == "" {
+			continue
+		}
+		slash := strings.Index(rel, "/")
+		if slash < 0 {
+			immediate[rel] = e
+			continue
+		}
+		dir := rel[:slash]
+		acc, ok := subtrees[dir]
+		if !ok {
+			acc = &dirAccum{entries: map[string]flatTreeEntry{}}
+			subtrees[dir] = acc
+		}
+		acc.entries[full] = e
+	}
+
+	tree := &object.Tree{}
+	for name, e := range immediate {
+		tree.Entries = append(tree.Entries, object.TreeEntry{
+			Name: name,
+			Mode: e.mode,
+			Hash: e.hash,
+		})
+	}
+	for name := range subtrees {
+		var subPrefix string
+		if prefix == "" {
+			subPrefix = name
+		} else {
+			subPrefix = prefix + "/" + name
+		}
+		subHash, err := writeSubtree(repo, subPrefix, flat)
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+		tree.Entries = append(tree.Entries, object.TreeEntry{
+			Name: name,
+			Mode: filemode.Dir,
+			Hash: subHash,
+		})
+	}
+
+	sort.Slice(tree.Entries, func(i, j int) bool {
+		return tree.Entries[i].Name < tree.Entries[j].Name
+	})
+
+	obj := repo.Storer.NewEncodedObject()
+	if err := tree.Encode(obj); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("merge: encode tree: %w", err)
+	}
+	return repo.Storer.SetEncodedObject(obj)
 }
 
 // DiffRefs computes the changes going from from to to. Either side may be

@@ -193,7 +193,9 @@
       "title": "Commit",
       "files": "Changed files",
       "binaryDiff": "Binary diff",
-      "parents": "Parents"
+      "parents": "Parents",
+      "viewBefore": "View file before this change",
+      "viewAfter": "View file after this change"
     },
     "settings": {
       "title": "Repository settings",
@@ -286,7 +288,93 @@
       "targz": "Source code (tar.gz)"
     },
     "readme": "README",
-    "settingsLink": "Settings"
+    "settingsLink": "Settings",
+    "tabs2": {
+      "issues": "Issues"
+    }
+  },
+  "issue": {
+    "title": "Issues",
+    "subtitle": "Everything starts with an issue — a conversation, a branch, and (soon) an agent session.",
+    "new": "New issue",
+    "newTitle": "Open an issue",
+    "newSubtitle": "An issue bundles your request, its branch, and the conversation around it.",
+    "fields": {
+      "title": "Title",
+      "titleHint": "Short and specific. 1–200 characters.",
+      "titlePlaceholder": "Title",
+      "body": "Description",
+      "bodyHint": "Markdown is fine — agents and humans both read this.",
+      "bodyPlaceholder": "Add a description…",
+      "baseBranch": "Base branch"
+    },
+    "submit": "Open issue",
+    "submitting": "Opening…",
+    "createFailed": "Open failed",
+    "empty": "No issues yet",
+    "emptyHint": "Open the first one to start a conversation around your repo.",
+    "listFailed": "Load failed",
+    "filters": {
+      "all": "All",
+      "open": "Open",
+      "merged": "Merged",
+      "closed": "Closed"
+    },
+    "state": {
+      "open": "Open",
+      "merged": "Merged",
+      "closed": "Closed"
+    },
+    "openedBy": "opened by {name} · {time}",
+    "branch": "Branch",
+    "base": "Base",
+    "headSHA": "Head",
+    "mergedSHA": "Merge commit",
+    "noHead": "No commits yet",
+    "pushHint": "Check out the branch and push to add commits:",
+    "tabs": {
+      "conversation": "Conversation",
+      "commits": "Commits",
+      "diff": "Diff"
+    },
+    "commitsEmpty": "No commits yet. Push to {branch} to introduce changes.",
+    "commentForm": {
+      "placeholder": "Leave a comment",
+      "submit": "Comment",
+      "submitting": "Sending…",
+      "failed": "Comment failed",
+      "title": "Add a comment"
+    },
+    "opened": "opened this issue",
+    "commented": "commented",
+    "close": "Close issue",
+    "reopen": "Reopen issue",
+    "stateChangeFailed": "State change failed",
+    "merge": "Merge",
+    "merging": "Merging…",
+    "mergeConfirm": "Merge issue #{n} into {base}?",
+    "mergeFailed": "Merge failed",
+    "mergeOk": "Merged into {base} ({mode}).",
+    "diffEmpty": "Nothing to diff — push commits to {branch} to see changes.",
+    "diffStats": "Changes",
+    "filesChanged": "{n} files changed",
+    "diffLoadFailed": "Diff load failed",
+    "timeline": {
+      "commitPushed": "{name} pushed {n} commit(s)",
+      "branchMerged": "{name} merged {from} into {into} ({mode})",
+      "stateChanged": "{name} {transition} this issue",
+      "transitionOpenedFromClosed": "re-opened",
+      "transitionClosed": "closed",
+      "transitionMerged": "merged",
+      "transitionOpened": "opened",
+      "titleChanged": "{name} changed the title"
+    },
+    "you": "you",
+    "parent": "Parent",
+    "subIssueOf": "Sub-issue of",
+    "subIssues": "Sub-issues",
+    "newSubIssue": "New sub-issue",
+    "noSubIssues": "No sub-issues yet."
   },
   "pat": {
     "title": "Personal Access Tokens",

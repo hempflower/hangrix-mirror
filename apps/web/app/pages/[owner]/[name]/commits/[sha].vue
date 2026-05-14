@@ -163,7 +163,16 @@ onMounted(load)
         {{ t('repo.commit.files') }} · {{ diffList.length }}
       </h2>
 
-      <FileDiffList :diffs="diffList" />
+      <!-- "before" ref is the first parent's SHA. Root commits have no
+           parent — passing '' suppresses the before-link entirely, which is
+           correct (every file shows up as added against an empty tree). -->
+      <FileDiffList
+        :diffs="diffList"
+        :owner="owner"
+        :name="name"
+        :ref-before="payload.commit.parent_shas[0] ?? ''"
+        :ref-after="payload.commit.sha"
+      />
     </template>
   </div>
 </template>
