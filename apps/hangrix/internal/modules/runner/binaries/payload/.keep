@@ -1,0 +1,6 @@
+This directory is populated by the build pipeline. See ../binaries.go.
+
+`make embed-binaries` cross-compiles `hangrix-agent` and `hangrix-runner`
+into this directory before `go build` so the server can //go:embed them.
+
+Files here are .gitignored; this .keep is the only versioned content.

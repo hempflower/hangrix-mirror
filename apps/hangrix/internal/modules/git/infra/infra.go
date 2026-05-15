@@ -579,7 +579,7 @@ func (g *GoGit) CreateBranch(path, branchName, startRef string) error {
 	if err != nil {
 		return err
 	}
-	if !isSafeRefSegment(branchName) {
+	if !domain.IsValidRefName(branchName) {
 		return domain.ErrInvalidRefName
 	}
 	refName := plumbing.NewBranchReferenceName(branchName)
@@ -740,7 +740,7 @@ func prepareNewTag(path, tagName, refOrSha string) (*git.Repository, plumbing.Ha
 	if err != nil {
 		return nil, plumbing.ZeroHash, err
 	}
-	if !isSafeRefSegment(tagName) {
+	if !domain.IsValidRefName(tagName) {
 		return nil, plumbing.ZeroHash, domain.ErrInvalidRefName
 	}
 	refName := plumbing.NewTagReferenceName(tagName)
@@ -760,32 +760,6 @@ func prepareNewTag(path, tagName, refOrSha string) (*git.Repository, plumbing.Ha
 		return nil, plumbing.ZeroHash, err
 	}
 	return repo, hash, nil
-}
-
-// isSafeRefSegment short-circuits the cheapest, most obviously-bad branch/tag
-// names so callers see ErrInvalidRefName immediately rather than a wrapped
-// go-git Validate error. Full ref-grammar enforcement still happens via
-// ReferenceName.Validate().
-func isSafeRefSegment(name string) bool {
-	if name == "" || len(name) > 200 {
-		return false
-	}
-	if strings.HasPrefix(name, "-") || strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") {
-		return false
-	}
-	if strings.Contains(name, "..") || strings.Contains(name, "//") {
-		return false
-	}
-	for _, r := range name {
-		if r <= 0x20 || r == 0x7f {
-			return false
-		}
-		switch r {
-		case '~', '^', ':', '?', '*', '[', '\\':
-			return false
-		}
-	}
-	return true
 }
 
 // ContainsCommit returns every branch / tag whose tip is descended from

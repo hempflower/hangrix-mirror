@@ -1,0 +1,298 @@
+// Package client wraps the runner-facing HTTP surface of the Hangrix
+// server. One Client per process; methods are safe for concurrent use
+// because the underlying http.Client is.
+//
+// All routes except Enroll require the Bearer agent token set via
+// WithAgentToken (or supplied to New). Enroll trades a one-shot enroll
+// token for the long-lived agent token.
+package client
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+)
+
+type Client struct {
+	base       string
+	agentToken string
+	http       *http.Client
+}
+
+// New makes a Client without an agent token (used for enrollment); set
+// the token afterwards with WithAgentToken once you have one.
+func New(base string) *Client {
+	return &Client{
+		base: strings.TrimRight(base, "/"),
+		http: &http.Client{
+			Timeout: 60 * time.Second,
+		},
+	}
+}
+
+func (c *Client) WithAgentToken(tok string) *Client {
+	c.agentToken = tok
+	return c
+}
+
+// ---- enroll ----
+
+type EnrollRequest struct {
+	EnrollToken  string          `json:"enroll_token"`
+	Capabilities json.RawMessage `json:"capabilities,omitempty"`
+}
+
+type EnrollResponse struct {
+	RunnerID   int64             `json:"runner_id"`
+	RunnerName string            `json:"runner_name"`
+	AgentToken string            `json:"agent_token"`
+	Bootstrap  BootstrapPayload  `json:"bootstrap"`
+}
+
+// BootstrapPayload is the side of the enroll/bootstrap responses that
+// tells the runner everything it needs to run with no extra flags:
+// endpoints to inject into the agent, binary download URL + sha, and
+// the cadence parameters server and runner must agree on.
+type BootstrapPayload struct {
+	Binaries          map[string]BinaryInfo `json:"binaries"`
+	LLMEndpoint       string                `json:"llm_endpoint"`
+	MCPEndpoint       string                `json:"mcp_endpoint"`
+	DefaultAgentImage string                `json:"default_agent_image,omitempty"`
+	PollWaitSec       int                   `json:"poll_wait_sec"`
+	HeartbeatSec      int                   `json:"heartbeat_sec"`
+}
+
+// BinaryInfo is one entry in BootstrapPayload.Binaries. URL is
+// server-relative; the runner prepends the same base URL it uses for
+// every other call.
+type BinaryInfo struct {
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+func (c *Client) Enroll(ctx context.Context, req EnrollRequest) (*EnrollResponse, error) {
+	var out EnrollResponse
+	if err := c.do(ctx, http.MethodPost, "/api/runner/enroll", req, &out, false); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Bootstrap re-fetches the bootstrap payload using the long-term agent
+// token. Called by `serve` at startup so the runner picks up endpoint /
+// agent-binary changes the platform made since enroll.
+func (c *Client) Bootstrap(ctx context.Context) (*BootstrapPayload, error) {
+	var out BootstrapPayload
+	if err := c.do(ctx, http.MethodGet, "/api/runner/bootstrap", nil, &out, true); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DownloadBinary streams the named binary at relativeURL to `dst`,
+// verifies the SHA256 matches expected (if non-empty), and returns the
+// actual bytes written. Caller pre-opens dst and chmods 0755 on success
+// — splitting "stream" from "finalize" keeps the cache-write vs verify
+// steps obvious.
+func (c *Client) DownloadBinary(ctx context.Context, relativeURL, expectedSHA string, dst io.Writer) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+relativeURL, nil)
+	if err != nil {
+		return 0, err
+	}
+	if c.agentToken == "" {
+		return 0, errors.New("agent token not set")
+	}
+	req.Header.Set("Authorization", "Bearer "+c.agentToken)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return 0, fmt.Errorf("GET %s: %d %s", relativeURL, resp.StatusCode, snippet(body))
+	}
+	sum := sha256.New()
+	mw := io.MultiWriter(dst, sum)
+	n, err := io.Copy(mw, resp.Body)
+	if err != nil {
+		return n, err
+	}
+	if expectedSHA != "" {
+		got := hex.EncodeToString(sum.Sum(nil))
+		if got != expectedSHA {
+			return n, fmt.Errorf("agent binary sha mismatch: want %s got %s", expectedSHA, got)
+		}
+	}
+	return n, nil
+}
+
+// ---- heartbeat ----
+
+type HeartbeatRequest struct {
+	Capabilities json.RawMessage `json:"capabilities,omitempty"`
+}
+
+func (c *Client) Heartbeat(ctx context.Context, req HeartbeatRequest) error {
+	return c.do(ctx, http.MethodPost, "/api/runner/heartbeat", req, nil, true)
+}
+
+// ---- tasks ----
+
+type Task struct {
+	SessionID     int64             `json:"session_id"`
+	AgentImage    string            `json:"agent_image"`
+	Role          string            `json:"role"`
+	BundleDir     string            `json:"bundle_dir"`
+	WorkingBranch string            `json:"working_branch"`
+	BaseBranch    string            `json:"base_branch"`
+	HostAddendum  string            `json:"host_addendum"`
+	Env           map[string]string `json:"env"`
+	SessionToken  string            `json:"session_token"`
+}
+
+// PollTasks returns (task, true, nil) on a real assignment, (nil, false, nil)
+// when the server returned 204 (no work), or (nil, false, err) on transport /
+// 5xx. Callers loop on `false` after a small backoff.
+func (c *Client) PollTasks(ctx context.Context) (*Task, bool, error) {
+	body, status, err := c.raw(ctx, http.MethodGet, "/api/runner/tasks", nil, true)
+	if err != nil {
+		return nil, false, err
+	}
+	switch status {
+	case http.StatusNoContent:
+		return nil, false, nil
+	case http.StatusOK:
+		var t Task
+		if err := json.Unmarshal(body, &t); err != nil {
+			return nil, false, fmt.Errorf("decode task: %w", err)
+		}
+		return &t, true, nil
+	default:
+		return nil, false, fmt.Errorf("poll tasks: %d %s", status, snippet(body))
+	}
+}
+
+// ---- session lifecycle ----
+
+func (c *Client) MarkRunning(ctx context.Context, sessionID int64) error {
+	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/runner/sessions/%d/running", sessionID), nil, nil, true)
+}
+
+type TerminateRequest struct {
+	Status   string `json:"status"`
+	ExitCode *int32 `json:"exit_code,omitempty"`
+	Message  string `json:"message,omitempty"`
+}
+
+func (c *Client) Terminate(ctx context.Context, sessionID int64, req TerminateRequest) error {
+	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/runner/sessions/%d/terminate", sessionID), req, nil, true)
+}
+
+// ---- message + input forwarding ----
+
+type AppendMessageRequest struct {
+	Kind       string          `json:"kind"`
+	Role       string          `json:"role,omitempty"`
+	Content    string          `json:"content,omitempty"`
+	Phase      string          `json:"phase,omitempty"`
+	Level      string          `json:"level,omitempty"`
+	Msg        string          `json:"msg,omitempty"`
+	Name       string          `json:"name,omitempty"`
+	Args       json.RawMessage `json:"args,omitempty"`
+	Result     json.RawMessage `json:"result,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCallDTO   `json:"tool_calls,omitempty"`
+	TurnID     string          `json:"turn_id,omitempty"`
+}
+
+type ToolCallDTO struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+func (c *Client) AppendMessage(ctx context.Context, sessionID int64, req AppendMessageRequest) error {
+	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/runner/sessions/%d/messages", sessionID), req, nil, true)
+}
+
+type InputsResponse struct {
+	Frames []json.RawMessage `json:"frames"`
+}
+
+func (c *Client) PollInputs(ctx context.Context, sessionID int64) (*InputsResponse, error) {
+	var out InputsResponse
+	if err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/runner/sessions/%d/inputs", sessionID), nil, &out, true); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ---- transport helpers ----
+
+func (c *Client) do(ctx context.Context, method, path string, in, out any, auth bool) error {
+	body, status, err := c.raw(ctx, method, path, in, auth)
+	if err != nil {
+		return err
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("%s %s: %d %s", method, path, status, snippet(body))
+	}
+	if out == nil || len(body) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("decode %s response: %w", path, err)
+	}
+	return nil
+}
+
+func (c *Client) raw(ctx context.Context, method, path string, in any, auth bool) ([]byte, int, error) {
+	var body io.Reader
+	if in != nil {
+		buf, err := json.Marshal(in)
+		if err != nil {
+			return nil, 0, fmt.Errorf("encode body: %w", err)
+		}
+		body = bytes.NewReader(buf)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
+	if err != nil {
+		return nil, 0, err
+	}
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if auth {
+		if c.agentToken == "" {
+			return nil, 0, errors.New("agent token not set")
+		}
+		req.Header.Set("Authorization", "Bearer "+c.agentToken)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	out, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return out, resp.StatusCode, nil
+}
+
+func snippet(b []byte) string {
+	if len(b) > 256 {
+		return string(b[:256]) + "…"
+	}
+	return string(b)
+}

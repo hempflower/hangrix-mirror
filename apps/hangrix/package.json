@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "scripts": {
     "dev": "node ./scripts/copy-web-dist.mjs && go tool air -c .air.toml",
-    "build": "node ./scripts/copy-web-dist.mjs && go build -o bin/ ./cmd/hangrix",
+    "embed-binaries": "node ./scripts/build-embed-binaries.mjs",
+    "build": "node ./scripts/copy-web-dist.mjs && node ./scripts/build-embed-binaries.mjs && go build -o bin/ ./cmd/hangrix",
     "test": "go test ./...",
     "lint": "go vet ./..."
   }

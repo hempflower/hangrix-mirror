@@ -116,9 +116,11 @@ type Client struct {
 }
 
 // New builds a Client. endpoint must be the proxy mount (e.g.
-// https://hangrix.example/api/llm/openai-prod/v1). The trailing slash is
-// stripped here so callers don't have to be careful — concatenating
-// endpoint+"/responses" must produce a valid URL.
+// https://hangrix.example/api/llm/v1). The trailing slash is stripped
+// here so callers don't have to be careful — concatenating
+// endpoint+"/responses" must produce a valid URL. The proxy is one
+// unified endpoint; provider routing is resolved server-side from the
+// request body's `model` field.
 func New(endpoint, token string) *Client {
 	return &Client{
 		endpoint: strings.TrimRight(endpoint, "/"),

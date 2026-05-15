@@ -1,7 +1,16 @@
 // Package domain declares the Personal Access Token (PAT) types and the
-// interfaces that other modules import: Store (CRUD against the backing DB)
-// and Validator (plaintext → user lookup, used by the smart-HTTP layer to
-// authenticate git push without dragging a circular dep through auth).
+// interfaces that other modules import.
+//
+// Two interfaces, each scoped to a different consumer:
+//   - Store — what HTTP handlers see (Create / List / Revoke). Implemented
+//     by the service layer, which adds validation + secret minting on top
+//     of the narrower persistence layer.
+//   - Validator — what the smart-HTTP layer holds to authenticate
+//     plaintext PATs without dragging in the rest of Store.
+//
+// Persistence sits behind Repo (declared here, implemented by infra).
+// Service composes Repo with bcrypt + regex to satisfy Store and
+// Validator; handlers never see Repo.
 //
 // Token wire format (returned ONCE on creation, never reconstructable
 // server-side):
@@ -33,6 +42,12 @@ const (
 
 func (s Scope) Valid() bool { return s == ScopeRepoRead || s == ScopeRepoWrite }
 
+// WirePrefix is the literal prefix every PAT plaintext begins with.
+// Distinct from session tokens (`hgxs_`) and runner tokens (`hgxe_` /
+// `hgxr_`) so a single auth router can dispatch by inspecting the
+// header alone.
+const WirePrefix = "hgx_"
+
 // PrefixLen is the public-prefix length built into every PAT's wire format.
 // Bumping this is a wire-format change.
 const PrefixLen = 8
@@ -40,6 +55,11 @@ const PrefixLen = 8
 // SecretLen is the entropy portion length (chars). 32 chars of base32
 // alphabet = ~160 bits.
 const SecretLen = 32
+
+// MaxNameLen caps the user-supplied label length. Anything longer is
+// rejected at the validation boundary — keeps the column unbounded
+// neither in DB nor in display lists.
+const MaxNameLen = 64
 
 // Token is the persisted record. The plaintext secret is never stored.
 type Token struct {
@@ -88,26 +108,46 @@ type CreatedToken struct {
 	Plaintext string
 }
 
+// InsertParams is the bag the service hands to Repo.Insert. The fields
+// have already been validated + the secret bcrypted; Repo only writes a
+// row. Separating this from the Store.Create signature keeps the
+// validation boundary explicit — Repo is incapable of accepting
+// unvalidated input.
+type InsertParams struct {
+	UserID    int64
+	Name      string
+	Prefix    string
+	HashedKey string
+	Scopes    []Scope
+	ExpiresAt *time.Time
+}
+
+// Repo is the persistence-only interface. Implemented by infra. Service
+// composes this with bcrypt + regex + minting to satisfy Store /
+// Validator. Cross-module callers should depend on Store / Validator,
+// not Repo.
+type Repo interface {
+	// Insert writes a pre-validated, pre-hashed token row. Returns
+	// ErrPrefixConflict on a unique-violation specifically over the
+	// prefix column so the caller can retry with a fresh prefix.
+	Insert(ctx context.Context, params InsertParams) (*Token, error)
+
+	ListByUser(ctx context.Context, userID int64) ([]*Token, error)
+	Revoke(ctx context.Context, id, userID int64) error
+	GetByPrefix(ctx context.Context, prefix string) (*Token, error)
+	TouchLastUsed(ctx context.Context, id int64) error
+}
+
+// Store is the handler-facing interface. Adds validation + secret
+// minting on top of Repo.
 type Store interface {
-	// Create generates a fresh secret, persists the hash with prefix +
-	// scopes + expiry, and returns the row + plaintext.
+	// Create validates name + scopes, mints a fresh secret, bcrypts it,
+	// and persists. Returns the row + the wire-format plaintext shown
+	// to the user exactly once.
 	Create(ctx context.Context, userID int64, name string, scopes []Scope, expiresAt *time.Time) (*CreatedToken, error)
 
-	// ListByUser returns all tokens belonging to userID, including revoked
-	// ones (the UI may want to show revoked history). Caller filters.
 	ListByUser(ctx context.Context, userID int64) ([]*Token, error)
-
-	// Revoke marks the token revoked. Returns ErrTokenNotFound if id
-	// doesn't exist or doesn't belong to userID.
 	Revoke(ctx context.Context, id, userID int64) error
-
-	// GetByPrefix loads the token row for the given public prefix. Used
-	// by Validator; not exposed to handlers.
-	GetByPrefix(ctx context.Context, prefix string) (*Token, error)
-
-	// TouchLastUsed bumps last_used_at to NOW(). Best-effort; ignore
-	// errors at call sites.
-	TouchLastUsed(ctx context.Context, id int64) error
 }
 
 // Validator resolves a plaintext PAT to its bearer user. It's a separate
@@ -121,8 +161,11 @@ type Validator interface {
 }
 
 var (
-	ErrTokenNotFound = errors.New("token not found")
-	ErrTokenInvalid  = errors.New("token invalid format")
-	ErrTokenExpired  = errors.New("token expired")
-	ErrTokenRevoked  = errors.New("token revoked")
+	ErrTokenNotFound  = errors.New("token not found")
+	ErrTokenInvalid   = errors.New("token invalid format")
+	ErrTokenExpired   = errors.New("token expired")
+	ErrTokenRevoked   = errors.New("token revoked")
+	ErrInvalidName    = errors.New("invalid token name")
+	ErrInvalidScope   = errors.New("invalid token scope")
+	ErrPrefixConflict = errors.New("token prefix conflict")
 )

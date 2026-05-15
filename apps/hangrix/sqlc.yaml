@@ -69,3 +69,40 @@ sql:
         emit_interface: false
         emit_exact_table_names: false
         emit_empty_slices: true
+  - engine: postgresql
+    queries: internal/modules/llm_provider/infra/queries.sql
+    # llm_providers FKs users(id) for created_by; llm_usage_log keeps no FK
+    # to the runner module so the schema set stays narrow.
+    schema:
+      - internal/modules/user/infra/migrations
+      - internal/modules/llm_provider/infra/migrations
+    gen:
+      go:
+        package: llmproviderdb
+        out: internal/modules/llm_provider/infra/llmproviderdb
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_empty_slices: true
+  - engine: postgresql
+    queries: internal/modules/runner/infra/queries.sql
+    # runner tables FK users(id) (created_by) and repos(id) (agent_sessions.repo_id);
+    # union user + org + repo migrations so sqlc can resolve both. At
+    # runtime each module applies only its own migrations.
+    schema:
+      - internal/modules/user/infra/migrations
+      - internal/modules/org/infra/migrations
+      - internal/modules/repo/infra/migrations
+      - internal/modules/runner/infra/migrations
+    gen:
+      go:
+        package: runnerdb
+        out: internal/modules/runner/infra/runnerdb
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_empty_slices: true

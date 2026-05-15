@@ -15,7 +15,6 @@ import (
 
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/token/domain"
-	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/token/infra"
 )
 
 type Handler struct {
@@ -110,9 +109,9 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	created, err := h.store.Create(r.Context(), caller.ID, req.Name, scopes, expiresAt)
 	if err != nil {
 		switch {
-		case errors.Is(err, infra.ErrInvalidName):
+		case errors.Is(err, domain.ErrInvalidName):
 			writeError(w, http.StatusBadRequest, "invalid name (1-64 chars)")
-		case errors.Is(err, infra.ErrInvalidScope):
+		case errors.Is(err, domain.ErrInvalidScope):
 			writeError(w, http.StatusBadRequest, "invalid scope")
 		default:
 			writeError(w, http.StatusInternalServerError, err.Error())

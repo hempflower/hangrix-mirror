@@ -16,6 +16,7 @@ import (
 	llmproxy "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_proxy"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/org"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/token"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/user"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/server"
@@ -42,6 +43,7 @@ func main() {
 		issue.Module(),
 		llmprovider.Module(),
 		llmproxy.Module(),
+		runner.Module(),
 		web.Module(),
 	)
 

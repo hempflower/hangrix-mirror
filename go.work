@@ -3,6 +3,7 @@ go 1.26.1
 use (
 	./apps/hangrix
 	./apps/hangrix-agent
+	./apps/hangrix-runner
 	./pkg/common
 	./pkg/cryptobox
 	./pkg/ioc
