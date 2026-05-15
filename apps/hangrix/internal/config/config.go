@@ -14,6 +14,18 @@ type Config struct {
 	Redis    RedisConfig    `mapstructure:"redis"`
 	Auth     AuthConfig     `mapstructure:"auth"`
 	Storage  StorageConfig  `mapstructure:"storage"`
+	LLM      LLMConfig      `mapstructure:"llm"`
+}
+
+// LLMConfig holds platform-wide LLM settings — currently just the AES-256
+// master key used by modules/llm_provider to encrypt provider api keys at
+// rest. Per-provider details (base_url / api_key / allowed_models) live in
+// the database, not here.
+type LLMConfig struct {
+	// EncryptionKey is a base64-encoded 32-byte key required to seal and
+	// unseal provider api keys. The llm_provider module panics at startup
+	// if it is unset or malformed.
+	EncryptionKey string `mapstructure:"encryption_key"`
 }
 
 type StorageConfig struct {

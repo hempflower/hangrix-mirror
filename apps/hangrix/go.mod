@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/hangrix/hangrix/pkg/common v0.0.0
+	github.com/hangrix/hangrix/pkg/cryptobox v0.0.0
 	github.com/hangrix/hangrix/pkg/ioc v0.0.0
 	github.com/spf13/viper v1.21.0
 )
@@ -74,6 +75,7 @@ require (
 
 replace (
 	github.com/hangrix/hangrix/pkg/common => ../../pkg/common
+	github.com/hangrix/hangrix/pkg/cryptobox => ../../pkg/cryptobox
 	github.com/hangrix/hangrix/pkg/ioc => ../../pkg/ioc
 )
 

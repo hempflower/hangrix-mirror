@@ -12,6 +12,8 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/healthz"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/hello"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue"
+	llmprovider "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider"
+	llmproxy "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_proxy"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/org"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/token"
@@ -38,6 +40,8 @@ func main() {
 		org.Module(),
 		repo.Module(),
 		issue.Module(),
+		llmprovider.Module(),
+		llmproxy.Module(),
 		web.Module(),
 	)
 
