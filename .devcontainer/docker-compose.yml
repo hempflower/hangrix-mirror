@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   app:
-    image: mcr.microsoft.com/devcontainers/go:1.26
+    image: mcr.microsoft.com/devcontainers/go:1.26-bookworm
     volumes:
       - ../..:/workspaces:cached
       # docker-outside-of-docker: host's docker socket so `docker` inside
