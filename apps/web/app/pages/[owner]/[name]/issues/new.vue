@@ -19,6 +19,16 @@ const router = useRouter()
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
 
+setBreadcrumbs(() => {
+  const base = `/${owner.value}/${name.value}`
+  return [
+    { label: owner.value, to: base },
+    { label: name.value, to: base },
+    { label: t('repo.tabs2.issues'), to: `${base}/issues` },
+    { label: t('issue.newTitle') },
+  ]
+})
+
 const { repo, load: loadRepo } = useRepo(() => owner.value, () => name.value)
 
 // parent query param drives sub-issue creation. Surfaces the parent's

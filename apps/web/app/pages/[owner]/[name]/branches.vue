@@ -40,6 +40,17 @@ definePageMeta({ layout: 'repo' })
 
 const { t } = useI18n()
 const route = useRoute()
+
+setBreadcrumbs(() => {
+  const owner = String(route.params.owner ?? '')
+  const name = String(route.params.name ?? '')
+  const base = `/${owner}/${name}`
+  return [
+    { label: owner, to: base },
+    { label: name, to: base },
+    { label: t('repo.tabs.branches') },
+  ]
+})
 const { user } = useCurrentUser()
 
 const owner = computed(() => String(route.params.owner ?? ''))

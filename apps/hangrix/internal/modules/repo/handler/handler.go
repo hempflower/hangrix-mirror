@@ -22,6 +22,7 @@ import (
 
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
+	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/infra"
 	tokendomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/token/domain"
@@ -49,6 +50,8 @@ type Handler struct {
 	storage     *infra.Storage
 	git         gitdomain.Git
 	users       userdomain.Repo
+	orgs        orgdomain.OrgRepo
+	resolver    orgdomain.Resolver
 	tokens      tokendomain.Validator
 	middleware  authdomain.Middleware
 	guards      []domain.BranchWriteGuard
@@ -61,8 +64,13 @@ type HandlerDeps struct {
 	Storage     *infra.Storage
 	Git         gitdomain.Git
 	Users       userdomain.Repo
-	Tokens      tokendomain.Validator
-	Middleware  authdomain.Middleware
+	// Orgs + Resolver come from the org module. Orgs handles
+	// "is caller a member of this org" / "what's their role" queries; the
+	// Resolver turns the path-segment {owner} into an Owner (kind, id, name).
+	Orgs       orgdomain.OrgRepo
+	Resolver   orgdomain.Resolver
+	Tokens     tokendomain.Validator
+	Middleware authdomain.Middleware
 	// Guards is injected as the slice of every BranchWriteGuard registered
 	// in the ioc container — currently 0 or 1 element (the issue module's
 	// guard). The handler iterates in order; first non-nil error wins.
@@ -80,6 +88,8 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		storage:     deps.Storage,
 		git:         deps.Git,
 		users:       deps.Users,
+		orgs:        deps.Orgs,
+		resolver:    deps.Resolver,
 		tokens:      deps.Tokens,
 		middleware:  deps.Middleware,
 		guards:      deps.Guards,
@@ -130,6 +140,18 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Get("/", h.listByUsername)
 	})
 
+	r.Route("/api/orgs/{org}/repos", func(r chi.Router) {
+		r.Use(h.middleware.RequireAuth)
+		r.Get("/", h.listByOrg)
+	})
+
+	// Ownership transfer. Sits under /api/repos rather than the org module
+	// since the caller is identified by the source repo, not by the target
+	// owner. POST not PATCH because the action is non-idempotent and
+	// rearranges filesystem state.
+	r.With(h.middleware.RequireAuth).
+		Post("/api/repos/{owner}/{name}/transfer", h.transfer)
+
 	// Smart HTTP. Auth is handled inline (cookie / Basic-password / Basic-PAT),
 	// so these routes deliberately skip RequireAuth. See git_http.go for the
 	// auth flow. Both upload-pack (read) and receive-pack (write) are wired
@@ -140,11 +162,14 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 }
 
 // publicRepo is the JSON projection. We mirror the DB fields one-to-one and
-// add owner_username so the client never has to do a second lookup to build
-// a clone URL.
+// expose owner_kind / owner_name (with owner_username kept as a kind-blind
+// alias so the existing UI can continue to build clone URLs without caring
+// whether the owner is a user or an org).
 type publicRepo struct {
 	ID            int64     `json:"id"`
+	OwnerKind     string    `json:"owner_kind"`
 	OwnerID       int64     `json:"owner_id"`
+	OwnerName     string    `json:"owner_name"`
 	OwnerUsername string    `json:"owner_username"`
 	Name          string    `json:"name"`
 	Description   string    `json:"description"`
@@ -157,8 +182,10 @@ type publicRepo struct {
 func toPublic(r *domain.Repo) publicRepo {
 	return publicRepo{
 		ID:            r.ID,
+		OwnerKind:     string(r.OwnerKind),
 		OwnerID:       r.OwnerID,
-		OwnerUsername: r.OwnerUsername,
+		OwnerName:     r.OwnerName,
+		OwnerUsername: r.OwnerName,
 		Name:          r.Name,
 		Description:   r.Description,
 		Visibility:    string(r.Visibility),
@@ -176,6 +203,10 @@ type createReq struct {
 	Visibility    string `json:"visibility"`
 	DefaultBranch string `json:"default_branch,omitempty"`
 	InitReadme    bool   `json:"init_readme,omitempty"`
+	// Owner optionally selects the target owner namespace. Empty means
+	// "the calling user"; a non-empty value must resolve to a user (the
+	// caller themselves) or an org of which the caller is a member.
+	Owner string `json:"owner,omitempty"`
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
@@ -209,7 +240,12 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	repo, err := h.store.Create(ctx, caller.ID, req.Name, req.Description, defaultBranch, visibility)
+	ownerKind, ownerID, ownerName, ok := h.resolveCreateOwner(w, r, caller, strings.TrimSpace(req.Owner))
+	if !ok {
+		return
+	}
+
+	repo, err := h.store.Create(ctx, ownerKind, ownerID, req.Name, req.Description, defaultBranch, visibility)
 	if err != nil {
 		if errors.Is(err, domain.ErrRepoConflict) {
 			writeError(w, http.StatusConflict, "repo already exists")
@@ -221,14 +257,58 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 
 	// Best-effort filesystem init. On failure we roll back the DB row so the
 	// caller can retry with the same name; otherwise the metadata row would
-	// orphan a missing bare repo.
-	if err := h.storage.InitOnDisk(repo, caller.Username, req.InitReadme, caller.Username, caller.Email); err != nil {
+	// orphan a missing bare repo. The seed commit's author identity is still
+	// the calling user regardless of who ends up owning the repo.
+	if err := h.storage.InitOnDisk(repo, ownerName, req.InitReadme, caller.Username, caller.Email); err != nil {
 		_ = h.store.Delete(ctx, repo.ID)
 		writeError(w, http.StatusInternalServerError, "init repo: "+err.Error())
 		return
 	}
 
 	writeJSON(w, http.StatusCreated, toPublic(repo))
+}
+
+// resolveCreateOwner inspects the optional req.Owner field and returns the
+// (kind, id, name) tuple to create the repo under. The caller is the
+// authoritative source for the "no owner specified → use my account" path.
+// For an explicit owner: it must resolve to either the caller themselves or
+// an org of which the caller is a member (any role — admin tightening is a
+// follow-up). Anything else → 403/404 as appropriate, and ok=false.
+func (h *Handler) resolveCreateOwner(w http.ResponseWriter, r *http.Request, caller *userdomain.User, ownerName string) (domain.OwnerKind, int64, string, bool) {
+	if ownerName == "" || ownerName == caller.Username {
+		return domain.OwnerKindUser, caller.ID, caller.Username, true
+	}
+	owner, err := h.resolver.ResolveOwner(r.Context(), ownerName)
+	if err != nil {
+		if errors.Is(err, orgdomain.ErrOwnerNotFound) || errors.Is(err, orgdomain.ErrOrgReserved) {
+			writeError(w, http.StatusNotFound, "owner not found")
+			return "", 0, "", false
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return "", 0, "", false
+	}
+	switch owner.Kind {
+	case orgdomain.OwnerKindUser:
+		// Only the caller themselves may create under a user namespace.
+		if owner.ID != caller.ID {
+			writeError(w, http.StatusForbidden, "cannot create repo under another user")
+			return "", 0, "", false
+		}
+		return domain.OwnerKindUser, owner.ID, owner.Name, true
+	case orgdomain.OwnerKindOrg:
+		_, ok, err := h.resolver.Membership(r.Context(), owner.ID, caller.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return "", 0, "", false
+		}
+		if !ok && caller.Role != userdomain.RoleAdmin {
+			writeError(w, http.StatusForbidden, "not an org member")
+			return "", 0, "", false
+		}
+		return domain.OwnerKindOrg, owner.ID, owner.Name, true
+	}
+	writeError(w, http.StatusInternalServerError, "unknown owner kind")
+	return "", 0, "", false
 }
 
 type listResp struct {
@@ -240,7 +320,7 @@ func (h *Handler) listMine(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authdomain.UserFromRequest(r)
 	offset, limit := parseOffsetLimit(r)
 
-	repos, total, err := h.store.ListByOwner(r.Context(), caller.ID, true, offset, limit)
+	repos, total, err := h.store.ListByOwner(r.Context(), domain.OwnerKindUser, caller.ID, true, offset, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -268,7 +348,43 @@ func (h *Handler) listByUsername(w http.ResponseWriter, r *http.Request) {
 	includePrivate := caller.ID == owner.ID || caller.Role == userdomain.RoleAdmin
 
 	offset, limit := parseOffsetLimit(r)
-	repos, total, err := h.store.ListByOwner(r.Context(), owner.ID, includePrivate, offset, limit)
+	repos, total, err := h.store.ListByOwner(r.Context(), domain.OwnerKindUser, owner.ID, includePrivate, offset, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, listRespFrom(repos, total))
+}
+
+func (h *Handler) listByOrg(w http.ResponseWriter, r *http.Request) {
+	orgName := chi.URLParam(r, "org")
+	if !usernameRe.MatchString(orgName) {
+		writeError(w, http.StatusBadRequest, "invalid org")
+		return
+	}
+	org, err := h.orgs.GetByName(r.Context(), orgName)
+	if err != nil {
+		if errors.Is(err, orgdomain.ErrOrgNotFound) {
+			writeError(w, http.StatusNotFound, "org not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	caller, _ := authdomain.UserFromRequest(r)
+	_, isMember, err := h.resolver.Membership(r.Context(), org.ID, caller.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Members (or admin) get the full listing including private repos;
+	// every other authenticated caller still sees the org but only its
+	// public repos. Org rows themselves don't carry a visibility flag.
+	includePrivate := isMember || caller.Role == userdomain.RoleAdmin
+
+	offset, limit := parseOffsetLimit(r)
+	repos, total, err := h.store.ListByOwner(r.Context(), domain.OwnerKindOrg, org.ID, includePrivate, offset, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -381,11 +497,104 @@ func (h *Handler) deleteOne(w http.ResponseWriter, r *http.Request) {
 	}
 	// DB row is gone; remove the bare repo. Best-effort: log-equivalent is a
 	// 500 only if removal failed in a way that isn't "already missing".
-	if err := h.storage.DeleteOnDisk(repo.OwnerUsername, repo.Name); err != nil {
+	if err := h.storage.DeleteOnDisk(repo.OwnerName, repo.Name); err != nil {
 		writeError(w, http.StatusInternalServerError, "remove repo dir: "+err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---- Transfer ----
+
+type transferReq struct {
+	TargetOwner string `json:"target_owner"`
+	Confirm     string `json:"confirm"` // must equal "<owner>/<name>" of the source repo
+}
+
+// transfer moves a repo to a new owner namespace. Caller must already be
+// allowed to write the source repo (owner / org-owner-role / admin), and
+// must be a valid owner of the target (themselves, or an org owner of the
+// target org). DB swap + on-disk rename happen sequentially; if the rename
+// fails we roll the DB row back so a re-tried transfer can succeed.
+func (h *Handler) transfer(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForWrite(w, r)
+	if !ok {
+		return
+	}
+
+	var req transferReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	target := strings.TrimSpace(req.TargetOwner)
+	if !usernameRe.MatchString(target) {
+		writeError(w, http.StatusBadRequest, "invalid target_owner")
+		return
+	}
+	expectConfirm := repo.OwnerName + "/" + repo.Name
+	if strings.TrimSpace(req.Confirm) != expectConfirm {
+		writeError(w, http.StatusBadRequest, "confirm must match '<owner>/<name>'")
+		return
+	}
+
+	caller, _ := authdomain.UserFromRequest(r)
+	owner, err := h.resolver.ResolveOwner(r.Context(), target)
+	if err != nil {
+		if errors.Is(err, orgdomain.ErrOwnerNotFound) || errors.Is(err, orgdomain.ErrOrgReserved) {
+			writeError(w, http.StatusNotFound, "target owner not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Caller must have rights to push into the target. Same rules as create.
+	switch owner.Kind {
+	case orgdomain.OwnerKindUser:
+		if owner.ID != caller.ID && caller.Role != userdomain.RoleAdmin {
+			writeError(w, http.StatusForbidden, "cannot transfer to another user")
+			return
+		}
+	case orgdomain.OwnerKindOrg:
+		role, isMember, err := h.resolver.Membership(r.Context(), owner.ID, caller.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if (!isMember || role != orgdomain.RoleOwner) && caller.Role != userdomain.RoleAdmin {
+			writeError(w, http.StatusForbidden, "must be an org owner of the target")
+			return
+		}
+	}
+
+	newKind := domain.OwnerKind(owner.Kind)
+	if repo.OwnerKind == newKind && repo.OwnerID == owner.ID {
+		// No-op: same owner. Return the current repo so callers can treat
+		// transfer as idempotent.
+		writeJSON(w, http.StatusOK, toPublic(repo))
+		return
+	}
+
+	updated, err := h.store.Transfer(r.Context(), repo.ID, newKind, owner.ID)
+	if err != nil {
+		if errors.Is(err, domain.ErrRepoConflict) {
+			writeError(w, http.StatusConflict, "target already has a repo by that name")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := h.storage.RenameOnDisk(repo.OwnerName, repo.Name, owner.Name, repo.Name); err != nil {
+		// Disk rename failed — undo the DB swap so the source location
+		// remains the canonical truth. We swallow the rollback error
+		// (logging not yet wired in this module); if rollback also fails
+		// the admin can move the directory by hand and re-run transfer.
+		_, _ = h.store.Transfer(r.Context(), repo.ID, repo.OwnerKind, repo.OwnerID)
+		writeError(w, http.StatusInternalServerError, "rename on disk: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, toPublic(updated))
 }
 
 // ---- Git reads ----
@@ -698,7 +907,12 @@ func (h *Handler) resolveRepoForRead(w http.ResponseWriter, r *http.Request) (*d
 	}
 	caller, _ := authdomain.UserFromRequest(r)
 	if repo.Visibility == domain.VisibilityPrivate {
-		if caller.ID != repo.OwnerID && caller.Role != userdomain.RoleAdmin {
+		can, err := h.canReadRepo(r.Context(), caller, repo)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return nil, false
+		}
+		if !can {
 			writeError(w, http.StatusForbidden, "forbidden")
 			return nil, false
 		}
@@ -707,18 +921,67 @@ func (h *Handler) resolveRepoForRead(w http.ResponseWriter, r *http.Request) (*d
 }
 
 // resolveRepoForWrite enforces owner-or-admin authorization for mutating
-// endpoints (PATCH / DELETE).
+// endpoints (PATCH / DELETE / branch and tag writes).
 func (h *Handler) resolveRepoForWrite(w http.ResponseWriter, r *http.Request) (*domain.Repo, bool) {
 	repo, ok := h.loadRepoFromPath(w, r)
 	if !ok {
 		return nil, false
 	}
 	caller, _ := authdomain.UserFromRequest(r)
-	if caller.ID != repo.OwnerID && caller.Role != userdomain.RoleAdmin {
+	can, err := h.canWriteRepo(r.Context(), caller, repo)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return nil, false
+	}
+	if !can {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return nil, false
 	}
 	return repo, true
+}
+
+// canReadRepo: caller may read a (private) repo if they own it (user-owned),
+// are any-role member of the owning org, or are a platform admin.
+func (h *Handler) canReadRepo(ctx context.Context, caller *userdomain.User, repo *domain.Repo) (bool, error) {
+	if caller == nil {
+		return false, nil
+	}
+	if caller.Role == userdomain.RoleAdmin {
+		return true, nil
+	}
+	switch repo.OwnerKind {
+	case domain.OwnerKindUser:
+		return caller.ID == repo.OwnerID, nil
+	case domain.OwnerKindOrg:
+		_, ok, err := h.resolver.Membership(ctx, repo.OwnerID, caller.ID)
+		return ok, err
+	}
+	return false, nil
+}
+
+// canWriteRepo: caller may write to a repo if they are the user owner
+// (user-owned), an owner-role member of the org (org-owned), or admin. v1
+// keeps writes owner-only inside orgs — member-but-not-owner readers can't
+// push or mutate metadata. Tightening / relaxing this lives behind a future
+// repo-level role table (M10+).
+func (h *Handler) canWriteRepo(ctx context.Context, caller *userdomain.User, repo *domain.Repo) (bool, error) {
+	if caller == nil {
+		return false, nil
+	}
+	if caller.Role == userdomain.RoleAdmin {
+		return true, nil
+	}
+	switch repo.OwnerKind {
+	case domain.OwnerKindUser:
+		return caller.ID == repo.OwnerID, nil
+	case domain.OwnerKindOrg:
+		role, ok, err := h.resolver.Membership(ctx, repo.OwnerID, caller.ID)
+		if err != nil || !ok {
+			return false, err
+		}
+		return role == orgdomain.RoleOwner, nil
+	}
+	return false, nil
 }
 
 func (h *Handler) loadRepoFromPath(w http.ResponseWriter, r *http.Request) (*domain.Repo, bool) {
@@ -732,16 +995,16 @@ func (h *Handler) loadRepoFromPath(w http.ResponseWriter, r *http.Request) (*dom
 		writeError(w, http.StatusBadRequest, "invalid name")
 		return nil, false
 	}
-	owner, err := h.users.GetByUsername(r.Context(), ownerName)
+	owner, err := h.resolver.ResolveOwner(r.Context(), ownerName)
 	if err != nil {
-		if errors.Is(err, userdomain.ErrUserNotFound) {
+		if errors.Is(err, orgdomain.ErrOwnerNotFound) || errors.Is(err, orgdomain.ErrOrgReserved) {
 			writeError(w, http.StatusNotFound, "repo not found")
 			return nil, false
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return nil, false
 	}
-	repo, err := h.store.GetByOwnerAndName(r.Context(), owner.ID, repoName)
+	repo, err := h.store.GetByOwnerAndName(r.Context(), domain.OwnerKind(owner.Kind), owner.ID, repoName)
 	if err != nil {
 		if errors.Is(err, domain.ErrRepoNotFound) {
 			writeError(w, http.StatusNotFound, "repo not found")
@@ -754,7 +1017,7 @@ func (h *Handler) loadRepoFromPath(w http.ResponseWriter, r *http.Request) (*dom
 }
 
 func (h *Handler) resolveFsPath(w http.ResponseWriter, repo *domain.Repo) (string, bool) {
-	path, err := h.storage.ResolvePath(repo.OwnerUsername, repo.Name)
+	path, err := h.storage.ResolvePath(repo.OwnerName, repo.Name)
 	if err != nil {
 		// This shouldn't happen — the names already passed handler-level
 		// validation — but guard anyway since Storage owns the FS rules.

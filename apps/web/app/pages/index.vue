@@ -8,6 +8,8 @@ import { Badge } from '@/components/ui/badge'
 const { t } = useI18n()
 const { user } = useCurrentUser()
 
+setBreadcrumbs(() => [{ label: t('nav.dashboard') }])
+
 const stats = computed(() => {
   if (!user.value) return []
   return [

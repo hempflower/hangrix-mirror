@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { toTypedSchema } from '@vee-validate/zod'
 import * as z from 'zod'
 
@@ -10,26 +10,62 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Label } from '@/components/ui/label'
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import type { PublicRepo } from '~/types/repo'
 
 const { t } = useI18n()
+
+setBreadcrumbs(() => [
+  { label: t('repo.title'), to: '/repos' },
+  { label: t('repo.create') },
+])
 const router = useRouter()
+const route = useRoute()
+const { user, refresh: refreshUser } = useCurrentUser()
+const { orgs: myOrgs, refresh: refreshMyOrgs } = useMyOrgs()
+
+// Owner picker options: SELF_SENTINEL = the caller's own user namespace,
+// anything else = an org name they belong to. The sentinel is a non-empty
+// placeholder because reka-ui's <Select> forbids empty-string item values.
+// `?owner=acme` in the URL preselects an org (used by the org profile
+// "Create repo" button).
+const SELF_SENTINEL = '__self__'
+const ownerOptions = computed<{ value: string; label: string }[]>(() => {
+  const me = user.value?.username ?? ''
+  return [
+    { value: SELF_SENTINEL, label: me ? `@${me}` : t('repo.create') },
+    ...(myOrgs.value ?? []).map(o => ({ value: o.name, label: o.name })),
+  ]
+})
+
+const initialOwner = computed(() => {
+  const q = route.query.owner
+  return typeof q === 'string' && q ? q : SELF_SENTINEL
+})
 
 const schema = computed(() => toTypedSchema(z.object({
   name: z.string().regex(/^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/),
+  owner: z.string().optional(),
   description: z.string().max(500).optional(),
   visibility: z.enum(['public', 'private']),
   default_branch: z.string().max(100).optional(),
   init_readme: z.boolean().optional(),
 })))
 
-const initial = {
+const initial = computed(() => ({
   name: '',
+  owner: initialOwner.value,
   description: '',
   visibility: 'private' as const,
   default_branch: 'main',
   init_readme: true,
-}
+}))
 
 const formError = ref<string | null>(null)
 
@@ -41,6 +77,10 @@ async function onSubmit(values: any) {
     visibility: values.visibility,
     init_readme: !!values.init_readme,
   }
+  const ownerVal = (values.owner ?? '').trim()
+  if (ownerVal && ownerVal !== SELF_SENTINEL) {
+    body.owner = ownerVal
+  }
   if (values.default_branch && values.default_branch.trim()) {
     body.default_branch = values.default_branch.trim()
   }
@@ -50,11 +90,16 @@ async function onSubmit(values: any) {
       credentials: 'include',
       body,
     })
-    router.push(`/${repo.owner_username}/${repo.name}`)
+    router.push(`/${repo.owner_name}/${repo.name}`)
   } catch (e: any) {
     formError.value = e?.data?.error ?? t('repo.createFailed')
   }
 }
+
+onMounted(async () => {
+  if (!user.value) await refreshUser()
+  await refreshMyOrgs()
+})
 </script>
 
 <template>
@@ -75,6 +120,29 @@ async function onSubmit(values: any) {
           <CardDescription>{{ t('repo.createSubtitle') }}</CardDescription>
         </CardHeader>
         <CardContent class="space-y-4">
+          <FormField name="owner">
+            <FormItem>
+              <FormLabel>{{ t('repo.owner') }}</FormLabel>
+              <FormControl>
+                <Select
+                  :model-value="values.owner || SELF_SENTINEL"
+                  @update:model-value="(v) => setFieldValue('owner', String(v ?? SELF_SENTINEL))"
+                >
+                  <SelectTrigger class="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem v-for="o in ownerOptions" :key="o.value" :value="o.value">
+                      {{ o.label }}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </FormControl>
+              <p class="text-xs text-muted-foreground">{{ t('repo.ownerHint') }}</p>
+              <FormMessage />
+            </FormItem>
+          </FormField>
+
           <FormField v-slot="{ componentField }" name="name">
             <FormItem>
               <FormLabel>{{ t('repo.name') }}</FormLabel>

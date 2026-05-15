@@ -16,6 +16,7 @@ import (
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
+	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	userdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/user/domain"
 )
 
@@ -26,13 +27,19 @@ type Handler struct {
 
 	sessions   domain.SessionStore
 	users      userdomain.Repo
+	orgs       orgdomain.OrgRepo
 	middleware domain.Middleware
 }
 
 type HandlerDeps struct {
-	Config     *config.Config
-	Sessions   domain.SessionStore
-	Users      userdomain.Repo
+	Config   *config.Config
+	Sessions domain.SessionStore
+	Users    userdomain.Repo
+	// Orgs is used at registration time to keep the user-name namespace
+	// disjoint from the org-name namespace. The two failure modes
+	// ("org already taken" / "user already taken") collapse into one
+	// 409 — the caller picks a different name either way.
+	Orgs       orgdomain.OrgRepo
 	Middleware domain.Middleware
 }
 
@@ -43,6 +50,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		sessionTTL:   deps.Config.Auth.SessionTTL,
 		sessions:     deps.Sessions,
 		users:        deps.Users,
+		orgs:         deps.Orgs,
 		middleware:   deps.Middleware,
 	}
 }
@@ -95,6 +103,14 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "username must be 3-32 chars")
 		return
 	}
+	// Reserved-name + cross-namespace (orgs) check. We refuse to mint a user
+	// whose username would shadow an existing org name; the org route
+	// /{owner}/{name} treats both kinds uniformly, so a collision would
+	// silently make one of them unreachable.
+	if orgdomain.IsReservedName(req.Username) {
+		writeError(w, http.StatusConflict, "username is reserved")
+		return
+	}
 	if _, err := mail.ParseAddress(req.Email); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid email")
 		return
@@ -111,6 +127,13 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	if exists, err := h.orgs.Exists(ctx, req.Username); err != nil {
+		writeError(w, http.StatusInternalServerError, "name lookup failed")
+		return
+	} else if exists {
+		writeError(w, http.StatusConflict, "username already exists")
+		return
+	}
 	count, err := h.users.Count(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "count users failed")

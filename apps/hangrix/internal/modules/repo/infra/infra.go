@@ -16,9 +16,11 @@ import (
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
+	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/infra/repodb"
 )
@@ -35,9 +37,15 @@ type PostgresStore struct {
 
 type PostgresStoreDeps struct {
 	Pool *pgxpool.Pool
+	// Orgs is wired purely for migration ordering: the M5 repo migration
+	// adds an `owner_org_id` column with an FK to organizations(id), so the
+	// org module's migrations must run first. ioc constructs deps before
+	// owners, so depending on the resolver guarantees the right order.
+	Orgs orgdomain.Resolver
 }
 
 func NewPostgresStore(deps *PostgresStoreDeps) *PostgresStore {
+	_ = deps.Orgs // see deps doc comment — referenced for build order only.
 	sub, err := fs.Sub(migrationsFS, "migrations")
 	if err != nil {
 		panic(fmt.Errorf("repo migrations sub-fs: %w", err))
@@ -48,24 +56,38 @@ func NewPostgresStore(deps *PostgresStoreDeps) *PostgresStore {
 	return &PostgresStore{q: repodb.New(deps.Pool)}
 }
 
-func (s *PostgresStore) Create(ctx context.Context, ownerID int64, name, description, defaultBranch string, visibility domain.Visibility) (*domain.Repo, error) {
-	row, err := s.q.CreateRepo(ctx, repodb.CreateRepoParams{
-		OwnerID:       ownerID,
-		Name:          name,
-		Description:   description,
-		Visibility:    string(visibility),
-		DefaultBranch: defaultBranch,
-	})
+func (s *PostgresStore) Create(ctx context.Context, ownerKind domain.OwnerKind, ownerID int64, name, description, defaultBranch string, visibility domain.Visibility) (*domain.Repo, error) {
+	var row repodb.Repo
+	var err error
+	switch ownerKind {
+	case domain.OwnerKindUser:
+		row, err = s.q.CreateRepoForUser(ctx, repodb.CreateRepoForUserParams{
+			OwnerUserID:   pgtype.Int8{Int64: ownerID, Valid: true},
+			Name:          name,
+			Description:   description,
+			Visibility:    string(visibility),
+			DefaultBranch: defaultBranch,
+		})
+	case domain.OwnerKindOrg:
+		row, err = s.q.CreateRepoForOrg(ctx, repodb.CreateRepoForOrgParams{
+			OwnerOrgID:    pgtype.Int8{Int64: ownerID, Valid: true},
+			Name:          name,
+			Description:   description,
+			Visibility:    string(visibility),
+			DefaultBranch: defaultBranch,
+		})
+	default:
+		return nil, domain.ErrInvalidOwnerKind
+	}
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, domain.ErrRepoConflict
 		}
 		return nil, err
 	}
-	// Create returns the base row without owner_username; fetch the joined
-	// view so the caller gets a fully-populated Repo. This is one extra
-	// round-trip per create, which is acceptable given how infrequent
-	// creates are.
+	// Create returns the base row without owner_name; fetch the joined view
+	// so the caller gets a fully-populated Repo. This is one extra round-
+	// trip per create, which is acceptable given how infrequent creates are.
 	full, err := s.q.GetRepoByID(ctx, row.ID)
 	if err != nil {
 		return nil, err
@@ -84,42 +106,86 @@ func (s *PostgresStore) GetByID(ctx context.Context, id int64) (*domain.Repo, er
 	return joinedRowToRepo(row), nil
 }
 
-func (s *PostgresStore) GetByOwnerAndName(ctx context.Context, ownerID int64, name string) (*domain.Repo, error) {
-	row, err := s.q.GetRepoByOwnerAndName(ctx, repodb.GetRepoByOwnerAndNameParams{
-		OwnerID: ownerID,
-		Name:    name,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, domain.ErrRepoNotFound
+func (s *PostgresStore) GetByOwnerAndName(ctx context.Context, ownerKind domain.OwnerKind, ownerID int64, name string) (*domain.Repo, error) {
+	switch ownerKind {
+	case domain.OwnerKindUser:
+		row, err := s.q.GetRepoByUserOwnerAndName(ctx, repodb.GetRepoByUserOwnerAndNameParams{
+			OwnerUserID: pgtype.Int8{Int64: ownerID, Valid: true},
+			Name:        name,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, domain.ErrRepoNotFound
+			}
+			return nil, err
 		}
-		return nil, err
+		return userOwnerRowToRepo(row), nil
+	case domain.OwnerKindOrg:
+		row, err := s.q.GetRepoByOrgOwnerAndName(ctx, repodb.GetRepoByOrgOwnerAndNameParams{
+			OwnerOrgID: pgtype.Int8{Int64: ownerID, Valid: true},
+			Name:       name,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, domain.ErrRepoNotFound
+			}
+			return nil, err
+		}
+		return orgOwnerRowToRepo(row), nil
+	default:
+		return nil, domain.ErrInvalidOwnerKind
 	}
-	return joinedRowToRepo(repodb.GetRepoByIDRow(row)), nil
 }
 
-func (s *PostgresStore) ListByOwner(ctx context.Context, ownerID int64, includePrivate bool, offset, limit int32) ([]*domain.Repo, int64, error) {
-	rows, err := s.q.ListReposByOwner(ctx, repodb.ListReposByOwnerParams{
-		OwnerID:        ownerID,
-		Limit:          limit,
-		Offset:         offset,
-		IncludePrivate: includePrivate,
-	})
-	if err != nil {
-		return nil, 0, err
+func (s *PostgresStore) ListByOwner(ctx context.Context, ownerKind domain.OwnerKind, ownerID int64, includePrivate bool, offset, limit int32) ([]*domain.Repo, int64, error) {
+	switch ownerKind {
+	case domain.OwnerKindUser:
+		rows, err := s.q.ListReposByUserOwner(ctx, repodb.ListReposByUserOwnerParams{
+			OwnerUserID:    pgtype.Int8{Int64: ownerID, Valid: true},
+			Limit:          limit,
+			Offset:         offset,
+			IncludePrivate: includePrivate,
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+		total, err := s.q.CountReposByUserOwner(ctx, repodb.CountReposByUserOwnerParams{
+			OwnerUserID:    pgtype.Int8{Int64: ownerID, Valid: true},
+			IncludePrivate: includePrivate,
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+		out := make([]*domain.Repo, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, userListRowToRepo(r))
+		}
+		return out, total, nil
+	case domain.OwnerKindOrg:
+		rows, err := s.q.ListReposByOrgOwner(ctx, repodb.ListReposByOrgOwnerParams{
+			OwnerOrgID:     pgtype.Int8{Int64: ownerID, Valid: true},
+			Limit:          limit,
+			Offset:         offset,
+			IncludePrivate: includePrivate,
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+		total, err := s.q.CountReposByOrgOwner(ctx, repodb.CountReposByOrgOwnerParams{
+			OwnerOrgID:     pgtype.Int8{Int64: ownerID, Valid: true},
+			IncludePrivate: includePrivate,
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+		out := make([]*domain.Repo, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, orgListRowToRepo(r))
+		}
+		return out, total, nil
+	default:
+		return nil, 0, domain.ErrInvalidOwnerKind
 	}
-	total, err := s.q.CountReposByOwner(ctx, repodb.CountReposByOwnerParams{
-		OwnerID:        ownerID,
-		IncludePrivate: includePrivate,
-	})
-	if err != nil {
-		return nil, 0, err
-	}
-	out := make([]*domain.Repo, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, joinedRowToRepo(repodb.GetRepoByIDRow(r)))
-	}
-	return out, total, nil
 }
 
 func (s *PostgresStore) Delete(ctx context.Context, id int64) error {
@@ -156,11 +222,46 @@ func (s *PostgresStore) UpdateMeta(ctx context.Context, id int64, description, d
 	return joinedRowToRepo(full), nil
 }
 
+func (s *PostgresStore) Transfer(ctx context.Context, id int64, newOwnerKind domain.OwnerKind, newOwnerID int64) (*domain.Repo, error) {
+	var n int64
+	var err error
+	switch newOwnerKind {
+	case domain.OwnerKindUser:
+		n, err = s.q.TransferRepoToUser(ctx, repodb.TransferRepoToUserParams{
+			ID:          id,
+			OwnerUserID: pgtype.Int8{Int64: newOwnerID, Valid: true},
+		})
+	case domain.OwnerKindOrg:
+		n, err = s.q.TransferRepoToOrg(ctx, repodb.TransferRepoToOrgParams{
+			ID:         id,
+			OwnerOrgID: pgtype.Int8{Int64: newOwnerID, Valid: true},
+		})
+	default:
+		return nil, domain.ErrInvalidOwnerKind
+	}
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, domain.ErrRepoConflict
+		}
+		return nil, err
+	}
+	if n == 0 {
+		return nil, domain.ErrRepoNotFound
+	}
+	full, err := s.q.GetRepoByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return joinedRowToRepo(full), nil
+}
+
+// ---- row mappers ----
+
 func joinedRowToRepo(r repodb.GetRepoByIDRow) *domain.Repo {
-	return &domain.Repo{
+	out := &domain.Repo{
 		ID:            r.ID,
-		OwnerID:       r.OwnerID,
-		OwnerUsername: r.OwnerUsername,
+		OwnerKind:     domain.OwnerKind(r.OwnerKind),
+		OwnerName:     r.OwnerName,
 		Name:          r.Name,
 		Description:   r.Description,
 		Visibility:    domain.Visibility(r.Visibility),
@@ -168,6 +269,84 @@ func joinedRowToRepo(r repodb.GetRepoByIDRow) *domain.Repo {
 		CreatedAt:     r.CreatedAt.Time,
 		UpdatedAt:     r.UpdatedAt.Time,
 	}
+	if r.OwnerUserID.Valid {
+		out.OwnerID = r.OwnerUserID.Int64
+	} else if r.OwnerOrgID.Valid {
+		out.OwnerID = r.OwnerOrgID.Int64
+	}
+	return out
+}
+
+func userOwnerRowToRepo(r repodb.GetRepoByUserOwnerAndNameRow) *domain.Repo {
+	out := &domain.Repo{
+		ID:            r.ID,
+		OwnerKind:     domain.OwnerKind(r.OwnerKind),
+		OwnerName:     r.OwnerName,
+		Name:          r.Name,
+		Description:   r.Description,
+		Visibility:    domain.Visibility(r.Visibility),
+		DefaultBranch: r.DefaultBranch,
+		CreatedAt:     r.CreatedAt.Time,
+		UpdatedAt:     r.UpdatedAt.Time,
+	}
+	if r.OwnerUserID.Valid {
+		out.OwnerID = r.OwnerUserID.Int64
+	}
+	return out
+}
+
+func orgOwnerRowToRepo(r repodb.GetRepoByOrgOwnerAndNameRow) *domain.Repo {
+	out := &domain.Repo{
+		ID:            r.ID,
+		OwnerKind:     domain.OwnerKind(r.OwnerKind),
+		OwnerName:     r.OwnerName,
+		Name:          r.Name,
+		Description:   r.Description,
+		Visibility:    domain.Visibility(r.Visibility),
+		DefaultBranch: r.DefaultBranch,
+		CreatedAt:     r.CreatedAt.Time,
+		UpdatedAt:     r.UpdatedAt.Time,
+	}
+	if r.OwnerOrgID.Valid {
+		out.OwnerID = r.OwnerOrgID.Int64
+	}
+	return out
+}
+
+func userListRowToRepo(r repodb.ListReposByUserOwnerRow) *domain.Repo {
+	out := &domain.Repo{
+		ID:            r.ID,
+		OwnerKind:     domain.OwnerKind(r.OwnerKind),
+		OwnerName:     r.OwnerName,
+		Name:          r.Name,
+		Description:   r.Description,
+		Visibility:    domain.Visibility(r.Visibility),
+		DefaultBranch: r.DefaultBranch,
+		CreatedAt:     r.CreatedAt.Time,
+		UpdatedAt:     r.UpdatedAt.Time,
+	}
+	if r.OwnerUserID.Valid {
+		out.OwnerID = r.OwnerUserID.Int64
+	}
+	return out
+}
+
+func orgListRowToRepo(r repodb.ListReposByOrgOwnerRow) *domain.Repo {
+	out := &domain.Repo{
+		ID:            r.ID,
+		OwnerKind:     domain.OwnerKind(r.OwnerKind),
+		OwnerName:     r.OwnerName,
+		Name:          r.Name,
+		Description:   r.Description,
+		Visibility:    domain.Visibility(r.Visibility),
+		DefaultBranch: r.DefaultBranch,
+		CreatedAt:     r.CreatedAt.Time,
+		UpdatedAt:     r.UpdatedAt.Time,
+	}
+	if r.OwnerOrgID.Valid {
+		out.OwnerID = r.OwnerOrgID.Int64
+	}
+	return out
 }
 
 func isUniqueViolation(err error) bool {

@@ -21,15 +21,15 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 
 1. **Issue 是工作流的最小单位。** 任何代码变更都必须有一个 issue 承载它。没有"游离的分支"或"无 issue 的 PR"。这给了 agent 一个稳定的上下文锚点。
 2. **每个 git 实体都有 agent-friendly 表达。** 仓库、commit、diff、issue 既要给人看的 UI，也要给 agent 用的结构化形式（流式 diff、语义化摘要、可寻址的 anchor）。
-3. **agent 是 first-class identity，不是 webhook。** agent 有账号、有权限、有 audit log；它的提交、评论与人类账号同形。但 **agent identity 与 user 是不同实体**——用户表只代表人类，agent 走独立的模型（见 M6 的 agent-as-repo）。
+3. **agent 是 first-class identity，不是 webhook。** agent 有账号、有权限、有 audit log；它的提交、评论与人类账号同形。但 **agent identity 与 user 是不同实体**——用户表只代表人类，agent 走独立的模型（见 M7 的 agent-as-repo）。
 4. **平台能力以工具暴露，git 能力以 CLI 暴露。** 平台动作（issue 评论 / 看 diff / merge）走明确的工具集，agent 通过 MCP-style 调用；仓库读写直接用容器里的 `git` CLI —— 不把 git 包成一层平台工具，也不依赖把整个仓库塞进上下文。
 5. **可见 / 可停 / 可 revert，不做事前门禁。** agent 所有写操作（commit / merge / 评论）落审计，能快速 revert；admin / repo owner 能一键停某 agent 或关闭仓库的自动 session。不做"diff 行数限制 / 文件白名单 / 先批准再做"这类事前门禁 —— 安全靠事后约束。
 6. **本地优先的形态。** 当前以单二进制 + 嵌入式 SPA 形态运行；多租户/SaaS 形态是后续选项，不是前提。
-7. **Agent 运行环境由 host 仓库定义，agent 不可自决。** 同一 agent 在 Go 项目和 Node 项目跑的环境不同 —— 这是 host 该说的话。Agent 仓库（M6 的 agent-as-repo）只声明 prompt + 工具偏好，不声明镜像 / 包 / 解释器版本；host 仓库通过 `.hangrix/agents.yml` 声明容器（image 或 build）+ env + secrets + volumes。Agent 跨仓库可复用，host 各自管自己的工具链。
+7. **Agent 运行环境由 host 仓库定义，agent 不可自决。** 同一 agent 在 Go 项目和 Node 项目跑的环境不同 —— 这是 host 该说的话。Agent 仓库（M7 的 agent-as-repo）只声明 prompt + 工具偏好，不声明镜像 / 包 / 解释器版本；host 仓库通过 `.hangrix/agents.yml` 声明容器（image 或 build）+ env + secrets + volumes。Agent 跨仓库可复用，host 各自管自己的工具链。
 
-## 当前状态（M4 完成）
+## 当前状态（M5 完成）
 
-**M4 全部闭环。** Hangrix 已经把 issue 立成了产品主入口：一个 issue 同时是「对话 + git 分支 + （未来的）agent 会话」三位一体。所有非默认分支的 push 必须挂在某个开放 issue 下，默认分支只能被 issue merge 推进 —— 钩子和 web API 两侧都拒掉游离分支。形态上从 Gitea-like 切到了"issue-centric"，但 agent 还没接入，下一步从 M5a 的 LLM proxy 起步，沿 M5b（agent runtime）→ M5c（runner & 容器）的顺序把执行链路立起来。
+**M5 全部闭环。** Owner 命名空间从「只有用户」扩成「用户 ∪ 组织」：一个 organization 是独立的 owner 实体，能拥有仓库、有成员、有自己的 profile 和 settings 页。所有 git / issue 能力对 org-owned 仓库无感复用 —— 仓库路由 `/{owner}/{name}` 的 `<owner>` 透明接收 user 用户名或 org 名，由 `ResolveOwner` 一次解析。M7 起官方预设 agent（`hangrix/dispatcher` / `hangrix/maintainer`）的稳定归属位现在可以坐实。下一步沿 **M6a（LLM proxy）→ M6b（agent runtime）→ M6c（runner & 容器）** 把 agent 执行链路立起来。
 
 已就绪：
 - **脚手架（M0）**：Go 1.26 + Nuxt 4 单二进制；`pkg/ioc` DI；chi、viper、air、Turborepo。
@@ -38,8 +38,9 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 - **Git 平台（M3 核心）**：`modules/token` PAT + `git-receive-pack` 写路径 + 分支 / Tag CRUD + 仓库设置 + Compare + README 渲染。`resolveRef` 透明 peel annotated tag。
 - **协作辅助（M3 stretch）**：`branch_protections` 表 + `pre-receive` 钩子（force-push / delete 拦截）+ commit 包含查询 + archive 下载（zip / tar.gz）。
 - **Issue 容器（M4）**：`modules/issue` 完整模块 —— Issue / Comment / Event 三张表 + `issue_counters` per-repo 单调编号 + sub-issue（parent_id / parent_number）。Issue API：list / create / patch / merge / sync / timeline / diff / commits / children + 评论 create / list（**评论删除已撤回**——issue 时间线只追加不删除，删除按钮和后端路由都已移除）。**写入收紧**：`repodomain.BranchWriteGuard` + `PushObserver` 两个跨模块接口，issue 模块挂上去；`hangrix-issue-mode` sidecar 同步开放 issue 编号给 pre-receive 钩子，钩子里 base 锁定 + `issue/<n>` 校验双线生效；web API 的 `createBranch` / `deleteBranch` / receive-pack 也都跑同一份 guard。`MergeBranch` 三方合并实现进 `modules/git`（FF / merge-commit / up-to-date 三态 + 冲突哨兵 `ErrMergeConflict`）。前端：Issues 列表 / 详情 / 新建（含 `?parent=N` 子 issue 入口）；详情页 conversation + commits + diff 三 tab（tab 状态写进 `?tab=` URL 可分享 / 可回退）、GitHub 风格评论卡（avatar header strip + 相对时间 + tooltip 显示绝对时间戳）、评论 / 系统事件混排时间线、15s 自动刷新（hidden tab 自动暂停 —— 取代了原来的"手动 Sync 按钮"）、合并按钮、parent / children 侧栏 + 「Changes」(+N −M / files changed) 卡。FileDiffList 重写成 GitHub 风格：行号 gutter + emerald/red 行底 + sky hunk header + 折叠 + 每个文件 +N −M 徽章 + "view before / view after" blob 链接（commit 详情页和 issue diff tab 共用）。
+- **组织（M5）**：`modules/org` 完整模块 —— `organizations` + `organization_members` 两张表 + 跨模块 `Resolver`（`ResolveOwner` / `Membership`）。`modules/repo` 重构成 owner_kind/owner_id 二元归属（user 或 org，DB CHECK 保证恰一；UNIQUE 拆 partial 索引按 kind 限定 name 唯一）。`POST /api/orgs` / 成员管理 / `POST /api/repos/{owner}/{name}/transfer` 全部就绪；transfer 走 DB swap + 磁盘 rename 的"先 DB 后磁盘 + 失败回滚 DB"策略。保留名（`admin` / `api` / `git` / `static` / `_` 等）+ 跨表 namespace 互斥校验（创建 user 撞 org 名 / 反之都返 409）。前端：导航栏「New organization」入口、`/orgs/new` 表单、`/{name}` 统一 profile 页（同一个 `[owner]/index.vue` 通过 `ResolveOwner` 渲染 user 或 org 视图）、`/{name}/settings` + `/{name}/settings/members`、新建仓库表单的 Owner 下拉、`/{owner}/{name}/settings` 的 Transfer 弹窗（type-to-confirm `<owner>/<name>`）。**Org visibility 字段在 ship 前主动撤回**：原计划 public / private 两档，落地后判断「私有 org 给非成员看什么」始终拐不出有意义的语义，干脆删列 + 删 UI，所有 org 一律登录可见，私密性靠仓库 visibility 兜底（见后文"计划外"）。
 - **数据库迁移系统**：`goose v3` 库模式 + 每模块独立 `goose_<module>` 版本表，启动时 sequential 应用。
-- **前端基础**：shadcn-vue + Tailwind v4 + 5 套布局矩阵；vee-validate + zod + 全局 i18n errorMap；中英双语；独立 Admin Sidebar。新增组件 `dialog` / `textarea` 给 PAT / 设置 / 分支 / Tag / Compare / Issue 表单复用；`marked` + `dompurify` 给 README 渲染。M4 还接入了 RepoSidebar Issues 入口（即使空仓库也可见）。
+- **前端基础**：shadcn-vue + Tailwind v4 + 5 套布局矩阵；vee-validate + zod + 全局 i18n errorMap；中英双语；独立 Admin Sidebar。新增组件 `dialog` / `textarea` 给 PAT / 设置 / 分支 / Tag / Compare / Issue 表单复用；`marked` + `dompurify` 给 README 渲染。M4 接入 RepoSidebar Issues 入口（即使空仓库也可见）；M5 接入 AppSidebar 的 Organizations section（动态列出 `useMyOrgs` 拉到的组织 + 「New organization」固定项）。面包屑机制从 AppHeader 的 130 行 `route.path` 大 switch 重构成 `composables/useBreadcrumbs` + 每页 `setBreadcrumbs(supplier)` —— supplier 包在 `watchEffect` 里跟随 locale / params / fetched 数据自动重算；未迁移页面会在 header 显示原始路径作为告警。
 
 ## 里程碑
 
@@ -67,7 +68,7 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 - 全局 zod errorMap：表单校验文案不在 schema 里硬编码，统一走 `validation.*` i18n 键。
 
 **计划里删掉的事**：
-- 原计划在 user 表里加 `kind = human | agent` 字段（当时为 agent 那一步铺路），已删除。决定改为"users 只代表人类，agent identity 走独立路径"（M6 落到 agent-as-repo + role key）——避免账号系统在 password / 邮箱 / 登录等地方对人和 agent 拧着说。
+- 原计划在 user 表里加 `kind = human | agent` 字段（当时为 agent 那一步铺路），已删除。决定改为"users 只代表人类，agent identity 走独立路径"（M7 落到 agent-as-repo + role key）——避免账号系统在 password / 邮箱 / 登录等地方对人和 agent 拧着说。
 
 **退出条件（已通过）**：
 1. 启动空库 → 注册第一个账号自动 admin → 登录 → 改资料 → 注册第二个账号是普通用户 → admin 能在管理页禁用第二个用户 → 被禁用的用户登录失败。✅
@@ -123,7 +124,7 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 #### 不在 M3 内的事
 
 - **多协作者 / 组织** — 仍然只 `owner / admin`，不引入 collaborator 表。
-- **Web UI 直接编辑文件 / 在线 commit** — agent 接入后（M6）才有自动化写入路径，人类先用 git CLI。
+- **Web UI 直接编辑文件 / 在线 commit** — agent 接入后（M7）才有自动化写入路径，人类先用 git CLI。
 - **issue / PR / discussion** — M4 的事。
 - **SSH 协议** — 永久不做，见「不在路线图内的事」。
 
@@ -153,7 +154,7 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 | --- | --- |
 | 对话 | 标题 + 描述 + 评论流（按时间线，含人类评论、agent 消息、系统事件如 commit/merge） |
 | 分支 | 自动绑定一条 git 分支 `issue/<n>`（**create 时即落库**，首次 push 才在磁盘出现 commit） |
-| 会话 | 一个 agent session（M6 才接入；M4 阶段 issue 可以没有 session） |
+| 会话 | 一个 agent session（M7 才接入；M4 阶段 issue 可以没有 session） |
 
 #### 已完成
 
@@ -183,7 +184,7 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
   - **Merge 内部豁免**：merge API 通过 `BranchWriteOp.IsInternal = true` 绕过 guard，让 owner 可以把 issue 分支推进 base branch。
 - [x] **三方合并实现进 `modules/git`**：`MergeBranch(intoBranch, fromRef, message, author)` 返回 `(sha, mode)`，mode 是 `fast-forward` / `merge-commit` / `up-to-date`。
   - FF / up-to-date 路径直接走 ref 更新。
-  - 真正三方合并：flatten 三棵 tree → 逐 path 三方对比 → 单边修改取该边、双边相同合并取任意一边、双边发散返回 `ErrMergeConflict`（M4 不做行级解决，留给"先 rebase 再合"的人工流程或 M6 agent）。
+  - 真正三方合并：flatten 三棵 tree → 逐 path 三方对比 → 单边修改取该边、双边相同合并取任意一边、双边发散返回 `ErrMergeConflict`（M4 不做行级解决，留给"先 rebase 再合"的人工流程或 M7 agent）。
   - 同步新增 `ResolveCommit(path, ref)` —— 空仓 / 不存在的分支返回空字符串而不是 error，便于 guard / sync 处理"新建 branch"路径。
 - [x] **子 issue（计划外但已上线）**：父 issue 的 `issue/<n>` branch 成为子 issue 的 base branch；合并子 issue 是把 commit 推进父分支，再合并父 issue 时把整组 commit 一并带进 default branch。父 / 子关系靠 `parent_id` 外键 + 冗余 `parent_number` 实现，避免列表视图二次查询。
 - [x] **前端**：
@@ -203,7 +204,7 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 - **issue 分支不再"懒创建"**：原计划"首次 push 才建分支"，实际改为 create 时立刻落 `branch_name`、磁盘上不创建 ref，等首次 push（受 guard 校验）落盘。代价是磁盘和元数据短暂错位（issue 已存在但 `issue/<n>` ref 不存在），收益是 guard 的判断只看 DB，pre-receive 钩子也不用查"分支是否预创建"这种态。
 - **行内评论 UI 暂未做**：API 支持 `file_path` + `line` 字段，前端 diff tab 暂时只渲染 patch，没接评论锚点。下个 milestone 顺手补。
 - **issue 状态机简化**：不允许从 `merged` 反向。`closed ↔ open` 自由切换；进入 `merged` 只走 `/merge` 端点。
-- **评论不允许删除**：原本提供了删除评论的 UI 和 `DELETE /issues/{n}/comments/{id}` 路由，落地时撤回。理由：issue 时间线本身就是审计流（M6 起 agent 会把动作落到这里），让作者后期改史会破坏可追溯性。需要纠正的话再发一条评论说明就行。前端 UI / 后端路由 / Store 接口三处都已清理掉。
+- **评论不允许删除**：原本提供了删除评论的 UI 和 `DELETE /issues/{n}/comments/{id}` 路由，落地时撤回。理由：issue 时间线本身就是审计流（M7 起 agent 会把动作落到这里），让作者后期改史会破坏可追溯性。需要纠正的话再发一条评论说明就行。前端 UI / 后端路由 / Store 接口三处都已清理掉。
 - **手动 Sync 按钮替换成自动轮询**：原侧栏的「Sync」按钮拿掉，换成 15s 间隔的 auto-refresh（hidden tab 不跑）。`POST /sync` 端点保留 —— 给将来的 agent / 外部脚本用。
 
 #### 退出条件（已通过）
@@ -217,11 +218,97 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 7. ✅ 在 issue 详情页点「New sub-issue」→ 子 issue base 自动是父 issue 的分支；合并子 issue 把 commit 推进父分支。
 8. ✅ 全程 UI 中没有"PR"这个词。
 
-### M5a — LLM provider & proxy
+### M5 — 组织 / Organizations ✅
+
+把"个人账号 + 仓库"模型扩展到组织：一个 organization 是独立的 owner 实体，能拥有仓库、有多个成员、有自己的资料页。所有 git / issue 能力对 org-owned 仓库无感复用 —— 仓库路由 `/{owner}/{name}` 的 `<owner>` 从"必须是 user 用户名"扩展到"user 或 org 名"。
+
+> **为什么先做（在 M6 agent 链路之前）：** M7 起官方预设 agent 仓库（`hangrix/dispatcher` / `hangrix/maintainer`）需要一个稳定的 owner 命名空间 —— 不能让平台预设挂在某个具体 admin 个人名下，否则该人离开 / 删号 / 转账号都会带跑整个 agent 生态。先把 organization 立起来，让 `hangrix/*` 这种"平台级 agent owner"自然成立；同时让用户能用组织聚合自己的项目和 agent 仓库。
+>
+> 实现上刻意参考 GitHub 的组织模型 —— "用户 / 组织 / 仓库"三层在 git 协作语境下已被验证够用，不发明新概念。
+
+#### 设计原则
+
+1. **Owner 命名空间统一。** `<owner>` 既可以是 user 用户名，也可以是 organization 名；同 namespace 互斥（创建 org 时校验该名在 `users.username` ∪ `organizations.name` 全集内未占用，反之亦然）。所有 `/{owner}/{name}` 路由透明支持两类。
+2. **Org 不是 identity。** Org 没有密码 / session / PAT —— org 本身不"做事"，做事的总是它的成员。Org 是 namespace + ACL 容器。
+3. **权限继续刻意简单。** Org-level role 只两档：`owner` / `member`。Owner 能改 org 设置 / 加减成员 / 删 org；member 能在 org 名下建仓库 + 访问 org 的私有仓库。**不引入 team / outside collaborator / repo-level role**（那些等真有需求再做）。
+4. **Repo 归属二选一，可转移。** 任一仓库归属 user 或 org（不可同时）。Transfer 是 owner-only 操作：DB 字段切换 + 磁盘 bare repo rename 落在同一事务。
+5. **Agent identity 不变（M7 起）。** Commit author 仍是 role key、email 仍是 `<role-key>@agents.<host-domain>` —— 跟仓库归属于谁无关。Org owner 跟 user owner 在 agent 调度路径上等价。
+
+#### 数据模型
+
+- **`modules/org`**：新模块。
+  - `organizations`（id、name UNIQUE、display_name、description、avatar_url、created_by、created_at、updated_at、deleted_at NULL）。软删除走 `deleted_at` —— 跟 user `disabled` 的取舍一致，留行不真删，便于审计。**原计划的 `visibility` 列已撤回**（见后文"计划外但已经做了的事"），M5 在 ship 前删了列：迁移 `00001_create_organizations.sql` 创建带 visibility 的表，`00002_drop_org_visibility.sql` 立刻把它删掉 —— 历史层叠保留是为了让任何中间 checkout 的部署一次性应用就能落到一致状态。
+  - `organization_members`（org_id、user_id、role `owner | member`、added_by、added_at），PK `(org_id, user_id)`。约束：单 org 至少一个 owner（删最后一个 owner / 降级返 409）。
+- **`modules/repo` 改造**：
+  - `repos.owner_id`（M1 时是 `NOT NULL REFERENCES users(id)`）拆成 `owner_kind` + `owner_user_id` / `owner_org_id`：`owner_kind IN ('user','org')`，两列其一 NOT NULL（DB CHECK `(owner_user_id IS NOT NULL) <> (owner_org_id IS NOT NULL)` 保证恰一）。
+  - UNIQUE 拆 partial：`UNIQUE (owner_user_id, name) WHERE owner_user_id IS NOT NULL` + `UNIQUE (owner_org_id, name) WHERE owner_org_id IS NOT NULL` —— 同 owner 下 name 唯一，但 user 跟 org 哪怕同名也互不冲突（owner 名 namespace 已经在 ResolveOwner 那一侧保证全集唯一）。
+  - 新增 `org/domain.Resolver` 跨模块接口（`ResolveOwner(name) → (kind, id, name)` + `Membership(orgID, userID) → (role, ok, err)`），由 `modules/org` 注入 ioc 容器；`modules/repo` 的 handler 和 git 路径全部走它，不再各自查 `users.username`。
+- **磁盘路径**：bare repo 落 `data/repos/<owner>/<name>.git`，`<owner>` 直接是 user 用户名或 org 名（共享同 namespace，路径无需区分）。transfer 时先 DB swap 再磁盘 `os.Rename` —— 失败回滚 DB（不是同一事务，因为磁盘操作不在 DB 事务里，所以是"补偿"而非"原子"，留了 admin 兜底空间）。
+- **保留名（reserved）**：补一份系统保留 owner 名单（`admin` / `api` / `git` / `static` / `_` 等）拒掉 user / org 创建撞名，避免跟 web 路由冲突。`IsReservedName` 在 user 注册和 org 创建两条路径都生效。
+
+#### API
+
+- [x] **Org CRUD（authenticated user 都可创建）**：
+  - `POST /api/orgs`（body：name / display_name / description）—— 创建者自动落 `owner` 角色。原计划的 `visibility` 字段已删（见后文）。
+  - `GET /api/orgs/{name}` —— 任意已登录用户可见。
+  - `PATCH /api/orgs/{name}`（owner-only，display_name / description / avatar_url 三个字段）/ `DELETE /api/orgs/{name}`（owner-only，type-to-confirm 输入 org name 才生效）。
+  - `GET /api/orgs?member_of=me`（列我加入的 org，给 AppSidebar 用）/ `GET /api/users/{username}/orgs`（列出某用户归属的 org）。
+- [x] **成员管理**：
+  - `GET /api/orgs/{name}/members`。
+  - `POST /api/orgs/{name}/members`（owner-only，body：`{username, role}`）—— **直接加，不走 invitation 流程**（v1 刻意简单；本地优先形态不需要邮件邀请）。
+  - `PATCH /api/orgs/{name}/members/{username}`（改 role）/ `DELETE /api/orgs/{name}/members/{username}`（移除）—— 最后一个 owner 移除 / 降级返 409。`DELETE` 自我移除（caller == target）跳过 canManage 检查，但仍受最后一个 owner 约束。
+- [x] **仓库归属**：
+  - `POST /api/repos` body 新增可选 `owner: "<name>"`（省略时归 caller 个人；指定时通过 `ResolveOwner` + `Membership` 校验 caller 是该 org 成员 —— v1 任何 role 都可建库，admin 后续按需收紧）。
+  - 新增 `GET /api/orgs/{name}/repos`；既有 `GET /api/users/{username}/repos` 保留。Org-owned 仓库列表上对成员显示所有（含 private），对非成员只显示 public。
+  - `POST /api/repos/{owner}/{name}/transfer`（caller 必须能写源仓库，且对 target 是合法 owner 角色或 admin；body：`{target_owner, confirm}`，`confirm` 必须等于 `<owner>/<name>` 才放行）—— DB 字段切换 + 磁盘 rename，磁盘失败时回滚 DB swap。Same-owner 转移幂等返 200。
+
+#### Web UI
+
+- [x] **新建 org 入口**：AppSidebar 新增 Organizations section，列出 `useMyOrgs` 拉到的组织 + 固定的「New organization」链接（导航栏底部不另开下拉，避免与个人菜单冲突）。
+- [x] **Org profile 页 `/{name}`**：avatar + display_name + description + 仓库列表 tab + 成员列表 tab。路由层面：单一 `[owner]/index.vue` 同时拉 `/api/users/{name}` 和 `/api/orgs/{name}` 然后按命中渲染 —— 一个返回有效数据另一个 404 是正常路径，404 不上报 UI。URL 形态与 user profile 完全一致。
+- [x] **Org 设置页 `/{name}/settings`**：owner-only，否则 redirect 回 profile。基本信息表单（display_name / description / avatar_url）+ 危险区（删除 org，type-to-confirm 输入 org name）。
+- [x] **成员管理页 `/{name}/settings/members`**：列表 + 加成员（按 username 搜）+ 改 role（dropdown）+ 移除（trash 按钮）；最后一个 owner UI 上 disable 改 role + 移除按钮。
+- [x] **新建仓库表单**：owner 字段从只读"当前用户"改为下拉（Select），选项 = 「@我」+ 我加入的所有 org。`?owner=<name>` query 预选某 org（由 org profile 页的「New repository」按钮使用）。**Select 空值改用 `__self__` 哨兵**：reka-ui 的 SelectItem 禁止 `value=""`，所以个人 namespace 用一个非空 sentinel 占位，提交时再还原成"不传 owner"。
+- [x] **仓库设置页的「Transfer ownership」**：M3 留的占位按钮升级成真功能 —— 弹窗输入 target owner name + 再输入 `<owner>/<name>` 确认；成功后 router.replace 到新路径。
+- [x] **M3 / M4 已建页面对 org-owned 仓库无感**：仓库详情 / 分支 / Tag / Issue / Compare / Settings 全部走 `ResolveOwner` + `Membership`，权限判断里再没有"caller 是不是 owner_user_id"这种用户绑定逻辑。UI 上没有 org 专属 / user 专属分支。
+
+#### 兼容性与边界
+
+- **现有 user-owned 仓库已就地迁移**：`00003_repos_owner_org.sql` 加 `owner_kind` / `owner_org_id` 两列 + DB CHECK + partial UNIQUE，老 `owner_user_id` 行就地 `owner_kind='user'` 落位（migration 里 backfill）。
+- **PAT / 会话不变**：依然只有 user 有 PAT、有 session。Org-owned 仓库的写权限 = 「user 是该 org 成员 + PAT 有 `repo:write` scope」复合判断（在 `git_http.go` 的 `gitCaller` 里实现）。
+- **Issue / 分支保护规则照搬**：M3 的 `branch_protections` 表按 repo_id 挂，跟 owner 是 user 还是 org 无关；M4 的 `issue_counters` / pre-receive 钩子同理，**没动一行代码就能跑**。
+- **Audit**：v1 没拉独立的 audit log 表 —— `organizations.created_by` / `organization_members.added_by` / `repos.updated_at` 这些列已经把"谁做了什么"信息埋下了，等真有审计回放需求再补一张 `audit_events` 表（M10+ 候选）。Transfer 失败的磁盘错误目前只走 HTTP 500 + 标准日志，没专门表打点。
+
+#### 不在 M5 里的事
+
+- **Team / sub-group**：v1 不做。Org 只有 owner / member 两档。若将来要按"前端组 / 后端组"分权，再加 `teams` / `team_members` / `repo_team_access` 三张表 —— 但要先证明这些是 agent 协作语境下的必需，不是抄 GitHub。
+- **Outside collaborator**：M3 的 owner-only 模型还没扩到"非 owner 协作者"，先维持现状。M10+ 一并做（见 [不在路线图内的事] 末尾候选）。
+- **Org-level PAT / OAuth app**：org 不"做事"，没有自己的 token。
+- **Invitation 流程**：直接加成员，不发邀请邮件、不等接受 —— 本地优先形态下用户已经在同一部署里，不需要 SaaS 风格的 invite handshake。
+- **Billing / 多租户**：永远 by 设计不做（原则 6 本地优先）。
+- **独立 audit 表**：见上"Audit"段，留给 M10+。
+
+#### 计划外但已经做了的事
+
+- **撤回 Org visibility**：原 spec 里 organizations 表有 `visibility public | private` 列，设计意图是「private org 只对成员可见」。落地走到一半发现这个语义在本地优先 + 仓库自己也有 visibility 的形态下并不增加任何价值 —— 用户真正想隐藏的永远是仓库内容，org 名本身在 namespace 全集里早就是公开标识（用 `git clone` 试一下就知道存不存在）。继续维护 visibility 只会让 `canRead` 在「org 私 / 仓库公」「org 公 / 仓库私」四象限之间纠结。直接砍掉：domain / handler / sqlc / 前端 / i18n 全清，迁移 `00002_drop_org_visibility.sql` 落库；`canRead` 简化为「登录即可见」。仓库可见性独立保留，与 owner kind 完全解耦。
+- **面包屑机制重构**：M5 加了 `/{owner}/settings*` 一系列页面之后，AppHeader 那套 130 行 `route.path` 大 switch 终于撑不住。换成 `composables/useBreadcrumbs` —— 每页 `setBreadcrumbs(supplier)`，supplier 包在 `watchEffect` 里跟随 locale / `route.params` / fetched 数据自动重算。19 个现有页面全部迁移（含 M2-M4 已有的所有 repo 子页），未迁移页面会在 header 显示原始路径作为告警信号。这件事不属于 M5 spec，但 M5 的 owner / settings / members 三层嵌套页是触发它的最后一根稻草。
+- **`.mcp.json` 瘦身**：开发工具链清理 —— 移除社区 `@modelcontextprotocol/server-filesystem` / `server-git`（前者跟内置文件工具重复，后者 npm 上根本没这个包名），把 playwright 改成官方 `@playwright/mcp@latest` 并固定 `--browser=chromium`。让 Playwright 验收 M5 UI 端到端走通的步骤无障碍跑完。
+
+#### 退出条件
+
+1. ✅ 用户 A 在 web 上新建 org `playtestorg` → 拿到 `/playtestorg` profile 页 + 自动是 owner → 在 `playtestorg` 名下新建仓库 `playtestorg/e2erepo`（勾上 init_readme）→ `git clone http://.../git/playtestorg/e2erepo.git` 拉到 README。
+2. ✅ 用户 A 把用户 B（`bobtest`）加为 `playtestorg` 的 member → B 登录后能在 AppSidebar 里看到 `playtestorg` → B 也能在 `playtestorg` 名下创建仓库（`POST /api/repos` 带 `owner=playtestorg` 返 201）。
+3. ✅ 用户 A 把私人仓库 `playtester/my-personal` transfer 给 `playtestorg` → 磁盘从 `data/repos/playtester/my-personal.git` rename 到 `data/repos/playtestorg/my-personal.git` → `/playtestorg/my-personal` 路由立刻生效 → 原 `/playtester/my-personal` 路由 404。**未做的子项**：旧 PAT 在 transfer 后能否继续 push（PAT 跟 user 绑定，仓库归属变化不影响 token 自身，但 push 权限需 caller 是新 owner 的成员 —— 已经在 receive-pack 路径覆盖，但没专门跑一遍端到端）。
+4. ✅ 用户 A 创建保留名 `admin` 的 org → 409 `name is reserved`；创建 user 重名 `playtester` 的 org → 409 `name already taken`；反向尝试注册 user `playtestorg`（与 org 撞名）→ 409 `username already exists`。
+5. ✅ 在 acme 仅剩 alice 一个 owner 时移除 alice → 409 `cannot remove the last owner`；升 bob 为 owner 后再移除 alice → 204。
+6. ✅ 在 org-owned 仓库上跑 M4 的退出条件 1-8 —— smoke-test 已经验证 push / merge / 钩子链路，所有路径都走 `ResolveOwner` 解析 owner，pre-receive 和 issue guard 完全无感。
+7. ✅ 全程 admin 后台没有"组织管理"特殊视图 —— `/admin/users` 是唯一管理界面，org 是用户能自助管理的资源；admin 仍能借身份进任意 org settings 兜底，但 sidebar 上不挂入口。
+
+### M6a — LLM provider & proxy
 
 平台第一步要能跟 LLM 说话。这一步**完全独立于 runner、agent、issue**：admin 配 provider → 平台跑代理 → 任何能发 HTTP 的客户端用 OpenAI SDK 都能调 → 用量落表。
 
-> **为什么先做：** LLM proxy 是个零依赖的纯 HTTP 子系统，能用 curl 全验完。M5b 写 agent binary 时直接对着 proxy 写，不用同时调试两层；M5c 起 runner 才把它接进容器里。
+> **为什么先做：** LLM proxy 是个零依赖的纯 HTTP 子系统，能用 curl 全验完。M6b 写 agent binary 时直接对着 proxy 写，不用同时调试两层；M6c 起 runner 才把它接进容器里。
 
 核心模型：
 
@@ -240,22 +327,22 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 - [ ] **`modules/llm_proxy`**：HTTP 端点 `/api/llm/<provider_name>/v1/*`，OpenAI Response API 兼容。
   - 路由：`<provider_name>` 查 provider → 按 type 走翻译层（v1 ship `openai` 零翻译 / `anthropic` OpenAI↔Messages 翻译 / `openai-compat` 转自定 base_url）。
   - Auth：`Authorization: Bearer $HANGRIX_SESSION_TOKEN` 验三件事 —— token 绑 session + session role 的 `llm.provider` 跟 URL path 匹配 + 请求 body 的 model 在 provider `allowed_models` 里；任一失败 403。
-  - 落用量表：每次请求记 session_id / role / token usage / latency / 错误码，供 M9+ 成本 dashboard 用。
-- [ ] **测试用 session token 颁发**：M5a 阶段没有真 agent session，提供一个 admin API 颁发"假 session token"绑死到一对 (provider, model)，让 curl / 测试客户端能调 proxy 通完整鉴权链。这同一种 token 在 M6b 的 MCP server + M5c 的 git push 都通用，M5c 起这个测试口让位给真 session 颁发。
+  - 落用量表：每次请求记 session_id / role / token usage / latency / 错误码，供 M10+ 成本 dashboard 用。
+- [ ] **测试用 session token 颁发**：M6a 阶段没有真 agent session，提供一个 admin API 颁发"假 session token"绑死到一对 (provider, model)，让 curl / 测试客户端能调 proxy 通完整鉴权链。这同一种 token 在 M7b 的 MCP server + M6c 的 git push 都通用，M6c 起这个测试口让位给真 session 颁发。
 
 退出条件：admin 配一个 LLM provider（勾选 platform default）+ 用 admin API 颁一张测试 session token → 本机 `curl` 用任意 OpenAI 客户端连 `/api/llm/<provider_name>/v1/responses` 拿到一句模型响应 → proxy 路由到正确上游 + 鉴权三件事都验过 + 用量落表。
 
-### M5b — Agent runtime（Go binary）
+### M6b — Agent runtime（Go binary）
 
-立一个独立的 agent 二进制（**用 Go 从头写，不依赖任何现成的 agent SDK**），跑在容器里跟 M5a 的 LLM proxy + 平台 API + git CLI 三方说话。M5c 把这个二进制 bind-mount 进 runner 调度的容器里。
+立一个独立的 agent 二进制（**用 Go 从头写，不依赖任何现成的 agent SDK**），跑在容器里跟 M6a 的 LLM proxy + 平台 API + git CLI 三方说话。M6c 把这个二进制 bind-mount 进 runner 调度的容器里。
 
 > **为什么从头写：** 现有 SDK（Claude Agent SDK / OpenAI Assistants / LangChain agent runner）都是 opinionated 的 high-level 抽象，对 prompt 拼装 / tool call 协议 / 重试 / 上下文管理留的口子有限。Hangrix 要把 audit、role identity、prompt 来源（base + host addendum）、git 工作流深度嵌进 loop，control 全攥手里更划算。**单二进制 Go 实现 + OpenAI Response API HTTP 客户端 hand-rolled + git CLI shell-out** —— 没有 third-party agent framework 依赖。
 
 #### 角色与边界
 
 - **进程级 agent runner**：每个 role 在容器里跑一个 `hangrix-agent` 进程，存活到 issue 归档或 idle 超时。
-- 通过 **stdin / stdout JSON-Lines** 跟外层 runner（M5c）通信：runner 喂事件，agent 报告 tool call / 状态 / 日志。
-- 通过 HTTP 跟 **M5a 的 LLM proxy** + **平台 API** 通信，凭证从 env 拿。
+- 通过 **stdin / stdout JSON-Lines** 跟外层 runner（M6c）通信：runner 喂事件，agent 报告 tool call / 状态 / 日志。
+- 通过 HTTP 跟 **M6a 的 LLM proxy** + **平台 API** 通信，凭证从 env 拿。
 - 通过 **shell-out** 调容器内 `git` CLI 处理仓库读写。
 - **无状态执行器**：session 状态归 Hangrix 平台管，agent 进程重启时从平台拉历史重建上下文。
 
@@ -279,10 +366,10 @@ hangrix-agent/                       # Go module
 
 工具分两类，LLM 看到的是一个扁平 function-call 列表：
 
-- **本地工具**（agent binary 内置，容器内执行）：`read` / `write` / `edit` / `glob` / `grep` / `bash` / `webfetch`，参考 Claude Code 同名工具的语义（`read` 行号 + offset/limit / `edit` 强制先读 / `bash` 含 stdout-stderr-exit_code / `grep` 用 ripgrep / 等）。Agent 不包装 git —— 仓库操作（clone / pull --rebase / commit / push）由 LLM 通过 `bash` 直接调 `/usr/bin/git`，凭证由 M5c runner 在容器启动时通过 credential helper 预配置。
-- **平台工具**（Hangrix 平台通过 HTTP MCP 暴露）：`issue.*` / `roster.*`，agent 用 `pkg/mcp` 的标准 MCP client 调远端服务端点（M6b 起 ship 的平台 MCP server）。M5b 期间这类工具走 stub —— 没有真平台 MCP server 也能跑本地工具自检。
+- **本地工具**（agent binary 内置，容器内执行）：`read` / `write` / `edit` / `glob` / `grep` / `bash` / `webfetch`，参考 Claude Code 同名工具的语义（`read` 行号 + offset/limit / `edit` 强制先读 / `bash` 含 stdout-stderr-exit_code / `grep` 用 ripgrep / 等）。Agent 不包装 git —— 仓库操作（clone / pull --rebase / commit / push）由 LLM 通过 `bash` 直接调 `/usr/bin/git`，凭证由 M6c runner 在容器启动时通过 credential helper 预配置。
+- **平台工具**（Hangrix 平台通过 HTTP MCP 暴露）：`issue.*` / `roster.*`，agent 用 `pkg/mcp` 的标准 MCP client 调远端服务端点（M7b 起 ship 的平台 MCP server）。M6b 期间这类工具走 stub —— 没有真平台 MCP server 也能跑本地工具自检。
 
-#### 启动期环境（由 M5c runner 注入）
+#### 启动期环境（由 M6c runner 注入）
 
 | Env | 含义 |
 |---|---|
@@ -399,16 +486,16 @@ for {
 - [ ] **`pkg/runtime/loop`**：主循环 + 上下文管理 + 单轮 token 上限 + 重试 + fatal error 处理。
 - [ ] **会话历史回放**：启动时**先**读 stdin 上的 `{"kind": "history", ...}` 一帧（runner 保证作为首条），用它预填 `pkg/runtime/context` 的消息列表；之后才进入事件循环。新 session 时 `messages: []` 也合法。
 - [ ] **新消息回报**：每次 LLM 返回 assistant 消息 / 每次 tool call + result 都通过 stdout 的 `message` / `tool_call` 实时写给 runner —— runner 是消息日志的唯一持久化者，agent 自己**不写盘**。
-- [ ] **上下文窗口裁剪**：组装下一轮 LLM 请求时按"最近 N 条 + 总 token 上限"裁剪发送的消息（裁剪只影响发给 LLM 的内容，不丢日志）。具体策略 v1 用简单的尾窗口截断，更聪明的摘要 / RAG 留给 M8。
+- [ ] **上下文窗口裁剪**：组装下一轮 LLM 请求时按"最近 N 条 + 总 token 上限"裁剪发送的消息（裁剪只影响发给 LLM 的内容，不丢日志）。具体策略 v1 用简单的尾窗口截断，更聪明的摘要 / RAG 留给 M9。
 - [ ] **`pkg/ipc/jsonl`**：stdin 行读 + stdout 行写；事件、tool call、状态、日志四种结构化 message。
 - [ ] **`cmd/hangrix-agent/main`**：env 解析 + 模块组装 + 信号处理（SIGTERM → graceful shutdown）。
-- [ ] **冒烟测试**：本机起一个 mock HTTP MCP server（只实现 `tools/list` 返几个 stub 平台工具）+ `docker run -v $PWD/hangrix-agent:/agent -e HANGRIX_LLM_ENDPOINT=... -e HANGRIX_PLATFORM_MCP_ENDPOINT=... ... hangrix-agent` 注入 mock env + stdin 喂一条事件 → 完成一轮 LLM + 调本地工具（`bash` 跑 `git push` / `read` 读文件等）+ stdout 报 done。**M5b 期间只验本地工具 + MCP 客户端握手**，平台真工具实现在 M6b。
+- [ ] **冒烟测试**：本机起一个 mock HTTP MCP server（只实现 `tools/list` 返几个 stub 平台工具）+ `docker run -v $PWD/hangrix-agent:/agent -e HANGRIX_LLM_ENDPOINT=... -e HANGRIX_PLATFORM_MCP_ENDPOINT=... ... hangrix-agent` 注入 mock env + stdin 喂一条事件 → 完成一轮 LLM + 调本地工具（`bash` 跑 `git push` / `read` 读文件等）+ stdout 报 done。**M6b 期间只验本地工具 + MCP 客户端握手**，平台真工具实现在 M7b。
 
-退出条件：M5a 配好一个 provider + 本机起 mock HTTP MCP server + sandbox host repo → 本机 `docker run` 启动 `hangrix-agent` + 注入完整 env + stdin 喂一条事件 → agent 拉系统 prompt + 调一次 LLM + 解析 tool call → 调本地工具（如 `bash git push` / `read` 看文件）+ 调 mock 平台工具（`tools/call`）成功 + stdout 报告 done。**纯 agent binary 验证，不依赖 runner、平台 MCP server 走 mock**。
+退出条件：M6a 配好一个 provider + 本机起 mock HTTP MCP server + sandbox host repo → 本机 `docker run` 启动 `hangrix-agent` + 注入完整 env + stdin 喂一条事件 → agent 拉系统 prompt + 调一次 LLM + 解析 tool call → 调本地工具（如 `bash git push` / `read` 看文件）+ 调 mock 平台工具（`tools/call`）成功 + stdout 报告 done。**纯 agent binary 验证，不依赖 runner、平台 MCP server 走 mock**。
 
-### M5c — Runner & 容器底盘
+### M6c — Runner & 容器底盘
 
-把 agent 的部署 / 执行 / 凭证供给立起来。让 M5b 的 `hangrix-agent` 真正以"一个 runner 上一个隔离容器"的方式跑起来，凭证（**一张统一的 session token** 同时供 LLM proxy / 平台 MCP / git push 三处使用，外加 repo secrets）由 runner outbound 注入，目标 host repo 和 issue 由调度层指定。
+把 agent 的部署 / 执行 / 凭证供给立起来。让 M6b 的 `hangrix-agent` 真正以"一个 runner 上一个隔离容器"的方式跑起来，凭证（**一张统一的 session token** 同时供 LLM proxy / 平台 MCP / git push 三处使用，外加 repo secrets）由 runner outbound 注入，目标 host repo 和 issue 由调度层指定。
 
 核心模型：
 
@@ -418,9 +505,9 @@ for {
     - **用户级（user）**：只服务注册它的用户自己的 agent。
   - Runner 自报能力（CPU / 内存 / 并发上限 / 容器运行时），服务端按"可见度 + 容量"选 runner。
 - **Agent 容器**：runner 为每个 agent session 拉起一个隔离容器。
-  - **第一版固定一个容器镜像**（含 `git` CLI + 必要依赖），M6 起改成由 host 仓库 `.hangrix/agents.yml` 的 `container:` 块声明（image 或 build）。
-  - **M5b 的 `hangrix-agent` 二进制 + 配套文件由 runner 通过 bind mount 注入到容器**，不打进镜像。agent 升级走 runner 拉新二进制即可，不重建镜像。
-  - 容器启动时由 runner 注入完整 env（M5b 启动期约定那张表）—— LLM endpoint + 已 resolve model + 平台 MCP endpoint + **统一 session token**（同时鉴权 LLM / MCP / git push）+ repo secrets + 业务上下文。
+  - **第一版固定一个容器镜像**（含 `git` CLI + 必要依赖），M7 起改成由 host 仓库 `.hangrix/agents.yml` 的 `container:` 块声明（image 或 build）。
+  - **M6b 的 `hangrix-agent` 二进制 + 配套文件由 runner 通过 bind mount 注入到容器**，不打进镜像。agent 升级走 runner 拉新二进制即可，不重建镜像。
+  - 容器启动时由 runner 注入完整 env（M6b 启动期约定那张表）—— LLM endpoint + 已 resolve model + 平台 MCP endpoint + **统一 session token**（同时鉴权 LLM / MCP / git push）+ repo secrets + 业务上下文。
 - Agent 在容器里 **直接用 `git` CLI** 操作仓库（clone / commit / push）—— 平台 **不** 提供 `repo.tree` / `repo.read_file` / `branch.commit` 这类 git 包装工具。
 
 需要做的：
@@ -431,7 +518,7 @@ for {
   - 心跳（capabilities + 当前负载）
   - 任务下发：`agent.session.start` / `agent.session.stop` / `agent.session.input`
   - 事件上报：agent stdout 的 tool call / status / log / done 转发给平台事件总线 + audit
-- [ ] **容器编排**：拉镜像（v1 固定）→ bind mount M5b 的 `hangrix-agent` binary → bind mount agent bundle 到 `HANGRIX_AGENT_BUNDLE` 路径（agent 仓库 pinned sha 解出的目录）→ **写 host prompt addendum 到容器内临时文件**（路径填到 `HANGRIX_HOST_ADDENDUM` env，**不假设 prompt 长度**）→ 注入完整 env（含 `HANGRIX_SESSION_TOKEN` 统一凭证）→ **预配置 git credential helper**（用 `HANGRIX_SESSION_TOKEN` 作 HTTP Basic password，让容器内任何 `git push` 走 HTTPS 推到目标 issue 分支）→ **预 clone host repo 到工作目录**（`/workspace`，checkout 到 `HANGRIX_WORKING_BRANCH`）→ 启动容器、attach stdio。
+- [ ] **容器编排**：拉镜像（v1 固定）→ bind mount M6b 的 `hangrix-agent` binary → bind mount agent bundle 到 `HANGRIX_AGENT_BUNDLE` 路径（agent 仓库 pinned sha 解出的目录）→ **写 host prompt addendum 到容器内临时文件**（路径填到 `HANGRIX_HOST_ADDENDUM` env，**不假设 prompt 长度**）→ 注入完整 env（含 `HANGRIX_SESSION_TOKEN` 统一凭证）→ **预配置 git credential helper**（用 `HANGRIX_SESSION_TOKEN` 作 HTTP Basic password，让容器内任何 `git push` 走 HTTPS 推到目标 issue 分支）→ **预 clone host repo 到工作目录**（`/workspace`，checkout 到 `HANGRIX_WORKING_BRANCH`）→ 启动容器、attach stdio。
 - [ ] **凭证调度**：服务端在 session 启动时为该次 session 颁发**一张统一的短期 session token**（同时鉴权 LLM proxy / 平台 MCP / git push 三处；token 跟 session 绑死、issue 关闭即过期、admin 可一键吊销）。三类资源各自的授权检查走服务端 session resolver：LLM proxy 查 provider+model 命中、MCP 查 `can:` 过滤、receive-pack 查目标分支限定 `issue/<n>`。token 本身不编码权限，只标识 session。
 - [ ] **Agent 二进制分发**：runner 持有版本化的 `hangrix-agent` binary（从服务端拉），启动容器时 bind mount 到固定路径，容器入口直接 exec。
 - [ ] **stdin / stdout 转发**：runner 把"平台事件 → agent stdin"和"agent stdout → 平台事件总线 + audit"两条管道接通；agent 退出码 / 异常上报。
@@ -440,13 +527,13 @@ for {
   - Agent stdout 的 `message` / `tool_call` 实时 append 到日志；语义事件（commit / merge / review_vote）也插入到对应时间点。
   - **容器启动时**：runner 从平台读出该 session 的完整日志 → 转换成 `{"kind": "history", "messages": [...]}` → 作为首条 IPC 消息写到 agent stdin。新 session 也发，只是 `messages: []`。
   - 日志存储格式：v1 走 Postgres JSONB 列（`agent_session_messages` 表 per row 一条消息，或 `agent_session.messages JSONB[]`，按性能选）；session 归档时只标记，不删，留作 audit。
-- [ ] **Session 任务参数模型**：M5c 的 runner 协议参数 = 容器镜像 + agent binary 版本 + 完整 env（M5b 那张表）+ 目标仓库 + 目标分支。M6a 起 agent-as-repo 解析层坐在这之上，把 host yaml + role 配置翻译成这组参数。
+- [ ] **Session 任务参数模型**：M6c 的 runner 协议参数 = 容器镜像 + agent binary 版本 + 完整 env（M6b 那张表）+ 目标仓库 + 目标分支。M7a 起 agent-as-repo 解析层坐在这之上，把 host yaml + role 配置翻译成这组参数。
 
-退出条件：admin 注册一个平台 runner → admin API 触发一次测试 session → runner 拉起容器、bind mount M5b 的 `hangrix-agent`、注入完整 env、把一条 mock `issue.comment.mentioned` 事件通过 stdin 喂进去 → 容器内 agent 完成一轮 LLM 调用 + tool call（`issue.comment`）+ `git push` + 通过 stdout 把 tool call / done 报回 runner → runner 转发到平台 audit + 事件总线。**全链路 verified，不碰 issue UI，不接 host yaml 解析**（那是 M6a）。
+退出条件：admin 注册一个平台 runner → admin API 触发一次测试 session → runner 拉起容器、bind mount M6b 的 `hangrix-agent`、注入完整 env、把一条 mock `issue.comment.mentioned` 事件通过 stdin 喂进去 → 容器内 agent 完成一轮 LLM 调用 + tool call（`issue.comment`）+ `git push` + 通过 stdout 把 tool call / done 报回 runner → runner 转发到平台 audit + 事件总线。**全链路 verified，不碰 issue UI，不接 host yaml 解析**（那是 M7a）。
 
-### M6a — 多 role 基础设施
+### M7a — 多 role 基础设施
 
-把 agent / role / team 这套抽象立起来：识别 agent 仓库、解析 host yaml、起 per-role session、commit author 落 role key、audit 链跑通 —— **不接 mention 协议、不上完整工具集、不动 UI**。M6b 把协作层补齐，M6c 把 UI 和官方预设 agent 收尾。
+把 agent / role / team 这套抽象立起来：识别 agent 仓库、解析 host yaml、起 per-role session、commit author 落 role key、audit 链跑通 —— **不接 mention 协议、不上完整工具集、不动 UI**。M7b 把协作层补齐，M7c 把 UI 和官方预设 agent 收尾。
 
 #### 核心抽象
 
@@ -455,7 +542,7 @@ for {
 | **Agent** | 一个 Hangrix 仓库（根目录有 `agent.yml`），含 base prompt / 声明的工具集 / 元数据 |
 | **Role** | host 仓库 `.hangrix/agents.yml` 里的本地标签 = agent 引用 + 触发器 + 工具白名单 + scope hint + 可选 host prompt addendum + mention 授权 |
 | **Team** | 一个 issue 上所有已激活 role sessions 的集合（取代原"1 issue 1 session"）|
-| **Mention** | `@agent-<role-key>` 评论语法，是唯一的 role 唤醒方式（协议本身在 M6b 实现）|
+| **Mention** | `@agent-<role-key>` 评论语法，是唯一的 role 唤醒方式（协议本身在 M7b 实现）|
 
 #### Agent-as-repo
 
@@ -607,17 +694,17 @@ roles:
 - [ ] **Agent 仓库识别**：repo 模块加"根有 `agent.yml` 判定为 agent"逻辑；仓库列表 / 搜索过滤支持 `kind=agent`。`agent.yml` schema 校验拒容器 / 环境 / secret 字段（原则 7）。
 - [ ] **`modules/agents_config`**：解析 host 仓库 `.hangrix/agents.yml`（container / env / secrets / volumes / llm / roles 各块）+ `.hangrix/agents.lock` 自动维护（agent ref → sha 解析）。
 - [ ] **`modules/agent_session`**：per-role session 表 + 状态机；issue 创建 / 关闭事件钩进生命周期；session 启动时落 runtime_version / agent_sha / host_prompt_sha 进 audit。
-- [ ] **Session spawn 编排**：host yaml 解析 → 选 runner（visibility + 容量）→ 准备容器（pull image 或 build）→ 注入 M5 凭证 + 缓存好的 LLM 配置 → 启动容器。
+- [ ] **Session spawn 编排**：host yaml 解析 → 选 runner（visibility + 容量）→ 准备容器（pull image 或 build）→ 注入 M6 凭证 + 缓存好的 LLM 配置 → 启动容器。
 - [ ] **Identity 落地**：commit author = role key、email = `<role-key>@agents.<host-domain>`，receive-pack 路径下接受这种 author 写入。
 - [ ] **Audit 链路**：role / agent_ref / agent_sha / host_prompt_sha / runtime_version / session uuid / cause_id 落审计表。
 
 #### 退出条件
 
-写一份 `.hangrix/agents.yml` 只声明一个测试 role（agent 指向自己仓库里临时塞的一个 `agent.yml`）+ image 容器 + LLM 配置 → 开 issue → 该 role session 自动起、容器在某 runner 上拉起 → 容器内 agent 用本地工具完成 `git clone` + 改文件 + `git commit` + `git push`（commit author 显示为 role key）→ audit log 完整记录 session + runtime_version + agent_sha + host_prompt_sha + cause `comment_id` → 关 issue → session 归档容器回收。**平台工具（`issue.*` / `roster.*`）在 M6b 起才真正可用**；M6a 不接 mention 路由、不动 UI。
+写一份 `.hangrix/agents.yml` 只声明一个测试 role（agent 指向自己仓库里临时塞的一个 `agent.yml`）+ image 容器 + LLM 配置 → 开 issue → 该 role session 自动起、容器在某 runner 上拉起 → 容器内 agent 用本地工具完成 `git clone` + 改文件 + `git commit` + `git push`（commit author 显示为 role key）→ audit log 完整记录 session + runtime_version + agent_sha + host_prompt_sha + cause `comment_id` → 关 issue → session 归档容器回收。**平台工具（`issue.*` / `roster.*`）在 M7b 起才真正可用**；M7a 不接 mention 路由、不动 UI。
 
-### M6b — Mention 协议、完整工具集、事件总线
+### M7b — Mention 协议、完整工具集、事件总线
 
-骨架立稳后铺协作层：mention 解析 + 完整工具集 + 事件总线 + 三层分发架构。让多 role 真正能协作（dispatcher 路由 + reviewer 投票 + maintainer 合并），但 UI 还是 M4 的单一时间线（swim-lane 留给 M6c）。
+骨架立稳后铺协作层：mention 解析 + 完整工具集 + 事件总线 + 三层分发架构。让多 role 真正能协作（dispatcher 路由 + reviewer 投票 + maintainer 合并），但 UI 还是 M4 的单一时间线（swim-lane 留给 M7c）。
 
 #### Mention 协议
 
@@ -633,7 +720,7 @@ roles:
 | `issue.read` | 读时间线 | 几乎所有 role |
 | `issue.diff` | issue 分支 vs base 的 diff | coder / reviewer / maintainer |
 | `issue.children` | 列 sub-issue | dispatcher / maintainer |
-| `issue.checks` | 当前 issue 所有 check 的最新 state（M7 起填充）| maintainer |
+| `issue.checks` | 当前 issue 所有 check 的最新 state（M8 起填充）| maintainer |
 | `issue.comment` | 留言 | 几乎所有 role |
 | `issue.review_vote` | 投票（approve / request_changes / abstain）→ 结构化事件 | reviewer |
 | `issue.merge` | 合并到 base —— 默认无人能调，仅显式 `can:` 授权 | maintainer |
@@ -645,10 +732,10 @@ roles:
 
 **两种工具来源**：
 
-- **本地工具**（`read` / `write` / `edit` / `glob` / `grep` / `bash` / `webfetch`）—— 由 M5b 的 `hangrix-agent` 二进制内置，容器内 in-process 执行，**不经过 HTTP**。
-- **平台工具**（`issue.*` / `roster.*`）—— 由 M6b 的 `modules/platform_mcp` 通过 **HTTP MCP server** 暴露在 `/api/mcp/v1/`，agent 用 MCP client 调；session-scope bearer token 鉴权。
+- **本地工具**（`read` / `write` / `edit` / `glob` / `grep` / `bash` / `webfetch`）—— 由 M6b 的 `hangrix-agent` 二进制内置，容器内 in-process 执行，**不经过 HTTP**。
+- **平台工具**（`issue.*` / `roster.*`）—— 由 M7b 的 `modules/platform_mcp` 通过 **HTTP MCP server** 暴露在 `/api/mcp/v1/`，agent 用 MCP client 调；session-scope bearer token 鉴权。
 
-git 凭证由 M5c runner 在容器启动时预配置（credential helper），agent 用 `bash` 调 `git push` 即可 —— **没有 git 专用工具**。
+git 凭证由 M6c runner 在容器启动时预配置（credential helper），agent 用 `bash` 调 `git push` 即可 —— **没有 git 专用工具**。
 
 #### 事件集（v1，平台事件总线）
 
@@ -660,7 +747,7 @@ git 凭证由 M5c runner 在容器启动时预配置（credential helper），ag
 | `issue.comment.mentioned` | 评论 @ 了某 role（每个 mentioned role 一个独立事件） |
 | `commit.pushed` | issue 分支收到 push |
 | `review_vote.posted` | 某 reviewer 投票 |
-| `ci.status_changed` | CI 状态变化（由 M7 CI 子系统产生）|
+| `ci.status_changed` | CI 状态变化（由 M8 CI 子系统产生）|
 
 #### 事件的三层分发
 
@@ -668,31 +755,31 @@ git 凭证由 M5c runner 在容器启动时预配置（credential helper），ag
 
 ```
 [平台事件总线]                ← schema 在这一层（structured JSON，命名严谨、可版本化）
-    ├→ [M5c runner → M5b agent stdin]  翻译成 agent 输入事件 → agent 看到
+    ├→ [M6c runner → M6b agent stdin]  翻译成 agent 输入事件 → agent 看到
     ├→ [时间线 UI]            渲染成 swim-lane 条目     → 人类看到
     ├→ [audit log]            原样落表                  → 事后查询
-    └→ [外部 webhook]         原样投递（M9+）          → 第三方
+    └→ [外部 webhook]         原样投递（M10+）          → 第三方
 ```
 
-Agent stdin 看到的具体 prose 格式由 M5b 的 `hangrix-agent` 内部 `pkg/prompt` + `pkg/ipc` 决定，**不进 schema 也不在 ROADMAP 锁**。事件 payload 保留所有下游消费者可能要的字段（如 `comment_id` agent 用不上但 audit / webhook 要 —— **schema 偏全，adapter 偏简**）。
+Agent stdin 看到的具体 prose 格式由 M6b 的 `hangrix-agent` 内部 `pkg/prompt` + `pkg/ipc` 决定，**不进 schema 也不在 ROADMAP 锁**。事件 payload 保留所有下游消费者可能要的字段（如 `comment_id` agent 用不上但 audit / webhook 要 —— **schema 偏全，adapter 偏简**）。
 
 #### 需要做的
 
-- [ ] **Mention 解析**：评论入库时 tokenize body 匹配 `@agent-([a-z0-9-]+)`，跳过 markdown 代码块和引用块。匹配 role key → 查 host yaml → 通过 `mention_by` 校验 → 投递 `issue.comment.mentioned` 事件。匹配但不通过校验的 chip 信息落 metadata（UI 在 M6c 渲染）。
+- [ ] **Mention 解析**：评论入库时 tokenize body 匹配 `@agent-([a-z0-9-]+)`，跳过 markdown 代码块和引用块。匹配 role key → 查 host yaml → 通过 `mention_by` 校验 → 投递 `issue.comment.mentioned` 事件。匹配但不通过校验的 chip 信息落 metadata（UI 在 M7c 渲染）。
 - [ ] **`issue_comments.mentioned_roles JSONB[]` 列** + 入库时填充。
-- [ ] **平台事件总线**：定义 v1 事件 payload schema（structured JSON），落 `event_log` 表 + in-process 分发到多 consumer（M5c runner 喂 agent stdin / audit log / UI 监听 / webhook stub）。
+- [ ] **平台事件总线**：定义 v1 事件 payload schema（structured JSON），落 `event_log` 表 + in-process 分发到多 consumer（M6c runner 喂 agent stdin / audit log / UI 监听 / webhook stub）。
 - [ ] **`modules/platform_mcp`**：HTTP MCP server，路径 `/api/mcp/v1/`（`tools/list` + `tools/call` 等 MCP 标准 RPC）。`Authorization: Bearer $HANGRIX_SESSION_TOKEN` —— 这跟 LLM proxy / git push 共用的同一张 session token；`tools/list` 返回当前 session role 的 `can:` 与已激活平台工具的交集；`tools/call` 走对应平台 handler。
-- [ ] **平台工具实现**：`issue.diff` / `issue.children` / `issue.checks`（M7 前返空）/ `issue.review_vote` / `issue.merge` / `issue.close` / `roster.list` —— 每个都在 platform MCP server 后面挂 handler。本地工具（`read` / `write` / `edit` / `glob` / `grep` / `bash` / `webfetch`）由 M5b agent 自带，**不走 MCP server**。
-- [ ] **Agent ↔ 平台事件桥接**：M5c runner 把平台事件总线的事件翻译成 M5b agent 的 stdin JSON-Lines；反向把 agent stdout 的 tool call 报告写回事件总线 + audit（注：tool call 的执行已由 agent 自己经 MCP 完成，runner 这里只是落审计 + 转发状态）。
+- [ ] **平台工具实现**：`issue.diff` / `issue.children` / `issue.checks`（M8 前返空）/ `issue.review_vote` / `issue.merge` / `issue.close` / `roster.list` —— 每个都在 platform MCP server 后面挂 handler。本地工具（`read` / `write` / `edit` / `glob` / `grep` / `bash` / `webfetch`）由 M6b agent 自带，**不走 MCP server**。
+- [ ] **Agent ↔ 平台事件桥接**：M6c runner 把平台事件总线的事件翻译成 M6b agent 的 stdin JSON-Lines；反向把 agent stdout 的 tool call 报告写回事件总线 + audit（注：tool call 的执行已由 agent 自己经 MCP 完成，runner 这里只是落审计 + 转发状态）。
 - [ ] **结构化事件 payload schema**：
   - `issue.review_vote`: `{state: approve|request_changes|abstain, body?: text}`
-  - `ci.status_changed`: `{check_name, state, url?}`（M7 才有产生方，M6b 先定 schema 留口）
+  - `ci.status_changed`: `{check_name, state, url?}`（M8 才有产生方，M7b 先定 schema 留口）
 
 #### 退出条件
 
-基于 M6a 的 host yaml，加上 dispatcher / backend / reviewer / maintainer 四个 role → 开 issue「加 health check 端点」→ dispatcher 自动起、调 `issue.comment` 发 `@agent-backend please add /healthz` → backend session 自动唤醒（无人手动触发）、写代码 + push → reviewer 因 `commit.pushed` 自动唤醒、调 `issue.review_vote` 投 approve → maintainer 因 `review_vote.posted` 唤醒、调 `issue.checks`（返空，stub 接受）+ `issue.merge` 合并 → issue 自动转 `merged`。**全程通过现有 M4 timeline tab 可见**（没有 swim-lane）。
+基于 M7a 的 host yaml，加上 dispatcher / backend / reviewer / maintainer 四个 role → 开 issue「加 health check 端点」→ dispatcher 自动起、调 `issue.comment` 发 `@agent-backend please add /healthz` → backend session 自动唤醒（无人手动触发）、写代码 + push → reviewer 因 `commit.pushed` 自动唤醒、调 `issue.review_vote` 投 approve → maintainer 因 `review_vote.posted` 唤醒、调 `issue.checks`（返空，stub 接受）+ `issue.merge` 合并 → issue 自动转 `merged`。**全程通过现有 M4 timeline tab 可见**（没有 swim-lane）。
 
-### M6c — 前端 swim-lane + 平台预设 agent
+### M7c — 前端 swim-lane + 平台预设 agent
 
 最后一步把体验做出来：issue 详情页两个 tab + role swim-lane + mention chip + admin agent 仓库页；同时 ship 两个官方 agent 仓库让用户开盒即用。
 
@@ -728,18 +815,18 @@ Installer 首次启动 seed 两份官方 agent 仓库（进 db + 磁盘，owner 
 
 用户在自己仓库写 host yaml 引用 `hangrix/dispatcher@latest` + `hangrix/maintainer@latest` + 自己写的 coder / reviewer → 开 issue → 全程在 UI 上看 swim-lane 流动：dispatcher 派单到 backend → backend 写代码 push → reviewer 投票 → maintainer 合并。「人类」tab 干净（只有用户开 issue 那条）；「智能体」tab 完整展示协作过程；admin 后台可看到三个 agent 仓库注册；`git log` 看到不同 role 的 commit author 区分。
 
-### M7 — CI / Workflow 子系统
+### M8 — CI / Workflow 子系统
 
-独立于 agent 协作的检查执行系统，类比 GitHub Actions。M6 通过两个接口跟 CI 协作：
+独立于 agent 协作的检查执行系统，类比 GitHub Actions。M7 通过两个接口跟 CI 协作：
 
 - 平台事件 **`ci.status_changed`**（多 check 支持，每个 `(issue_id, commit_sha, check_name)` 一条独立状态：`green | red | pending | skipped`）
 - 工具 **`issue.checks`**（maintainer 一次性拿到当前 issue 所有 check 的最新 state，决定是否 merge）
 
-完整设计在本 milestone 展开 —— 包含 workflow 定义文件位置（候选 `.hangrix/workflows/*.yml`）、trigger 模型、job runner 是否复用 M5 的 agent runner pool、check 数据模型与 panel UI、credential 注入路径等。详细规划等 M6 落地后再拆。
+完整设计在本 milestone 展开 —— 包含 workflow 定义文件位置（候选 `.hangrix/workflows/*.yml`）、trigger 模型、job runner 是否复用 M6 的 agent runner pool、check 数据模型与 panel UI、credential 注入路径等。详细规划等 M7 落地后再拆。
 
-### M8 — 围绕 AI 重塑 issue 体验
+### M9 — 围绕 AI 重塑 issue 体验
 
-把 M6 的 agent 能力反过来打磨 issue 自身——这是 issue 真正"AI-Native"的部分，不只是把 chat 嵌进来。
+把 M7 的 agent 能力反过来打磨 issue 自身——这是 issue 真正"AI-Native"的部分，不只是把 chat 嵌进来。
 
 - [ ] **结构化的 agent 时间线视图**：把 agent 的 tool call、思考、commit、问题分成可折叠的块，不要单纯流式文本。用户能快速扫到"agent 改了什么 / 卡在哪 / 在等我什么"。
 - [ ] **Diff 的 AI 视角**：issue diff tab 除了行级 diff，提供按"意图块"分组的视图（agent 生成时附带语义标签）。人类直接 push 的 commit 退化到普通行级视图。
@@ -750,17 +837,17 @@ Installer 首次启动 seed 两份官方 agent 仓库（进 db + 磁盘，owner 
 
 退出条件：用户在平台上的日常路径是"开 issue → 和 agent 来回几轮 → merge"，绕开 agent 反而更费劲。
 
-### M9+ — 待定
+### M10+ — 待定
 
 候选方向，下一阶段再裁剪：
 
-- 多租户、组织、SSO
+- SSO（org 成员的统一登录；M5 的 org 已经把成员模型立起来，SSO 是把"成员加入"换成"外部 IdP 决定"）
 - Federation / mirror
 - 桌面客户端（已有单二进制形态，做包装就行）
-- 多协作者 / collaborator 表（M3 的 owner-only 模型显出局限时再做）
-- Transfer ownership（M3 仓库设置里占位的"coming soon"按钮）
+- Team / sub-group（M5 的 org 只有 owner / member 两档，真出现需要按子组分权的场景时再加 `teams` + `team_members` + `repo_team_access`）
+- Outside collaborator / 多协作者（M3 的 owner-only 模型显出局限时再做 —— 跟 M5 的 org member 是两种正交关系）
 - 外部 webhook 订阅（让事件总线对第三方开放）
-- LLM 成本追踪 dashboard + per-host 配额（M5a 的 LLM proxy 已经在记用量表，到这一步是把它做成可视化 + 限额）
+- LLM 成本追踪 dashboard + per-host 配额（M6a 的 LLM proxy 已经在记用量表，到这一步是把它做成可视化 + 限额）
 - User-BYOK（用户带自己的 API key 给某些 role 用）
 - 更多 LLM provider 类型（Google Vertex / AWS Bedrock / Azure OpenAI 等需要自己签名协议的，单独翻译层）
 
@@ -770,9 +857,9 @@ Installer 首次启动 seed 两份官方 agent 仓库（进 db + 磁盘，owner 
 - **不允许游离的分支（M4 起强制）。** 产品稳态下任何非 default 分支必须挂在某个 issue 下，push 到没有 issue 的分支会被拒。**M3 是过渡期，允许直接 push**——M4 引入 issue 后 `BranchWriteGuard` hook 切换实现，把该规则强制开起来。
 - **不做 GitHub/GitLab 的功能补全。** 缺什么功能要先回答"AI agent 怎么用它"；只对人有用的功能优先级靠后。M3 的 push / 分支 / 设置 / compare / README 渲染是 "agent 需要这些 git 抽象作为底座" 的最小集合，而不是为了对标其他平台。
 - **不做通用 LLM 中台。** 平台只负责把 git 能力以工具形态暴露给 agent，不替 agent 选模型、不做 prompt 编排。
-- **不做无沙箱的 agent 自治。** agent 跑在 runner 节点的隔离容器里，凭证（**一张统一的 session token**，同时鉴权 LLM / MCP / git push）按 session 维度一次性下发、过期回收；admin 能一键吊销某 agent 或关闭某仓库的自动 session。**agent 可以直接 commit / merge**（M6 起）—— 安全靠"可见 + 可停 + 可 revert"的事后约束，不靠"先批准再做"的事前门禁。
-- **不让 agent 复用 users 表。** users 表只代表人类。Agent identity 走独立路径（M6 的 agent-as-repo）：commit author 是 role key、认证靠 runner 注入的 session 范围凭证、admin 视图是"agent 仓库列表 + 平台禁用表"——避免账号系统在 password / 邮箱 / 登录态这些地方对人和 agent 拧着说。
-- **权限模型刻意简单。** 始终只用 `user / admin`；仓库 owner 通过 handler 内部判断处理。真到了多协作者、组织这类需求时再设计 ACL，不预留字段。M3 的"分支保护规则"和 M6 的"role / can / mention_by"都是 repo-local 配置，**不是** user 级 RBAC。
+- **不做无沙箱的 agent 自治。** agent 跑在 runner 节点的隔离容器里，凭证（**一张统一的 session token**，同时鉴权 LLM / MCP / git push）按 session 维度一次性下发、过期回收；admin 能一键吊销某 agent 或关闭某仓库的自动 session。**agent 可以直接 commit / merge**（M7 起）—— 安全靠"可见 + 可停 + 可 revert"的事后约束，不靠"先批准再做"的事前门禁。
+- **不让 agent 复用 users 表。** users 表只代表人类。Agent identity 走独立路径（M7 的 agent-as-repo）：commit author 是 role key、认证靠 runner 注入的 session 范围凭证、admin 视图是"agent 仓库列表 + 平台禁用表"——避免账号系统在 password / 邮箱 / 登录态这些地方对人和 agent 拧着说。
+- **权限模型刻意简单。** 平台层只用 `user / admin`；M5 给 org 加 `owner / member` 二档（仅 org scope）—— 不引入 team / outside collaborator / repo-level role。仓库 owner 通过 handler 内部判断处理（`ResolveOwner` 决定走 user 还是 org，user 是 org 成员即视为该 org 仓库的 owner）。再细粒度的 ACL 真到必需时再设计，不预留字段。M3 的"分支保护规则"和 M7 的"role / can / mention_by"都是 repo-local 配置，**不是** user 级 RBAC。
 - **不做 SSH 协议。** 本地优先 + agent-native 的形态下，HTTP + PAT 已经覆盖所有 git push/pull / API 调用场景：浏览器、git CLI、agent runtime 共用一种凭证模型。SSH 要再维护一套 key 管理 + auth_keys 配置 + 端口暴露，回报很低；用户真需要 SSH 体验时大概率说明用错了产品（应该选 Gitea / GitHub），不是该补的功能。
 - **不做 Git LFS。** Hangrix 的主轴是 "agent 在 issue 里读 / 改 / 评论代码"——大文件（视频、模型权重、设计稿二进制）对 agent 工作流没有价值，agent 既不能 diff 也不能 patch。引入 LFS 意味着 storage 后端、pointer 文件协议、独立鉴权三层额外复杂度，且会鼓励用户把不该入 git 的资产塞进来。需要存大文件的项目应当外挂对象存储 + 在 issue 里引用链接。
 
@@ -781,4 +868,4 @@ Installer 首次启动 seed 两份官方 agent 仓库（进 db + 磁盘，owner 
 - 每个新功能走 `internal/modules/<name>/` 模块化单体约定（见 [AGENTS.md](AGENTS.md)）；跨模块依赖只能通过 ioc 容器和对方 `domain/` 接口。
 - 所有 HTTP handler 和 agent 工具共用同一层 domain 接口；禁止 agent-only 或 UI-only 的 fast path 绕过 domain。
 - 数据库变更走 goose 迁移（`internal/modules/<name>/infra/migrations/<NNNNN>_<name>.sql`），向前可应用、向后有 Down，禁止改老迁移。
-- audit log、agent task log 是产品功能，不是运维日志，从 M5 起就要落库可查询。
+- audit log、agent task log 是产品功能，不是运维日志，从 M6 起就要落库可查询。

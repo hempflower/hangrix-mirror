@@ -17,6 +17,15 @@ const router = useRouter()
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
 
+setBreadcrumbs(() => {
+  const base = `/${owner.value}/${name.value}`
+  return [
+    { label: owner.value, to: base },
+    { label: name.value, to: base },
+    { label: t('repo.tabs2.issues') },
+  ]
+})
+
 const tabValues = ['all', 'open', 'merged', 'closed'] as const
 type TabValue = typeof tabValues[number]
 

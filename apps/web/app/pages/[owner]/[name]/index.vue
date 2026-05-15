@@ -51,6 +51,11 @@ const { user } = useCurrentUser()
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
 
+setBreadcrumbs(() => [
+  { label: owner.value, to: `/${owner.value}/${name.value}` },
+  { label: name.value },
+])
+
 const { repo, error: repoError, load: loadRepo } = useRepo(() => owner.value, () => name.value)
 const {
   refs,

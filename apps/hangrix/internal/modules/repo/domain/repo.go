@@ -25,13 +25,28 @@ func (v Visibility) Valid() bool {
 	return v == VisibilityPublic || v == VisibilityPrivate
 }
 
-// Repo is the canonical metadata for a single bare repository. OwnerUsername
-// is denormalized from the users table; Store implementations populate it on
-// read so handlers can build filesystem paths without an extra lookup.
+// OwnerKind names which kind of principal owns a repo. Duplicated in
+// org/domain.OwnerKind on purpose — keeping repo/domain free of an org
+// import lets the issue module pull in only repo/domain and still match
+// the wire encoding ("user" / "org") used everywhere else.
+type OwnerKind string
+
+const (
+	OwnerKindUser OwnerKind = "user"
+	OwnerKindOrg  OwnerKind = "org"
+)
+
+func (k OwnerKind) Valid() bool { return k == OwnerKindUser || k == OwnerKindOrg }
+
+// Repo is the canonical metadata for a single bare repository. OwnerName is
+// denormalized from users.username or organizations.name (which one depends
+// on OwnerKind); Store implementations populate it on read so handlers can
+// build filesystem paths without an extra lookup.
 type Repo struct {
 	ID            int64
-	OwnerID       int64
-	OwnerUsername string
+	OwnerKind     OwnerKind
+	OwnerID       int64 // user.id when Kind==user, org.id when Kind==org
+	OwnerName     string
 	Name          string
 	Description   string
 	Visibility    Visibility
@@ -43,11 +58,15 @@ type Repo struct {
 // ErrRepoNotFound is returned by Store lookups when no row matches.
 var ErrRepoNotFound = errors.New("repo not found")
 
-// ErrRepoConflict is returned when (owner_id, name) uniqueness is violated.
+// ErrRepoConflict is returned when (owner, name) uniqueness is violated.
 var ErrRepoConflict = errors.New("repo already exists")
 
 // ErrInvalidName is returned when a supplied repository name fails validation.
 var ErrInvalidName = errors.New("invalid repo name")
+
+// ErrInvalidOwnerKind is returned by Store implementations when the caller
+// passes an OwnerKind other than the two declared constants.
+var ErrInvalidOwnerKind = errors.New("invalid owner kind")
 
 // ErrProtectionNotFound is returned when a branch_protections lookup misses.
 var ErrProtectionNotFound = errors.New("branch protection not found")
@@ -97,14 +116,18 @@ func MatchProtection(rules []*BranchProtection, branchName string) *BranchProtec
 	return nil
 }
 
-// Store is the persistence abstraction for repo metadata. Implementations
-// must map the Postgres unique-violation on (owner_id, name) to
-// ErrRepoConflict and missing-row lookups to ErrRepoNotFound.
+// Store is the persistence abstraction for repo metadata. The owner is
+// addressed as a (kind, id) pair: kind tells the implementation whether to
+// store the id in owner_user_id or owner_org_id. Implementations must map
+// the Postgres unique-violation on either (owner_user_id, name) or
+// (owner_org_id, name) to ErrRepoConflict and missing-row lookups to
+// ErrRepoNotFound.
 type Store interface {
-	Create(ctx context.Context, ownerID int64, name, description, defaultBranch string, visibility Visibility) (*Repo, error)
+	Create(ctx context.Context, ownerKind OwnerKind, ownerID int64, name, description, defaultBranch string, visibility Visibility) (*Repo, error)
 	GetByID(ctx context.Context, id int64) (*Repo, error)
-	GetByOwnerAndName(ctx context.Context, ownerID int64, name string) (*Repo, error)
-	ListByOwner(ctx context.Context, ownerID int64, includePrivate bool, offset, limit int32) ([]*Repo, int64, error)
+	GetByOwnerAndName(ctx context.Context, ownerKind OwnerKind, ownerID int64, name string) (*Repo, error)
+	ListByOwner(ctx context.Context, ownerKind OwnerKind, ownerID int64, includePrivate bool, offset, limit int32) ([]*Repo, int64, error)
 	Delete(ctx context.Context, id int64) error
 	UpdateMeta(ctx context.Context, id int64, description, defaultBranch string, visibility Visibility) (*Repo, error)
+	Transfer(ctx context.Context, id int64, newOwnerKind OwnerKind, newOwnerID int64) (*Repo, error)
 }

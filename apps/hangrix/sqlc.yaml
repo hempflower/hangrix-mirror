@@ -14,13 +14,32 @@ sql:
         emit_exact_table_names: false
         emit_empty_slices: true
   - engine: postgresql
-    queries: internal/modules/repo/infra/queries.sql
-    # repo migrations reference users(id) via FK, so the schema input includes
-    # the user module's migrations too. sqlc parses the union as one DDL set;
-    # at runtime each module still applies only its own migrations via goose
-    # with a module-scoped version table.
+    queries: internal/modules/org/infra/queries.sql
+    # Org migrations reference users(id); union the user schema so sqlc can
+    # resolve the FK. At runtime each module applies only its own migrations.
     schema:
       - internal/modules/user/infra/migrations
+      - internal/modules/org/infra/migrations
+    gen:
+      go:
+        package: orgdb
+        out: internal/modules/org/infra/orgdb
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_empty_slices: true
+  - engine: postgresql
+    queries: internal/modules/repo/infra/queries.sql
+    # Repo migrations FK users(id) and (since M5) organizations(id); union all
+    # three schemas so sqlc can parse the joins. At runtime each module still
+    # applies only its own migrations via goose with a module-scoped version
+    # table; the repo module declares an org dependency in its ioc deps so
+    # org migrations win the build-order race.
+    schema:
+      - internal/modules/user/infra/migrations
+      - internal/modules/org/infra/migrations
       - internal/modules/repo/infra/migrations
     gen:
       go:

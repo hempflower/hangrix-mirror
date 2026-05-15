@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { FolderGit2, GitBranch, LayoutDashboard, LogOut, Settings, Shield, User } from 'lucide-vue-next'
+import { computed, onMounted } from 'vue'
+import { Building2, FolderGit2, GitBranch, LayoutDashboard, LogOut, Plus, Settings, Shield, User } from 'lucide-vue-next'
 import {
   Sidebar,
   SidebarContent,
@@ -35,6 +35,11 @@ const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const { user, logout } = useCurrentUser()
+const { orgs: myOrgs, refresh: refreshMyOrgs } = useMyOrgs()
+
+onMounted(async () => {
+  if (user.value && !myOrgs.value) await refreshMyOrgs()
+})
 
 async function onLogout() {
   await logout()
@@ -88,6 +93,35 @@ const userInitial = computed(() => user.value?.username?.charAt(0).toUpperCase()
                 <NuxtLink :to="item.to">
                   <component :is="item.icon" />
                   <span>{{ item.label }}</span>
+                </NuxtLink>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+
+      <SidebarGroup>
+        <SidebarGroupLabel class="flex items-center justify-between">
+          <span>{{ t('sidebar.organizations') }}</span>
+          <NuxtLink to="/orgs/new" :title="t('org.create')" class="rounded p-0.5 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground">
+            <Plus class="size-3.5" />
+          </NuxtLink>
+        </SidebarGroupLabel>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            <SidebarMenuItem v-for="o in myOrgs ?? []" :key="o.id">
+              <SidebarMenuButton :is-active="route.path === `/${o.name}`" :tooltip="o.name" as-child>
+                <NuxtLink :to="`/${o.name}`">
+                  <Building2 />
+                  <span>{{ o.display_name || o.name }}</span>
+                </NuxtLink>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem v-if="(myOrgs ?? []).length === 0">
+              <SidebarMenuButton :tooltip="t('org.create')" as-child>
+                <NuxtLink to="/orgs/new">
+                  <Plus />
+                  <span>{{ t('org.create') }}</span>
                 </NuxtLink>
               </SidebarMenuButton>
             </SidebarMenuItem>
@@ -152,6 +186,12 @@ const userInitial = computed(() => user.value?.username?.charAt(0).toUpperCase()
                 <NuxtLink to="/profile" class="cursor-pointer">
                   <User />
                   <span>{{ t('nav.profile') }}</span>
+                </NuxtLink>
+              </DropdownMenuItem>
+              <DropdownMenuItem as-child>
+                <NuxtLink to="/orgs/new" class="cursor-pointer">
+                  <Building2 />
+                  <span>{{ t('org.create') }}</span>
                 </NuxtLink>
               </DropdownMenuItem>
               <DropdownMenuItem v-if="user.role === 'admin'" as-child>

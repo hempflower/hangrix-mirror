@@ -2,22 +2,11 @@
 // versions:
 //   sqlc v1.31.1
 
-package repodb
+package orgdb
 
 import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
-
-type BranchProtection struct {
-	ID               int64
-	RepoID           int64
-	Pattern          string
-	ForbidForcePush  bool
-	ForbidDelete     bool
-	ForbidDirectPush bool
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
-}
 
 type Organization struct {
 	ID          int64
@@ -37,18 +26,6 @@ type OrganizationMember struct {
 	Role    string
 	AddedBy int64
 	AddedAt pgtype.Timestamptz
-}
-
-type Repo struct {
-	ID            int64
-	OwnerUserID   pgtype.Int8
-	Name          string
-	Description   string
-	Visibility    string
-	DefaultBranch string
-	CreatedAt     pgtype.Timestamptz
-	UpdatedAt     pgtype.Timestamptz
-	OwnerOrgID    pgtype.Int8
 }
 
 type User struct {

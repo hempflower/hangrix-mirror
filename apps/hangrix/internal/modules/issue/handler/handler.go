@@ -27,6 +27,7 @@ import (
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
+	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	repoinfra "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/infra"
 	userdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/user/domain"
@@ -38,6 +39,7 @@ type Handler struct {
 	storage    *repoinfra.Storage
 	git        gitdomain.Git
 	users      userdomain.Repo
+	resolver   orgdomain.Resolver
 	middleware authdomain.Middleware
 }
 
@@ -47,6 +49,7 @@ type HandlerDeps struct {
 	Storage    *repoinfra.Storage
 	Git        gitdomain.Git
 	Users      userdomain.Repo
+	Resolver   orgdomain.Resolver
 	Middleware authdomain.Middleware
 }
 
@@ -57,6 +60,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		storage:    deps.Storage,
 		git:        deps.Git,
 		users:      deps.Users,
+		resolver:   deps.Resolver,
 		middleware: deps.Middleware,
 	}
 }
@@ -191,24 +195,29 @@ func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request) (*repoCtx,
 		writeError(w, http.StatusBadRequest, "invalid repo")
 		return nil, false
 	}
-	ownerUser, err := h.users.GetByUsername(r.Context(), owner)
+	resolved, err := h.resolver.ResolveOwner(r.Context(), owner)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "repo not found")
 		return nil, false
 	}
-	repo, err := h.repos.GetByOwnerAndName(r.Context(), ownerUser.ID, name)
+	repo, err := h.repos.GetByOwnerAndName(r.Context(), repodomain.OwnerKind(resolved.Kind), resolved.ID, name)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "repo not found")
 		return nil, false
 	}
 	caller, _ := authdomain.UserFromRequest(r)
 	if repo.Visibility == repodomain.VisibilityPrivate {
-		if caller.ID != repo.OwnerID && caller.Role != userdomain.RoleAdmin {
+		ok, err := h.canRead(r, caller, repo)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return nil, false
+		}
+		if !ok {
 			writeError(w, http.StatusForbidden, "forbidden")
 			return nil, false
 		}
 	}
-	fsPath, err := h.storage.ResolvePath(repo.OwnerUsername, repo.Name)
+	fsPath, err := h.storage.ResolvePath(repo.OwnerName, repo.Name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "resolve path: "+err.Error())
 		return nil, false
@@ -216,9 +225,46 @@ func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request) (*repoCtx,
 	return &repoCtx{repo: repo, fsPath: fsPath}, true
 }
 
-// canManage gates owner-only writes (merge, transition closed/merged).
-func canManage(caller *userdomain.User, repo *repodomain.Repo) bool {
-	return caller != nil && (caller.ID == repo.OwnerID || caller.Role == userdomain.RoleAdmin)
+// canRead mirrors the repo handler's canReadRepo: user-owned → user is
+// owner, org-owned → user is any-role member, admin always.
+func (h *Handler) canRead(r *http.Request, caller *userdomain.User, repo *repodomain.Repo) (bool, error) {
+	if caller == nil {
+		return false, nil
+	}
+	if caller.Role == userdomain.RoleAdmin {
+		return true, nil
+	}
+	switch repo.OwnerKind {
+	case repodomain.OwnerKindUser:
+		return caller.ID == repo.OwnerID, nil
+	case repodomain.OwnerKindOrg:
+		_, ok, err := h.resolver.Membership(r.Context(), repo.OwnerID, caller.ID)
+		return ok, err
+	}
+	return false, nil
+}
+
+// canManage gates owner-only issue writes (merge, transition closed/merged).
+// Mirrors the repo handler's canWriteRepo: org-owned repos require owner
+// role inside the org; admin always.
+func (h *Handler) canManage(r *http.Request, caller *userdomain.User, repo *repodomain.Repo) bool {
+	if caller == nil {
+		return false
+	}
+	if caller.Role == userdomain.RoleAdmin {
+		return true
+	}
+	switch repo.OwnerKind {
+	case repodomain.OwnerKindUser:
+		return caller.ID == repo.OwnerID
+	case repodomain.OwnerKindOrg:
+		role, ok, err := h.resolver.Membership(r.Context(), repo.OwnerID, caller.ID)
+		if err != nil || !ok {
+			return false
+		}
+		return role == orgdomain.RoleOwner
+	}
+	return false
 }
 
 func (h *Handler) loadIssue(w http.ResponseWriter, r *http.Request, repoID int64) (*domain.Issue, bool) {
@@ -360,7 +406,7 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	caller, _ := authdomain.UserFromRequest(r)
-	authorOrManager := caller.ID == iss.AuthorID || canManage(caller, rc.repo)
+	authorOrManager := caller.ID == iss.AuthorID || h.canManage(r, caller, rc.repo)
 	if !authorOrManager {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -624,7 +670,7 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	caller, _ := authdomain.UserFromRequest(r)
-	if !canManage(caller, rc.repo) {
+	if !h.canManage(r, caller, rc.repo) {
 		writeError(w, http.StatusForbidden, "only the repo owner can merge")
 		return
 	}

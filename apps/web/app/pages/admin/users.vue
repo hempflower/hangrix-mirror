@@ -11,6 +11,11 @@ import type { User, UserListResp } from '~/types/user'
 const { t } = useI18n()
 const { user: me } = useCurrentUser()
 
+setBreadcrumbs(() => [
+  { label: t('admin.section'), to: '/admin/users' },
+  { label: t('admin.users.title') },
+])
+
 const users = ref<User[]>([])
 const total = ref(0)
 const loading = ref(false)

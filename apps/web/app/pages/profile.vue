@@ -3,6 +3,7 @@ import { computed, ref, watchEffect } from 'vue'
 import { toTypedSchema } from '@vee-validate/zod'
 import * as z from 'zod'
 
+
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -14,6 +15,8 @@ import type { User } from '~/types/user'
 
 const { t } = useI18n()
 const { user, refresh } = useCurrentUser()
+
+setBreadcrumbs(() => [{ label: t('nav.profile') }])
 
 // Email form
 const emailSchema = computed(() => toTypedSchema(z.object({

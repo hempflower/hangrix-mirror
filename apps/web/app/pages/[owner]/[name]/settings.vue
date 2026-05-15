@@ -41,8 +41,20 @@ definePageMeta({ layout: 'repo' })
 
 const { t } = useI18n()
 const route = useRoute()
+
+setBreadcrumbs(() => {
+  const owner = String(route.params.owner ?? '')
+  const name = String(route.params.name ?? '')
+  const base = `/${owner}/${name}`
+  return [
+    { label: owner, to: base },
+    { label: name, to: base },
+    { label: t('repo.settingsLink') },
+  ]
+})
 const router = useRouter()
 const { user, refresh: refreshUser } = useCurrentUser()
+const { orgs: myOrgs, refresh: refreshMyOrgs } = useMyOrgs()
 
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
@@ -75,8 +87,46 @@ const branches = computed(() => refs.value?.branches ?? [])
 const fullName = computed(() => `${owner.value}/${name.value}`)
 const canManage = computed(() => {
   if (!repo.value || !user.value) return false
-  return user.value.role === 'admin' || user.value.id === repo.value.owner_id
+  if (user.value.role === 'admin') return true
+  if (repo.value.owner_kind === 'user') {
+    return user.value.id === repo.value.owner_id
+  }
+  // Org-owned: optimistic UI check — show the controls if the repo is
+  // owned by an org the caller belongs to. The server still enforces
+  // owner-role on every mutation, so non-owner members hitting the
+  // buttons just get a 403.
+  return (myOrgs.value ?? []).some(o => o.id === repo.value!.owner_id)
 })
+
+const transferOpen = ref(false)
+const transferTarget = ref('')
+const transferConfirm = ref('')
+const transferError = ref<string | null>(null)
+const transferring = ref(false)
+
+async function onTransfer() {
+  if (!repo.value) return
+  transferError.value = null
+  transferring.value = true
+  try {
+    const updated = await $fetch<PublicRepo>(
+      `/api/repos/${owner.value}/${name.value}/transfer`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        body: { target_owner: transferTarget.value.trim(), confirm: transferConfirm.value.trim() },
+      },
+    )
+    transferOpen.value = false
+    transferTarget.value = ''
+    transferConfirm.value = ''
+    router.replace(`/${updated.owner_name}/${updated.name}/settings`)
+  } catch (e: any) {
+    transferError.value = e?.data?.error ?? t('repo.settings.transferFailed')
+  } finally {
+    transferring.value = false
+  }
+}
 
 const schema = computed(() => toTypedSchema(z.object({
   description: z.string().max(500).optional(),
@@ -95,6 +145,7 @@ async function load() {
   loadError.value = null
   try {
     if (!user.value) await refreshUser()
+    if (!myOrgs.value) await refreshMyOrgs()
     repo.value = await $fetch<PublicRepo>(`/api/repos/${owner.value}/${name.value}`, {
       credentials: 'include',
     })
@@ -518,12 +569,51 @@ onMounted(load)
               <p class="text-sm font-medium">{{ t('repo.settings.transfer') }}</p>
               <p class="text-xs text-muted-foreground">{{ t('repo.settings.transferHint') }}</p>
             </div>
-            <Button variant="outline" disabled>
-              {{ t('repo.settings.transferHint') }}
+            <Button variant="outline" @click="transferOpen = true">
+              {{ t('repo.settings.transfer') }}
             </Button>
           </div>
         </CardContent>
       </Card>
+
+      <Dialog v-model:open="transferOpen">
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{{ t('repo.settings.transfer') }}</DialogTitle>
+            <DialogDescription>
+              {{ t('repo.settings.transferDescription') }}
+            </DialogDescription>
+          </DialogHeader>
+          <div class="space-y-3">
+            <div class="space-y-1">
+              <Label for="transfer-target" class="text-sm">
+                {{ t('repo.settings.transferTarget') }}
+              </Label>
+              <Input id="transfer-target" v-model="transferTarget" autocomplete="off" :placeholder="t('repo.settings.transferTargetPlaceholder')" />
+            </div>
+            <div class="space-y-1">
+              <Label for="transfer-confirm" class="text-sm">
+                {{ t('repo.settings.transferConfirmLabel', { name: fullName }) }}
+              </Label>
+              <Input id="transfer-confirm" v-model="transferConfirm" autocomplete="off" :placeholder="fullName" />
+            </div>
+            <p v-if="transferError" class="text-sm text-destructive">
+              {{ transferError }}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" @click="transferOpen = false">
+              {{ t('common.cancel') }}
+            </Button>
+            <Button
+              :disabled="!transferTarget.trim() || transferConfirm.trim() !== fullName || transferring"
+              @click="onTransfer"
+            >
+              {{ transferring ? t('common.saving') : t('repo.settings.transfer') }}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog v-model:open="deleteOpen">
         <DialogContent>

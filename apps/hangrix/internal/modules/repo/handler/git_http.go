@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
+	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	tokendomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/token/domain"
 	userdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/user/domain"
@@ -193,7 +194,7 @@ func (h *Handler) authorizeGitRead(w http.ResponseWriter, r *http.Request) (*dom
 			challengeBasicAuth(w)
 			return nil, "", false
 		}
-		if !canAccessRepo(caller.user, repo) {
+		if !h.canAccessRepo(r.Context(), caller.user, repo, false) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return nil, "", false
 		}
@@ -222,7 +223,7 @@ func (h *Handler) authorizeGitWrite(w http.ResponseWriter, r *http.Request) (*do
 		challengeBasicAuth(w)
 		return nil, "", false
 	}
-	if !canAccessRepo(caller.user, repo) {
+	if !h.canAccessRepo(r.Context(), caller.user, repo, true) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return nil, "", false
 	}
@@ -235,19 +236,19 @@ func (h *Handler) authorizeGitWrite(w http.ResponseWriter, r *http.Request) (*do
 
 func (h *Handler) loadGitRepo(w http.ResponseWriter, r *http.Request, owner, repoName string) (*domain.Repo, string, bool) {
 	ctx := r.Context()
-	ownerUser, err := h.users.GetByUsername(ctx, owner)
+	resolved, err := h.resolver.ResolveOwner(ctx, owner)
 	if err != nil {
-		// Don't differentiate "no such user" from "no such repo" — same
+		// Don't differentiate "no such owner" from "no such repo" — same
 		// 404 either way.
 		http.NotFound(w, r)
 		return nil, "", false
 	}
-	repo, err := h.store.GetByOwnerAndName(ctx, ownerUser.ID, repoName)
+	repo, err := h.store.GetByOwnerAndName(ctx, domain.OwnerKind(resolved.Kind), resolved.ID, repoName)
 	if err != nil {
 		http.NotFound(w, r)
 		return nil, "", false
 	}
-	fsPath, err := h.storage.ResolvePath(repo.OwnerUsername, repo.Name)
+	fsPath, err := h.storage.ResolvePath(repo.OwnerName, repo.Name)
 	if err != nil {
 		http.NotFound(w, r)
 		return nil, "", false
@@ -255,8 +256,32 @@ func (h *Handler) loadGitRepo(w http.ResponseWriter, r *http.Request, owner, rep
 	return repo, fsPath, true
 }
 
-func canAccessRepo(user *userdomain.User, repo *domain.Repo) bool {
-	return user.ID == repo.OwnerID || user.Role == userdomain.RoleAdmin
+// canAccessRepo answers "may this user read or write the repo?" — the smart-
+// HTTP wrappers further restrict writes via hasWriteScope. User-owned repos
+// allow the owner themselves; org-owned repos allow any member for read and
+// owner-role members for write. The org/domain Resolver carries the
+// membership check; admin always passes.
+func (h *Handler) canAccessRepo(ctx context.Context, user *userdomain.User, repo *domain.Repo, write bool) bool {
+	if user == nil {
+		return false
+	}
+	if user.Role == userdomain.RoleAdmin {
+		return true
+	}
+	switch repo.OwnerKind {
+	case domain.OwnerKindUser:
+		return user.ID == repo.OwnerID
+	case domain.OwnerKindOrg:
+		role, ok, err := h.resolver.Membership(ctx, repo.OwnerID, user.ID)
+		if err != nil || !ok {
+			return false
+		}
+		if write {
+			return role == orgdomain.RoleOwner
+		}
+		return true
+	}
+	return false
 }
 
 func challengeBasicAuth(w http.ResponseWriter) {

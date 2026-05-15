@@ -20,79 +20,18 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
+import type { Crumb } from '~/composables/useBreadcrumbs'
 
-const { t, locale, locales, setLocale } = useI18n()
+const { locale, locales, setLocale, t } = useI18n()
 const route = useRoute()
+const pageCrumbs = useBreadcrumbsState()
 
-interface Crumb { label: string; to?: string }
-
-function shortSha(s: string) {
-  return s.slice(0, 7)
-}
-
+// Pages register their own crumbs by calling setBreadcrumbs() in setup.
+// Until a page does, fall back to the raw path so the gap is visible
+// during dev rather than producing an empty header.
 const crumbs = computed<Crumb[]>(() => {
-  const path = route.path
-
-  if (path === '/') {
-    return [{ label: t('nav.dashboard') }]
-  }
-  if (path.startsWith('/admin/users')) {
-    return [
-      { label: t('admin.section'), to: '/admin/users' },
-      { label: t('admin.users.title') },
-    ]
-  }
-  if (path.startsWith('/profile')) {
-    return [{ label: t('nav.profile') }]
-  }
-  if (path === '/repos' || path.startsWith('/repos/')) {
-    return [{ label: t('repo.title') }]
-  }
-
-  // Repo paths: /[owner]/[name][/...]
-  const owner = String(route.params.owner ?? '')
-  const name = String(route.params.name ?? '')
-  if (owner && name) {
-    const base = `/${owner}/${name}`
-    const head: Crumb[] = [
-      { label: owner, to: base },
-      { label: name, to: base },
-    ]
-    // /[owner]/[name]
-    if (path === base) {
-      return [head[0]!, { label: name }]
-    }
-    // /[owner]/[name]/blob/<ref>/<...path>
-    if (path.startsWith(`${base}/blob/`)) {
-      const rawPath = route.params.path
-      const segs = Array.isArray(rawPath)
-        ? (rawPath as string[]).filter(Boolean)
-        : String(rawPath ?? '').split('/').filter(Boolean)
-      const out: Crumb[] = [head[0]!, head[1]!, { label: 'blob' }]
-      segs.forEach(seg => out.push({ label: seg }))
-      return out
-    }
-    // /[owner]/[name]/commits/[sha]
-    if (path.startsWith(`${base}/commits/`)) {
-      const sha = String(route.params.sha ?? '')
-      return [head[0]!, head[1]!, { label: t('repo.tabs.commits'), to: `${base}?tab=commits` }, { label: shortSha(sha) }]
-    }
-    if (path === `${base}/branches`) {
-      return [head[0]!, head[1]!, { label: t('repo.tabs.branches') }]
-    }
-    if (path === `${base}/tags`) {
-      return [head[0]!, head[1]!, { label: t('repo.tabs.tags') }]
-    }
-    if (path === `${base}/compare`) {
-      return [head[0]!, head[1]!, { label: t('repo.tabs.compare') }]
-    }
-    if (path === `${base}/settings`) {
-      return [head[0]!, head[1]!, { label: t('repo.settingsLink') }]
-    }
-    return [head[0]!, { label: name }]
-  }
-
-  return [{ label: path }]
+  if (pageCrumbs.value.length > 0) return pageCrumbs.value
+  return [{ label: route.path }]
 })
 
 const availableLocales = computed(() => (locales as any).value as { code: string; name: string }[])

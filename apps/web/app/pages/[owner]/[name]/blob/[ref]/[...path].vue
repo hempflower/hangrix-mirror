@@ -9,6 +9,23 @@ definePageMeta({ layout: 'repo' })
 const { t } = useI18n()
 const route = useRoute()
 
+setBreadcrumbs(() => {
+  const owner = String(route.params.owner ?? '')
+  const name = String(route.params.name ?? '')
+  const base = `/${owner}/${name}`
+  const rawPath = route.params.path
+  const segs = Array.isArray(rawPath)
+    ? (rawPath as string[]).filter(Boolean)
+    : String(rawPath ?? '').split('/').filter(Boolean)
+  const out = [
+    { label: owner, to: base },
+    { label: name, to: base },
+    { label: 'blob' },
+  ]
+  segs.forEach(seg => out.push({ label: seg }))
+  return out
+})
+
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
 

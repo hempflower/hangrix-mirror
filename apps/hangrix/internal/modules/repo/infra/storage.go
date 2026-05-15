@@ -272,6 +272,31 @@ func (s *Storage) DeleteOnDisk(ownerUsername, repoName string) error {
 	return os.RemoveAll(path)
 }
 
+// RenameOnDisk moves a bare repo from <oldOwner>/<oldName>.git to
+// <newOwner>/<newName>.git. Used by the M5 transfer-ownership endpoint
+// (transfer can change owner but keeps name; we still accept new names for
+// the future "rename + transfer" UX). The target parent dir is created if
+// missing. If oldOwner == newOwner the rename is a same-directory move and
+// the new parent dir already exists; either way `os.Rename` is atomic on a
+// single filesystem.
+func (s *Storage) RenameOnDisk(oldOwner, oldName, newOwner, newName string) error {
+	oldPath, err := s.ResolvePath(oldOwner, oldName)
+	if err != nil {
+		return err
+	}
+	newPath, err := s.ResolvePath(newOwner, newName)
+	if err != nil {
+		return err
+	}
+	if oldPath == newPath {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(newPath), 0o755); err != nil {
+		return fmt.Errorf("rename: mkdir parent: %w", err)
+	}
+	return os.Rename(oldPath, newPath)
+}
+
 // Git exposes the underlying git interface so the handler can issue read
 // operations against a resolved path without re-wiring its own dependency.
 func (s *Storage) Git() gitdomain.Git { return s.git }

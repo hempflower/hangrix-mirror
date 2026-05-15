@@ -8,6 +8,8 @@ import type { PublicRepo, RepoListResp } from '~/types/repo'
 
 const { t } = useI18n()
 
+setBreadcrumbs(() => [{ label: t('repo.title') }])
+
 const repos = ref<PublicRepo[]>([])
 const total = ref(0)
 const loading = ref(false)

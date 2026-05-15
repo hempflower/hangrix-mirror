@@ -1,8 +1,13 @@
 export type Visibility = 'public' | 'private'
 
+export type OwnerKind = 'user' | 'org'
+
 export interface PublicRepo {
   id: number
+  owner_kind: OwnerKind
   owner_id: number
+  owner_name: string
+  /** Legacy alias for `owner_name` kept until all callers migrate. */
   owner_username: string
   name: string
   description: string

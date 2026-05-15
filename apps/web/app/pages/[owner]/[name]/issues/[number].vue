@@ -33,6 +33,16 @@ const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
 const number = computed(() => Number(route.params.number ?? 0))
 
+setBreadcrumbs(() => {
+  const base = `/${owner.value}/${name.value}`
+  return [
+    { label: owner.value, to: base },
+    { label: name.value, to: base },
+    { label: t('repo.tabs2.issues'), to: `${base}/issues` },
+    { label: `#${number.value}` },
+  ]
+})
+
 const { repo, load: loadRepo } = useRepo(() => owner.value, () => name.value)
 
 const issue = ref<Issue | null>(null)
