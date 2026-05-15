@@ -5,6 +5,10 @@ services:
     image: mcr.microsoft.com/devcontainers/go:1.26
     volumes:
       - ../..:/workspaces:cached
+      # docker-outside-of-docker: host's docker socket so `docker` inside
+      # the devcontainer talks to the host daemon. Containers spawned from
+      # here are siblings on the host, not nested children.
+      - /var/run/docker.sock:/var/run/docker.sock
     working_dir: /workspaces/${localWorkspaceFolderBasename}
     command: sleep infinity
     networks:
