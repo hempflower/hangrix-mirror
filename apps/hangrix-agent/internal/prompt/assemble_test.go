@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hangrix/hangrix/apps/hangrix-agent/pkg/prompt"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/prompt"
 )
 
 // TestAssemble_AllThreeLayers spreads a temporary agent bundle + host

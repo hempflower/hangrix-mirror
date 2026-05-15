@@ -20,9 +20,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hangrix/hangrix/apps/hangrix-agent/pkg/llm"
-	"github.com/hangrix/hangrix/apps/hangrix-agent/pkg/mcp"
-	"github.com/hangrix/hangrix/apps/hangrix-agent/pkg/tools/local"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/llm"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/mcp"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/local"
 )
 
 // Source distinguishes a local in-process tool from a remote MCP one.

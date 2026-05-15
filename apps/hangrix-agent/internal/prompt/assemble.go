@@ -38,15 +38,16 @@ type Inputs struct {
 	// Host addendum file (HANGRIX_HOST_ADDENDUM). Empty → skip host layer.
 	HostAddendumPath string
 
-	// Runtime context surfaced at the top of the prompt.
+	// Runtime context surfaced at the top of the prompt. Deliberately
+	// excludes runner internals (LLM / MCP endpoints, credential
+	// material) — the agent reaches those services through pre-wired
+	// clients and does not need their addresses to operate.
 	Role          string
 	HostRepo      string
 	IssueNumber   string
 	WorkingBranch string
 	BaseBranch    string
 	SessionID     string
-	LLMEndpoint   string
-	MCPEndpoint   string
 }
 
 // Assembled bundles the final prompt with debug provenance the runtime
@@ -76,8 +77,6 @@ func Assemble(in Inputs) (*Assembled, error) {
 	writeKV(&buf, "issue_number", in.IssueNumber)
 	writeKV(&buf, "base_branch", in.BaseBranch)
 	writeKV(&buf, "working_branch", in.WorkingBranch)
-	writeKV(&buf, "llm_endpoint", in.LLMEndpoint)
-	writeKV(&buf, "platform_mcp_endpoint", in.MCPEndpoint)
 	buf.WriteString("\n")
 
 	// (2) Baseline. Always present; it's compiled in.

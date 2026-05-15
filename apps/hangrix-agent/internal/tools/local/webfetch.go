@@ -7,17 +7,20 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
+
+	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 )
 
-// webfetch fetches a URL and, by default, strips HTML to a readable text
-// form for the LLM. The HTML→text conversion is intentionally crude: drop
-// <script> and <style> blocks, strip remaining tags, collapse whitespace.
-// A real markdown converter (e.g. JinaReader) would be better but pulls
-// in a heavy dep tree; the v1 LLM-friendly form is good enough for the
-// "find a docs page → summarise" loop M6b needs.
+// webfetch fetches a URL and, by default, converts the HTML body to
+// markdown so the LLM keeps document structure (headings, lists, links,
+// code blocks) instead of a flat tag-stripped blob. We delegate the
+// conversion to github.com/JohannesKaufmann/html-to-markdown/v2 — it
+// handles nested markup, tables, and the inline/block distinction far
+// better than a hand-rolled regex pass and is the canonical Go choice
+// for this job. Set raw=true to skip the conversion and get the original
+// body bytes (useful for JSON, plain text, etc.).
 
 type webfetchArgs struct {
 	URL string `json:"url"`
@@ -45,7 +48,7 @@ func newWebFetchTool() Tool {
 
 func (webfetchTool) Name() string { return "webfetch" }
 func (webfetchTool) Description() string {
-	return "Fetch a URL. By default returns the body converted to plain text (HTML stripped). Set raw=true to get the original body bytes (useful for non-HTML responses)."
+	return "Fetch a URL. By default returns the body converted to markdown (headings, lists, links, and code blocks preserved; scripts/styles stripped) under the 'markdown' field. Set raw=true to skip the conversion and get the original body bytes under 'body' instead — useful for non-HTML responses like JSON or plain text."
 }
 func (webfetchTool) Schema() map[string]any {
 	return map[string]any{
@@ -64,10 +67,10 @@ func (w *webfetchTool) Call(ctx context.Context, raw json.RawMessage) (any, erro
 		return nil, err
 	}
 	if a.URL == "" {
-		return nil, errors.New("url is required")
+		return nil, errors.New("webfetch: missing required 'url' argument. Provide an absolute http(s) URL to fetch.")
 	}
 	if !strings.HasPrefix(a.URL, "http://") && !strings.HasPrefix(a.URL, "https://") {
-		return nil, fmt.Errorf("only http/https URLs are supported")
+		return nil, fmt.Errorf("webfetch: %q is not a supported URL. Only absolute http:// and https:// URLs are allowed — relative paths and other schemes (file://, ftp://, etc.) are not fetched. To read a local file use the 'read' tool instead.", a.URL)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.URL, nil)
@@ -103,39 +106,17 @@ func (w *webfetchTool) Call(ctx context.Context, raw json.RawMessage) (any, erro
 	}
 	if a.Raw {
 		out["body"] = string(body)
-	} else {
-		out["text"] = htmlToText(string(body))
+		return out, nil
 	}
+	md, convErr := htmltomarkdown.ConvertString(string(body))
+	if convErr != nil {
+		// Conversion failure is rare (the library tolerates very broken
+		// HTML), but if it happens we surface the original bytes so the
+		// LLM still has something to work with rather than an empty result.
+		out["body"] = string(body)
+		out["conversion_error"] = convErr.Error()
+		return out, nil
+	}
+	out["markdown"] = md
 	return out, nil
-}
-
-var (
-	// Two regexes instead of one back-referenced pattern: Go's RE2 has
-	// no backreferences, so we strip <script>…</script> and
-	// <style>…</style> in two passes.
-	scriptBlock  = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
-	styleBlock   = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
-	htmlTag      = regexp.MustCompile(`<[^>]+>`)
-	multiSpace   = regexp.MustCompile(`[ \t]+`)
-	multiNewline = regexp.MustCompile(`\n{3,}`)
-)
-
-func htmlToText(s string) string {
-	s = scriptBlock.ReplaceAllString(s, "")
-	s = styleBlock.ReplaceAllString(s, "")
-	s = htmlTag.ReplaceAllString(s, "")
-	// Decode the four entities that show up in nearly every page; full
-	// entity decoding would need html.UnescapeString, which is fine but
-	// brings in net/html — and the four below cover the 99% case.
-	s = strings.NewReplacer(
-		"&amp;", "&",
-		"&lt;", "<",
-		"&gt;", ">",
-		"&quot;", "\"",
-		"&#39;", "'",
-		"&nbsp;", " ",
-	).Replace(s)
-	s = multiSpace.ReplaceAllString(s, " ")
-	s = multiNewline.ReplaceAllString(s, "\n\n")
-	return strings.TrimSpace(s)
 }

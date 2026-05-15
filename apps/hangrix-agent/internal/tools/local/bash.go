@@ -13,10 +13,13 @@ import (
 	"time"
 )
 
-// bash runs commands in `sh -c`. The "interactive" niceties (login shell,
+// bash runs commands in `bash -c`. The "interactive" niceties (login shell,
 // rcfile, signal proxying) are deliberately absent — the agent is one
 // process running in a one-shot container, so adding them would complicate
-// the result without changing what the LLM can do.
+// the result without changing what the LLM can do. We require bash (not the
+// POSIX `sh` fallback) because agent-authored scripts routinely lean on
+// bashisms (pipefail, process substitution, `[[ … ]]`, arrays) and silently
+// degrading to dash would produce surprising failures.
 //
 // Backgrounding is handled by spawning a goroutine, returning a taskId,
 // and stashing the *exec.Cmd in a map so a follow-up bash call can poll
@@ -60,17 +63,19 @@ func newBashTool() Tool { return &bashTool{jobs: map[string]*bashJob{}} }
 
 func (*bashTool) Name() string { return "bash" }
 func (*bashTool) Description() string {
-	return "Run a shell command via 'sh -c'. Returns {stdout, stderr, exit_code, timed_out}. Set run_in_background=true for long-running commands; the response will include a task_id you can pass back via task_id to poll progress."
+	return "Run a shell command via 'bash -c' (bashisms like pipefail, process substitution, and [[ ]] are available). Returns {stdout, stderr, exit_code, timed_out}. " +
+		"Set run_in_background=true to start a long-running command; the response will include a tool-generated task_id. " +
+		"To check progress, call bash again with that task_id and no command — task_id is opaque, do not invent or modify it, and do not supply it together with command in the same call."
 }
 func (*bashTool) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"command":          map[string]any{"type": "string"},
-			"working_dir":      map[string]any{"type": "string"},
-			"timeout_seconds":  map[string]any{"type": "integer", "description": "Default 120."},
-			"run_in_background": map[string]any{"type": "boolean"},
-			"task_id":          map[string]any{"type": "string", "description": "Pass to poll a previously-started background task."},
+			"command":           map[string]any{"type": "string", "description": "Shell command to execute. Required unless task_id is given."},
+			"working_dir":       map[string]any{"type": "string"},
+			"timeout_seconds":   map[string]any{"type": "integer", "description": "Default 120."},
+			"run_in_background": map[string]any{"type": "boolean", "description": "Start the command in the background; the response carries a tool-generated task_id you pass back to poll."},
+			"task_id":           map[string]any{"type": "string", "description": "Opaque id returned by an earlier run_in_background=true call. Pass it back (with no command) to poll progress. Mutually exclusive with command — never supply both, and never invent a value."},
 		},
 	}
 }
@@ -81,10 +86,17 @@ func (b *bashTool) Call(ctx context.Context, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	if a.TaskID != "" {
+		// task_id is the tool's contract for "poll an existing job." Mixing
+		// it with a fresh command would conflate "start" and "poll" — the
+		// LLM has no business inventing or recycling ids, so we refuse
+		// instead of silently picking one branch.
+		if a.Command != "" {
+			return nil, errors.New("task_id and command are mutually exclusive: pass task_id (with no command) to poll an existing background task, or pass command to start a new one")
+		}
 		return b.poll(a.TaskID), nil
 	}
 	if a.Command == "" {
-		return nil, errors.New("command is required")
+		return nil, errors.New("bash: missing 'command'. To start a new shell command, set 'command' (it runs via 'bash -c'). To poll a previously-started background task, set 'task_id' on its own (without 'command').")
 	}
 	if a.TimeoutSeconds <= 0 {
 		a.TimeoutSeconds = 120
@@ -100,7 +112,7 @@ func (b *bashTool) runForeground(ctx context.Context, a bashArgs) (*bashResult, 
 	cctx, cancel := context.WithTimeout(ctx, time.Duration(a.TimeoutSeconds)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(cctx, "sh", "-c", a.Command)
+	cmd := exec.CommandContext(cctx, "bash", "-c", a.Command)
 	if a.WorkingDir != "" {
 		cmd.Dir = a.WorkingDir
 	}
@@ -140,7 +152,7 @@ func (b *bashTool) spawnBackground(a bashArgs) *bashResult {
 	if a.TimeoutSeconds > 0 {
 		cctx, cancel = context.WithTimeout(cctx, time.Duration(a.TimeoutSeconds)*time.Second)
 	}
-	cmd := exec.CommandContext(cctx, "sh", "-c", a.Command)
+	cmd := exec.CommandContext(cctx, "bash", "-c", a.Command)
 	if a.WorkingDir != "" {
 		cmd.Dir = a.WorkingDir
 	}
@@ -188,7 +200,13 @@ func (b *bashTool) poll(id string) *bashResult {
 	job, ok := b.jobs[id]
 	b.mu.Unlock()
 	if !ok {
-		return &bashResult{ExitCode: -1, Stderr: fmt.Sprintf("unknown task_id: %s", id)}
+		return &bashResult{
+			ExitCode: -1,
+			Stderr: fmt.Sprintf(
+				"bash: unknown task_id %q. Task ids are generated by the tool when you start a command with run_in_background=true and are valid for the lifetime of the agent process. Only pass back a task_id that bash previously returned in this session; do not invent or modify the value.",
+				id,
+			),
+		}
 	}
 	job.mu.Lock()
 	defer job.mu.Unlock()

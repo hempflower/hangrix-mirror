@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hangrix/hangrix/apps/hangrix-agent/pkg/ipc"
-	"github.com/hangrix/hangrix/apps/hangrix-agent/pkg/llm"
-	"github.com/hangrix/hangrix/apps/hangrix-agent/pkg/mcp"
-	"github.com/hangrix/hangrix/apps/hangrix-agent/pkg/runtime"
-	"github.com/hangrix/hangrix/apps/hangrix-agent/pkg/tools"
-	"github.com/hangrix/hangrix/apps/hangrix-agent/pkg/tools/local"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/ipc"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/llm"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/mcp"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/runtime"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/local"
 )
 
 // TestLoopSmoke is the M6b exit-condition rehearsal: scripted LLM

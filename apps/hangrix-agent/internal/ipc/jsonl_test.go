@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hangrix/hangrix/apps/hangrix-agent/pkg/ipc"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/ipc"
 )
 
 // TestReader_RoundsTrip walks the three inbound shapes the runner emits

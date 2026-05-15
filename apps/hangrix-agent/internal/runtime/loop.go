@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/hangrix/hangrix/apps/hangrix-agent/pkg/ipc"
-	"github.com/hangrix/hangrix/apps/hangrix-agent/pkg/llm"
-	"github.com/hangrix/hangrix/apps/hangrix-agent/pkg/tools"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/ipc"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/llm"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools"
 )
 
 // Loop owns the message-pump that ties IPC, LLM and tools together.

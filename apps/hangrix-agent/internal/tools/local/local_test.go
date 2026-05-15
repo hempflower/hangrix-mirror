@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hangrix/hangrix/apps/hangrix-agent/pkg/tools/local"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/local"
 )
 
 // TestEditRequiresPriorRead pins the read-before-edit guard. The whole
@@ -26,12 +26,21 @@ func TestEditRequiresPriorRead(t *testing.T) {
 	editTool := tools["edit"]
 	readTool := tools["read"]
 
-	// Edit before read: must refuse.
+	// Edit before read: must refuse, with an LLM-friendly message that
+	// names the rule and the fix. The model uses the error text to
+	// self-correct, so stripping the explanation regresses behaviour even
+	// though the refusal itself still happens.
 	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
 		"path": path, "mode": "replace", "find": "hello", "replace": "hi",
 	}))
 	if err == nil || !strings.Contains(err.Error(), "was not read") {
 		t.Fatalf("expected read-first refusal, got %v", err)
+	}
+	msg := err.Error()
+	for _, want := range []string{"'read' tool", "retry", "whitespace-sensitive"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("read-first error should mention %q (so the LLM knows how to recover); got: %s", want, msg)
+		}
 	}
 
 	// Read, then edit: must succeed.
@@ -87,6 +96,27 @@ func TestBashForeground(t *testing.T) {
 	}
 	if fields.TimedOut {
 		t.Errorf("timed_out should be false")
+	}
+}
+
+// TestBashTaskIDMutualExclusion pins the rule that task_id (poll an existing
+// background task) and command (start a new one) cannot coexist in a single
+// call. The LLM has no business inventing task_id values, so we refuse the
+// call rather than silently picking one branch.
+func TestBashTaskIDMutualExclusion(t *testing.T) {
+	t.Parallel()
+	tools := byName(local.All())
+	bash := tools["bash"]
+
+	_, err := bash.Call(context.Background(), mustJSON(map[string]any{
+		"command": "echo hi",
+		"task_id": "task_deadbeef",
+	}))
+	if err == nil {
+		t.Fatal("expected error when both command and task_id are supplied")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error should explain the conflict, got: %v", err)
 	}
 }
 

@@ -14,6 +14,15 @@
 //     container config (read-only mounts, mount-points), not here.
 //   - ReadTracker is shared across tools so `edit` can enforce
 //     read-before-write within one session.
+//
+// Error message convention. Tool errors are fed directly back to the LLM
+// as the function-call output, so they double as documentation. Each
+// error SHOULD follow a three-part shape — "<tool>: <what went wrong>.
+// <Why the rule exists / what the constraint is>. <How to recover>." —
+// so the model can self-correct without having to re-derive the tool's
+// contract. Bare OS errors (file-not-found, permission denied) are
+// passed through when the message already explains itself; everything
+// validation- or contract-related uses the three-part shape.
 package local
 
 import (

@@ -52,7 +52,7 @@ func (t *readTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	if a.Path == "" {
-		return nil, errors.New("path is required")
+		return nil, errors.New("read: missing required 'path' argument. Provide an absolute or working-directory-relative file path to read.")
 	}
 	if a.Offset <= 0 {
 		a.Offset = 1
@@ -63,7 +63,10 @@ func (t *readTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 
 	f, err := os.Open(a.Path)
 	if err != nil {
-		return nil, err
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("read: file %q does not exist. Verify the path; use the 'glob' tool to discover files (e.g. pattern \"**/*.go\") if you're unsure.", a.Path)
+		}
+		return nil, fmt.Errorf("read: cannot open %q: %w", a.Path, err)
 	}
 	defer f.Close()
 
@@ -136,11 +139,11 @@ func (writeTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	if a.Path == "" {
-		return nil, errors.New("path is required")
+		return nil, errors.New("write: missing required 'path' argument. Provide an absolute or working-directory-relative file path to create.")
 	}
 	if !a.Overwrite {
 		if _, err := os.Stat(a.Path); err == nil {
-			return nil, fmt.Errorf("file exists: %s (set overwrite=true to replace)", a.Path)
+			return nil, fmt.Errorf("write: %q already exists. The 'write' tool is for creating new files so it refuses to clobber existing content by default. To modify the file in place, use the 'edit' tool (after reading it). To intentionally replace its contents, retry 'write' with overwrite=true.", a.Path)
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(a.Path), 0o755); err != nil {
@@ -197,14 +200,17 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	if a.Path == "" {
-		return nil, errors.New("path is required")
+		return nil, errors.New("edit: missing required 'path' argument. Provide the file path you want to modify.")
 	}
 	if !e.tracker.WasRead(a.Path) {
-		return nil, fmt.Errorf("edit refused: %s was not read in this session — call the read tool first", a.Path)
+		return nil, fmt.Errorf("edit: %q was not read in this session, so editing is refused. The 'edit' tool requires you to read a file with the 'read' tool first — this guarantees you have seen the file's current contents and can target an exact, whitespace-sensitive match. Call 'read' on this path, then retry 'edit' with the precise text from the file you want to change.", a.Path)
 	}
 	body, err := os.ReadFile(a.Path)
 	if err != nil {
-		return nil, err
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("edit: file %q no longer exists. It may have been deleted or moved since you read it. Re-discover its location with 'glob' or 'grep' and read it again before editing.", a.Path)
+		}
+		return nil, fmt.Errorf("edit: cannot read %q: %w", a.Path, err)
 	}
 	original := string(body)
 
@@ -213,7 +219,7 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 	switch a.Mode {
 	case "replace":
 		if a.Find == "" {
-			return nil, errors.New("replace mode requires non-empty 'find'")
+			return nil, errors.New("edit (replace): 'find' is empty. Replace mode locates an exact substring and swaps it for 'replace' — set 'find' to the text you want to change (whitespace-sensitive, copy it verbatim from the file you read).")
 		}
 		if a.All {
 			updated = strings.ReplaceAll(original, a.Find, a.Replace)
@@ -225,12 +231,12 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 			}
 		}
 		if changed == 0 {
-			return nil, fmt.Errorf("replace: 'find' not present in file")
+			return nil, fmt.Errorf("edit (replace): 'find' did not match any content in %q. The match is exact and whitespace-sensitive (indentation, tabs vs spaces, trailing newlines all matter). Re-read the file and copy the target text verbatim, including surrounding context if needed to make it unique.", a.Path)
 		}
 	case "insert":
 		lines := strings.Split(original, "\n")
 		if a.After < 0 || a.After > len(lines) {
-			return nil, fmt.Errorf("insert: 'after' (%d) out of range [0, %d]", a.After, len(lines))
+			return nil, fmt.Errorf("edit (insert): 'after'=%d is outside the file's line range [0, %d]. Use 0 to prepend at the top, a 1-based line number to insert immediately after that line, or %d to append at the end.", a.After, len(lines), len(lines))
 		}
 		head := append([]string{}, lines[:a.After]...)
 		tail := append([]string{}, lines[a.After:]...)
@@ -240,15 +246,15 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 		changed = 1
 	case "delete":
 		if a.Find == "" {
-			return nil, errors.New("delete mode requires non-empty 'find'")
+			return nil, errors.New("edit (delete): 'find' is empty. Delete mode removes the first exact match of 'find' from the file — set it to the text you want to remove (whitespace-sensitive, copy it verbatim from the file).")
 		}
 		if !strings.Contains(original, a.Find) {
-			return nil, errors.New("delete: 'find' not present in file")
+			return nil, fmt.Errorf("edit (delete): 'find' did not match any content in %q. The match is exact and whitespace-sensitive. Re-read the file and copy the target text verbatim.", a.Path)
 		}
 		updated = strings.Replace(original, a.Find, "", 1)
 		changed = 1
 	default:
-		return nil, fmt.Errorf("unknown mode: %q", a.Mode)
+		return nil, fmt.Errorf("edit: unknown mode %q. Supported modes are 'replace' (find/replace text), 'insert' (add text at/after a line number), and 'delete' (remove a piece of text). Set 'mode' to one of those.", a.Mode)
 	}
 
 	if err := os.WriteFile(a.Path, []byte(updated), 0o644); err != nil {
@@ -295,14 +301,14 @@ func (globTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	if a.Pattern == "" {
-		return nil, errors.New("pattern is required")
+		return nil, errors.New("glob: missing required 'pattern' argument. Provide a glob like 'src/**/*.go' — '**' recurses into subdirectories, '*' matches a single path segment.")
 	}
 	if a.Limit <= 0 {
 		a.Limit = 200
 	}
 	matches, err := globRecursive(a.Pattern)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("glob: invalid pattern %q: %w. Patterns follow filepath.Match syntax with '**' for recursion (e.g. 'pkg/**/*_test.go').", a.Pattern, err)
 	}
 	type entry struct {
 		Path  string

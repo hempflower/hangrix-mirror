@@ -4,7 +4,7 @@
 // see on the next request.
 package runtime
 
-import "github.com/hangrix/hangrix/apps/hangrix-agent/pkg/llm"
+import "github.com/hangrix/hangrix/apps/hangrix-agent/internal/llm"
 
 // Context is the rolling message list the runtime hands to the LLM each
 // turn. Append* methods are the only mutators so the trim policy lives

@@ -62,7 +62,7 @@ func (g *grepTool) Call(ctx context.Context, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	if a.Pattern == "" {
-		return nil, errors.New("pattern is required")
+		return nil, errors.New("grep: missing required 'pattern' argument. Provide an RE2 regular expression (the same syntax Go and ripgrep use) — set 'ignore_case' for case-insensitive matching.")
 	}
 	if a.Path == "" {
 		a.Path = "."
@@ -94,7 +94,7 @@ func (g *grepTool) runRipgrep(ctx context.Context, a grepArgs) (any, error) {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return map[string]any{"pattern": a.Pattern, "count": 0, "matches": []string{}}, nil
 		}
-		return nil, fmt.Errorf("rg: %w", err)
+		return nil, fmt.Errorf("grep (ripgrep): %w. If the pattern is invalid, re-check it as an RE2 regex; if the path is wrong, use 'glob' to discover files first.", err)
 	}
 	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
 	if len(lines) > a.Limit {
@@ -115,7 +115,7 @@ func (g *grepTool) runGoFallback(a grepArgs) (any, error) {
 	}
 	re, err := regexp.Compile(flags + a.Pattern)
 	if err != nil {
-		return nil, fmt.Errorf("compile pattern: %w", err)
+		return nil, fmt.Errorf("grep: pattern %q is not a valid RE2 regex: %w. RE2 omits backreferences and lookarounds — rewrite without those features, or escape literal regex metacharacters (\\., \\*, \\(, etc).", a.Pattern, err)
 	}
 	var matches []string
 	walkErr := filepath.WalkDir(a.Path, func(path string, d os.DirEntry, err error) error {
