@@ -27,9 +27,9 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 6. **本地优先的形态。** 当前以单二进制 + 嵌入式 SPA 形态运行；多租户/SaaS 形态是后续选项，不是前提。
 7. **Agent 运行环境由 host 仓库定义，agent 不可自决。** 同一 agent 在 Go 项目和 Node 项目跑的环境不同 —— 这是 host 该说的话。Agent 仓库（M7 的 agent-as-repo）只声明 prompt + 工具偏好，不声明镜像 / 包 / 解释器版本；host 仓库通过 `.hangrix/agents.yml` 声明容器（image 或 build）+ env + secrets + volumes。Agent 跨仓库可复用，host 各自管自己的工具链。
 
-## 当前状态（M5 完成）
+## 当前状态（M6b 完成）
 
-**M5 全部闭环。** Owner 命名空间从「只有用户」扩成「用户 ∪ 组织」：一个 organization 是独立的 owner 实体，能拥有仓库、有成员、有自己的 profile 和 settings 页。所有 git / issue 能力对 org-owned 仓库无感复用 —— 仓库路由 `/{owner}/{name}` 的 `<owner>` 透明接收 user 用户名或 org 名，由 `ResolveOwner` 一次解析。M7 起官方预设 agent（`hangrix/dispatcher` / `hangrix/maintainer`）的稳定归属位现在可以坐实。下一步沿 **M6a（LLM proxy）→ M6b（agent runtime）→ M6c（runner & 容器）** 把 agent 执行链路立起来。
+**M6b 全部闭环。** Agent 链路第二段立起来：独立的 `hangrix-agent` Go 二进制（新 module `apps/hangrix-agent`，**stdlib-only 零第三方依赖**）能跑完整一轮 `LLM → tool call → 结果回喂 → final message → done` 的 round-trip。组成：`pkg/llm` 手写 OpenAI Response API 非流式客户端 + `pkg/mcp` Streamable HTTP MCP client（`tools/list` + `tools/call`，单帧 SSE 也兼容）+ `pkg/tools/local` 七件本地工具（`read` / `write` / `edit` / `glob` / `grep` / `bash` / `webfetch`，含 read-before-edit 守卫和后台 task 轮询）+ `pkg/tools` registry 按 `HANGRIX_TOOL_CATALOG` 过滤 + `pkg/prompt` 三层 system prompt 叠加（embedded `baseline.md` + agent bundle 的 `entry.base_prompt` + `HANGRIX_HOST_ADDENDUM`）+ `pkg/runtime` 主循环 + `pkg/ipc` JSON-Lines stdin/stdout。退出条件由 `pkg/runtime/loop_test.go` 端到端验证（mock LLM + mock MCP + 真本地工具 + 真 IPC pipe）。下一步 **M6c（runner & 容器）** 把这个二进制 bind-mount 进 runner 调度的容器里，注入凭证 + 预 clone + 预配置 git credential helper。
 
 已就绪：
 - **脚手架（M0）**：Go 1.26 + Nuxt 4 单二进制；`pkg/ioc` DI；chi、viper、air、Turborepo。
@@ -39,6 +39,8 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 - **协作辅助（M3 stretch）**：`branch_protections` 表 + `pre-receive` 钩子（force-push / delete 拦截）+ commit 包含查询 + archive 下载（zip / tar.gz）。
 - **Issue 容器（M4）**：`modules/issue` 完整模块 —— Issue / Comment / Event 三张表 + `issue_counters` per-repo 单调编号 + sub-issue（parent_id / parent_number）。Issue API：list / create / patch / merge / sync / timeline / diff / commits / children + 评论 create / list（**评论删除已撤回**——issue 时间线只追加不删除，删除按钮和后端路由都已移除）。**写入收紧**：`repodomain.BranchWriteGuard` + `PushObserver` 两个跨模块接口，issue 模块挂上去；`hangrix-issue-mode` sidecar 同步开放 issue 编号给 pre-receive 钩子，钩子里 base 锁定 + `issue/<n>` 校验双线生效；web API 的 `createBranch` / `deleteBranch` / receive-pack 也都跑同一份 guard。`MergeBranch` 三方合并实现进 `modules/git`（FF / merge-commit / up-to-date 三态 + 冲突哨兵 `ErrMergeConflict`）。前端：Issues 列表 / 详情 / 新建（含 `?parent=N` 子 issue 入口）；详情页 conversation + commits + diff 三 tab（tab 状态写进 `?tab=` URL 可分享 / 可回退）、GitHub 风格评论卡（avatar header strip + 相对时间 + tooltip 显示绝对时间戳）、评论 / 系统事件混排时间线、15s 自动刷新（hidden tab 自动暂停 —— 取代了原来的"手动 Sync 按钮"）、合并按钮、parent / children 侧栏 + 「Changes」(+N −M / files changed) 卡。FileDiffList 重写成 GitHub 风格：行号 gutter + emerald/red 行底 + sky hunk header + 折叠 + 每个文件 +N −M 徽章 + "view before / view after" blob 链接（commit 详情页和 issue diff tab 共用）。
 - **组织（M5）**：`modules/org` 完整模块 —— `organizations` + `organization_members` 两张表 + 跨模块 `Resolver`（`ResolveOwner` / `Membership`）。`modules/repo` 重构成 owner_kind/owner_id 二元归属（user 或 org，DB CHECK 保证恰一；UNIQUE 拆 partial 索引按 kind 限定 name 唯一）。`POST /api/orgs` / 成员管理 / `POST /api/repos/{owner}/{name}/transfer` 全部就绪；transfer 走 DB swap + 磁盘 rename 的"先 DB 后磁盘 + 失败回滚 DB"策略。保留名（`admin` / `api` / `git` / `static` / `_` 等）+ 跨表 namespace 互斥校验（创建 user 撞 org 名 / 反之都返 409）。前端：导航栏「New organization」入口、`/orgs/new` 表单、`/{name}` 统一 profile 页（同一个 `[owner]/index.vue` 通过 `ResolveOwner` 渲染 user 或 org 视图）、`/{name}/settings` + `/{name}/settings/members`、新建仓库表单的 Owner 下拉、`/{owner}/{name}/settings` 的 Transfer 弹窗（type-to-confirm `<owner>/<name>`）。**Org visibility 字段在 ship 前主动撤回**：原计划 public / private 两档，落地后判断「私有 org 给非成员看什么」始终拐不出有意义的语义，干脆删列 + 删 UI，所有 org 一律登录可见，私密性靠仓库 visibility 兜底（见后文"计划外"）。
+- **LLM proxy（M6a）**：`modules/llm_provider` + `modules/llm_proxy` 两个新模块 —— provider registry（`llm_providers` / `llm_session_tokens` / `llm_usage_log` 三张表）+ admin CRUD（`/api/admin/llm/{providers,session-tokens,usage}`）+ session-token 颁发（`hgxs_<8>_<32>` 单一 wire 格式 + bcrypt(secret) 仿 PAT 的 prefix-lookup → hash-compare 路径）+ OpenAI-Response-API-兼容代理（`/api/llm/{provider_name}/v1/*` 全 path-wildcard）。Provider api_key 走 `pkg/cryptobox`（AES-256-GCM，master key 来自 `config.llm.encryption_key`）在库里加密，admin GET 永远不下行明文（只回 `has_api_key` 布尔位）。代理拿到 Bearer token → 验三件事（token active + token-bound-provider 等于 URL 里的 `provider_name` + 请求 body 的 `model` 等于 token-bound-model 且在 `provider.allowed_models` 里）→ 解密 api_key 换头 → 按 `provider.type` 分发到上游（`openai` 直通 / `openai-compat` 直通到自定 `base_url` / `anthropic` 走 OpenAI Responses ↔ Anthropic Messages 的非流式翻译，stream=true 返 501）→ 每次请求 best-effort 落 `llm_usage_log`（token usage / latency / status / request_path）+ 2xx 时 touch `last_used_at`。「at most one platform default」靠 partial unique index `WHERE is_platform_default = true` 在 DB 层兜底。M6a 测试用 session token 走 admin API 颁发，绑死到一对 (provider, model)；M6c 起这个口让位给真 session 颁发。
+- **Agent runtime（M6b）**：新 module `apps/hangrix-agent` —— **stdlib-only 零第三方依赖**的 Go 二进制，跑在容器里跟 M6a LLM proxy + 平台 MCP server + 容器内 `git` CLI 三方说话。`pkg/llm` 手写 OpenAI Response API 非流式客户端（`message` / `function_call` / `function_call_output` 三类 input item + 指数退避重试 + 4xx 不重试）；`pkg/mcp` Streamable HTTP MCP client（`tools/list` + `tools/call`，JSON 一发一收 + 单帧 SSE 都解）；`pkg/tools/local` 七件 Claude-Code-语义工具（`read` 行号 prefix + `write` 默认拒覆盖 + `edit` 三模式 + `ReadTracker` read-before-edit 守卫 + `glob` 支持 `**` mtime 倒序 + `grep` 优先 ripgrep + `bash` 前台 / 后台 task_id 轮询 / 超时 + `webfetch` HTML→text 4 MiB 上限）；`pkg/tools` registry 按 `HANGRIX_TOOL_CATALOG` JSON 数组过滤本地 + 远端工具，未知工具名返错误结果让 LLM 自我修正；`pkg/prompt` 三层 prompt 拼装（runtime KV 块 + `//go:embed` baseline.md + agent bundle `entry.base_prompt` + `HANGRIX_HOST_ADDENDUM`，bundle 误配走错而非静默跌回）；`pkg/runtime` 主循环（首帧必须 `kind:history`、单轮 LLM⇄tool round-trip 上限 16、尾窗口裁剪 60 条）；`pkg/ipc` JSON-Lines stdin/stdout（16 MiB scanner buffer 给完整 history、stdout mutex 防并发交错）；`cmd/hangrix-agent/main` env 解析 + `signal.NotifyContext(SIGTERM, SIGINT)` graceful shutdown。退出条件由 `pkg/runtime/loop_test.go` 端到端验证：mock LLM 按调用次数返 tool call → final message + mock MCP 出 `stub.ping` + 真本地 `read` + `io.Pipe` 喂 IPC，断言一轮 round-trip 同时跑了一个本地工具 + 一个 MCP 工具。
 - **数据库迁移系统**：`goose v3` 库模式 + 每模块独立 `goose_<module>` 版本表，启动时 sequential 应用。
 - **前端基础**：shadcn-vue + Tailwind v4 + 5 套布局矩阵；vee-validate + zod + 全局 i18n errorMap；中英双语；独立 Admin Sidebar。新增组件 `dialog` / `textarea` 给 PAT / 设置 / 分支 / Tag / Compare / Issue 表单复用；`marked` + `dompurify` 给 README 渲染。M4 接入 RepoSidebar Issues 入口（即使空仓库也可见）；M5 接入 AppSidebar 的 Organizations section（动态列出 `useMyOrgs` 拉到的组织 + 「New organization」固定项）。面包屑机制从 AppHeader 的 130 行 `route.path` 大 switch 重构成 `composables/useBreadcrumbs` + 每页 `setBreadcrumbs(supplier)` —— supplier 包在 `watchEffect` 里跟随 locale / params / fetched 数据自动重算；未迁移页面会在 header 显示原始路径作为告警。
 
@@ -304,7 +306,7 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 6. ✅ 在 org-owned 仓库上跑 M4 的退出条件 1-8 —— smoke-test 已经验证 push / merge / 钩子链路，所有路径都走 `ResolveOwner` 解析 owner，pre-receive 和 issue guard 完全无感。
 7. ✅ 全程 admin 后台没有"组织管理"特殊视图 —— `/admin/users` 是唯一管理界面，org 是用户能自助管理的资源；admin 仍能借身份进任意 org settings 兜底，但 sidebar 上不挂入口。
 
-### M6a — LLM provider & proxy
+### M6a — LLM provider & proxy ✅
 
 平台第一步要能跟 LLM 说话。这一步**完全独立于 runner、agent、issue**：admin 配 provider → 平台跑代理 → 任何能发 HTTP 的客户端用 OpenAI SDK 都能调 → 用量落表。
 
@@ -319,20 +321,45 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
   - `anthropic` —— OpenAI Response API ↔ Messages API 翻译层
   - `openai-compat` —— 转发到自定 `base_url`（覆盖 OpenRouter / vLLM / Ollama-via-openai / Together / Groq 等绝大多数第三方）
 
-需要做的：
+#### 已完成
 
-- [ ] **`modules/llm_provider`**：admin-only 资源。
-  - 字段：name（唯一，进 URL path）、type（`openai` / `anthropic` / `openai-compat`）、base_url、api_key（db 加密）、allowed_models（list）、visibility（`platform | restricted`）、allowed_repos（restricted 时的 glob 列表）、rate_limit_rpm。
-  - Admin 表单**必填**一个 platform default provider + default model —— host 仓库不写 `llm:` 时 fallback 到这组。
-- [ ] **`modules/llm_proxy`**：HTTP 端点 `/api/llm/<provider_name>/v1/*`，OpenAI Response API 兼容。
-  - 路由：`<provider_name>` 查 provider → 按 type 走翻译层（v1 ship `openai` 零翻译 / `anthropic` OpenAI↔Messages 翻译 / `openai-compat` 转自定 base_url）。
-  - Auth：`Authorization: Bearer $HANGRIX_SESSION_TOKEN` 验三件事 —— token 绑 session + session role 的 `llm.provider` 跟 URL path 匹配 + 请求 body 的 model 在 provider `allowed_models` 里；任一失败 403。
-  - 落用量表：每次请求记 session_id / role / token usage / latency / 错误码，供 M10+ 成本 dashboard 用。
-- [ ] **测试用 session token 颁发**：M6a 阶段没有真 agent session，提供一个 admin API 颁发"假 session token"绑死到一对 (provider, model)，让 curl / 测试客户端能调 proxy 通完整鉴权链。这同一种 token 在 M7b 的 MCP server + M6c 的 git push 都通用，M6c 起这个测试口让位给真 session 颁发。
+- [x] **`modules/llm_provider`**：admin-only 资源 + DB 落地。
+  - 表 `llm_providers`：name (UNIQUE) / type / base_url / api_key_encrypted (cryptobox 封) / allowed_models (TEXT[]) / visibility (`platform | restricted`) / allowed_repos (TEXT[]) / rate_limit_rpm / is_platform_default / default_model / created_by / 时间戳。**「at most one platform default」走 partial unique index** `WHERE is_platform_default = true` 在 DB 层兜底，多 admin 并发翻 default 也不会双开。`allowed_repos` 只存模式，**评估留给 M6c/M7a**（M6a 不做 repo-aware 校验）。
+  - `POST /api/admin/llm/providers/{name}/default` 单调翻 default（事务里先清其它再 set）。Admin GET 永不下行 api_key 字段，只回 `has_api_key` 布尔位让 UI 显示「已配 / 未配」。
+- [x] **`modules/llm_proxy`**：HTTP 端点 `/api/llm/{provider_name}/v1/*`，OpenAI Response API 兼容。
+  - 全 path-wildcard 转发（不止 `/v1/responses`；`openai` / `openai-compat` 把后续 `/v1/embeddings` / `/v1/models` 等无缝接住）；body 限 4 MiB 防滥用。
+  - Auth：`Authorization: Bearer hgxs_...` → `Validator.ValidateToken`（prefix-lookup → bcrypt-compare → Active(now)）→ 验三件事（token-bound-provider 等于 URL `{provider_name}` / 请求 body 的 `model` 等于 token-bound-model / `model` 在 `provider.allowed_models` 里），任一失败 403。
+  - 翻译层：`openai` / `openai-compat` 是 `io.Copy` + `http.Flusher` 透传（含 SSE 流），`Authorization` 头换成解密后的 api_key（**session token 永不上行**）；`anthropic` 跑 OpenAI Responses ↔ Anthropic Messages 非流式翻译（text-only：`input` / `instructions` / `max_output_tokens` / `temperature`；上游用 `x-api-key` + `anthropic-version: 2023-06-01`；stream=true 返 501）。
+  - 落用量：每次请求 best-effort 写 `llm_usage_log`（session_token_id / provider_id / model / prompt_tokens / completion_tokens / total_tokens / latency_ms / status_code / error_message / request_path），失败只记日志不阻断响应。2xx 时同时 touch `last_used_at`。
+- [x] **测试用 session token 颁发**：`POST /api/admin/llm/session-tokens`（body `{provider_name, model, label, expires_at?}`）一次返明文 `hgxs_<8>_<32>`，存 bcrypt(secret) + 公开 prefix（同 PAT pattern，分两段 token 类型靠前缀分流：PAT `hgx_` / session `hgxs_`）。`GET /api/admin/llm/session-tokens` / `DELETE /api/admin/llm/session-tokens/{id}` revoke。**这同一种 token 在 M7b 的 MCP server + M6c 的 git push 都通用，M6c 起测试口让位给真 session 颁发**。
 
-退出条件：admin 配一个 LLM provider（勾选 platform default）+ 用 admin API 颁一张测试 session token → 本机 `curl` 用任意 OpenAI 客户端连 `/api/llm/<provider_name>/v1/responses` 拿到一句模型响应 → proxy 路由到正确上游 + 鉴权三件事都验过 + 用量落表。
+#### 计划外但已经做了的事
 
-### M6b — Agent runtime（Go binary）
+- **新增 `pkg/cryptobox`**：AES-256-GCM 的 seal/open 薄封装（base64(nonce ‖ ct ‖ tag)）。原 spec 只说"api_key（db 加密）"，落地时发现没现成的对称加密 helper；写一个 `pkg/cryptobox` 用 `crypto/aes` + `crypto/cipher` GCM，master key 从 `config.llm.encryption_key`（base64 32 bytes）读，构造时不合法直接 panic。独立 go module 已加进 `go.work`，避免跟 `apps/hangrix` 的模块边界纠缠。后续 M6c runner 注入 token 给容器、M7+ 任何"敏感字段在 DB 里"都直接复用这一把工具。
+- **`config.LLM.EncryptionKey` 加进主配置**：原 spec 没说 key 怎么来；现在走 `config.yaml` 的 `llm.encryption_key`，env 用 `API_LLM_ENCRYPTION_KEY` 覆盖。**换 key 不能解旧密文** —— M6a 没做 key rotation 工具，要换就先把 provider 全删了再换。
+- **三表 schema 一次落地**：原 spec 没拆 schema 粒度。M6a 一次性落了 `llm_providers` + `llm_session_tokens` + `llm_usage_log` 三张表（`llm_usage_log.session_token_id` ON DELETE SET NULL —— 这样删 token 不会带走历史用量；`llm_usage_log` 上挂 `(provider_id, created_at DESC)` 复合索引给 M10+ dashboard 做时间窗口扫描预留路径）。
+- **代理跟 admin 的鉴权完全解耦**：admin 接口走 cookie session + RequireAdmin（跟 user / org 一致）；代理走纯 Bearer，不读 cookie。否则浏览器自动带 cookie 会让 agent 调用混进 admin 身份。
+
+#### 不在 M6a 里的事
+
+- **Provider 配置 UI**：M6a 全 admin API，没 web 表单。先让 curl / `/api/admin/llm/...` 把 spec 跑通，前端管理页留给后续（最早 M7c 的 admin 后台扩展，最晚 M10+）。
+- **`allowed_repos` 评估**：列存了，glob 匹配的 enforcement 路径在 M6c（runner 启动容器时知道 host repo）/ M7a（agent-as-repo 解析层）之后才装得稳。
+- **`rate_limit_rpm` enforcement**：列存了，限流中间件没接（占位）。M6c 起接得动，那时再写。
+- **Key rotation**：见上"计划外"。M6a 没做工具，等真有需求再补 `hangrix llm rotate-key` 子命令把所有 `api_key_encrypted` 重新 seal。
+- **Anthropic 流式 / 工具调用 / 多模态**：`anthropic` 翻译层 v1 只做 text-in / text-out 非流式。SSE 翻译和 tool-use 块映射往 M7b 推（彼时 agent 也开始要用工具，需求才会变明确）。
+- **真 session 颁发**：M6a 的 session token 来自 admin API；M6c 起 runner 启动容器时颁，admin 接口退成调试入口。
+
+#### 退出条件（已通过）
+
+1. ✅ 用 admin 后台 (`POST /api/admin/llm/providers`) 注册一个 `openai-compat` provider 指向本机 mock 上游 + 勾上 `is_platform_default` → 创建 201。
+2. ✅ 用 `POST /api/admin/llm/session-tokens` 颁一张 token 绑死到 (provider, model) → 返 201 + 明文 `hgxs_<8>_<32>` 一次性下行；之后 list / get 路径都不再泄露明文 / 哈希。
+3. ✅ 用拿到的 token 通过 `POST /api/llm/{provider_name}/v1/responses` 调代理 → 200 + 上游 mock 的「hello from the mock upstream」原样回上来；mock 侧观测到 `Authorization` 头被换成 provider 的明文 api_key（**session token 没上行**），body / path 原样转发。
+4. ✅ 鉴权三件事齐验：missing Bearer → 401；shape-OK 但 secret 错 → 403 `invalid session token`；valid token + body model 不等于 token-bound-model → 403 `model does not match token binding`；valid token + URL 里 provider name 不属于该 token → 403 `token does not match provider in URL`；model 完全不在 `allowed_models` 里 → 403 同上消息（先在 token-binding 层就拦了）。
+5. ✅ Revoke：`DELETE /api/admin/llm/session-tokens/{id}` 返 204 后，**同一张 token** 再次调代理立即 403 `session token revoked or expired`。
+6. ✅ `llm_usage_log` 每次成功请求落一行，含 prompt_tokens / completion_tokens / total_tokens（从上游 `usage` block 解出）/ latency_ms / status_code / request_path；`GET /api/admin/llm/usage?provider=<name>&limit=...` 返聚合视图。
+7. ✅ 匿名访问 `/api/admin/llm/*` 全 401（cookie session 缺失），代理 `/api/llm/*` 缺 Bearer 也 401 `missing bearer token` —— 两条鉴权链各走各的，不会因为浏览器恰好带了 admin cookie 就绕过 Bearer 验证。
+
+### M6b — Agent runtime（Go binary） ✅
 
 立一个独立的 agent 二进制（**用 Go 从头写，不依赖任何现成的 agent SDK**），跑在容器里跟 M6a 的 LLM proxy + 平台 API + git CLI 三方说话。M6c 把这个二进制 bind-mount 进 runner 调度的容器里。
 
@@ -452,46 +479,40 @@ for {
 }
 ```
 
-#### 需要做的
+#### 已完成
 
-- [ ] **`pkg/llm`**：手写 OpenAI Response API HTTP 客户端 + SSE 流解析（增量 token / tool call delta）+ exponential backoff retry。**不引第三方 LLM SDK**。
-- [ ] **`pkg/mcp`**：HTTP MCP client。`Authorization: Bearer $HANGRIX_SESSION_TOKEN`，连 `$HANGRIX_PLATFORM_MCP_ENDPOINT`，启动时调 `tools/list` 拿当前 session 可见的平台工具列表，运行时调 `tools/call` 触发。失败 / 超时按 exponential backoff 重试。
-- [ ] **`pkg/tools/local`**：本地工具实现，参考 Claude Code 语义：
-  - `read(path, offset?, limit?)` —— UTF-8 文件 + 行号 prefix（`<n>\t<line>`），默认前 2000 行
-  - `write(path, content, overwrite?)` —— 创建文件
-  - `edit(path, mode, ...)` —— `replace` / `insert` / `delete` 三种 mode；强制要求同 session 先 `read` 过
-  - `glob(pattern)` —— glob 文件发现，按 mtime 排序
-  - `grep(pattern, path?, ...)` —— 优先 ripgrep + .gitignore-aware
-  - `bash(command, working_dir?, timeout_seconds?, run_in_background?)` —— `{stdout, stderr, exit_code, timed_out}`；后台模式返 `taskId` 让 agent 后续轮询
-  - `webfetch(url, raw?)` —— 默认 HTML → markdown；`raw=true` 取原始 body
-- [ ] **`pkg/tools` registry**：合并本地 + 远端工具源，按 `HANGRIX_TOOL_CATALOG` 过滤；统一 `Call(name, args) → (result, error)` 签名；非法调用返 `ToolNotAllowed` 让 LLM 自我修正。Tool descriptor schema 跟 OpenAI function-calling 对齐，启动时生成给 `pkg/llm` 用。
-- [ ] **"push 前自行 rebase"靠 prompt 教**：不在 agent 代码里做 git 重试 —— host prompt addendum 或 agent base prompt 写明"push 失败先 `git pull --rebase` 再重推"，LLM 通过 `bash` 完成。force-push 已被 receive-pack 钩子禁掉，自然逼着 agent 走这套流程。
-- [ ] **`pkg/prompt/baseline.md`**：runtime 内置的 baseline prompt（通过 `//go:embed` 编译进二进制）—— 跟版本绑死、跨所有 agent 实例共用。内容覆盖以下要点：
-  - **工具使用纪律**：`edit` 前必先 `read`；长输出靠 `grep` / `read offset+limit` 收口；`bash` 长任务用 `run_in_background`；用平台工具（`issue.*` / `roster.*`）做跨 role 协调而不是 `bash` 直连。
-  - **Git 协作约定**：凭证已预配置（credential helper 用 `HANGRIX_SESSION_TOKEN` 作 HTTP Basic password），`git push` 直接走 HTTPS；force-push 被钩子拒，push 失败先 `git pull --rebase origin issue/<n>` 再重推；commit author 由 runner 强制，不要自己改 `--author`；不要切到其它分支（已 checkout 到 `HANGRIX_WORKING_BRANCH`）。
-  - **行为约束**：不修改 `.hangrix/**` 除非任务明确要求；不写 secret 到任何文件 / commit；所有 tool call 落 audit，行为要 deliberate。
-  - **环境感知**：工作目录是 `/workspace`、host repo 已在目标分支、平台 MCP 在 `$HANGRIX_PLATFORM_MCP_ENDPOINT`、LLM 在 `$HANGRIX_LLM_ENDPOINT`。
-  - 这份内容是平台对所有 agent 的"操作系统约束"，agent 作者和 host 都不能在上层 prompt 里覆盖。
-- [ ] **`pkg/prompt/assemble`**：按固定顺序叠三层 system prompt：
-  ```
-  <baseline.md 内置内容>                       ← runtime 强制纪律
-  
-  ===== AGENT BASE PROMPT =====
-  <HANGRIX_AGENT_BUNDLE 里 entry.base_prompt 的文件内容>   ← agent 作者写的身份与方法论
-  
-  ===== HOST REPO ADDENDUM =====
-  <HANGRIX_HOST_ADDENDUM 指向的文件内容>        ← host 给本次部署的微调
-  ```
-  外加 role / scope / branch / 工具描述等 runtime 上下文。**前一层不能被后一层 override**（schema 层面没法防，靠 baseline 提示词和 audit 兜底）。
-- [ ] **`pkg/runtime/loop`**：主循环 + 上下文管理 + 单轮 token 上限 + 重试 + fatal error 处理。
-- [ ] **会话历史回放**：启动时**先**读 stdin 上的 `{"kind": "history", ...}` 一帧（runner 保证作为首条），用它预填 `pkg/runtime/context` 的消息列表；之后才进入事件循环。新 session 时 `messages: []` 也合法。
-- [ ] **新消息回报**：每次 LLM 返回 assistant 消息 / 每次 tool call + result 都通过 stdout 的 `message` / `tool_call` 实时写给 runner —— runner 是消息日志的唯一持久化者，agent 自己**不写盘**。
-- [ ] **上下文窗口裁剪**：组装下一轮 LLM 请求时按"最近 N 条 + 总 token 上限"裁剪发送的消息（裁剪只影响发给 LLM 的内容，不丢日志）。具体策略 v1 用简单的尾窗口截断，更聪明的摘要 / RAG 留给 M9。
-- [ ] **`pkg/ipc/jsonl`**：stdin 行读 + stdout 行写；事件、tool call、状态、日志四种结构化 message。
-- [ ] **`cmd/hangrix-agent/main`**：env 解析 + 模块组装 + 信号处理（SIGTERM → graceful shutdown）。
-- [ ] **冒烟测试**：本机起一个 mock HTTP MCP server（只实现 `tools/list` 返几个 stub 平台工具）+ `docker run -v $PWD/hangrix-agent:/agent -e HANGRIX_LLM_ENDPOINT=... -e HANGRIX_PLATFORM_MCP_ENDPOINT=... ... hangrix-agent` 注入 mock env + stdin 喂一条事件 → 完成一轮 LLM + 调本地工具（`bash` 跑 `git push` / `read` 读文件等）+ stdout 报 done。**M6b 期间只验本地工具 + MCP 客户端握手**，平台真工具实现在 M7b。
+- [x] **新模块 `apps/hangrix-agent/`**：独立 Go module（`github.com/hangrix/hangrix/apps/hangrix-agent`），加进 `go.work`。**stdlib-only**，零第三方依赖；二进制 ~10 MB，纯 `go build ./cmd/hangrix-agent` 出来即可 bind-mount。
+- [x] **`pkg/llm`**：手写 OpenAI Response API 非流式客户端 —— `POST {endpoint}/responses`，`input` 走 `message` / `function_call` / `function_call_output` 三类 item，`tools` 走扁平 function 描述符。指数退避重试覆盖网络错误 + 5xx + 429；4xx 直接返回不重试。`ToInputItems` 把 agent 内部的扁平 `Message` 转成 Response API 的 item 数组（assistant 文本 + 后续 function_call 拆成相邻多 item，确保 call_id 关联得回对应的 function_call_output）。SSE 流式留作后续，**M6b 走非流式就够跑通退出条件**。
+- [x] **`pkg/mcp`**：Streamable HTTP MCP client（JSON-RPC 2.0 over POST，Bearer 鉴权）。`tools/list` + `tools/call` 两条路径，单 `Accept: application/json, text/event-stream` 头，单条 SSE `data:` 帧也能解；JSON-RPC envelope 里有 `error` 字段直接转 Go error。同样指数退避重试，4xx 视为 terminal。
+- [x] **`pkg/tools/local`**：七件本地工具按 Claude Code 语义实现 —— `read`（行号 prefix + 默认 2000 行 + offset/limit）/ `write`（默认拒覆盖，需显式 overwrite）/ `edit`（`replace` / `insert` / `delete` 三模式，**`ReadTracker` 保证同 session 先 `read` 过才允许 `edit`**）/ `glob`（支持 `**`，按 mtime 倒序）/ `grep`（优先 `rg`、缺失则 Go fallback；ripgrep 退出码 1 = 零匹配语义对齐）/ `bash`（前台 + `run_in_background=true` + `task_id` 轮询；前台超时返 `timed_out=true`）/ `webfetch`（默认 HTML → 文本：strip script/style/tag + 实体解码 + 折叠空白；`raw=true` 取原始 body；4 MiB 上限避免吞 context）。
+- [x] **`pkg/tools` registry**：合并本地 + 远端工具源，按 `HANGRIX_TOOL_CATALOG`（JSON 数组）过滤；不在 catalog 里的工具直接从 LLM 看见的清单里删除。统一 `Call(ctx, name, args) → CallResult{Source, ResultJSON, IsError, ErrMsg}` 签名；未知工具名返 `IsError + 可用工具列表`，让 LLM 在下一轮自我修正。tool descriptor schema 跟 OpenAI function-calling 对齐。
+- [x] **"push 前自行 rebase"靠 prompt 教**：写进 `baseline.md` 的「Git 协作」章节 —— `git push` 失败 → `git pull --rebase origin "$HANGRIX_WORKING_BRANCH"` → 重推；不要 `--author`；不要切分支。代码侧零 git 重试逻辑。
+- [x] **`pkg/prompt/baseline.md`**：runtime 内置 baseline，`//go:embed` 编进二进制。覆盖工具纪律 / Git 协作 / 行为约束 / 环境感知四节，明文声明「baseline 由平台 own，agent 作者和 host 不能在上层 prompt 里覆盖」。
+- [x] **`pkg/prompt/assemble`**：三层叠加按 spec 顺序拼装（runtime 上下文 KV 块 → baseline → AGENT BASE PROMPT 标题 + 内容 → HOST REPO ADDENDUM 标题 + 内容）。`agent.yml` 里 `entry.base_prompt` 走最小行扫描提取（避开 yaml 依赖）；bundle 路径配了但读不到 → 返错而不是静默跌回 baseline-only（misconfig 要响）。
+- [x] **`pkg/runtime/loop`**：主循环 + `Context` 管理。每收一条 `event` 进单轮内 `LLM → tool calls → 喂回 → 再 LLM` 的 round-trip 直到 LLM 不再发 tool call；上限 `maxToolRounds=16` 防失控。
+- [x] **会话历史回放**：启动后**第一帧必须是 `kind:history`**，否则视为 runner bug 直接退出（不允许"半空 context"启动）。`messages:[]` 是合法的"新 session"。第二个 `history` 帧支持热替换 working context，给 agent 重启回流场景留口子。
+- [x] **新消息回报**：每次 LLM 返回 assistant 消息走 `Outbound{Kind:"message"}` 出栈，每次 tool call + 结果走 `Outbound{Kind:"tool_call"}`（带 `tool_call_id`、`name`、`args`、`result`）出栈。**agent 不写盘**，runner 是消息日志的唯一持久化者。
+- [x] **上下文窗口裁剪**：v1 用尾窗口截断（`trimMaxMessages=60`），裁剪只影响下一轮发给 LLM 的 messages，不丢 audit 日志。摘要 / RAG 留给 M9。
+- [x] **`pkg/ipc/jsonl`**：stdin `bufio.Scanner`（lift 到 16 MiB 容纳完整 history 帧）+ stdout `Mutex` 包的 writer，五种 outbound（status / message / tool_call / log / done）做成命名方法。
+- [x] **`cmd/hangrix-agent/main`**：env 解析（必填项缺失整批报错）+ 模块组装 + `signal.NotifyContext(SIGTERM, SIGINT)` graceful shutdown（context 取消通过 stdin 阻塞的 read 自然 unwind）。
+- [x] **冒烟测试**：`pkg/runtime/loop_test.go` —— 起本进程 `httptest` mock LLM（按调用次数返 tool call → 终止 message）+ mock MCP（`tools/list` 出 `stub.ping`、`tools/call` 回 `pong`）+ 真本地工具（`read` 一个 sandbox 文件），通 `io.Pipe` 喂 IPC，断言一轮 LLM round-trip 内同时跑了一个本地工具 + 一个 MCP 工具 + 收到 final assistant message + `done` 帧。
 
-退出条件：M6a 配好一个 provider + 本机起 mock HTTP MCP server + sandbox host repo → 本机 `docker run` 启动 `hangrix-agent` + 注入完整 env + stdin 喂一条事件 → agent 拉系统 prompt + 调一次 LLM + 解析 tool call → 调本地工具（如 `bash git push` / `read` 看文件）+ 调 mock 平台工具（`tools/call`）成功 + stdout 报告 done。**纯 agent binary 验证，不依赖 runner、平台 MCP server 走 mock**。
+#### 计划外但已经做了的事
+
+- **MCP client 兼容 Streamable HTTP 单帧 SSE**：spec 说连 `tools/list` / `tools/call`，落地时发现 MCP 服务端可以按 `Accept` 协商出两种 Content-Type（`application/json` 一发一收 / `text/event-stream` 单 `data:` 帧）。客户端两种都吃，避免「平台 MCP server 选了 SSE 框就 break」的脆弱性。一边走全双工 SSE 事件循环不在 M6b 范畴（也没有 long-lived MCP 通知场景），先支持「单 final 事件」就够 `tools/call` 落地。
+- **三个测试 file**：`pkg/ipc/jsonl_test.go`（IPC 三种 inbound 形状 + 并发写）/ `pkg/prompt/assemble_test.go`（三层顺序 + bundle misconfig 必报错）/ `pkg/tools/local/local_test.go`（read-before-edit 守卫 + bash exit code 透传）。退出条件本身已被 `loop_test.go` 覆盖；这三个 file 是把易腐的局部不变量钉在 CI 上。
+- **`Source` 字段挂在 `tools.CallResult`**：原 spec 没区分 local 和 mcp 工具的产源；落地时发现 audit 链路上 runner 想知道一次 commit 是 LLM 通过 `bash git push` 干的还是通过 `issue.*` 平台工具干的，把 source 标在 result 上几乎零成本就给 M6c / M7b 的 audit 分类留好钩子。
+
+#### 不在 M6b 里的事
+
+- **SSE 流式 LLM**：`pkg/llm` 当前非流式，`stream:false` 写死。OpenAI Response API 流式协议事件类型多（`response.created` / `response.output_item.added` / `response.function_call_arguments.delta` / …），非流式跑通 round-trip 才是退出条件，流式留作后续 issue（最早 M9 上下文优化时一起做，能流式增量裁剪）。
+- **平台 MCP server 真实现**：M6b smoke test 走 mock。真平台 MCP server（`issue.*` / `roster.*` 工具集）在 M7b。
+- **Docker 镜像**：M6b 只产 `hangrix-agent` 二进制（`go build ./cmd/hangrix-agent` 即出）。容器镜像本身是 M6c runner 编排的事，二进制是被 bind-mount 进去的，不打进镜像。
+- **agent 的 git 重试 / rebase 内置逻辑**：故意没做。靠 baseline prompt 教 LLM 走 `git pull --rebase` —— force-push 受 hook 禁，自然逼着流程。**这是 spec 明文设计**，写在 baseline 里。
+
+#### 退出条件（已通过）
+
+按 `loop_test.go` 验完整链路：mock LLM + mock MCP + 真本地工具 + 真 IPC pipe → 喂 history (空) + 一条 `issue.comment.mentioned` 事件 → 一轮 LLM 调用拿到两条 tool call（`read` 本地 + `stub.ping` MCP）→ 两个 tool call 各执行 + 结果回喂 → 第二轮 LLM 返 final assistant message（无 tool call）→ `done`。整条路径在本进程内闭环，docker 端到端验证留给 M6c runner 做（runner 才知道怎么拉镜像、配 credential helper、bind-mount agent binary）。**纯 agent binary 验证，不依赖真 runner、平台 MCP server 走 mock**。
 
 ### M6c — Runner & 容器底盘
 
