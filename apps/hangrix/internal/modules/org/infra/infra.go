@@ -11,9 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 
-	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -60,7 +58,7 @@ func (r *PostgresRepo) Create(ctx context.Context, name, displayName, descriptio
 		CreatedBy:   createdBy,
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
+		if database.IsUniqueViolation(err) {
 			return nil, domain.ErrOrgConflict
 		}
 		return nil, err
@@ -129,7 +127,7 @@ func (r *PostgresRepo) AddMember(ctx context.Context, orgID, userID, addedBy int
 		AddedBy: addedBy,
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
+		if database.IsUniqueViolation(err) {
 			return domain.ErrMemberConflict
 		}
 		return err
@@ -273,11 +271,6 @@ func rowToOrg(r orgdb.Organization) *domain.Org {
 		CreatedAt:   r.CreatedAt.Time,
 		UpdatedAt:   r.UpdatedAt.Time,
 	}
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation
 }
 
 // nullableInt64 is a small helper to convert *int64 → pgtype.Int8. Kept here

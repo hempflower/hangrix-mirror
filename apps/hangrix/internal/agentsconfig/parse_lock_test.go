@@ -1,12 +1,10 @@
-package service_test
+package agentsconfig
 
 import (
 	"errors"
 	"testing"
 	"time"
 
-	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agents_config/domain"
-	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agents_config/service"
 )
 
 func TestParseLockFile_Happy(t *testing.T) {
@@ -22,7 +20,7 @@ agents:
     resolved_sha: fedcba9876543210fedcba9876543210fedcba98
     resolved_at: 2026-05-16T10:01:00Z
 `
-	lf, err := service.ParseLockFile([]byte(body))
+	lf, err := ParseLockFile([]byte(body))
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -52,7 +50,7 @@ func TestParseLockFile_Errors(t *testing.T) {
 		{
 			name:   "bad-version",
 			body:   "version: 9\nagents: []\n",
-			target: domain.ErrInvalidVersion,
+			target: ErrInvalidVersion,
 		},
 		{
 			name: "missing-ref-suffix",
@@ -63,7 +61,7 @@ agents:
     resolved_sha: 0123456789abcdef0123456789abcdef01234567
     resolved_at: 2026-05-16T10:00:00Z
 `,
-			target: domain.ErrMissingAgentRef,
+			target: ErrMissingAgentRef,
 		},
 		{
 			name: "bad-sha-short",
@@ -74,7 +72,7 @@ agents:
     resolved_sha: abc123
     resolved_at: 2026-05-16T10:00:00Z
 `,
-			target: domain.ErrInvalidLockEntry,
+			target: ErrInvalidLockEntry,
 		},
 		{
 			name: "bad-sha-uppercase",
@@ -85,7 +83,7 @@ agents:
     resolved_sha: 0123456789ABCDEF0123456789abcdef01234567
     resolved_at: 2026-05-16T10:00:00Z
 `,
-			target: domain.ErrInvalidLockEntry,
+			target: ErrInvalidLockEntry,
 		},
 		{
 			name: "zero-resolved-at",
@@ -96,7 +94,7 @@ agents:
     resolved_sha: 0123456789abcdef0123456789abcdef01234567
     resolved_at: 0001-01-01T00:00:00Z
 `,
-			target: domain.ErrInvalidLockEntry,
+			target: ErrInvalidLockEntry,
 		},
 		{
 			name: "duplicate-ref",
@@ -110,7 +108,7 @@ agents:
     resolved_sha: fedcba9876543210fedcba9876543210fedcba98
     resolved_at: 2026-05-16T10:01:00Z
 `,
-			target: domain.ErrDuplicateLockKey,
+			target: ErrDuplicateLockKey,
 		},
 		{
 			name: "unknown-field",
@@ -122,13 +120,13 @@ agents:
     resolved_at: 2026-05-16T10:00:00Z
     extra: 1
 `,
-			target: domain.ErrUnknownField,
+			target: ErrUnknownField,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := service.ParseLockFile([]byte(tc.body))
+			_, err := ParseLockFile([]byte(tc.body))
 			if err == nil {
 				t.Fatalf("expected err, got nil")
 			}
@@ -143,20 +141,20 @@ func TestSerializeLockFile_RoundTripDeterministic(t *testing.T) {
 	t.Parallel()
 
 	at := time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC)
-	lf := &domain.LockFile{
+	lf := &LockFile{
 		Version: 1,
-		Agents: map[string]domain.LockEntry{
+		Agents: map[string]LockEntry{
 			"zeta/last@v1":   {ResolvedSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ResolvedAt: at},
 			"alpha/first@v1": {ResolvedSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", ResolvedAt: at},
 			"mid/m@v1":       {ResolvedSHA: "cccccccccccccccccccccccccccccccccccccccc", ResolvedAt: at},
 		},
 	}
 
-	got1, err := service.SerializeLockFile(lf)
+	got1, err := SerializeLockFile(lf)
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}
-	got2, err := service.SerializeLockFile(lf)
+	got2, err := SerializeLockFile(lf)
 	if err != nil {
 		t.Fatalf("serialize 2: %v", err)
 	}
@@ -165,7 +163,7 @@ func TestSerializeLockFile_RoundTripDeterministic(t *testing.T) {
 	}
 
 	// Round-trip through parser.
-	parsed, err := service.ParseLockFile(got1)
+	parsed, err := ParseLockFile(got1)
 	if err != nil {
 		t.Fatalf("re-parse: %v\nbody=%s", err, got1)
 	}
@@ -192,41 +190,41 @@ func TestSerializeLockFile_RejectsBadEntries(t *testing.T) {
 	at := time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC)
 	cases := []struct {
 		name   string
-		lf     *domain.LockFile
+		lf     *LockFile
 		target error
 	}{
 		{
 			name: "bad-version",
-			lf: &domain.LockFile{
+			lf: &LockFile{
 				Version: 2,
-				Agents:  map[string]domain.LockEntry{},
+				Agents:  map[string]LockEntry{},
 			},
-			target: domain.ErrInvalidVersion,
+			target: ErrInvalidVersion,
 		},
 		{
 			name: "bad-sha",
-			lf: &domain.LockFile{
+			lf: &LockFile{
 				Version: 1,
-				Agents: map[string]domain.LockEntry{
+				Agents: map[string]LockEntry{
 					"a/b@v1": {ResolvedSHA: "short", ResolvedAt: at},
 				},
 			},
-			target: domain.ErrInvalidLockEntry,
+			target: ErrInvalidLockEntry,
 		},
 		{
 			name: "zero-time",
-			lf: &domain.LockFile{
+			lf: &LockFile{
 				Version: 1,
-				Agents: map[string]domain.LockEntry{
+				Agents: map[string]LockEntry{
 					"a/b@v1": {ResolvedSHA: "0123456789abcdef0123456789abcdef01234567"},
 				},
 			},
-			target: domain.ErrInvalidLockEntry,
+			target: ErrInvalidLockEntry,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := service.SerializeLockFile(tc.lf)
+			_, err := SerializeLockFile(tc.lf)
 			if err == nil {
 				t.Fatalf("expected err")
 			}
@@ -240,8 +238,8 @@ func TestSerializeLockFile_RejectsBadEntries(t *testing.T) {
 func TestLockKey(t *testing.T) {
 	t.Parallel()
 
-	ref := domain.AgentRef{Owner: "hangrix", Name: "reviewer", Ref: "v1.0.0"}
-	if got := service.LockKey(ref); got != "hangrix/reviewer@v1.0.0" {
+	ref := AgentRef{Owner: "hangrix", Name: "reviewer", Ref: "v1.0.0"}
+	if got := LockKey(ref); got != "hangrix/reviewer@v1.0.0" {
 		t.Fatalf("LockKey: %q", got)
 	}
 }

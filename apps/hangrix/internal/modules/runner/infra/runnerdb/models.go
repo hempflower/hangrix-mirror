@@ -17,7 +17,7 @@ type AgentSession struct {
 	Role                  string
 	Model                 string
 	AgentImage            string
-	BundleDir             string
+	AgentRepo             string
 	WorkingBranch         string
 	BaseBranch            string
 	HostAddendum          string
@@ -33,6 +33,12 @@ type AgentSession struct {
 	ClaimedAt             pgtype.Timestamptz
 	StartedAt             pgtype.Timestamptz
 	EndedAt               pgtype.Timestamptz
+	AgentSha              string
+	RepoSha               string
+	RoleKey               string
+	CauseKind             string
+	CauseID               string
+	RoleConfig            []byte
 }
 
 type AgentSessionInput struct {
@@ -99,6 +105,7 @@ type Repo struct {
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
 	OwnerOrgID    pgtype.Int8
+	Kind          string
 }
 
 type Runner struct {

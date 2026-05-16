@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -93,14 +94,14 @@ func toUserResp(u *userdomain.User) userResp {
 func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	var req registerReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	req.Username = strings.TrimSpace(req.Username)
 	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 
 	if len(req.Username) < 3 || len(req.Username) > 32 {
-		writeError(w, http.StatusBadRequest, "username must be 3-32 chars")
+		httpx.WriteError(w, http.StatusBadRequest, "username must be 3-32 chars")
 		return
 	}
 	// Reserved-name + cross-namespace (orgs) check. We refuse to mint a user
@@ -108,35 +109,35 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	// /{owner}/{name} treats both kinds uniformly, so a collision would
 	// silently make one of them unreachable.
 	if orgdomain.IsReservedName(req.Username) {
-		writeError(w, http.StatusConflict, "username is reserved")
+		httpx.WriteError(w, http.StatusConflict, "username is reserved")
 		return
 	}
 	if _, err := mail.ParseAddress(req.Email); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid email")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid email")
 		return
 	}
 	if len(req.Password) < 8 {
-		writeError(w, http.StatusBadRequest, "password must be >= 8 chars")
+		httpx.WriteError(w, http.StatusBadRequest, "password must be >= 8 chars")
 		return
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "hash failed")
+		httpx.WriteError(w, http.StatusInternalServerError, "hash failed")
 		return
 	}
 
 	ctx := r.Context()
 	if exists, err := h.orgs.Exists(ctx, req.Username); err != nil {
-		writeError(w, http.StatusInternalServerError, "name lookup failed")
+		httpx.WriteError(w, http.StatusInternalServerError, "name lookup failed")
 		return
 	} else if exists {
-		writeError(w, http.StatusConflict, "username already exists")
+		httpx.WriteError(w, http.StatusConflict, "username already exists")
 		return
 	}
 	count, err := h.users.Count(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "count users failed")
+		httpx.WriteError(w, http.StatusInternalServerError, "count users failed")
 		return
 	}
 	role := userdomain.RoleUser
@@ -147,18 +148,18 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	u, err := h.users.Create(ctx, req.Username, req.Email, string(hash), role)
 	if err != nil {
 		if errors.Is(err, userdomain.ErrUserConflict) {
-			writeError(w, http.StatusConflict, "username or email already exists")
+			httpx.WriteError(w, http.StatusConflict, "username or email already exists")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	if err := h.issueSession(w, r, u.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, toUserResp(u))
+	httpx.WriteJSON(w, http.StatusCreated, toUserResp(u))
 }
 
 type loginReq struct {
@@ -169,7 +170,7 @@ type loginReq struct {
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	var req loginReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	req.Username = strings.TrimSpace(req.Username)
@@ -178,25 +179,25 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	u, err := h.users.GetByUsername(ctx, req.Username)
 	if err != nil {
 		if errors.Is(err, userdomain.ErrUserNotFound) {
-			writeError(w, http.StatusUnauthorized, "invalid credentials")
+			httpx.WriteError(w, http.StatusUnauthorized, "invalid credentials")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if u.Disabled {
-		writeError(w, http.StatusForbidden, "account disabled")
+		httpx.WriteError(w, http.StatusForbidden, "account disabled")
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)); err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		httpx.WriteError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 	if err := h.issueSession(w, r, u.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, toUserResp(u))
+	httpx.WriteJSON(w, http.StatusOK, toUserResp(u))
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
@@ -218,10 +219,10 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 	u, ok := domain.UserFromRequest(r)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	writeJSON(w, http.StatusOK, toUserResp(u))
+	httpx.WriteJSON(w, http.StatusOK, toUserResp(u))
 }
 
 func (h *Handler) issueSession(w http.ResponseWriter, r *http.Request, userID int64) error {
@@ -251,16 +252,6 @@ func newToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }
 
 // keep context import in case future flows need it

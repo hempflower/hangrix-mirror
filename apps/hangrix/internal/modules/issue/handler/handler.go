@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -192,34 +193,34 @@ func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request) (*repoCtx,
 	owner := chi.URLParam(r, "owner")
 	name := chi.URLParam(r, "name")
 	if !usernameRe.MatchString(owner) || !repoNameRe.MatchString(name) {
-		writeError(w, http.StatusBadRequest, "invalid repo")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid repo")
 		return nil, false
 	}
 	resolved, err := h.resolver.ResolveOwner(r.Context(), owner)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "repo not found")
+		httpx.WriteError(w, http.StatusNotFound, "repo not found")
 		return nil, false
 	}
 	repo, err := h.repos.GetByOwnerAndName(r.Context(), repodomain.OwnerKind(resolved.Kind), resolved.ID, name)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "repo not found")
+		httpx.WriteError(w, http.StatusNotFound, "repo not found")
 		return nil, false
 	}
 	caller, _ := authdomain.UserFromRequest(r)
 	if repo.Visibility == repodomain.VisibilityPrivate {
 		ok, err := h.canRead(r, caller, repo)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return nil, false
 		}
 		if !ok {
-			writeError(w, http.StatusForbidden, "forbidden")
+			httpx.WriteError(w, http.StatusForbidden, "forbidden")
 			return nil, false
 		}
 	}
 	fsPath, err := h.storage.ResolvePath(repo.OwnerName, repo.Name)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "resolve path: "+err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, "resolve path: "+err.Error())
 		return nil, false
 	}
 	return &repoCtx{repo: repo, fsPath: fsPath}, true
@@ -271,16 +272,16 @@ func (h *Handler) loadIssue(w http.ResponseWriter, r *http.Request, repoID int64
 	raw := chi.URLParam(r, "number")
 	n, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || n <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid issue number")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid issue number")
 		return nil, false
 	}
 	iss, err := h.issues.GetByNumber(r.Context(), repoID, n)
 	if err != nil {
 		if errors.Is(err, domain.ErrIssueNotFound) {
-			writeError(w, http.StatusNotFound, "issue not found")
+			httpx.WriteError(w, http.StatusNotFound, "issue not found")
 			return nil, false
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return nil, false
 	}
 	return iss, true
@@ -289,8 +290,8 @@ func (h *Handler) loadIssue(w http.ResponseWriter, r *http.Request, repoID int64
 // --- handlers ---
 
 type createReq struct {
-	Title  string `json:"title"`
-	Body   string `json:"body"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
 	// ParentNumber, when non-zero, links the new issue as a child of the
 	// referenced issue. The child's base branch is automatically pointed at
 	// the parent's issue branch so merging a child fast-forwards into the
@@ -307,12 +308,12 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	var req createReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	title := strings.TrimSpace(req.Title)
 	if title == "" || len(title) > 200 {
-		writeError(w, http.StatusBadRequest, "title is required (1-200 chars)")
+		httpx.WriteError(w, http.StatusBadRequest, "title is required (1-200 chars)")
 		return
 	}
 
@@ -322,14 +323,14 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		parent, err := h.issues.GetByNumber(r.Context(), rc.repo.ID, req.ParentNumber)
 		if err != nil {
 			if errors.Is(err, domain.ErrIssueNotFound) {
-				writeError(w, http.StatusBadRequest, "parent issue not found")
+				httpx.WriteError(w, http.StatusBadRequest, "parent issue not found")
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if parent.State != domain.StateOpen {
-			writeError(w, http.StatusConflict, "parent issue is not open")
+			httpx.WriteError(w, http.StatusConflict, "parent issue is not open")
 			return
 		}
 		base = parent.BranchName
@@ -340,13 +341,13 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authdomain.UserFromRequest(r)
 	iss, err := h.issues.Create(r.Context(), rc.repo.ID, caller.ID, title, req.Body, base, parentID, parentNumber)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	// Keep the receive-pack sidecar in sync so a fresh issue is immediately
 	// pushable.
 	h.refreshIssueMode(r, rc)
-	writeJSON(w, http.StatusCreated, toPublic(iss))
+	httpx.WriteJSON(w, http.StatusCreated, toPublic(iss))
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -356,7 +357,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	state := domain.State(strings.TrimSpace(r.URL.Query().Get("state")))
 	if state != "" && !state.Valid() {
-		writeError(w, http.StatusBadRequest, "invalid state")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid state")
 		return
 	}
 	offset := parseInt32(r.URL.Query().Get("offset"), 0)
@@ -368,14 +369,14 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		Limit:  limit,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	items := make([]publicIssue, 0, len(list))
 	for _, i := range list {
 		items = append(items, toPublic(i))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
@@ -387,7 +388,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublic(iss))
+	httpx.WriteJSON(w, http.StatusOK, toPublic(iss))
 }
 
 type patchReq struct {
@@ -408,13 +409,13 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authdomain.UserFromRequest(r)
 	authorOrManager := caller.ID == iss.AuthorID || h.canManage(r, caller, rc.repo)
 	if !authorOrManager {
-		writeError(w, http.StatusForbidden, "forbidden")
+		httpx.WriteError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 
 	var req patchReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 
@@ -424,7 +425,7 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 		if req.Title != nil {
 			title = strings.TrimSpace(*req.Title)
 			if title == "" || len(title) > 200 {
-				writeError(w, http.StatusBadRequest, "title invalid")
+				httpx.WriteError(w, http.StatusBadRequest, "title invalid")
 				return
 			}
 		}
@@ -436,7 +437,7 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 		var err error
 		updated, err = h.issues.UpdateTitleBody(r.Context(), iss.ID, title, body)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if titleChanged {
@@ -448,23 +449,23 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 	if req.State != nil {
 		want := domain.State(*req.State)
 		if !want.Valid() {
-			writeError(w, http.StatusBadRequest, "invalid state")
+			httpx.WriteError(w, http.StatusBadRequest, "invalid state")
 			return
 		}
 		// Closed ↔ open only — merged is set exclusively via the merge endpoint.
 		if want == domain.StateMerged {
-			writeError(w, http.StatusBadRequest, "merge through POST /merge to enter merged state")
+			httpx.WriteError(w, http.StatusBadRequest, "merge through POST /merge to enter merged state")
 			return
 		}
 		if want != updated.State {
 			// Re-opening a merged issue is not supported.
 			if updated.State == domain.StateMerged {
-				writeError(w, http.StatusConflict, "merged issues cannot change state")
+				httpx.WriteError(w, http.StatusConflict, "merged issues cannot change state")
 				return
 			}
 			next, err := h.issues.UpdateState(r.Context(), iss.ID, want, "")
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
+				httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 			payload, _ := json.Marshal(domain.StateChangedPayload{From: updated.State, To: want})
@@ -474,7 +475,7 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, toPublic(updated))
+	httpx.WriteJSON(w, http.StatusOK, toPublic(updated))
 }
 
 // timeline returns the merged comment + event stream sorted by created_at.
@@ -491,15 +492,15 @@ func (h *Handler) timeline(w http.ResponseWriter, r *http.Request) {
 	}
 	comments, err := h.issues.ListComments(r.Context(), iss.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	events, err := h.issues.ListEvents(r.Context(), iss.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"comments": collectComments(comments),
 		"events":   collectEvents(events),
 	})
@@ -535,14 +536,14 @@ func (h *Handler) children(w http.ResponseWriter, r *http.Request) {
 	}
 	kids, err := h.issues.ListChildren(r.Context(), iss.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	out := make([]publicIssue, 0, len(kids))
 	for _, k := range kids {
 		out = append(out, toPublic(k))
 	}
-	writeJSON(w, http.StatusOK, out)
+	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
 // commits returns the commit list "base..issue_branch" — the commits the
@@ -564,17 +565,17 @@ func (h *Handler) commits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if iss.HeadSHA == "" {
-		writeJSON(w, http.StatusOK, []*gitdomain.Commit{})
+		httpx.WriteJSON(w, http.StatusOK, []*gitdomain.Commit{})
 		return
 	}
 	const cap = 200
 	all, err := h.git.ListCommits(rc.fsPath, iss.BranchName, 0, cap)
 	if err != nil {
 		if errors.Is(err, gitdomain.ErrEmptyRepo) || errors.Is(err, gitdomain.ErrRefNotFound) {
-			writeJSON(w, http.StatusOK, []*gitdomain.Commit{})
+			httpx.WriteJSON(w, http.StatusOK, []*gitdomain.Commit{})
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	out := make([]*gitdomain.Commit, 0, len(all))
@@ -585,7 +586,7 @@ func (h *Handler) commits(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, c)
 	}
-	writeJSON(w, http.StatusOK, out)
+	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
 // diff returns the diff "base..issue_branch". When the issue branch has not
@@ -600,19 +601,19 @@ func (h *Handler) diff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if iss.HeadSHA == "" {
-		writeJSON(w, http.StatusOK, []*gitdomain.FileDiff{})
+		httpx.WriteJSON(w, http.StatusOK, []*gitdomain.FileDiff{})
 		return
 	}
 	diffs, err := h.git.DiffRefs(rc.fsPath, iss.BaseBranch, iss.BranchName)
 	if err != nil {
 		if errors.Is(err, gitdomain.ErrRefNotFound) {
-			writeJSON(w, http.StatusOK, []*gitdomain.FileDiff{})
+			httpx.WriteJSON(w, http.StatusOK, []*gitdomain.FileDiff{})
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, diffs)
+	httpx.WriteJSON(w, http.StatusOK, diffs)
 }
 
 type createCommentReq struct {
@@ -632,12 +633,12 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 	}
 	var req createCommentReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	body := strings.TrimSpace(req.Body)
 	if body == "" {
-		writeError(w, http.StatusBadRequest, "body is required")
+		httpx.WriteError(w, http.StatusBadRequest, "body is required")
 		return
 	}
 	if req.Line < 0 {
@@ -646,10 +647,10 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authdomain.UserFromRequest(r)
 	c, err := h.issues.CreateComment(r.Context(), iss.ID, caller.ID, body, strings.TrimSpace(req.FilePath), req.Line)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, toPublicComment(c))
+	httpx.WriteJSON(w, http.StatusCreated, toPublicComment(c))
 }
 
 type mergeReq struct {
@@ -671,16 +672,16 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	}
 	caller, _ := authdomain.UserFromRequest(r)
 	if !h.canManage(r, caller, rc.repo) {
-		writeError(w, http.StatusForbidden, "only the repo owner can merge")
+		httpx.WriteError(w, http.StatusForbidden, "only the repo owner can merge")
 		return
 	}
 	if iss.State != domain.StateOpen {
-		writeError(w, http.StatusConflict, "issue is not open")
+		httpx.WriteError(w, http.StatusConflict, "issue is not open")
 		return
 	}
 	headSHA, err := h.git.ResolveCommit(rc.fsPath, iss.BranchName)
 	if err != nil || headSHA == "" {
-		writeError(w, http.StatusConflict, "issue branch has no commits yet")
+		httpx.WriteError(w, http.StatusConflict, "issue branch has no commits yet")
 		return
 	}
 
@@ -698,16 +699,16 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, gitdomain.ErrMergeConflict) {
-			writeError(w, http.StatusConflict, "merge conflict — rebase the issue branch onto "+iss.BaseBranch)
+			httpx.WriteError(w, http.StatusConflict, "merge conflict — rebase the issue branch onto "+iss.BaseBranch)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	updated, err := h.issues.UpdateState(r.Context(), iss.ID, domain.StateMerged, mergeSHA)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	mergedAt := time.Now()
@@ -727,7 +728,7 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	// receive-pack sidecar so a follow-up push to issue/<n> is rejected.
 	h.refreshIssueMode(r, rc)
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"issue":     toPublic(updated),
 		"merge_sha": mergeSHA,
 		"mode":      mode,
@@ -748,28 +749,18 @@ func (h *Handler) sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.SyncIssueBranch(r.Context(), rc.repo, rc.fsPath, iss, 0); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	refreshed, err := h.issues.GetByNumber(r.Context(), rc.repo.ID, iss.Number)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublic(refreshed))
+	httpx.WriteJSON(w, http.StatusOK, toPublic(refreshed))
 }
 
 // --- utilities ---
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
-}
 
 func parseInt32(raw string, def int32) int32 {
 	if raw == "" {

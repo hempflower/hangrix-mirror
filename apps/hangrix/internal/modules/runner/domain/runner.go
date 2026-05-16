@@ -116,6 +116,20 @@ func (r *Runner) EnrollTokenActive() bool {
 }
 
 // SessionStatus is the lifecycle of one agent_sessions row.
+//
+// Two layers of state coexist on the same column:
+//
+//   pending → claimed → running                       — one container life.
+//   running → succeeded | failed | cancelled          — that container ended.
+//   running → idle                                    — the container finished
+//             one turn but the parent issue is still open. The row stays put
+//             waiting for the next trigger, which will recycle it back to
+//             pending (and from there through claimed → running again).
+//   * → archived                                      — the parent issue
+//             closed / merged. The row is dead for good; restart means a new
+//             session on a new issue.
+//
+// Spec: docs/agent-config.md §"Session 模型".
 type SessionStatus string
 
 const (
@@ -125,10 +139,25 @@ const (
 	SessionStatusSucceeded SessionStatus = "succeeded"
 	SessionStatusFailed    SessionStatus = "failed"
 	SessionStatusCancelled SessionStatus = "cancelled"
+	SessionStatusIdle      SessionStatus = "idle"
+	SessionStatusArchived  SessionStatus = "archived"
 )
 
+// Terminal reports whether the row will never run again. Archived is
+// terminal (issue is gone); idle is NOT terminal (the row waits for the
+// next trigger and goes back to pending). Succeeded/failed/cancelled are
+// terminal in the M6c sense — they describe the most recent container,
+// but the row itself can still get a fresh pending turn under M7a if the
+// session is per-role-not-per-container; for now we keep the M6c semantics
+// (terminal=row done) because the per-role lifecycle module is M7a Phase 2
+// and the new idle / archived states are how the row signals "still
+// active" vs. "permanently done" to that module.
 func (s SessionStatus) Terminal() bool {
-	return s == SessionStatusSucceeded || s == SessionStatusFailed || s == SessionStatusCancelled
+	switch s {
+	case SessionStatusSucceeded, SessionStatusFailed, SessionStatusCancelled, SessionStatusArchived:
+		return true
+	}
+	return false
 }
 
 // AgentSession is one scheduled run.
@@ -146,30 +175,48 @@ func (s SessionStatus) Terminal() bool {
 //   - SessionTokenRevokedAt: set when the session terminates so a leaked
 //     token from a dead session can't be replayed.
 type AgentSession struct {
-	ID                     int64
-	RunnerID               *int64
-	RepoID                 *int64
-	IssueNumber            *int32
-	Status                 SessionStatus
-	Role                   string
-	Model                  string
-	AgentImage             string
-	BundleDir              string
-	WorkingBranch          string
-	BaseBranch             string
-	HostAddendum           string
-	Env                    []byte // JSON map[string]string, empty == "{}"
-	SessionTokenPrefix     string
-	SessionTokenHash       string
-	SessionTokenSealed     string
-	SessionTokenRevokedAt  *time.Time
-	ExitCode               *int32
-	ErrorMessage           string
-	CreatedBy              int64
-	CreatedAt              time.Time
-	ClaimedAt              *time.Time
-	StartedAt              *time.Time
-	EndedAt                *time.Time
+	ID                    int64
+	RunnerID              *int64
+	RepoID                *int64
+	IssueNumber           *int32
+	Status                SessionStatus
+	Role                  string
+	Model                 string
+	AgentImage            string
+	// AgentRepo is the agent bundle the runner should materialise, as
+	// "<owner>/<name>@<sha>" (sha is required, resolved from the host
+	// yaml ref via the agents.lock file). The runner downloads the
+	// corresponding tarball from /api/runner/agent-bundles/... and
+	// mounts it read-only at /opt/hangrix/bundle. M6c's bundle_dir
+	// (a runner-side filesystem path) has been retired in migration
+	// 00002 — this field is what runners read now.
+	AgentRepo             string
+	WorkingBranch         string
+	BaseBranch            string
+	HostAddendum          string
+	Env                   []byte // JSON map[string]string, empty == "{}"
+	SessionTokenPrefix    string
+	SessionTokenHash      string
+	SessionTokenSealed    string
+	SessionTokenRevokedAt *time.Time
+	ExitCode              *int32
+	ErrorMessage          string
+	CreatedBy             int64
+	CreatedAt             time.Time
+	ClaimedAt             *time.Time
+	StartedAt             *time.Time
+	EndedAt               *time.Time
+
+	// M7a snapshot fields. Frozen at session-spawn so a later audit can
+	// reconstruct exactly which agent + host configuration produced any
+	// commit made by this session. See docs/agent-config.md §"Session
+	// 模型".
+	AgentSHA   string          // agent repo commit sha pulled by runner
+	RepoSHA    string          // host repo base-branch sha at spawn time
+	RoleKey    string          // role identifier from host yaml; commit author for pushes
+	CauseKind  string          // trigger family (e.g. "issue_opened", "comment_mentioned")
+	CauseID    string          // upstream artefact id (opaque to runner)
+	RoleConfig []byte          // resolved role config snapshot (JSON), empty == "{}"
 }
 
 // SessionTokenActive reports whether the session's identity token is
@@ -276,22 +323,35 @@ func (in CreateRunnerInput) Validate() error {
 // SessionTokenPrefix / SessionTokenHash / SessionTokenSealed are all minted
 // by the caller (it holds the cryptobox) before this call lands. The repo
 // only stores them; it never sees the plaintext on its own.
+//
+// The M7a snapshot fields (AgentSHA / RepoSHA / RoleKey / Cause* /
+// RoleConfig) carry zero defaults so the M6c admin path keeps working
+// uninstrumented. The M7a session-spawn orchestrator MUST populate them;
+// audit consumers detect "M6c-era row" by an empty AgentSHA.
 type CreateSessionInput struct {
-	RunnerID            *int64
-	RepoID              *int64
-	IssueNumber         *int32
-	Role                string
-	Model               string
-	AgentImage          string
-	BundleDir           string
-	WorkingBranch       string
-	BaseBranch          string
-	HostAddendum        string
-	Env                 map[string]string
-	SessionTokenPrefix  string
-	SessionTokenHash    string
-	SessionTokenSealed  string
-	CreatedBy           int64
+	RunnerID           *int64
+	RepoID             *int64
+	IssueNumber        *int32
+	Role               string
+	Model              string
+	AgentImage         string
+	AgentRepo          string // "<owner>/<name>@<sha>"
+	WorkingBranch      string
+	BaseBranch         string
+	HostAddendum       string
+	Env                map[string]string
+	SessionTokenPrefix string
+	SessionTokenHash   string
+	SessionTokenSealed string
+	CreatedBy          int64
+
+	// M7a snapshot.
+	AgentSHA   string
+	RepoSHA    string
+	RoleKey    string
+	CauseKind  string
+	CauseID    string
+	RoleConfig []byte // resolved role config (JSON), nil → "{}"
 }
 
 // RedeemEnrollResult is what EnrollValidator.RedeemEnrollment returns:

@@ -14,6 +14,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -129,21 +130,21 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 
 	var req createProviderReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	req.Type = strings.TrimSpace(req.Type)
 	if !providerNameRe.MatchString(req.Name) {
-		writeError(w, http.StatusBadRequest, "invalid name")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid name")
 		return
 	}
 	if !domain.ProviderType(req.Type).Valid() {
-		writeError(w, http.StatusBadRequest, "invalid type")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid type")
 		return
 	}
 	if req.APIKey == "" {
-		writeError(w, http.StatusBadRequest, "api_key is required")
+		httpx.WriteError(w, http.StatusBadRequest, "api_key is required")
 		return
 	}
 
@@ -158,26 +159,26 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 	out, err := h.repo.CreateProvider(r.Context(), in)
 	if err != nil {
 		if errors.Is(err, domain.ErrProviderConflict) {
-			writeError(w, http.StatusConflict, "name already taken")
+			httpx.WriteError(w, http.StatusConflict, "name already taken")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, toPublicProvider(out))
+	httpx.WriteJSON(w, http.StatusCreated, toPublicProvider(out))
 }
 
 func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.repo.ListProviders(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	items := make([]publicProvider, 0, len(rows))
 	for _, p := range rows {
 		items = append(items, toPublicProvider(p))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (h *Handler) getProvider(w http.ResponseWriter, r *http.Request) {
@@ -185,7 +186,7 @@ func (h *Handler) getProvider(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublicProvider(p))
+	httpx.WriteJSON(w, http.StatusOK, toPublicProvider(p))
 }
 
 type patchProviderReq struct {
@@ -204,7 +205,7 @@ func (h *Handler) patchProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	var req patchProviderReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 
@@ -224,13 +225,13 @@ func (h *Handler) patchProvider(w http.ResponseWriter, r *http.Request) {
 	out, err := h.repo.UpdateProvider(r.Context(), &updated)
 	if err != nil {
 		if errors.Is(err, domain.ErrProviderNotFound) {
-			writeError(w, http.StatusNotFound, "provider not found")
+			httpx.WriteError(w, http.StatusNotFound, "provider not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublicProvider(out))
+	httpx.WriteJSON(w, http.StatusOK, toPublicProvider(out))
 }
 
 func (h *Handler) deleteProvider(w http.ResponseWriter, r *http.Request) {
@@ -240,10 +241,10 @@ func (h *Handler) deleteProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.repo.DeleteProvider(r.Context(), p.ID); err != nil {
 		if errors.Is(err, domain.ErrProviderNotFound) {
-			writeError(w, http.StatusNotFound, "provider not found")
+			httpx.WriteError(w, http.StatusNotFound, "provider not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -273,7 +274,7 @@ func (h *Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 	if raw := q.Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n <= 0 {
-			writeError(w, http.StatusBadRequest, "invalid limit")
+			httpx.WriteError(w, http.StatusBadRequest, "invalid limit")
 			return
 		}
 		if n > maxUsageLimit {
@@ -285,16 +286,16 @@ func (h *Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 	var providerID *int64
 	if name := strings.TrimSpace(q.Get("provider")); name != "" {
 		if !providerNameRe.MatchString(name) {
-			writeError(w, http.StatusBadRequest, "invalid provider")
+			httpx.WriteError(w, http.StatusBadRequest, "invalid provider")
 			return
 		}
 		p, err := h.repo.GetProviderByName(r.Context(), name)
 		if err != nil {
 			if errors.Is(err, domain.ErrProviderNotFound) {
-				writeError(w, http.StatusNotFound, "provider not found")
+				httpx.WriteError(w, http.StatusNotFound, "provider not found")
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		providerID = &p.ID
@@ -304,7 +305,7 @@ func (h *Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(q.Get("since")); raw != "" {
 		t, err := time.Parse(time.RFC3339, raw)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid since (RFC3339 required)")
+			httpx.WriteError(w, http.StatusBadRequest, "invalid since (RFC3339 required)")
 			return
 		}
 		since = &t
@@ -312,7 +313,7 @@ func (h *Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := h.usage.ListUsage(r.Context(), providerID, since, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	items := make([]publicUsage, 0, len(rows))
@@ -333,7 +334,7 @@ func (h *Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:        u.CreatedAt,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 // ---- helpers ----
@@ -341,27 +342,17 @@ func (h *Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) loadProviderByName(w http.ResponseWriter, r *http.Request) (*domain.Provider, bool) {
 	name := chi.URLParam(r, "name")
 	if !providerNameRe.MatchString(name) {
-		writeError(w, http.StatusBadRequest, "invalid name")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid name")
 		return nil, false
 	}
 	p, err := h.repo.GetProviderByName(r.Context(), name)
 	if err != nil {
 		if errors.Is(err, domain.ErrProviderNotFound) {
-			writeError(w, http.StatusNotFound, "provider not found")
+			httpx.WriteError(w, http.StatusNotFound, "provider not found")
 			return nil, false
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return nil, false
 	}
 	return p, true
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

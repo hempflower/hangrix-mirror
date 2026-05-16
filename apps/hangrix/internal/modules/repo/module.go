@@ -16,7 +16,12 @@ func Module() *ioc.Module {
 	m := ioc.NewModule()
 	m.Provide(infra.NewPostgresStore).ToInterface(new(domain.Store))
 	m.Provide(infra.NewPostgresProtectionStore).ToInterface(new(domain.ProtectionStore))
-	m.Provide(infra.NewStorage).ToSelf()
+	storage := m.Provide(infra.NewStorage)
+	storage.ToSelf()
+	// Expose the path resolver as a narrow domain interface so the M7a
+	// runner agent-bundles endpoint can compute fsPaths without taking
+	// a hard dep on the concrete *infra.Storage.
+	storage.ToInterface(new(domain.PathResolver))
 	m.Provide(handler.NewHandler).ToInterface(new(server.RouteProvider))
 	return m
 }

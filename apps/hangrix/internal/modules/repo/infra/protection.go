@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/infra/repodb"
 )
@@ -65,7 +66,7 @@ func (s *PostgresProtectionStore) Create(ctx context.Context, repoID int64, patt
 		ForbidDirectPush: forbidDirectPush,
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
+		if database.IsUniqueViolation(err) {
 			return nil, domain.ErrProtectionConflict
 		}
 		return nil, err
@@ -86,7 +87,7 @@ func (s *PostgresProtectionStore) Update(ctx context.Context, id, repoID int64, 
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrProtectionNotFound
 		}
-		if isUniqueViolation(err) {
+		if database.IsUniqueViolation(err) {
 			return nil, domain.ErrProtectionConflict
 		}
 		return nil, err

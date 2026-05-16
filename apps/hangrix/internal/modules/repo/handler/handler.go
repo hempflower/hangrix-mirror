@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	"io"
 	"net/http"
 	"os/exec"
@@ -166,20 +167,31 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 // alias so the existing UI can continue to build clone URLs without caring
 // whether the owner is a user or an org).
 type publicRepo struct {
-	ID            int64     `json:"id"`
-	OwnerKind     string    `json:"owner_kind"`
-	OwnerID       int64     `json:"owner_id"`
-	OwnerName     string    `json:"owner_name"`
-	OwnerUsername string    `json:"owner_username"`
-	Name          string    `json:"name"`
-	Description   string    `json:"description"`
-	Visibility    string    `json:"visibility"`
-	DefaultBranch string    `json:"default_branch"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID            int64  `json:"id"`
+	OwnerKind     string `json:"owner_kind"`
+	OwnerID       int64  `json:"owner_id"`
+	OwnerName     string `json:"owner_name"`
+	OwnerUsername string `json:"owner_username"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	Visibility    string `json:"visibility"`
+	DefaultBranch string `json:"default_branch"`
+	// Kind is "standard" or "agent". M7a-introduced; reflects the
+	// cached classification computed from the default branch tip
+	// (presence of root agent.yml that parses cleanly).
+	Kind      string    `json:"kind"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func toPublic(r *domain.Repo) publicRepo {
+	kind := string(r.Kind)
+	if kind == "" {
+		// Defensive default — rows predating migration 00004 have NOT
+		// NULL DEFAULT 'standard', so this branch should never fire,
+		// but a stale read shouldn't surface an empty value to clients.
+		kind = string(domain.KindStandard)
+	}
 	return publicRepo{
 		ID:            r.ID,
 		OwnerKind:     string(r.OwnerKind),
@@ -190,9 +202,27 @@ func toPublic(r *domain.Repo) publicRepo {
 		Description:   r.Description,
 		Visibility:    string(r.Visibility),
 		DefaultBranch: r.DefaultBranch,
+		Kind:          kind,
 		CreatedAt:     r.CreatedAt,
 		UpdatedAt:     r.UpdatedAt,
 	}
+}
+
+// parseKindFilter pulls the optional `?kind=agent|standard` query param.
+// Returns (nil, ok=true) for "no filter", (*Kind, true) for a valid value,
+// (nil, false) for an explicit invalid value so the caller can 400. The
+// empty string is treated as "no filter" — clients that omit the param
+// and clients that send an empty value behave identically.
+func parseKindFilter(r *http.Request) (*domain.Kind, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get("kind"))
+	if raw == "" {
+		return nil, true
+	}
+	k := domain.Kind(raw)
+	if !k.Valid() {
+		return nil, false
+	}
+	return &k, true
 }
 
 // ---- CRUD ----
@@ -214,12 +244,12 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 
 	var req createReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if !repoNameRe.MatchString(req.Name) {
-		writeError(w, http.StatusBadRequest, "invalid name")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid name")
 		return
 	}
 	visibility := domain.Visibility(strings.TrimSpace(req.Visibility))
@@ -227,7 +257,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		visibility = domain.VisibilityPrivate
 	}
 	if !visibility.Valid() {
-		writeError(w, http.StatusBadRequest, "invalid visibility")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid visibility")
 		return
 	}
 	defaultBranch := strings.TrimSpace(req.DefaultBranch)
@@ -235,7 +265,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		defaultBranch = "main"
 	}
 	if !isValidBranchName(defaultBranch) {
-		writeError(w, http.StatusBadRequest, "invalid default_branch")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid default_branch")
 		return
 	}
 
@@ -248,10 +278,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	repo, err := h.store.Create(ctx, ownerKind, ownerID, req.Name, req.Description, defaultBranch, visibility)
 	if err != nil {
 		if errors.Is(err, domain.ErrRepoConflict) {
-			writeError(w, http.StatusConflict, "repo already exists")
+			httpx.WriteError(w, http.StatusConflict, "repo already exists")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -261,11 +291,11 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	// the calling user regardless of who ends up owning the repo.
 	if err := h.storage.InitOnDisk(repo, ownerName, req.InitReadme, caller.Username, caller.Email); err != nil {
 		_ = h.store.Delete(ctx, repo.ID)
-		writeError(w, http.StatusInternalServerError, "init repo: "+err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, "init repo: "+err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, toPublic(repo))
+	httpx.WriteJSON(w, http.StatusCreated, toPublic(repo))
 }
 
 // resolveCreateOwner inspects the optional req.Owner field and returns the
@@ -281,33 +311,33 @@ func (h *Handler) resolveCreateOwner(w http.ResponseWriter, r *http.Request, cal
 	owner, err := h.resolver.ResolveOwner(r.Context(), ownerName)
 	if err != nil {
 		if errors.Is(err, orgdomain.ErrOwnerNotFound) || errors.Is(err, orgdomain.ErrOrgReserved) {
-			writeError(w, http.StatusNotFound, "owner not found")
+			httpx.WriteError(w, http.StatusNotFound, "owner not found")
 			return "", 0, "", false
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return "", 0, "", false
 	}
 	switch owner.Kind {
 	case orgdomain.OwnerKindUser:
 		// Only the caller themselves may create under a user namespace.
 		if owner.ID != caller.ID {
-			writeError(w, http.StatusForbidden, "cannot create repo under another user")
+			httpx.WriteError(w, http.StatusForbidden, "cannot create repo under another user")
 			return "", 0, "", false
 		}
 		return domain.OwnerKindUser, owner.ID, owner.Name, true
 	case orgdomain.OwnerKindOrg:
 		_, ok, err := h.resolver.Membership(r.Context(), owner.ID, caller.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return "", 0, "", false
 		}
 		if !ok && caller.Role != userdomain.RoleAdmin {
-			writeError(w, http.StatusForbidden, "not an org member")
+			httpx.WriteError(w, http.StatusForbidden, "not an org member")
 			return "", 0, "", false
 		}
 		return domain.OwnerKindOrg, owner.ID, owner.Name, true
 	}
-	writeError(w, http.StatusInternalServerError, "unknown owner kind")
+	httpx.WriteError(w, http.StatusInternalServerError, "unknown owner kind")
 	return "", 0, "", false
 }
 
@@ -319,28 +349,33 @@ type listResp struct {
 func (h *Handler) listMine(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authdomain.UserFromRequest(r)
 	offset, limit := parseOffsetLimit(r)
-
-	repos, total, err := h.store.ListByOwner(r.Context(), domain.OwnerKindUser, caller.ID, true, offset, limit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	kind, ok := parseKindFilter(r)
+	if !ok {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid kind filter")
 		return
 	}
-	writeJSON(w, http.StatusOK, listRespFrom(repos, total))
+
+	repos, total, err := h.store.ListByOwner(r.Context(), domain.OwnerKindUser, caller.ID, true, kind, offset, limit)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, listRespFrom(repos, total))
 }
 
 func (h *Handler) listByUsername(w http.ResponseWriter, r *http.Request) {
 	username := chi.URLParam(r, "username")
 	if !usernameRe.MatchString(username) {
-		writeError(w, http.StatusBadRequest, "invalid username")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid username")
 		return
 	}
 	owner, err := h.users.GetByUsername(r.Context(), username)
 	if err != nil {
 		if errors.Is(err, userdomain.ErrUserNotFound) {
-			writeError(w, http.StatusNotFound, "user not found")
+			httpx.WriteError(w, http.StatusNotFound, "user not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -348,34 +383,39 @@ func (h *Handler) listByUsername(w http.ResponseWriter, r *http.Request) {
 	includePrivate := caller.ID == owner.ID || caller.Role == userdomain.RoleAdmin
 
 	offset, limit := parseOffsetLimit(r)
-	repos, total, err := h.store.ListByOwner(r.Context(), domain.OwnerKindUser, owner.ID, includePrivate, offset, limit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	kind, ok := parseKindFilter(r)
+	if !ok {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid kind filter")
 		return
 	}
-	writeJSON(w, http.StatusOK, listRespFrom(repos, total))
+	repos, total, err := h.store.ListByOwner(r.Context(), domain.OwnerKindUser, owner.ID, includePrivate, kind, offset, limit)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, listRespFrom(repos, total))
 }
 
 func (h *Handler) listByOrg(w http.ResponseWriter, r *http.Request) {
 	orgName := chi.URLParam(r, "org")
 	if !usernameRe.MatchString(orgName) {
-		writeError(w, http.StatusBadRequest, "invalid org")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid org")
 		return
 	}
 	org, err := h.orgs.GetByName(r.Context(), orgName)
 	if err != nil {
 		if errors.Is(err, orgdomain.ErrOrgNotFound) {
-			writeError(w, http.StatusNotFound, "org not found")
+			httpx.WriteError(w, http.StatusNotFound, "org not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	caller, _ := authdomain.UserFromRequest(r)
 	_, isMember, err := h.resolver.Membership(r.Context(), org.ID, caller.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	// Members (or admin) get the full listing including private repos;
@@ -384,12 +424,17 @@ func (h *Handler) listByOrg(w http.ResponseWriter, r *http.Request) {
 	includePrivate := isMember || caller.Role == userdomain.RoleAdmin
 
 	offset, limit := parseOffsetLimit(r)
-	repos, total, err := h.store.ListByOwner(r.Context(), domain.OwnerKindOrg, org.ID, includePrivate, offset, limit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	kind, ok := parseKindFilter(r)
+	if !ok {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid kind filter")
 		return
 	}
-	writeJSON(w, http.StatusOK, listRespFrom(repos, total))
+	repos, total, err := h.store.ListByOwner(r.Context(), domain.OwnerKindOrg, org.ID, includePrivate, kind, offset, limit)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, listRespFrom(repos, total))
 }
 
 func listRespFrom(repos []*domain.Repo, total int64) listResp {
@@ -405,7 +450,7 @@ func (h *Handler) getOne(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublic(repo))
+	httpx.WriteJSON(w, http.StatusOK, toPublic(repo))
 }
 
 type patchReq struct {
@@ -422,7 +467,7 @@ func (h *Handler) patchOne(w http.ResponseWriter, r *http.Request) {
 
 	var req patchReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 
@@ -434,7 +479,7 @@ func (h *Handler) patchOne(w http.ResponseWriter, r *http.Request) {
 	if req.Visibility != nil {
 		v := domain.Visibility(strings.TrimSpace(*req.Visibility))
 		if !v.Valid() {
-			writeError(w, http.StatusBadRequest, "invalid visibility")
+			httpx.WriteError(w, http.StatusBadRequest, "invalid visibility")
 			return
 		}
 		visibility = v
@@ -443,7 +488,7 @@ func (h *Handler) patchOne(w http.ResponseWriter, r *http.Request) {
 	if req.DefaultBranch != nil {
 		db := strings.TrimSpace(*req.DefaultBranch)
 		if !isValidBranchName(db) {
-			writeError(w, http.StatusBadRequest, "invalid default_branch")
+			httpx.WriteError(w, http.StatusBadRequest, "invalid default_branch")
 			return
 		}
 		// Keep DB metadata and the bare repo's HEAD symref in sync. Flip
@@ -457,13 +502,13 @@ func (h *Handler) patchOne(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := h.git.SetHEAD(path, db); err != nil {
 				if errors.Is(err, gitdomain.ErrRefNotFound) {
-					writeError(w, http.StatusBadRequest, "default_branch does not exist as a branch")
+					httpx.WriteError(w, http.StatusBadRequest, "default_branch does not exist as a branch")
 					return
 				}
 				if mapGitErr(w, err) {
 					return
 				}
-				writeError(w, http.StatusInternalServerError, err.Error())
+				httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 		}
@@ -473,13 +518,13 @@ func (h *Handler) patchOne(w http.ResponseWriter, r *http.Request) {
 	updated, err := h.store.UpdateMeta(r.Context(), repo.ID, description, defaultBranch, visibility)
 	if err != nil {
 		if errors.Is(err, domain.ErrRepoNotFound) {
-			writeError(w, http.StatusNotFound, "repo not found")
+			httpx.WriteError(w, http.StatusNotFound, "repo not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublic(updated))
+	httpx.WriteJSON(w, http.StatusOK, toPublic(updated))
 }
 
 func (h *Handler) deleteOne(w http.ResponseWriter, r *http.Request) {
@@ -489,16 +534,16 @@ func (h *Handler) deleteOne(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.store.Delete(r.Context(), repo.ID); err != nil {
 		if errors.Is(err, domain.ErrRepoNotFound) {
-			writeError(w, http.StatusNotFound, "repo not found")
+			httpx.WriteError(w, http.StatusNotFound, "repo not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	// DB row is gone; remove the bare repo. Best-effort: log-equivalent is a
 	// 500 only if removal failed in a way that isn't "already missing".
 	if err := h.storage.DeleteOnDisk(repo.OwnerName, repo.Name); err != nil {
-		writeError(w, http.StatusInternalServerError, "remove repo dir: "+err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, "remove repo dir: "+err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -524,17 +569,17 @@ func (h *Handler) transfer(w http.ResponseWriter, r *http.Request) {
 
 	var req transferReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	target := strings.TrimSpace(req.TargetOwner)
 	if !usernameRe.MatchString(target) {
-		writeError(w, http.StatusBadRequest, "invalid target_owner")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid target_owner")
 		return
 	}
 	expectConfirm := repo.OwnerName + "/" + repo.Name
 	if strings.TrimSpace(req.Confirm) != expectConfirm {
-		writeError(w, http.StatusBadRequest, "confirm must match '<owner>/<name>'")
+		httpx.WriteError(w, http.StatusBadRequest, "confirm must match '<owner>/<name>'")
 		return
 	}
 
@@ -542,10 +587,10 @@ func (h *Handler) transfer(w http.ResponseWriter, r *http.Request) {
 	owner, err := h.resolver.ResolveOwner(r.Context(), target)
 	if err != nil {
 		if errors.Is(err, orgdomain.ErrOwnerNotFound) || errors.Is(err, orgdomain.ErrOrgReserved) {
-			writeError(w, http.StatusNotFound, "target owner not found")
+			httpx.WriteError(w, http.StatusNotFound, "target owner not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -553,17 +598,17 @@ func (h *Handler) transfer(w http.ResponseWriter, r *http.Request) {
 	switch owner.Kind {
 	case orgdomain.OwnerKindUser:
 		if owner.ID != caller.ID && caller.Role != userdomain.RoleAdmin {
-			writeError(w, http.StatusForbidden, "cannot transfer to another user")
+			httpx.WriteError(w, http.StatusForbidden, "cannot transfer to another user")
 			return
 		}
 	case orgdomain.OwnerKindOrg:
 		role, isMember, err := h.resolver.Membership(r.Context(), owner.ID, caller.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if (!isMember || role != orgdomain.RoleOwner) && caller.Role != userdomain.RoleAdmin {
-			writeError(w, http.StatusForbidden, "must be an org owner of the target")
+			httpx.WriteError(w, http.StatusForbidden, "must be an org owner of the target")
 			return
 		}
 	}
@@ -572,17 +617,17 @@ func (h *Handler) transfer(w http.ResponseWriter, r *http.Request) {
 	if repo.OwnerKind == newKind && repo.OwnerID == owner.ID {
 		// No-op: same owner. Return the current repo so callers can treat
 		// transfer as idempotent.
-		writeJSON(w, http.StatusOK, toPublic(repo))
+		httpx.WriteJSON(w, http.StatusOK, toPublic(repo))
 		return
 	}
 
 	updated, err := h.store.Transfer(r.Context(), repo.ID, newKind, owner.ID)
 	if err != nil {
 		if errors.Is(err, domain.ErrRepoConflict) {
-			writeError(w, http.StatusConflict, "target already has a repo by that name")
+			httpx.WriteError(w, http.StatusConflict, "target already has a repo by that name")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if err := h.storage.RenameOnDisk(repo.OwnerName, repo.Name, owner.Name, repo.Name); err != nil {
@@ -591,10 +636,10 @@ func (h *Handler) transfer(w http.ResponseWriter, r *http.Request) {
 		// (logging not yet wired in this module); if rollback also fails
 		// the admin can move the directory by hand and re-run transfer.
 		_, _ = h.store.Transfer(r.Context(), repo.ID, repo.OwnerKind, repo.OwnerID)
-		writeError(w, http.StatusInternalServerError, "rename on disk: "+err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, "rename on disk: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublic(updated))
+	httpx.WriteJSON(w, http.StatusOK, toPublic(updated))
 }
 
 // ---- Git reads ----
@@ -613,10 +658,10 @@ func (h *Handler) getRefs(w http.ResponseWriter, r *http.Request) {
 		if mapGitErr(w, err) {
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, refs)
+	httpx.WriteJSON(w, http.StatusOK, refs)
 }
 
 func (h *Handler) listCommits(w http.ResponseWriter, r *http.Request) {
@@ -637,16 +682,16 @@ func (h *Handler) listCommits(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Empty repo is a normal state, not a 4xx — surface an empty list.
 		if errors.Is(err, gitdomain.ErrEmptyRepo) {
-			writeJSON(w, http.StatusOK, []*gitdomain.Commit{})
+			httpx.WriteJSON(w, http.StatusOK, []*gitdomain.Commit{})
 			return
 		}
 		if mapGitErr(w, err) {
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, commits)
+	httpx.WriteJSON(w, http.StatusOK, commits)
 }
 
 func (h *Handler) getCommit(w http.ResponseWriter, r *http.Request) {
@@ -660,7 +705,7 @@ func (h *Handler) getCommit(w http.ResponseWriter, r *http.Request) {
 	}
 	sha := chi.URLParam(r, "sha")
 	if sha == "" {
-		writeError(w, http.StatusBadRequest, "missing sha")
+		httpx.WriteError(w, http.StatusBadRequest, "missing sha")
 		return
 	}
 	cwd, err := h.git.CommitByID(path, sha)
@@ -668,10 +713,10 @@ func (h *Handler) getCommit(w http.ResponseWriter, r *http.Request) {
 		if mapGitErr(w, err) {
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, cwd)
+	httpx.WriteJSON(w, http.StatusOK, cwd)
 }
 
 func (h *Handler) getContainingRefs(w http.ResponseWriter, r *http.Request) {
@@ -685,7 +730,7 @@ func (h *Handler) getContainingRefs(w http.ResponseWriter, r *http.Request) {
 	}
 	sha := chi.URLParam(r, "sha")
 	if sha == "" {
-		writeError(w, http.StatusBadRequest, "missing sha")
+		httpx.WriteError(w, http.StatusBadRequest, "missing sha")
 		return
 	}
 	refs, err := h.git.ContainsCommit(path, sha)
@@ -693,10 +738,10 @@ func (h *Handler) getContainingRefs(w http.ResponseWriter, r *http.Request) {
 		if mapGitErr(w, err) {
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, refs)
+	httpx.WriteJSON(w, http.StatusOK, refs)
 }
 
 // getArchive shells out to `git archive` to produce a zip or tar.gz of the
@@ -715,12 +760,12 @@ func (h *Handler) getArchive(w http.ResponseWriter, r *http.Request) {
 
 	raw := strings.TrimSpace(chi.URLParam(r, "*"))
 	if raw == "" {
-		writeError(w, http.StatusBadRequest, "missing ref")
+		httpx.WriteError(w, http.StatusBadRequest, "missing ref")
 		return
 	}
 	ref, format, contentType, ok := parseArchiveTarget(raw)
 	if !ok {
-		writeError(w, http.StatusBadRequest, "unsupported archive format (use .zip or .tar.gz)")
+		httpx.WriteError(w, http.StatusBadRequest, "unsupported archive format (use .zip or .tar.gz)")
 		return
 	}
 
@@ -728,7 +773,7 @@ func (h *Handler) getArchive(w http.ResponseWriter, r *http.Request) {
 	// validate the ref-name shape so a caller can't smuggle in shell-active
 	// characters even though we go through exec.Command's argv.
 	if !isSafeArchiveRef(ref) {
-		writeError(w, http.StatusBadRequest, "invalid ref")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid ref")
 		return
 	}
 
@@ -749,12 +794,12 @@ func (h *Handler) getArchive(w http.ResponseWriter, r *http.Request) {
 	)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "archive: "+err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, "archive: "+err.Error())
 		return
 	}
 	cmd.Stderr = io.Discard
 	if err := cmd.Start(); err != nil {
-		writeError(w, http.StatusInternalServerError, "archive: "+err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, "archive: "+err.Error())
 		return
 	}
 
@@ -787,16 +832,16 @@ func (h *Handler) getTree(w http.ResponseWriter, r *http.Request) {
 	entries, err := h.git.Tree(path, ref, treePath)
 	if err != nil {
 		if errors.Is(err, gitdomain.ErrEmptyRepo) {
-			writeJSON(w, http.StatusOK, []*gitdomain.TreeEntry{})
+			httpx.WriteJSON(w, http.StatusOK, []*gitdomain.TreeEntry{})
 			return
 		}
 		if mapGitErr(w, err) {
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, entries)
+	httpx.WriteJSON(w, http.StatusOK, entries)
 }
 
 func (h *Handler) getTreeView(w http.ResponseWriter, r *http.Request) {
@@ -820,10 +865,10 @@ func (h *Handler) getTreeView(w http.ResponseWriter, r *http.Request) {
 		if mapGitErr(w, err) {
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, view)
+	httpx.WriteJSON(w, http.StatusOK, view)
 }
 
 type blobResp struct {
@@ -847,7 +892,7 @@ func (h *Handler) getBlob(w http.ResponseWriter, r *http.Request) {
 	}
 	filePath := r.URL.Query().Get("path")
 	if filePath == "" {
-		writeError(w, http.StatusBadRequest, "missing path")
+		httpx.WriteError(w, http.StatusBadRequest, "missing path")
 		return
 	}
 	content, binary, err := h.git.Blob(path, ref, filePath)
@@ -855,14 +900,14 @@ func (h *Handler) getBlob(w http.ResponseWriter, r *http.Request) {
 		if mapGitErr(w, err) {
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if len(content) > maxBlobBytes {
-		writeError(w, http.StatusRequestEntityTooLarge, "file too large")
+		httpx.WriteError(w, http.StatusRequestEntityTooLarge, "file too large")
 		return
 	}
-	writeJSON(w, http.StatusOK, blobResp{
+	httpx.WriteJSON(w, http.StatusOK, blobResp{
 		ContentBase64: base64.StdEncoding.EncodeToString(content),
 		Binary:        binary,
 		Size:          len(content),
@@ -881,7 +926,7 @@ func (h *Handler) getDiff(w http.ResponseWriter, r *http.Request) {
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
 	if from == "" || to == "" {
-		writeError(w, http.StatusBadRequest, "missing from/to")
+		httpx.WriteError(w, http.StatusBadRequest, "missing from/to")
 		return
 	}
 	diffs, err := h.git.DiffRefs(path, from, to)
@@ -889,10 +934,10 @@ func (h *Handler) getDiff(w http.ResponseWriter, r *http.Request) {
 		if mapGitErr(w, err) {
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, diffs)
+	httpx.WriteJSON(w, http.StatusOK, diffs)
 }
 
 // ---- Helpers ----
@@ -909,11 +954,11 @@ func (h *Handler) resolveRepoForRead(w http.ResponseWriter, r *http.Request) (*d
 	if repo.Visibility == domain.VisibilityPrivate {
 		can, err := h.canReadRepo(r.Context(), caller, repo)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return nil, false
 		}
 		if !can {
-			writeError(w, http.StatusForbidden, "forbidden")
+			httpx.WriteError(w, http.StatusForbidden, "forbidden")
 			return nil, false
 		}
 	}
@@ -930,11 +975,11 @@ func (h *Handler) resolveRepoForWrite(w http.ResponseWriter, r *http.Request) (*
 	caller, _ := authdomain.UserFromRequest(r)
 	can, err := h.canWriteRepo(r.Context(), caller, repo)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return nil, false
 	}
 	if !can {
-		writeError(w, http.StatusForbidden, "forbidden")
+		httpx.WriteError(w, http.StatusForbidden, "forbidden")
 		return nil, false
 	}
 	return repo, true
@@ -988,29 +1033,29 @@ func (h *Handler) loadRepoFromPath(w http.ResponseWriter, r *http.Request) (*dom
 	ownerName := chi.URLParam(r, "owner")
 	repoName := chi.URLParam(r, "name")
 	if !usernameRe.MatchString(ownerName) {
-		writeError(w, http.StatusBadRequest, "invalid owner")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid owner")
 		return nil, false
 	}
 	if !repoNameRe.MatchString(repoName) {
-		writeError(w, http.StatusBadRequest, "invalid name")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid name")
 		return nil, false
 	}
 	owner, err := h.resolver.ResolveOwner(r.Context(), ownerName)
 	if err != nil {
 		if errors.Is(err, orgdomain.ErrOwnerNotFound) || errors.Is(err, orgdomain.ErrOrgReserved) {
-			writeError(w, http.StatusNotFound, "repo not found")
+			httpx.WriteError(w, http.StatusNotFound, "repo not found")
 			return nil, false
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return nil, false
 	}
 	repo, err := h.store.GetByOwnerAndName(r.Context(), domain.OwnerKind(owner.Kind), owner.ID, repoName)
 	if err != nil {
 		if errors.Is(err, domain.ErrRepoNotFound) {
-			writeError(w, http.StatusNotFound, "repo not found")
+			httpx.WriteError(w, http.StatusNotFound, "repo not found")
 			return nil, false
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return nil, false
 	}
 	return repo, true
@@ -1021,7 +1066,7 @@ func (h *Handler) resolveFsPath(w http.ResponseWriter, repo *domain.Repo) (strin
 	if err != nil {
 		// This shouldn't happen — the names already passed handler-level
 		// validation — but guard anyway since Storage owns the FS rules.
-		writeError(w, http.StatusInternalServerError, "resolve path: "+err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, "resolve path: "+err.Error())
 		return "", false
 	}
 	return path, true
@@ -1033,28 +1078,28 @@ func (h *Handler) resolveFsPath(w http.ResponseWriter, repo *domain.Repo) (strin
 func mapGitErr(w http.ResponseWriter, err error) bool {
 	switch {
 	case errors.Is(err, gitdomain.ErrRefNotFound):
-		writeError(w, http.StatusNotFound, "ref not found")
+		httpx.WriteError(w, http.StatusNotFound, "ref not found")
 		return true
 	case errors.Is(err, gitdomain.ErrPathNotFound):
-		writeError(w, http.StatusNotFound, "path not found")
+		httpx.WriteError(w, http.StatusNotFound, "path not found")
 		return true
 	case errors.Is(err, gitdomain.ErrRepoNotFound):
-		writeError(w, http.StatusNotFound, "repo storage missing")
+		httpx.WriteError(w, http.StatusNotFound, "repo storage missing")
 		return true
 	case errors.Is(err, gitdomain.ErrNotABlob):
-		writeError(w, http.StatusBadRequest, "not a blob")
+		httpx.WriteError(w, http.StatusBadRequest, "not a blob")
 		return true
 	case errors.Is(err, gitdomain.ErrBranchExists):
-		writeError(w, http.StatusConflict, "branch already exists")
+		httpx.WriteError(w, http.StatusConflict, "branch already exists")
 		return true
 	case errors.Is(err, gitdomain.ErrTagExists):
-		writeError(w, http.StatusConflict, "tag already exists")
+		httpx.WriteError(w, http.StatusConflict, "tag already exists")
 		return true
 	case errors.Is(err, gitdomain.ErrCannotDeleteHEAD):
-		writeError(w, http.StatusConflict, "cannot delete current HEAD branch")
+		httpx.WriteError(w, http.StatusConflict, "cannot delete current HEAD branch")
 		return true
 	case errors.Is(err, gitdomain.ErrInvalidRefName):
-		writeError(w, http.StatusBadRequest, "invalid ref name")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid ref name")
 		return true
 	}
 	return false
@@ -1100,16 +1145,6 @@ func parseOffsetLimit(r *http.Request) (offset, limit int32) {
 	return
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
-}
-
 // ---- Branch / tag writes ----
 
 type createBranchReq struct {
@@ -1147,17 +1182,17 @@ func (h *Handler) createBranch(w http.ResponseWriter, r *http.Request) {
 
 	var req createBranchReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	name := strings.TrimSpace(req.Name)
 	start := strings.TrimSpace(req.StartRef)
 	if !validateRefNameInput(name) {
-		writeError(w, http.StatusBadRequest, "invalid name")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid name")
 		return
 	}
 	if start == "" {
-		writeError(w, http.StatusBadRequest, "missing start_ref")
+		httpx.WriteError(w, http.StatusBadRequest, "missing start_ref")
 		return
 	}
 
@@ -1170,10 +1205,10 @@ func (h *Handler) createBranch(w http.ResponseWriter, r *http.Request) {
 		IsCreate: true,
 	}); err != nil {
 		if errors.Is(err, domain.ErrBranchWriteDenied) {
-			writeError(w, http.StatusForbidden, err.Error())
+			httpx.WriteError(w, http.StatusForbidden, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -1181,7 +1216,7 @@ func (h *Handler) createBranch(w http.ResponseWriter, r *http.Request) {
 		if mapGitErr(w, err) {
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -1189,7 +1224,7 @@ func (h *Handler) createBranch(w http.ResponseWriter, r *http.Request) {
 	// follow-up GET /refs round-trip. We resolve via ListRefs to stay on
 	// the public Git interface rather than reaching into go-git here.
 	sha := lookupBranchSHA(h.git, path, name)
-	writeJSON(w, http.StatusCreated, refMutationResp{Name: name, SHA: sha})
+	httpx.WriteJSON(w, http.StatusCreated, refMutationResp{Name: name, SHA: sha})
 }
 
 func (h *Handler) deleteBranch(w http.ResponseWriter, r *http.Request) {
@@ -1204,7 +1239,7 @@ func (h *Handler) deleteBranch(w http.ResponseWriter, r *http.Request) {
 
 	name := strings.TrimSpace(chi.URLParam(r, "*"))
 	if name == "" {
-		writeError(w, http.StatusBadRequest, "missing branch")
+		httpx.WriteError(w, http.StatusBadRequest, "missing branch")
 		return
 	}
 
@@ -1213,11 +1248,11 @@ func (h *Handler) deleteBranch(w http.ResponseWriter, r *http.Request) {
 	// branch covers the web button.
 	rule, err := h.matchedProtection(r, repo.ID, name)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if rule != nil && rule.ForbidDelete {
-		writeError(w, http.StatusConflict, "branch is protected against deletion")
+		httpx.WriteError(w, http.StatusConflict, "branch is protected against deletion")
 		return
 	}
 
@@ -1230,10 +1265,10 @@ func (h *Handler) deleteBranch(w http.ResponseWriter, r *http.Request) {
 		IsDelete: true,
 	}); err != nil {
 		if errors.Is(err, domain.ErrBranchWriteDenied) {
-			writeError(w, http.StatusForbidden, err.Error())
+			httpx.WriteError(w, http.StatusForbidden, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -1241,7 +1276,7 @@ func (h *Handler) deleteBranch(w http.ResponseWriter, r *http.Request) {
 		if mapGitErr(w, err) {
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1266,21 +1301,21 @@ func (h *Handler) createTag(w http.ResponseWriter, r *http.Request) {
 
 	var req createTagReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	name := strings.TrimSpace(req.Name)
 	ref := strings.TrimSpace(req.Ref)
 	if !validateRefNameInput(name) {
-		writeError(w, http.StatusBadRequest, "invalid name")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid name")
 		return
 	}
 	if ref == "" {
-		writeError(w, http.StatusBadRequest, "missing ref")
+		httpx.WriteError(w, http.StatusBadRequest, "missing ref")
 		return
 	}
 	if req.Annotated && strings.TrimSpace(req.Message) == "" {
-		writeError(w, http.StatusBadRequest, "annotated tag requires message")
+		httpx.WriteError(w, http.StatusBadRequest, "annotated tag requires message")
 		return
 	}
 
@@ -1295,7 +1330,7 @@ func (h *Handler) createTag(w http.ResponseWriter, r *http.Request) {
 			if mapGitErr(w, err) {
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	} else {
@@ -1303,13 +1338,13 @@ func (h *Handler) createTag(w http.ResponseWriter, r *http.Request) {
 			if mapGitErr(w, err) {
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	}
 
 	sha := lookupTagSHA(h.git, path, name)
-	writeJSON(w, http.StatusCreated, refMutationResp{Name: name, SHA: sha})
+	httpx.WriteJSON(w, http.StatusCreated, refMutationResp{Name: name, SHA: sha})
 }
 
 func (h *Handler) deleteTag(w http.ResponseWriter, r *http.Request) {
@@ -1324,7 +1359,7 @@ func (h *Handler) deleteTag(w http.ResponseWriter, r *http.Request) {
 
 	name := strings.TrimSpace(chi.URLParam(r, "*"))
 	if name == "" {
-		writeError(w, http.StatusBadRequest, "missing tag")
+		httpx.WriteError(w, http.StatusBadRequest, "missing tag")
 		return
 	}
 
@@ -1332,7 +1367,7 @@ func (h *Handler) deleteTag(w http.ResponseWriter, r *http.Request) {
 		if mapGitErr(w, err) {
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1460,14 +1495,14 @@ func (h *Handler) listProtections(w http.ResponseWriter, r *http.Request) {
 	}
 	rules, err := h.protections.List(r.Context(), repo.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	out := make([]publicProtection, 0, len(rules))
 	for _, p := range rules {
 		out = append(out, toPublicProtection(p))
 	}
-	writeJSON(w, http.StatusOK, out)
+	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) createProtection(w http.ResponseWriter, r *http.Request) {
@@ -1477,24 +1512,24 @@ func (h *Handler) createProtection(w http.ResponseWriter, r *http.Request) {
 	}
 	var req protectionReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	pattern := strings.TrimSpace(req.Pattern)
 	if !isValidProtectionPattern(pattern) {
-		writeError(w, http.StatusBadRequest, "invalid pattern")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid pattern")
 		return
 	}
 	created, err := h.protections.Create(r.Context(), repo.ID, pattern, req.ForbidForcePush, req.ForbidDelete, req.ForbidDirectPush)
 	if err != nil {
 		if errors.Is(err, domain.ErrProtectionConflict) {
-			writeError(w, http.StatusConflict, "pattern already protected")
+			httpx.WriteError(w, http.StatusConflict, "pattern already protected")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, toPublicProtection(created))
+	httpx.WriteJSON(w, http.StatusCreated, toPublicProtection(created))
 }
 
 func (h *Handler) updateProtection(w http.ResponseWriter, r *http.Request) {
@@ -1508,28 +1543,28 @@ func (h *Handler) updateProtection(w http.ResponseWriter, r *http.Request) {
 	}
 	var req protectionReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	pattern := strings.TrimSpace(req.Pattern)
 	if !isValidProtectionPattern(pattern) {
-		writeError(w, http.StatusBadRequest, "invalid pattern")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid pattern")
 		return
 	}
 	updated, err := h.protections.Update(r.Context(), id, repo.ID, pattern, req.ForbidForcePush, req.ForbidDelete, req.ForbidDirectPush)
 	if err != nil {
 		if errors.Is(err, domain.ErrProtectionNotFound) {
-			writeError(w, http.StatusNotFound, "protection not found")
+			httpx.WriteError(w, http.StatusNotFound, "protection not found")
 			return
 		}
 		if errors.Is(err, domain.ErrProtectionConflict) {
-			writeError(w, http.StatusConflict, "pattern already protected")
+			httpx.WriteError(w, http.StatusConflict, "pattern already protected")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublicProtection(updated))
+	httpx.WriteJSON(w, http.StatusOK, toPublicProtection(updated))
 }
 
 func (h *Handler) deleteProtection(w http.ResponseWriter, r *http.Request) {
@@ -1543,10 +1578,10 @@ func (h *Handler) deleteProtection(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.protections.Delete(r.Context(), id, repo.ID); err != nil {
 		if errors.Is(err, domain.ErrProtectionNotFound) {
-			writeError(w, http.StatusNotFound, "protection not found")
+			httpx.WriteError(w, http.StatusNotFound, "protection not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1583,7 +1618,7 @@ func parsePathID(w http.ResponseWriter, r *http.Request, param string) (int64, b
 	raw := chi.URLParam(r, param)
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid "+param)
+		httpx.WriteError(w, http.StatusBadRequest, "invalid "+param)
 		return 0, false
 	}
 	return id, true

@@ -1,4 +1,4 @@
-package domain
+package agentsconfig
 
 // Trigger is the set of platform events a role can subscribe to. The
 // allow-list lives here in domain because the parser, the dispatcher,

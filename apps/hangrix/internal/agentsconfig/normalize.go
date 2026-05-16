@@ -1,6 +1,5 @@
-package service
+package agentsconfig
 
-import "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agents_config/domain"
 
 // NormalizeHostConfig fills schema-level defaults on a HostConfig that
 // already passed ParseHostConfig. Two-pass shape is intentional: the
@@ -11,10 +10,10 @@ import "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agents_config/d
 //
 // Defaults applied:
 //   - role.mention_by: "" -> "collaborators" (the spec default).
-func NormalizeHostConfig(cfg *domain.HostConfig) {
+func NormalizeHostConfig(cfg *HostConfig) {
 	for _, role := range cfg.Roles {
 		if role.MentionBy == "" {
-			role.MentionBy = domain.MentionByCollaborators
+			role.MentionBy = MentionByCollaborators
 		}
 	}
 }

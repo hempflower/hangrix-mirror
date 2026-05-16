@@ -23,9 +23,7 @@ import (
 	"io/fs"
 	"time"
 
-	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -91,7 +89,7 @@ func (r *PostgresRepo) CreateProvider(ctx context.Context, p *domain.Provider) (
 		CreatedBy:       p.CreatedBy,
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
+		if database.IsUniqueViolation(err) {
 			return nil, domain.ErrProviderConflict
 		}
 		return nil, err
@@ -291,8 +289,3 @@ func providerFromRow(r llmproviderdb.LlmProvider) *domain.Provider {
 }
 
 // ---- pgx error helpers ----
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation
-}

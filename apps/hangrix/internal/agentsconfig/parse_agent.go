@@ -1,4 +1,4 @@
-package service
+package agentsconfig
 
 import (
 	"bytes"
@@ -10,7 +10,6 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agents_config/domain"
 )
 
 // agentWire mirrors the on-disk YAML shape verbatim. Decoder will reject
@@ -63,7 +62,7 @@ var hostOnlyFields = []string{
 //   - No host-only keys at top level (image / build / container / env /
 //     secrets / volumes / llm / roles).
 //   - No unknown top-level keys at all (yaml.v3 KnownFields(true)).
-func ParseAgentManifest(body []byte) (*domain.AgentManifest, error) {
+func ParseAgentManifest(body []byte) (*AgentManifest, error) {
 	if err := rejectAgentSchemaHostFields(body); err != nil {
 		return nil, err
 	}
@@ -78,14 +77,14 @@ func ParseAgentManifest(body []byte) (*domain.AgentManifest, error) {
 		if errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("agent.yml is empty")
 		}
-		return nil, fmt.Errorf("%w: %s", domain.ErrUnknownField, err.Error())
+		return nil, fmt.Errorf("%w: %s", ErrUnknownField, err.Error())
 	}
 
 	if wire.Version != 1 {
-		return nil, fmt.Errorf("%w: got %d, want 1", domain.ErrInvalidVersion, wire.Version)
+		return nil, fmt.Errorf("%w: got %d, want 1", ErrInvalidVersion, wire.Version)
 	}
 	if wire.Kind != "agent" {
-		return nil, fmt.Errorf("%w: got %q, want %q", domain.ErrInvalidKind, wire.Kind, "agent")
+		return nil, fmt.Errorf("%w: got %q, want %q", ErrInvalidKind, wire.Kind, "agent")
 	}
 
 	if err := validateRelativePromptPath(wire.Entry.BasePrompt); err != nil {
@@ -94,14 +93,14 @@ func ParseAgentManifest(body []byte) (*domain.AgentManifest, error) {
 
 	for i, tool := range wire.DeclaredTools {
 		if !isValidToolSlug(tool) {
-			return nil, fmt.Errorf("%w: declared_tools[%d]=%q", domain.ErrInvalidDeclaredTool, i, tool)
+			return nil, fmt.Errorf("%w: declared_tools[%d]=%q", ErrInvalidDeclaredTool, i, tool)
 		}
 	}
 
-	return &domain.AgentManifest{
+	return &AgentManifest{
 		Version:       wire.Version,
 		Kind:          wire.Kind,
-		Entry:         domain.Entry{BasePrompt: wire.Entry.BasePrompt},
+		Entry:         Entry{BasePrompt: wire.Entry.BasePrompt},
 		DeclaredTools: wire.DeclaredTools,
 	}, nil
 }
@@ -121,7 +120,7 @@ func rejectAgentSchemaHostFields(body []byte) error {
 	}
 	for _, k := range hostOnlyFields {
 		if _, present := raw[k]; present {
-			return fmt.Errorf("%w: %q belongs in .hangrix/agents.yml", domain.ErrAgentSchemaForbiddenField, k)
+			return fmt.Errorf("%w: %q belongs in .hangrix/agents.yml", ErrAgentSchemaForbiddenField, k)
 		}
 	}
 	return nil
@@ -132,17 +131,17 @@ func rejectAgentSchemaHostFields(body []byte) error {
 // `/` or any `..` segment is a violation.
 func validateRelativePromptPath(p string) error {
 	if p == "" {
-		return domain.ErrMissingBasePrompt
+		return ErrMissingBasePrompt
 	}
 	if strings.HasPrefix(p, "/") {
-		return fmt.Errorf("%w: %q is absolute", domain.ErrInvalidBasePromptPath, p)
+		return fmt.Errorf("%w: %q is absolute", ErrInvalidBasePromptPath, p)
 	}
 	cleaned := path.Clean(p)
 	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
-		return fmt.Errorf("%w: %q escapes repo root", domain.ErrInvalidBasePromptPath, p)
+		return fmt.Errorf("%w: %q escapes repo root", ErrInvalidBasePromptPath, p)
 	}
 	if cleaned == "." {
-		return fmt.Errorf("%w: %q resolves to repo root", domain.ErrInvalidBasePromptPath, p)
+		return fmt.Errorf("%w: %q resolves to repo root", ErrInvalidBasePromptPath, p)
 	}
 	return nil
 }

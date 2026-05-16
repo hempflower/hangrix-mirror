@@ -1,10 +1,4 @@
-// Package domain models the two YAML configs that drive M7a multi-role
-// agents: the agent-repo manifest (`agent.yml`) and the host-repo team
-// configuration (`.hangrix/agents.yml`). It is pure data + invariants —
-// no YAML decoding, no I/O, no third-party library imports — so service/
-// can decode into private wire structs and map cleanly into these types
-// without leaking yaml.v3 details across the layer boundary.
-package domain
+package agentsconfig
 
 import "errors"
 

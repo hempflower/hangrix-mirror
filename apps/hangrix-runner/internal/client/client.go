@@ -149,10 +149,17 @@ func (c *Client) Heartbeat(ctx context.Context, req HeartbeatRequest) error {
 // ---- tasks ----
 
 type Task struct {
-	SessionID     int64             `json:"session_id"`
-	AgentImage    string            `json:"agent_image"`
-	Role          string            `json:"role"`
-	BundleDir     string            `json:"bundle_dir"`
+	SessionID  int64  `json:"session_id"`
+	AgentImage string `json:"agent_image"`
+	Role       string `json:"role"`
+	// AgentRepo is the bundle pin in `<owner>/<name>@<sha>` form. The
+	// runner resolves the `<sha>` against its content-addressed cache
+	// under ~/.hangrix/agent-bundles/<sha>/; on miss it pulls
+	// /api/runner/agent-bundles/{owner}/{name}/{sha}.tar.gz and
+	// verifies the X-Hangrix-SHA256 response header before mounting it
+	// at /opt/hangrix/bundle:ro. Empty for M6c-era admin smoke tasks
+	// where the agent image bakes its own bundle.
+	AgentRepo     string            `json:"agent_repo"`
 	WorkingBranch string            `json:"working_branch"`
 	BaseBranch    string            `json:"base_branch"`
 	HostAddendum  string            `json:"host_addendum"`

@@ -13,9 +13,7 @@ import (
 	"fmt"
 	"io/fs"
 
-	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -80,7 +78,7 @@ func (s *PostgresStore) Create(ctx context.Context, ownerKind domain.OwnerKind, 
 		return nil, domain.ErrInvalidOwnerKind
 	}
 	if err != nil {
-		if isUniqueViolation(err) {
+		if database.IsUniqueViolation(err) {
 			return nil, domain.ErrRepoConflict
 		}
 		return nil, err
@@ -137,7 +135,11 @@ func (s *PostgresStore) GetByOwnerAndName(ctx context.Context, ownerKind domain.
 	}
 }
 
-func (s *PostgresStore) ListByOwner(ctx context.Context, ownerKind domain.OwnerKind, ownerID int64, includePrivate bool, offset, limit int32) ([]*domain.Repo, int64, error) {
+func (s *PostgresStore) ListByOwner(ctx context.Context, ownerKind domain.OwnerKind, ownerID int64, includePrivate bool, kind *domain.Kind, offset, limit int32) ([]*domain.Repo, int64, error) {
+	kindArg := pgtype.Text{}
+	if kind != nil {
+		kindArg = pgtype.Text{String: string(*kind), Valid: true}
+	}
 	switch ownerKind {
 	case domain.OwnerKindUser:
 		rows, err := s.q.ListReposByUserOwner(ctx, repodb.ListReposByUserOwnerParams{
@@ -145,6 +147,7 @@ func (s *PostgresStore) ListByOwner(ctx context.Context, ownerKind domain.OwnerK
 			Limit:          limit,
 			Offset:         offset,
 			IncludePrivate: includePrivate,
+			Kind:           kindArg,
 		})
 		if err != nil {
 			return nil, 0, err
@@ -152,6 +155,7 @@ func (s *PostgresStore) ListByOwner(ctx context.Context, ownerKind domain.OwnerK
 		total, err := s.q.CountReposByUserOwner(ctx, repodb.CountReposByUserOwnerParams{
 			OwnerUserID:    pgtype.Int8{Int64: ownerID, Valid: true},
 			IncludePrivate: includePrivate,
+			Kind:           kindArg,
 		})
 		if err != nil {
 			return nil, 0, err
@@ -167,6 +171,7 @@ func (s *PostgresStore) ListByOwner(ctx context.Context, ownerKind domain.OwnerK
 			Limit:          limit,
 			Offset:         offset,
 			IncludePrivate: includePrivate,
+			Kind:           kindArg,
 		})
 		if err != nil {
 			return nil, 0, err
@@ -174,6 +179,7 @@ func (s *PostgresStore) ListByOwner(ctx context.Context, ownerKind domain.OwnerK
 		total, err := s.q.CountReposByOrgOwner(ctx, repodb.CountReposByOrgOwnerParams{
 			OwnerOrgID:     pgtype.Int8{Int64: ownerID, Valid: true},
 			IncludePrivate: includePrivate,
+			Kind:           kindArg,
 		})
 		if err != nil {
 			return nil, 0, err
@@ -186,6 +192,22 @@ func (s *PostgresStore) ListByOwner(ctx context.Context, ownerKind domain.OwnerK
 	default:
 		return nil, 0, domain.ErrInvalidOwnerKind
 	}
+}
+
+// UpdateKind flips the cached agent-vs-standard classification. Called by
+// the repo handler's PostReceive hook after each push to the default
+// branch; the query is a no-op when the column already holds the same
+// value (kind IS DISTINCT FROM kind guard), so concurrent pushes are
+// race-safe.
+func (s *PostgresStore) UpdateKind(ctx context.Context, id int64, kind domain.Kind) error {
+	if !kind.Valid() {
+		return fmt.Errorf("invalid repo kind %q", kind)
+	}
+	_, err := s.q.UpdateRepoKind(ctx, repodb.UpdateRepoKindParams{
+		ID:   id,
+		Kind: string(kind),
+	})
+	return err
 }
 
 func (s *PostgresStore) Delete(ctx context.Context, id int64) error {
@@ -240,7 +262,7 @@ func (s *PostgresStore) Transfer(ctx context.Context, id int64, newOwnerKind dom
 		return nil, domain.ErrInvalidOwnerKind
 	}
 	if err != nil {
-		if isUniqueViolation(err) {
+		if database.IsUniqueViolation(err) {
 			return nil, domain.ErrRepoConflict
 		}
 		return nil, err
@@ -266,6 +288,7 @@ func joinedRowToRepo(r repodb.GetRepoByIDRow) *domain.Repo {
 		Description:   r.Description,
 		Visibility:    domain.Visibility(r.Visibility),
 		DefaultBranch: r.DefaultBranch,
+		Kind:          domain.Kind(r.Kind),
 		CreatedAt:     r.CreatedAt.Time,
 		UpdatedAt:     r.UpdatedAt.Time,
 	}
@@ -286,6 +309,7 @@ func userOwnerRowToRepo(r repodb.GetRepoByUserOwnerAndNameRow) *domain.Repo {
 		Description:   r.Description,
 		Visibility:    domain.Visibility(r.Visibility),
 		DefaultBranch: r.DefaultBranch,
+		Kind:          domain.Kind(r.Kind),
 		CreatedAt:     r.CreatedAt.Time,
 		UpdatedAt:     r.UpdatedAt.Time,
 	}
@@ -304,6 +328,7 @@ func orgOwnerRowToRepo(r repodb.GetRepoByOrgOwnerAndNameRow) *domain.Repo {
 		Description:   r.Description,
 		Visibility:    domain.Visibility(r.Visibility),
 		DefaultBranch: r.DefaultBranch,
+		Kind:          domain.Kind(r.Kind),
 		CreatedAt:     r.CreatedAt.Time,
 		UpdatedAt:     r.UpdatedAt.Time,
 	}
@@ -322,6 +347,7 @@ func userListRowToRepo(r repodb.ListReposByUserOwnerRow) *domain.Repo {
 		Description:   r.Description,
 		Visibility:    domain.Visibility(r.Visibility),
 		DefaultBranch: r.DefaultBranch,
+		Kind:          domain.Kind(r.Kind),
 		CreatedAt:     r.CreatedAt.Time,
 		UpdatedAt:     r.UpdatedAt.Time,
 	}
@@ -340,6 +366,7 @@ func orgListRowToRepo(r repodb.ListReposByOrgOwnerRow) *domain.Repo {
 		Description:   r.Description,
 		Visibility:    domain.Visibility(r.Visibility),
 		DefaultBranch: r.DefaultBranch,
+		Kind:          domain.Kind(r.Kind),
 		CreatedAt:     r.CreatedAt.Time,
 		UpdatedAt:     r.UpdatedAt.Time,
 	}
@@ -347,9 +374,4 @@ func orgListRowToRepo(r repodb.ListReposByOrgOwnerRow) *domain.Repo {
 		out.OwnerID = r.OwnerOrgID.Int64
 	}
 	return out
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation
 }

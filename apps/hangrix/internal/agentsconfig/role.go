@@ -1,4 +1,4 @@
-package domain
+package agentsconfig
 
 // Role is one entry in the host yaml's `roles:` map after parsing. The
 // map key (the role's identifier like "backend" / "reviewer") lives on

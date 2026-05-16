@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
@@ -146,6 +147,63 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 	for _, obs := range h.observers {
 		_ = obs.PostReceive(postCtx, repo, fsPath)
 	}
+	// Refresh the M7a agent-vs-standard kind classification from the new
+	// default branch tip. Same swallow-errors stance: the client's push has
+	// already succeeded; a transient git or DB hiccup just means the
+	// kind column lags a turn until the next push.
+	h.refreshRepoKind(postCtx, repo, fsPath)
+}
+
+// refreshRepoKind inspects the default branch tip for a root agent.yml
+// and reclassifies the repo accordingly. A repo is KindAgent iff:
+//
+//   1. `<default_branch>:agent.yml` exists as a blob.
+//   2. Its bytes parse against the strict agents_config schema (no
+//      container / env / secrets / volumes fields, valid entry.base_prompt,
+//      etc. — principle 7).
+//
+// A failed parse keeps the repo classified KindStandard so an owner can
+// still push fixes (push is the only path to repair the file). The
+// validation cost is one extra `git cat-file -p` per push to a repo
+// that has an agent.yml — negligible compared to the receive-pack work
+// the same push already did.
+//
+// All errors are swallowed: the push has already succeeded by the time
+// this runs, and a transient git / parse / DB hiccup just means the
+// cached kind lags one turn until the next push.
+func (h *Handler) refreshRepoKind(ctx context.Context, repo *domain.Repo, fsPath string) {
+	branch := repo.DefaultBranch
+	if branch == "" {
+		return
+	}
+	kind := domain.KindStandard
+	if body, ok := readBlobAtRef(ctx, fsPath, branch, "agent.yml"); ok {
+		if _, err := agentsconfig.ParseAgentManifest(body); err == nil {
+			kind = domain.KindAgent
+		}
+	}
+	_ = h.store.UpdateKind(ctx, repo.ID, kind)
+}
+
+// readBlobAtRef returns the bytes of <ref>:<path> via `git cat-file -p`.
+// The second return is false when the blob is missing (caller treats this
+// as KindStandard) or the read errors (same — we never elevate kind on
+// uncertain reads). Stderr is discarded so the common "missing file"
+// case doesn't spam server logs.
+func readBlobAtRef(ctx context.Context, fsPath, ref, path string) ([]byte, bool) {
+	cmd := exec.CommandContext(ctx,
+		"git",
+		"--git-dir="+fsPath,
+		"cat-file",
+		"-p",
+		ref+":"+path,
+	)
+	cmd.Stderr = io.Discard
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // runStatelessRPC streams the request body into `git <sub> --stateless-rpc`

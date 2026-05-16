@@ -18,6 +18,12 @@ import (
 type Loop struct {
 	Client       *client.Client
 	Orchestrator orchestrator.Orchestrator
+	// Bundles resolves an `<owner>/<name>@<sha>` task.AgentRepo pin into
+	// a host directory the orchestrator bind-mounts at
+	// /opt/hangrix/bundle:ro. Optional in tests that hand-craft Tasks
+	// with empty AgentRepo (e.g. session_test.go); SessionDriver fails
+	// the task if a Task carries AgentRepo and this is nil.
+	Bundles BundleResolver
 
 	AgentBinaryPath string
 	WorkspaceRoot   string
@@ -68,6 +74,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		drv := &SessionDriver{
 			Client:          l.Client,
 			Orchestrator:    l.Orchestrator,
+			Bundles:         l.Bundles,
 			AgentBinaryPath: l.AgentBinaryPath,
 			WorkspaceRoot:   l.WorkspaceRoot,
 			LLMEndpoint:     l.LLMEndpoint,

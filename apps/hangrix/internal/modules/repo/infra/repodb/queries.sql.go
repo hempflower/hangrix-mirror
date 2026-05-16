@@ -18,15 +18,17 @@ JOIN organizations o ON o.id = r.owner_org_id
 WHERE r.owner_org_id = $1
   AND o.deleted_at IS NULL
   AND ($2::bool OR r.visibility = 'public')
+  AND ($3::TEXT IS NULL OR r.kind = $3)
 `
 
 type CountReposByOrgOwnerParams struct {
 	OwnerOrgID     pgtype.Int8
 	IncludePrivate bool
+	Kind           pgtype.Text
 }
 
 func (q *Queries) CountReposByOrgOwner(ctx context.Context, arg CountReposByOrgOwnerParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countReposByOrgOwner, arg.OwnerOrgID, arg.IncludePrivate)
+	row := q.db.QueryRow(ctx, countReposByOrgOwner, arg.OwnerOrgID, arg.IncludePrivate, arg.Kind)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -37,15 +39,17 @@ SELECT COUNT(*)
 FROM repos r
 WHERE r.owner_user_id = $1
   AND ($2::bool OR r.visibility = 'public')
+  AND ($3::TEXT IS NULL OR r.kind = $3)
 `
 
 type CountReposByUserOwnerParams struct {
 	OwnerUserID    pgtype.Int8
 	IncludePrivate bool
+	Kind           pgtype.Text
 }
 
 func (q *Queries) CountReposByUserOwner(ctx context.Context, arg CountReposByUserOwnerParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countReposByUserOwner, arg.OwnerUserID, arg.IncludePrivate)
+	row := q.db.QueryRow(ctx, countReposByUserOwner, arg.OwnerUserID, arg.IncludePrivate, arg.Kind)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -90,7 +94,7 @@ func (q *Queries) CreateBranchProtection(ctx context.Context, arg CreateBranchPr
 const createRepoForOrg = `-- name: CreateRepoForOrg :one
 INSERT INTO repos (owner_org_id, name, description, visibility, default_branch)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, owner_user_id, name, description, visibility, default_branch, created_at, updated_at, owner_org_id
+RETURNING id, owner_user_id, name, description, visibility, default_branch, created_at, updated_at, owner_org_id, kind
 `
 
 type CreateRepoForOrgParams struct {
@@ -120,6 +124,7 @@ func (q *Queries) CreateRepoForOrg(ctx context.Context, arg CreateRepoForOrgPara
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.OwnerOrgID,
+		&i.Kind,
 	)
 	return i, err
 }
@@ -127,7 +132,7 @@ func (q *Queries) CreateRepoForOrg(ctx context.Context, arg CreateRepoForOrgPara
 const createRepoForUser = `-- name: CreateRepoForUser :one
 INSERT INTO repos (owner_user_id, name, description, visibility, default_branch)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, owner_user_id, name, description, visibility, default_branch, created_at, updated_at, owner_org_id
+RETURNING id, owner_user_id, name, description, visibility, default_branch, created_at, updated_at, owner_org_id, kind
 `
 
 type CreateRepoForUserParams struct {
@@ -157,6 +162,7 @@ func (q *Queries) CreateRepoForUser(ctx context.Context, arg CreateRepoForUserPa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.OwnerOrgID,
+		&i.Kind,
 	)
 	return i, err
 }
@@ -218,7 +224,7 @@ func (q *Queries) GetBranchProtection(ctx context.Context, arg GetBranchProtecti
 }
 
 const getRepoByID = `-- name: GetRepoByID :one
-SELECT r.id, r.owner_user_id, r.name, r.description, r.visibility, r.default_branch, r.created_at, r.updated_at, r.owner_org_id,
+SELECT r.id, r.owner_user_id, r.name, r.description, r.visibility, r.default_branch, r.created_at, r.updated_at, r.owner_org_id, r.kind,
        COALESCE(u.username, o.name) AS owner_name,
        CASE
            WHEN r.owner_user_id IS NOT NULL THEN 'user'
@@ -240,6 +246,7 @@ type GetRepoByIDRow struct {
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
 	OwnerOrgID    pgtype.Int8
+	Kind          string
 	OwnerName     string
 	OwnerKind     string
 }
@@ -257,6 +264,7 @@ func (q *Queries) GetRepoByID(ctx context.Context, id int64) (GetRepoByIDRow, er
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.OwnerOrgID,
+		&i.Kind,
 		&i.OwnerName,
 		&i.OwnerKind,
 	)
@@ -264,7 +272,7 @@ func (q *Queries) GetRepoByID(ctx context.Context, id int64) (GetRepoByIDRow, er
 }
 
 const getRepoByOrgOwnerAndName = `-- name: GetRepoByOrgOwnerAndName :one
-SELECT r.id, r.owner_user_id, r.name, r.description, r.visibility, r.default_branch, r.created_at, r.updated_at, r.owner_org_id,
+SELECT r.id, r.owner_user_id, r.name, r.description, r.visibility, r.default_branch, r.created_at, r.updated_at, r.owner_org_id, r.kind,
        o.name AS owner_name,
        'org'::text AS owner_kind
 FROM repos r
@@ -287,6 +295,7 @@ type GetRepoByOrgOwnerAndNameRow struct {
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
 	OwnerOrgID    pgtype.Int8
+	Kind          string
 	OwnerName     string
 	OwnerKind     string
 }
@@ -304,6 +313,7 @@ func (q *Queries) GetRepoByOrgOwnerAndName(ctx context.Context, arg GetRepoByOrg
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.OwnerOrgID,
+		&i.Kind,
 		&i.OwnerName,
 		&i.OwnerKind,
 	)
@@ -311,7 +321,7 @@ func (q *Queries) GetRepoByOrgOwnerAndName(ctx context.Context, arg GetRepoByOrg
 }
 
 const getRepoByUserOwnerAndName = `-- name: GetRepoByUserOwnerAndName :one
-SELECT r.id, r.owner_user_id, r.name, r.description, r.visibility, r.default_branch, r.created_at, r.updated_at, r.owner_org_id,
+SELECT r.id, r.owner_user_id, r.name, r.description, r.visibility, r.default_branch, r.created_at, r.updated_at, r.owner_org_id, r.kind,
        u.username AS owner_name,
        'user'::text AS owner_kind
 FROM repos r
@@ -334,6 +344,7 @@ type GetRepoByUserOwnerAndNameRow struct {
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
 	OwnerOrgID    pgtype.Int8
+	Kind          string
 	OwnerName     string
 	OwnerKind     string
 }
@@ -351,6 +362,7 @@ func (q *Queries) GetRepoByUserOwnerAndName(ctx context.Context, arg GetRepoByUs
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.OwnerOrgID,
+		&i.Kind,
 		&i.OwnerName,
 		&i.OwnerKind,
 	)
@@ -394,7 +406,7 @@ func (q *Queries) ListBranchProtectionsByRepo(ctx context.Context, repoID int64)
 }
 
 const listReposByOrgOwner = `-- name: ListReposByOrgOwner :many
-SELECT r.id, r.owner_user_id, r.name, r.description, r.visibility, r.default_branch, r.created_at, r.updated_at, r.owner_org_id,
+SELECT r.id, r.owner_user_id, r.name, r.description, r.visibility, r.default_branch, r.created_at, r.updated_at, r.owner_org_id, r.kind,
        o.name AS owner_name,
        'org'::text AS owner_kind
 FROM repos r
@@ -402,6 +414,7 @@ JOIN organizations o ON o.id = r.owner_org_id
 WHERE r.owner_org_id = $1
   AND o.deleted_at IS NULL
   AND ($4::bool OR r.visibility = 'public')
+  AND ($5::TEXT IS NULL OR r.kind = $5)
 ORDER BY r.created_at DESC, r.id DESC
 LIMIT $2 OFFSET $3
 `
@@ -411,6 +424,7 @@ type ListReposByOrgOwnerParams struct {
 	Limit          int32
 	Offset         int32
 	IncludePrivate bool
+	Kind           pgtype.Text
 }
 
 type ListReposByOrgOwnerRow struct {
@@ -423,6 +437,7 @@ type ListReposByOrgOwnerRow struct {
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
 	OwnerOrgID    pgtype.Int8
+	Kind          string
 	OwnerName     string
 	OwnerKind     string
 }
@@ -433,6 +448,7 @@ func (q *Queries) ListReposByOrgOwner(ctx context.Context, arg ListReposByOrgOwn
 		arg.Limit,
 		arg.Offset,
 		arg.IncludePrivate,
+		arg.Kind,
 	)
 	if err != nil {
 		return nil, err
@@ -451,6 +467,7 @@ func (q *Queries) ListReposByOrgOwner(ctx context.Context, arg ListReposByOrgOwn
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.OwnerOrgID,
+			&i.Kind,
 			&i.OwnerName,
 			&i.OwnerKind,
 		); err != nil {
@@ -465,13 +482,14 @@ func (q *Queries) ListReposByOrgOwner(ctx context.Context, arg ListReposByOrgOwn
 }
 
 const listReposByUserOwner = `-- name: ListReposByUserOwner :many
-SELECT r.id, r.owner_user_id, r.name, r.description, r.visibility, r.default_branch, r.created_at, r.updated_at, r.owner_org_id,
+SELECT r.id, r.owner_user_id, r.name, r.description, r.visibility, r.default_branch, r.created_at, r.updated_at, r.owner_org_id, r.kind,
        u.username AS owner_name,
        'user'::text AS owner_kind
 FROM repos r
 JOIN users u ON u.id = r.owner_user_id
 WHERE r.owner_user_id = $1
   AND ($4::bool OR r.visibility = 'public')
+  AND ($5::TEXT IS NULL OR r.kind = $5)
 ORDER BY r.created_at DESC, r.id DESC
 LIMIT $2 OFFSET $3
 `
@@ -481,6 +499,7 @@ type ListReposByUserOwnerParams struct {
 	Limit          int32
 	Offset         int32
 	IncludePrivate bool
+	Kind           pgtype.Text
 }
 
 type ListReposByUserOwnerRow struct {
@@ -493,6 +512,7 @@ type ListReposByUserOwnerRow struct {
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
 	OwnerOrgID    pgtype.Int8
+	Kind          string
 	OwnerName     string
 	OwnerKind     string
 }
@@ -503,6 +523,7 @@ func (q *Queries) ListReposByUserOwner(ctx context.Context, arg ListReposByUserO
 		arg.Limit,
 		arg.Offset,
 		arg.IncludePrivate,
+		arg.Kind,
 	)
 	if err != nil {
 		return nil, err
@@ -521,6 +542,7 @@ func (q *Queries) ListReposByUserOwner(ctx context.Context, arg ListReposByUserO
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.OwnerOrgID,
+			&i.Kind,
 			&i.OwnerName,
 			&i.OwnerKind,
 		); err != nil {
@@ -619,6 +641,30 @@ func (q *Queries) UpdateBranchProtection(ctx context.Context, arg UpdateBranchPr
 	return i, err
 }
 
+const updateRepoKind = `-- name: UpdateRepoKind :execrows
+UPDATE repos
+SET kind = $1, updated_at = NOW()
+WHERE id = $2 AND kind IS DISTINCT FROM $1
+`
+
+type UpdateRepoKindParams struct {
+	Kind string
+	ID   int64
+}
+
+// Called by the receive-pack post-receive observer when the default branch
+// advances. Idempotent and cheap; the index on kind='agent' means the
+// transition itself triggers an index update only when kind actually
+// changes. Validation of the agent.yml content lives in the service
+// layer (agents_config parser); this query is dumb.
+func (q *Queries) UpdateRepoKind(ctx context.Context, arg UpdateRepoKindParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateRepoKind, arg.Kind, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateRepoMeta = `-- name: UpdateRepoMeta :one
 UPDATE repos
 SET description    = $2,
@@ -626,7 +672,7 @@ SET description    = $2,
     visibility     = $4,
     updated_at     = NOW()
 WHERE id = $1
-RETURNING id, owner_user_id, name, description, visibility, default_branch, created_at, updated_at, owner_org_id
+RETURNING id, owner_user_id, name, description, visibility, default_branch, created_at, updated_at, owner_org_id, kind
 `
 
 type UpdateRepoMetaParams struct {
@@ -654,6 +700,7 @@ func (q *Queries) UpdateRepoMeta(ctx context.Context, arg UpdateRepoMetaParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.OwnerOrgID,
+		&i.Kind,
 	)
 	return i, err
 }

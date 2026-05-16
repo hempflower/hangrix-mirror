@@ -11,9 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 
-	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
@@ -54,7 +52,7 @@ func (r *PostgresRepo) Create(ctx context.Context, username, email, passwordHash
 		Role:         string(role),
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
+		if database.IsUniqueViolation(err) {
 			return nil, domain.ErrUserConflict
 		}
 		return nil, err
@@ -96,7 +94,7 @@ func (r *PostgresRepo) List(ctx context.Context, offset, limit int32) ([]*domain
 func (r *PostgresRepo) UpdateProfile(ctx context.Context, id int64, email string) (*domain.User, error) {
 	row, err := r.q.UpdateUserProfile(ctx, userdb.UpdateUserProfileParams{ID: id, Email: email})
 	if err != nil {
-		if isUniqueViolation(err) {
+		if database.IsUniqueViolation(err) {
 			return nil, domain.ErrUserConflict
 		}
 		return mapLookup(row, err)
@@ -139,9 +137,4 @@ func rowToUser(r userdb.User) *domain.User {
 		CreatedAt:    r.CreatedAt.Time,
 		UpdatedAt:    r.UpdatedAt.Time,
 	}
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation
 }

@@ -47,7 +47,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -56,6 +55,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
 	llmdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider/domain"
@@ -125,23 +126,23 @@ func (h *Handler) bearerAuth(next http.Handler) http.Handler {
 		raw := r.Header.Get("Authorization")
 		const prefix = "Bearer "
 		if !strings.HasPrefix(raw, prefix) {
-			writeError(w, http.StatusUnauthorized, "missing bearer token")
+			httpx.WriteError(w, http.StatusUnauthorized, "missing bearer token")
 			return
 		}
 		token := strings.TrimSpace(strings.TrimPrefix(raw, prefix))
 		if token == "" {
-			writeError(w, http.StatusUnauthorized, "missing bearer token")
+			httpx.WriteError(w, http.StatusUnauthorized, "missing bearer token")
 			return
 		}
 		sess, err := h.validator.ValidateSessionToken(r.Context(), token)
 		if err != nil {
 			switch {
 			case errors.Is(err, runnerdomain.ErrInvalidSessionToken):
-				writeError(w, http.StatusForbidden, "invalid session token")
+				httpx.WriteError(w, http.StatusForbidden, "invalid session token")
 			case errors.Is(err, runnerdomain.ErrSessionTokenInactive):
-				writeError(w, http.StatusForbidden, "session token revoked or session terminated")
+				httpx.WriteError(w, http.StatusForbidden, "session token revoked or session terminated")
 			default:
-				writeError(w, http.StatusInternalServerError, err.Error())
+				httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			}
 			return
 		}
@@ -157,7 +158,7 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	sess, ok := r.Context().Value(ctxKeySession).(*runnerdomain.AgentSession)
 	if !ok || sess == nil {
-		writeError(w, http.StatusUnauthorized, "missing bearer token")
+		httpx.WriteError(w, http.StatusUnauthorized, "missing bearer token")
 		return
 	}
 
@@ -165,24 +166,24 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request) {
 	body, err := readBoundedBody(r.Body)
 	if err != nil {
 		if errors.Is(err, errBodyTooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			httpx.WriteError(w, http.StatusRequestEntityTooLarge, "request body too large")
 			return
 		}
-		writeError(w, http.StatusBadRequest, "failed to read body")
+		httpx.WriteError(w, http.StatusBadRequest, "failed to read body")
 		return
 	}
 	upReq, stream, err := upstream.ParseResponsesAPIRequest(body)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if stream {
-		writeError(w, http.StatusNotImplemented, "streaming not supported by this proxy")
+		httpx.WriteError(w, http.StatusNotImplemented, "streaming not supported by this proxy")
 		h.recordUsage(r.Context(), sess, 0, upReq.Model, upstream.Usage{}, http.StatusNotImplemented, "stream not supported", r.URL.Path, time.Since(start))
 		return
 	}
 	if upReq.Model == "" {
-		writeError(w, http.StatusBadRequest, "model is required")
+		httpx.WriteError(w, http.StatusBadRequest, "model is required")
 		return
 	}
 
@@ -191,10 +192,10 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, llmdomain.ErrNoModelMatch) {
 			msg := fmt.Sprintf("no provider serves model %q", upReq.Model)
-			writeError(w, http.StatusNotFound, msg)
+			httpx.WriteError(w, http.StatusNotFound, msg)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -202,7 +203,7 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request) {
 	adapter, ok := h.registry.Lookup(prov.Type)
 	if !ok {
 		msg := fmt.Sprintf("unsupported provider type: %s", prov.Type)
-		writeError(w, http.StatusNotImplemented, msg)
+		httpx.WriteError(w, http.StatusNotImplemented, msg)
 		h.recordUsage(r.Context(), sess, prov.ID, upReq.Model, upstream.Usage{}, http.StatusNotImplemented, msg, r.URL.Path, time.Since(start))
 		return
 	}
@@ -210,7 +211,7 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request) {
 	// (4) Decrypt the sealed api key once per request.
 	apiKey, err := h.box.Decrypt(prov.ApiKey)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to decrypt provider key")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to decrypt provider key")
 		return
 	}
 
@@ -222,7 +223,7 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request) {
 	upResp, dispatchErr := adapter.Respond(r.Context(), upReq)
 	if dispatchErr != nil {
 		status, msg := dispatchStatusFor(dispatchErr)
-		writeError(w, status, msg)
+		httpx.WriteError(w, status, msg)
 		h.recordUsage(r.Context(), sess, prov.ID, upReq.Model, upstream.Usage{}, int32(status), msg, r.URL.Path, time.Since(start))
 		return
 	}
@@ -230,7 +231,7 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request) {
 	// (6) Marshal the typed Response back into Responses-API JSON.
 	outBody, err := upstream.MarshalResponsesAPIResponse(upResp)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to encode response")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to encode response")
 		h.recordUsage(r.Context(), sess, prov.ID, upReq.Model, upResp.Usage, http.StatusInternalServerError, err.Error(), r.URL.Path, time.Since(start))
 		return
 	}
@@ -313,8 +314,3 @@ func readBoundedBody(rc io.ReadCloser) ([]byte, error) {
 
 // writeError emits a compact JSON error. Matches the shape used by the
 // admin handler so frontend code doesn't need a second renderer.
-func writeError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
-}

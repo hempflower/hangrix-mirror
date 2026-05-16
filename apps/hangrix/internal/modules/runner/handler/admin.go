@@ -21,15 +21,15 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
-	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/service"
 	"github.com/hangrix/hangrix/pkg/cryptobox"
@@ -144,7 +144,7 @@ func (h *AdminHandler) createRunner(w http.ResponseWriter, r *http.Request) {
 
 	var req createRunnerReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
@@ -153,19 +153,19 @@ func (h *AdminHandler) createRunner(w http.ResponseWriter, r *http.Request) {
 		req.Visibility = string(domain.VisibilityPlatform)
 	}
 	if !runnerNameRe.MatchString(req.Name) {
-		writeError(w, http.StatusBadRequest, "invalid name")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid name")
 		return
 	}
 	v := domain.Visibility(req.Visibility)
 	if v == domain.VisibilityUser {
 		// Admin creating a user runner on behalf of someone is out of M6c
 		// scope. The user-self-service path lives in M7a.
-		writeError(w, http.StatusBadRequest, "M6c admin path only supports platform runners")
+		httpx.WriteError(w, http.StatusBadRequest, "M6c admin path only supports platform runners")
 		return
 	}
 	in := domain.CreateRunnerInput{Name: req.Name, Visibility: v, CreatedBy: caller.ID}
 	if err := in.Validate(); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -174,7 +174,7 @@ func (h *AdminHandler) createRunner(w http.ResponseWriter, r *http.Request) {
 	// shown once in the response and never again recoverable.
 	plaintext, prefix, hashed, err := service.MintEnrollToken()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	runner, err := h.repo.CreateRunner(r.Context(), in, domain.NewEnrollToken{
@@ -183,13 +183,13 @@ func (h *AdminHandler) createRunner(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, domain.ErrRunnerConflict) {
-			writeError(w, http.StatusConflict, "name already taken")
+			httpx.WriteError(w, http.StatusConflict, "name already taken")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, createRunnerResp{
+	httpx.WriteJSON(w, http.StatusCreated, createRunnerResp{
 		Runner:               toPublicRunner(runner),
 		EnrollTokenPlaintext: plaintext,
 	})
@@ -198,44 +198,44 @@ func (h *AdminHandler) createRunner(w http.ResponseWriter, r *http.Request) {
 func (h *AdminHandler) listRunners(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.repo.ListRunners(r.Context(), nil, nil)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	items := make([]publicRunner, 0, len(rows))
 	for _, p := range rows {
 		items = append(items, toPublicRunner(p))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (h *AdminHandler) getRunner(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, chi.URLParam(r, "id"))
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "id"))
 	if !ok {
 		return
 	}
 	out, err := h.repo.GetRunnerByID(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, domain.ErrRunnerNotFound) {
-			writeError(w, http.StatusNotFound, "runner not found")
+			httpx.WriteError(w, http.StatusNotFound, "runner not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublicRunner(out))
+	httpx.WriteJSON(w, http.StatusOK, toPublicRunner(out))
 }
 
 func (h *AdminHandler) disableRunner(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, chi.URLParam(r, "id"))
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "id"))
 	if !ok {
 		return
 	}
 	if err := h.repo.DisableRunner(r.Context(), id); err != nil {
 		if errors.Is(err, domain.ErrRunnerNotFound) {
-			writeError(w, http.StatusNotFound, "runner not found")
+			httpx.WriteError(w, http.StatusNotFound, "runner not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -260,8 +260,14 @@ type createSessionReq struct {
 	IssueNumber   *int32 `json:"issue_number,omitempty"`
 	WorkingBranch string `json:"working_branch,omitempty"`
 	BaseBranch    string `json:"base_branch,omitempty"`
-	BundleDir     string `json:"bundle_dir,omitempty"`
-	HostAddendum  string `json:"host_addendum,omitempty"`
+	// AgentRepo is the bundle pin in `<owner>/<name>@<sha>` form. The
+	// runner downloads the corresponding tarball from
+	// /api/runner/agent-bundles/... and mounts it read-only at
+	// /opt/hangrix/bundle. Optional on the M6c admin smoke path
+	// (admin tests can spawn against an image that bakes its own
+	// bundle); M7a session-spawn always populates this.
+	AgentRepo    string `json:"agent_repo,omitempty"`
+	HostAddendum string `json:"host_addendum,omitempty"`
 
 	// MockEvent is the first inbound event the runner pushes into the
 	// agent's stdin queue right after the seed history frame. The
@@ -288,8 +294,16 @@ type publicSession struct {
 	AgentImage    string            `json:"agent_image"`
 	WorkingBranch string            `json:"working_branch"`
 	BaseBranch    string            `json:"base_branch"`
-	BundleDir     string            `json:"bundle_dir"`
+	AgentRepo     string            `json:"agent_repo"`
 	HostAddendum  string            `json:"host_addendum"`
+	// M7a snapshot. Empty on M6c-era rows; populated on M7a session-
+	// spawn. Surfaced on the admin view so audit consumers can verify
+	// the snapshot pin from outside the runner module.
+	AgentSHA  string `json:"agent_sha,omitempty"`
+	RepoSHA   string `json:"repo_sha,omitempty"`
+	RoleKey   string `json:"role_key,omitempty"`
+	CauseKind string `json:"cause_kind,omitempty"`
+	CauseID   string `json:"cause_id,omitempty"`
 	Env           map[string]string `json:"env"`
 	ExitCode      *int32            `json:"exit_code,omitempty"`
 	ErrorMessage  string            `json:"error_message,omitempty"`
@@ -315,7 +329,7 @@ func toPublicSession(s *domain.AgentSession) publicSession {
 		AgentImage:    s.AgentImage,
 		WorkingBranch: s.WorkingBranch,
 		BaseBranch:    s.BaseBranch,
-		BundleDir:     s.BundleDir,
+		AgentRepo:     s.AgentRepo,
 		HostAddendum:  s.HostAddendum,
 		Env:           env,
 		ExitCode:      s.ExitCode,
@@ -324,6 +338,11 @@ func toPublicSession(s *domain.AgentSession) publicSession {
 		ClaimedAt:     s.ClaimedAt,
 		StartedAt:     s.StartedAt,
 		EndedAt:       s.EndedAt,
+		AgentSHA:      s.AgentSHA,
+		RepoSHA:       s.RepoSHA,
+		RoleKey:       s.RoleKey,
+		CauseKind:     s.CauseKind,
+		CauseID:       s.CauseID,
 	}
 }
 
@@ -339,37 +358,37 @@ func toPublicSession(s *domain.AgentSession) publicSession {
 func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authdomain.UserFromRequest(r)
 
-	runnerID, ok := parseID(w, chi.URLParam(r, "id"))
+	runnerID, ok := httpx.ParseID(w, chi.URLParam(r, "id"))
 	if !ok {
 		return
 	}
 	runnerRow, err := h.repo.GetRunnerByID(r.Context(), runnerID)
 	if err != nil {
 		if errors.Is(err, domain.ErrRunnerNotFound) {
-			writeError(w, http.StatusNotFound, "runner not found")
+			httpx.WriteError(w, http.StatusNotFound, "runner not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if runnerRow.Status == domain.StatusDisabled {
-		writeError(w, http.StatusBadRequest, "runner disabled")
+		httpx.WriteError(w, http.StatusBadRequest, "runner disabled")
 		return
 	}
 
 	var req createSessionReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	req.Model = strings.TrimSpace(req.Model)
 	req.AgentImage = strings.TrimSpace(req.AgentImage)
 	if req.Model == "" {
-		writeError(w, http.StatusBadRequest, "model is required")
+		httpx.WriteError(w, http.StatusBadRequest, "model is required")
 		return
 	}
 	if req.AgentImage == "" {
-		writeError(w, http.StatusBadRequest, "agent_image is required")
+		httpx.WriteError(w, http.StatusBadRequest, "agent_image is required")
 		return
 	}
 
@@ -378,12 +397,12 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 	// only the in-container agent uses it (Bearer on every platform call).
 	plaintext, prefix, hashed, err := service.MintSessionToken()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	sealed, err := h.box.Encrypt(plaintext)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -404,7 +423,7 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 		Role:               req.Role,
 		Model:              req.Model,
 		AgentImage:         req.AgentImage,
-		BundleDir:          req.BundleDir,
+		AgentRepo:          req.AgentRepo,
 		WorkingBranch:      req.WorkingBranch,
 		BaseBranch:         req.BaseBranch,
 		HostAddendum:       req.HostAddendum,
@@ -416,7 +435,7 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := h.repo.CreateSession(r.Context(), in)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -425,7 +444,7 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 	// and write them to the agent's stdin in order.
 	history := []byte(`{"kind":"history","messages":[]}`)
 	if _, err := h.repo.EnqueueInput(r.Context(), sess.ID, history); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if req.MockEvent.Name != "" {
@@ -442,7 +461,7 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 			EventName: req.MockEvent.Name,
 			Payload:   body,
 		}); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		frame := map[string]any{
@@ -452,29 +471,29 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 		}
 		frameJSON, _ := json.Marshal(frame)
 		if _, err := h.repo.EnqueueInput(r.Context(), sess.ID, frameJSON); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	}
 
-	writeJSON(w, http.StatusCreated, toPublicSession(sess))
+	httpx.WriteJSON(w, http.StatusCreated, toPublicSession(sess))
 }
 
 func (h *AdminHandler) getSession(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, chi.URLParam(r, "sid"))
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "sid"))
 	if !ok {
 		return
 	}
 	s, err := h.repo.GetSessionByID(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, domain.ErrSessionNotFound) {
-			writeError(w, http.StatusNotFound, "session not found")
+			httpx.WriteError(w, http.StatusNotFound, "session not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublicSession(s))
+	httpx.WriteJSON(w, http.StatusOK, toPublicSession(s))
 }
 
 type publicMessage struct {
@@ -491,13 +510,13 @@ type publicMessage struct {
 }
 
 func (h *AdminHandler) listMessages(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, chi.URLParam(r, "sid"))
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "sid"))
 	if !ok {
 		return
 	}
 	rows, err := h.repo.ListMessages(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	items := make([]publicMessage, 0, len(rows))
@@ -515,7 +534,7 @@ func (h *AdminHandler) listMessages(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:  m.CreatedAt,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 // ---- shared helpers ----
@@ -525,23 +544,4 @@ func rawOrNull(b []byte) json.RawMessage {
 		return json.RawMessage("null")
 	}
 	return json.RawMessage(b)
-}
-
-func parseID(w http.ResponseWriter, raw string) (int64, bool) {
-	id, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid id")
-		return 0, false
-	}
-	return id, true
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

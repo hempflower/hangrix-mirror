@@ -38,6 +38,24 @@ const (
 
 func (k OwnerKind) Valid() bool { return k == OwnerKindUser || k == OwnerKindOrg }
 
+// Kind is the content-driven repo classifier introduced in M7a.
+//
+//   KindStandard — any repo without a root agent.yml. Default for new
+//                  repos until/unless a push lands one.
+//   KindAgent    — root agent.yml on the default branch tip parses + passes
+//                  agents_config schema validation (no container/env/secret
+//                  fields, valid entry.base_prompt, etc.). The push-side
+//                  detector flips the column; the field is a cached view of
+//                  what's in the repo, not authority.
+type Kind string
+
+const (
+	KindStandard Kind = "standard"
+	KindAgent    Kind = "agent"
+)
+
+func (k Kind) Valid() bool { return k == KindStandard || k == KindAgent }
+
 // Repo is the canonical metadata for a single bare repository. OwnerName is
 // denormalized from users.username or organizations.name (which one depends
 // on OwnerKind); Store implementations populate it on read so handlers can
@@ -51,6 +69,7 @@ type Repo struct {
 	Description   string
 	Visibility    Visibility
 	DefaultBranch string
+	Kind          Kind // KindStandard / KindAgent; cached from default branch tip
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }
@@ -116,18 +135,36 @@ func MatchProtection(rules []*BranchProtection, branchName string) *BranchProtec
 	return nil
 }
 
+// PathResolver is the narrow filesystem-path contract that cross-module
+// callers depend on instead of importing the concrete *infra.Storage.
+// The runner module's agent-bundle endpoint uses it to locate the bare
+// repo on disk before invoking `git archive`. ResolvePath validates the
+// two path components against the same fs-safety regex the create flow
+// uses; an unsafe component returns a sentinel error so callers can
+// 400 / 404 rather than 500.
+type PathResolver interface {
+	ResolvePath(ownerUsername, repoName string) (string, error)
+}
+
 // Store is the persistence abstraction for repo metadata. The owner is
 // addressed as a (kind, id) pair: kind tells the implementation whether to
 // store the id in owner_user_id or owner_org_id. Implementations must map
 // the Postgres unique-violation on either (owner_user_id, name) or
 // (owner_org_id, name) to ErrRepoConflict and missing-row lookups to
 // ErrRepoNotFound.
+//
+// ListByOwner accepts an optional `kind` filter (nil = no filter; non-nil
+// = restrict to that Kind). M7a's agent admin / dispatcher uses this to
+// list only agent repos. The arg is a pointer rather than an empty-string
+// sentinel because empty-string would silently mean "all kinds" — using
+// nil makes the intent explicit and matches the sqlc.narg lookup shape.
 type Store interface {
 	Create(ctx context.Context, ownerKind OwnerKind, ownerID int64, name, description, defaultBranch string, visibility Visibility) (*Repo, error)
 	GetByID(ctx context.Context, id int64) (*Repo, error)
 	GetByOwnerAndName(ctx context.Context, ownerKind OwnerKind, ownerID int64, name string) (*Repo, error)
-	ListByOwner(ctx context.Context, ownerKind OwnerKind, ownerID int64, includePrivate bool, offset, limit int32) ([]*Repo, int64, error)
+	ListByOwner(ctx context.Context, ownerKind OwnerKind, ownerID int64, includePrivate bool, kind *Kind, offset, limit int32) ([]*Repo, int64, error)
 	Delete(ctx context.Context, id int64) error
 	UpdateMeta(ctx context.Context, id int64, description, defaultBranch string, visibility Visibility) (*Repo, error)
+	UpdateKind(ctx context.Context, id int64, kind Kind) error
 	Transfer(ctx context.Context, id int64, newOwnerKind OwnerKind, newOwnerID int64) (*Repo, error)
 }

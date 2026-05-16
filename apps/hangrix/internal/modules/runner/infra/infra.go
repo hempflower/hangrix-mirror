@@ -19,9 +19,7 @@ import (
 	"io/fs"
 	"time"
 
-	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -82,7 +80,7 @@ func (r *PostgresRepo) CreateRunner(
 		CreatedBy:         in.CreatedBy,
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
+		if database.IsUniqueViolation(err) {
 			return nil, domain.ErrRunnerConflict
 		}
 		return nil, err
@@ -280,6 +278,10 @@ func (r *PostgresRepo) CreateSession(ctx context.Context, in domain.CreateSessio
 	if in.SessionTokenSealed != "" {
 		sealedArg = pgtype.Text{String: in.SessionTokenSealed, Valid: true}
 	}
+	roleConfig := in.RoleConfig
+	if len(roleConfig) == 0 {
+		roleConfig = []byte("{}")
+	}
 	row, err := r.q.CreateSession(ctx, runnerdb.CreateSessionParams{
 		RunnerID:           runnerArg,
 		RepoID:             repoArg,
@@ -287,7 +289,7 @@ func (r *PostgresRepo) CreateSession(ctx context.Context, in domain.CreateSessio
 		Role:               in.Role,
 		Model:              in.Model,
 		AgentImage:         in.AgentImage,
-		BundleDir:          in.BundleDir,
+		AgentRepo:          in.AgentRepo,
 		WorkingBranch:      in.WorkingBranch,
 		BaseBranch:         in.BaseBranch,
 		HostAddendum:       in.HostAddendum,
@@ -296,6 +298,12 @@ func (r *PostgresRepo) CreateSession(ctx context.Context, in domain.CreateSessio
 		SessionTokenHash:   in.SessionTokenHash,
 		SessionTokenSealed: sealedArg,
 		CreatedBy:          in.CreatedBy,
+		AgentSha:           in.AgentSHA,
+		RepoSha:            in.RepoSHA,
+		RoleKey:            in.RoleKey,
+		CauseKind:          in.CauseKind,
+		CauseID:            in.CauseID,
+		RoleConfig:         roleConfig,
 	})
 	if err != nil {
 		return nil, err
@@ -440,7 +448,7 @@ func (r *PostgresRepo) AppendMessage(ctx context.Context, m *domain.Message) (*d
 			Payload:    payload,
 		})
 		if err != nil {
-			if isUniqueViolation(err) {
+			if database.IsUniqueViolation(err) {
 				continue
 			}
 			return nil, err
@@ -474,7 +482,7 @@ func (r *PostgresRepo) EnqueueInput(ctx context.Context, sessionID int64, payloa
 			Payload:   payload,
 		})
 		if err != nil {
-			if isUniqueViolation(err) {
+			if database.IsUniqueViolation(err) {
 				continue
 			}
 			return nil, err
@@ -537,11 +545,6 @@ func encodeEnv(env map[string]string) ([]byte, error) {
 	return json.Marshal(env)
 }
 
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation
-}
-
 // ---- row → domain ----
 
 func runnerFromRow(r runnerdb.Runner) *domain.Runner {
@@ -589,7 +592,7 @@ func sessionFromRow(r runnerdb.AgentSession) *domain.AgentSession {
 		Role:               r.Role,
 		Model:              r.Model,
 		AgentImage:         r.AgentImage,
-		BundleDir:          r.BundleDir,
+		AgentRepo:          r.AgentRepo,
 		WorkingBranch:      r.WorkingBranch,
 		BaseBranch:         r.BaseBranch,
 		HostAddendum:       r.HostAddendum,
@@ -599,6 +602,12 @@ func sessionFromRow(r runnerdb.AgentSession) *domain.AgentSession {
 		ErrorMessage:       r.ErrorMessage,
 		CreatedBy:          r.CreatedBy,
 		CreatedAt:          r.CreatedAt.Time,
+		AgentSHA:           r.AgentSha,
+		RepoSHA:            r.RepoSha,
+		RoleKey:            r.RoleKey,
+		CauseKind:          r.CauseKind,
+		CauseID:            r.CauseID,
+		RoleConfig:         r.RoleConfig,
 	}
 	if r.RunnerID.Valid {
 		v := r.RunnerID.Int64

@@ -67,9 +67,10 @@ WHERE id = sqlc.arg('id');
 -- name: CreateSession :one
 INSERT INTO agent_sessions (
     runner_id, repo_id, issue_number, status, role, model,
-    agent_image, bundle_dir, working_branch, base_branch,
+    agent_image, agent_repo, working_branch, base_branch,
     host_addendum, env, session_token_prefix, session_token_hash,
-    session_token_sealed, created_by
+    session_token_sealed, created_by,
+    agent_sha, repo_sha, role_key, cause_kind, cause_id, role_config
 ) VALUES (
     sqlc.narg('runner_id'),
     sqlc.narg('repo_id'),
@@ -78,7 +79,7 @@ INSERT INTO agent_sessions (
     sqlc.arg('role'),
     sqlc.arg('model'),
     sqlc.arg('agent_image'),
-    sqlc.arg('bundle_dir'),
+    sqlc.arg('agent_repo'),
     sqlc.arg('working_branch'),
     sqlc.arg('base_branch'),
     sqlc.arg('host_addendum'),
@@ -86,7 +87,13 @@ INSERT INTO agent_sessions (
     sqlc.arg('session_token_prefix'),
     sqlc.arg('session_token_hash'),
     sqlc.narg('session_token_sealed'),
-    sqlc.arg('created_by')
+    sqlc.arg('created_by'),
+    sqlc.arg('agent_sha'),
+    sqlc.arg('repo_sha'),
+    sqlc.arg('role_key'),
+    sqlc.arg('cause_kind'),
+    sqlc.arg('cause_id'),
+    sqlc.arg('role_config')::jsonb
 )
 RETURNING *;
 

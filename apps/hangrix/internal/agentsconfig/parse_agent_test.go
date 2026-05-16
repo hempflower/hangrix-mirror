@@ -1,12 +1,10 @@
-package service_test
+package agentsconfig
 
 import (
 	"errors"
 	"strings"
 	"testing"
 
-	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agents_config/domain"
-	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agents_config/service"
 )
 
 func TestParseAgentManifest_Happy(t *testing.T) {
@@ -23,7 +21,7 @@ declared_tools:
   - issue_review_vote
 `)
 
-	got, err := service.ParseAgentManifest(body)
+	got, err := ParseAgentManifest(body)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -47,7 +45,7 @@ kind: agent
 entry:
   base_prompt: prompts/x.md
 `)
-	got, err := service.ParseAgentManifest(body)
+	got, err := ParseAgentManifest(body)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -67,78 +65,78 @@ func TestParseAgentManifest_Errors(t *testing.T) {
 		{
 			name:   "bad-version",
 			body:   "version: 2\nkind: agent\nentry:\n  base_prompt: p.md\n",
-			target: domain.ErrInvalidVersion,
+			target: ErrInvalidVersion,
 		},
 		{
 			name:   "missing-version",
 			body:   "kind: agent\nentry:\n  base_prompt: p.md\n",
-			target: domain.ErrInvalidVersion,
+			target: ErrInvalidVersion,
 		},
 		{
 			name:   "bad-kind",
 			body:   "version: 1\nkind: tool\nentry:\n  base_prompt: p.md\n",
-			target: domain.ErrInvalidKind,
+			target: ErrInvalidKind,
 		},
 		{
 			name:   "missing-base-prompt",
 			body:   "version: 1\nkind: agent\nentry: {}\n",
-			target: domain.ErrMissingBasePrompt,
+			target: ErrMissingBasePrompt,
 		},
 		{
 			name:   "absolute-base-prompt",
 			body:   "version: 1\nkind: agent\nentry:\n  base_prompt: /etc/passwd\n",
-			target: domain.ErrInvalidBasePromptPath,
+			target: ErrInvalidBasePromptPath,
 		},
 		{
 			name:   "escape-base-prompt",
 			body:   "version: 1\nkind: agent\nentry:\n  base_prompt: ../etc/passwd\n",
-			target: domain.ErrInvalidBasePromptPath,
+			target: ErrInvalidBasePromptPath,
 		},
 		{
 			name:   "dot-base-prompt",
 			body:   "version: 1\nkind: agent\nentry:\n  base_prompt: ./\n",
-			target: domain.ErrInvalidBasePromptPath,
+			target: ErrInvalidBasePromptPath,
 		},
 		{
 			name:   "bad-tool-slug",
 			body:   "version: 1\nkind: agent\nentry:\n  base_prompt: x.md\ndeclared_tools:\n  - Issue-Read\n",
-			target: domain.ErrInvalidDeclaredTool,
+			target: ErrInvalidDeclaredTool,
 		},
 		{
 			name:   "empty-tool-slug",
 			body:   "version: 1\nkind: agent\nentry:\n  base_prompt: x.md\ndeclared_tools:\n  - \"\"\n",
-			target: domain.ErrInvalidDeclaredTool,
+			target: ErrInvalidDeclaredTool,
 		},
 		{
 			name:   "host-field-container",
 			body:   "version: 1\nkind: agent\nentry:\n  base_prompt: x.md\ncontainer: { image: foo }\n",
-			target: domain.ErrAgentSchemaForbiddenField,
+			target: ErrAgentSchemaForbiddenField,
 		},
 		{
 			name:   "host-field-roles",
 			body:   "version: 1\nkind: agent\nentry:\n  base_prompt: x.md\nroles: {}\n",
-			target: domain.ErrAgentSchemaForbiddenField,
+			target: ErrAgentSchemaForbiddenField,
 		},
 		{
 			name:   "host-field-llm",
 			body:   "version: 1\nkind: agent\nentry:\n  base_prompt: x.md\nllm:\n  model: foo\n",
-			target: domain.ErrAgentSchemaForbiddenField,
+			target: ErrAgentSchemaForbiddenField,
 		},
 		{
 			name:   "unknown-top-level",
 			body:   "version: 1\nkind: agent\nentry:\n  base_prompt: x.md\nweird: 1\n",
-			target: domain.ErrUnknownField,
+			target: ErrUnknownField,
 		},
 		{
 			name:   "unknown-entry-field",
 			body:   "version: 1\nkind: agent\nentry:\n  base_prompt: x.md\n  extra: 1\n",
-			target: domain.ErrUnknownField,
+			target: ErrUnknownField,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := service.ParseAgentManifest([]byte(tc.body))
+			_, err := ParseAgentManifest([]byte(tc.body))
 			if err == nil {
 				t.Fatalf("expected err, got nil")
 			}
@@ -152,7 +150,7 @@ func TestParseAgentManifest_Errors(t *testing.T) {
 func TestParseAgentManifest_EmptyBody(t *testing.T) {
 	t.Parallel()
 
-	_, err := service.ParseAgentManifest([]byte(""))
+	_, err := ParseAgentManifest([]byte(""))
 	if err == nil {
 		t.Fatalf("expected err")
 	}

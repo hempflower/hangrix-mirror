@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	"net/http"
 	"strings"
 	"time"
@@ -21,6 +22,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
+	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
+	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/binaries"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 	"github.com/hangrix/hangrix/pkg/cryptobox"
@@ -39,6 +42,13 @@ type AgentHandler struct {
 	enrollValidator domain.EnrollValidator
 	box             *cryptobox.Box
 	cfg             *config.Config
+	// Cross-module deps used only by the M7a agent-bundle endpoint.
+	// orgResolver  username/orgname → Owner{Kind,ID,Name}
+	// repos        Metadata + kind validation
+	// paths        bare-repo fsPath for git archive
+	orgResolver orgdomain.Resolver
+	repos       repodomain.Store
+	paths       repodomain.PathResolver
 }
 
 type AgentHandlerDeps struct {
@@ -46,6 +56,9 @@ type AgentHandlerDeps struct {
 	AgentValidator  domain.AgentValidator
 	EnrollValidator domain.EnrollValidator
 	Config          *config.Config
+	OrgResolver     orgdomain.Resolver
+	Repos           repodomain.Store
+	Paths           repodomain.PathResolver
 }
 
 func NewAgentHandler(deps *AgentHandlerDeps) *AgentHandler {
@@ -59,6 +72,9 @@ func NewAgentHandler(deps *AgentHandlerDeps) *AgentHandler {
 		enrollValidator: deps.EnrollValidator,
 		box:             box,
 		cfg:             deps.Config,
+		orgResolver:     deps.OrgResolver,
+		repos:           deps.Repos,
+		paths:           deps.Paths,
 	}
 }
 
@@ -80,6 +96,10 @@ func (h *AgentHandler) RegisterRoutes(r chi.Router) {
 			r.Post("/sessions/{sid}/messages", h.appendMessage)
 			r.Get("/sessions/{sid}/inputs", h.pollInputs)
 			r.Post("/sessions/{sid}/terminate", h.terminate)
+			// M7a agent bundle distribution. Trailing wildcard so
+			// chi keeps the .tar.gz suffix in {*} for parseBundleRef
+			// to validate (other formats are explicitly unsupported).
+			r.Get("/agent-bundles/{owner}/{name}/*", h.getAgentBundle)
 		})
 	})
 }
@@ -94,18 +114,18 @@ func (h *AgentHandler) requireAgentToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok, err := bearerToken(r)
 		if err != nil {
-			writeError(w, http.StatusUnauthorized, err.Error())
+			httpx.WriteError(w, http.StatusUnauthorized, err.Error())
 			return
 		}
 		runner, err := h.agentValidator.ValidateAgentToken(r.Context(), tok)
 		if err != nil {
 			switch {
 			case errors.Is(err, domain.ErrInvalidToken):
-				writeError(w, http.StatusUnauthorized, "invalid token")
+				httpx.WriteError(w, http.StatusUnauthorized, "invalid token")
 			case errors.Is(err, domain.ErrTokenInactive):
-				writeError(w, http.StatusForbidden, "token inactive")
+				httpx.WriteError(w, http.StatusForbidden, "token inactive")
 			default:
-				writeError(w, http.StatusInternalServerError, err.Error())
+				httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			}
 			return
 		}
@@ -127,9 +147,9 @@ type enrollReq struct {
 }
 
 type enrollResp struct {
-	RunnerID   int64           `json:"runner_id"`
-	RunnerName string          `json:"runner_name"`
-	AgentToken string          `json:"agent_token"`
+	RunnerID   int64            `json:"runner_id"`
+	RunnerName string           `json:"runner_name"`
+	AgentToken string           `json:"agent_token"`
 	Bootstrap  bootstrapPayload `json:"bootstrap"`
 }
 
@@ -175,12 +195,12 @@ type binaryInfo struct {
 func (h *AgentHandler) enroll(w http.ResponseWriter, r *http.Request) {
 	var req enrollReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	req.EnrollToken = strings.TrimSpace(req.EnrollToken)
 	if req.EnrollToken == "" {
-		writeError(w, http.StatusBadRequest, "enroll_token required")
+		httpx.WriteError(w, http.StatusBadRequest, "enroll_token required")
 		return
 	}
 	caps := []byte(req.Capabilities)
@@ -191,17 +211,17 @@ func (h *AgentHandler) enroll(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, domain.ErrInvalidToken):
-			writeError(w, http.StatusUnauthorized, "invalid enroll token")
+			httpx.WriteError(w, http.StatusUnauthorized, "invalid enroll token")
 		case errors.Is(err, domain.ErrEnrollUsed):
-			writeError(w, http.StatusConflict, "enrollment already redeemed")
+			httpx.WriteError(w, http.StatusConflict, "enrollment already redeemed")
 		case errors.Is(err, domain.ErrRunnerDisabled):
-			writeError(w, http.StatusForbidden, "runner disabled")
+			httpx.WriteError(w, http.StatusForbidden, "runner disabled")
 		default:
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, enrollResp{
+	httpx.WriteJSON(w, http.StatusOK, enrollResp{
 		RunnerID:   out.Runner.ID,
 		RunnerName: out.Runner.Name,
 		AgentToken: out.AgentTokenPlaintext,
@@ -212,7 +232,7 @@ func (h *AgentHandler) enroll(w http.ResponseWriter, r *http.Request) {
 // ---- bootstrap + agent binary ----
 
 func (h *AgentHandler) bootstrap(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, h.buildBootstrap(r))
+	httpx.WriteJSON(w, http.StatusOK, h.buildBootstrap(r))
 }
 
 // buildBootstrap centralises the bootstrap payload assembly so /enroll
@@ -273,7 +293,7 @@ func (h *AgentHandler) binariesInfo() map[string]binaryInfo {
 }
 
 func (h *AgentHandler) listBinaries(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"binaries": h.binariesInfo()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"binaries": h.binariesInfo()})
 }
 
 // serveBinary streams the embedded named binary. /api/runner/binaries/
@@ -284,7 +304,7 @@ func (h *AgentHandler) serveBinary(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	info, err := binaries.Get(name)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "binary not embedded")
+		httpx.WriteError(w, http.StatusNotFound, "binary not embedded")
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -301,14 +321,14 @@ type heartbeatReq struct {
 func (h *AgentHandler) heartbeat(w http.ResponseWriter, r *http.Request) {
 	runner := runnerFromContext(r.Context())
 	if runner == nil {
-		writeError(w, http.StatusInternalServerError, "no runner in context")
+		httpx.WriteError(w, http.StatusInternalServerError, "no runner in context")
 		return
 	}
 	var req heartbeatReq
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	caps := []byte(req.Capabilities)
 	if err := h.repo.UpdateRunnerHeartbeat(r.Context(), runner.ID, caps); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -317,11 +337,17 @@ func (h *AgentHandler) heartbeat(w http.ResponseWriter, r *http.Request) {
 // ---- task dispatch ----
 
 type taskResp struct {
-	SessionID     int64             `json:"session_id"`
-	AgentImage    string            `json:"agent_image"`
-	Role          string            `json:"role"`
-	Model         string            `json:"model,omitempty"`
-	BundleDir     string            `json:"bundle_dir"`
+	SessionID  int64  `json:"session_id"`
+	AgentImage string `json:"agent_image"`
+	Role       string `json:"role"`
+	Model      string `json:"model,omitempty"`
+	// AgentRepo is "<owner>/<name>@<sha>". The runner resolves the
+	// `<sha>` against its content-addressed cache; on miss it pulls
+	// the corresponding tarball from
+	// /api/runner/agent-bundles/{owner}/{name}/{sha}.tar.gz and
+	// mounts it read-only at /opt/hangrix/bundle. Empty on M6c-era
+	// admin smoke sessions that don't need a bundle.
+	AgentRepo     string            `json:"agent_repo"`
 	WorkingBranch string            `json:"working_branch"`
 	BaseBranch    string            `json:"base_branch"`
 	HostAddendum  string            `json:"host_addendum"`
@@ -338,7 +364,7 @@ type taskResp struct {
 func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 	runner := runnerFromContext(r.Context())
 	if runner == nil {
-		writeError(w, http.StatusInternalServerError, "no runner in context")
+		httpx.WriteError(w, http.StatusInternalServerError, "no runner in context")
 		return
 	}
 
@@ -352,7 +378,7 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 				p, derr := h.box.Decrypt(sess.SessionTokenSealed)
 				if derr != nil {
 					_ = h.repo.MarkSessionTerminal(r.Context(), sess.ID, domain.SessionStatusFailed, nil, "decrypt session token: "+derr.Error())
-					writeError(w, http.StatusInternalServerError, "decrypt session token")
+					httpx.WriteError(w, http.StatusInternalServerError, "decrypt session token")
 					return
 				}
 				plaintext = p
@@ -361,12 +387,12 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 			if len(sess.Env) > 0 {
 				_ = json.Unmarshal(sess.Env, &env)
 			}
-			writeJSON(w, http.StatusOK, taskResp{
+			httpx.WriteJSON(w, http.StatusOK, taskResp{
 				SessionID:     sess.ID,
 				AgentImage:    sess.AgentImage,
 				Role:          sess.Role,
 				Model:         sess.Model,
-				BundleDir:     sess.BundleDir,
+				AgentRepo:     sess.AgentRepo,
 				WorkingBranch: sess.WorkingBranch,
 				BaseBranch:    sess.BaseBranch,
 				HostAddendum:  sess.HostAddendum,
@@ -376,7 +402,7 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !errors.Is(err, domain.ErrNoPendingSession) {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		// nothing pending; tick until the deadline or context cancel.
@@ -396,16 +422,16 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 // ---- session lifecycle ----
 
 func (h *AgentHandler) markRunning(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, chi.URLParam(r, "sid"))
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "sid"))
 	if !ok {
 		return
 	}
 	if err := h.repo.MarkSessionRunning(r.Context(), id); err != nil {
 		if errors.Is(err, domain.ErrSessionStateInvalid) {
-			writeError(w, http.StatusConflict, "session not in claimed/running state")
+			httpx.WriteError(w, http.StatusConflict, "session not in claimed/running state")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -418,26 +444,26 @@ type terminateReq struct {
 }
 
 func (h *AgentHandler) terminate(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, chi.URLParam(r, "sid"))
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "sid"))
 	if !ok {
 		return
 	}
 	var req terminateReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	status := domain.SessionStatus(strings.TrimSpace(req.Status))
 	if !status.Terminal() {
-		writeError(w, http.StatusBadRequest, "status must be terminal")
+		httpx.WriteError(w, http.StatusBadRequest, "status must be terminal")
 		return
 	}
 	if err := h.repo.MarkSessionTerminal(r.Context(), id, status, req.ExitCode, req.Message); err != nil {
 		if errors.Is(err, domain.ErrSessionStateInvalid) {
-			writeError(w, http.StatusConflict, "session already terminal")
+			httpx.WriteError(w, http.StatusConflict, "session already terminal")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -472,18 +498,18 @@ type toolCallDTO struct {
 }
 
 func (h *AgentHandler) appendMessage(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, chi.URLParam(r, "sid"))
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "sid"))
 	if !ok {
 		return
 	}
 	var req appendMessageReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	kind := domain.MessageKind(strings.TrimSpace(req.Kind))
 	if !kind.Valid() {
-		writeError(w, http.StatusBadRequest, "invalid kind")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid kind")
 		return
 	}
 	m := &domain.Message{
@@ -522,7 +548,7 @@ func (h *AgentHandler) appendMessage(w http.ResponseWriter, r *http.Request) {
 		m.Payload = body
 	}
 	if _, err := h.repo.AppendMessage(r.Context(), m); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -541,7 +567,7 @@ type inputsResp struct {
 // the runner keeps the connection short rather than truly idle so it can
 // notice agent exit promptly.
 func (h *AgentHandler) pollInputs(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, chi.URLParam(r, "sid"))
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "sid"))
 	if !ok {
 		return
 	}
@@ -549,7 +575,7 @@ func (h *AgentHandler) pollInputs(w http.ResponseWriter, r *http.Request) {
 	for {
 		rows, err := h.repo.ClaimPendingInputs(r.Context(), id, 50)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if len(rows) > 0 {
@@ -557,16 +583,16 @@ func (h *AgentHandler) pollInputs(w http.ResponseWriter, r *http.Request) {
 			for _, in := range rows {
 				frames = append(frames, rawOrNull(in.Payload))
 			}
-			writeJSON(w, http.StatusOK, inputsResp{Frames: frames})
+			httpx.WriteJSON(w, http.StatusOK, inputsResp{Frames: frames})
 			return
 		}
 		if time.Now().After(deadline) {
-			writeJSON(w, http.StatusOK, inputsResp{Frames: []json.RawMessage{}})
+			httpx.WriteJSON(w, http.StatusOK, inputsResp{Frames: []json.RawMessage{}})
 			return
 		}
 		select {
 		case <-r.Context().Done():
-			writeJSON(w, http.StatusOK, inputsResp{Frames: []json.RawMessage{}})
+			httpx.WriteJSON(w, http.StatusOK, inputsResp{Frames: []json.RawMessage{}})
 			return
 		case <-time.After(pollTick):
 		}

@@ -1,4 +1,4 @@
-package service
+package agentsconfig
 
 import (
 	"bytes"
@@ -10,7 +10,6 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agents_config/domain"
 )
 
 // lockWire mirrors `.hangrix/agents.lock` on the wire. The `agents`
@@ -39,7 +38,7 @@ type lockEntryWire struct {
 // TODO(M7a Phase 2): wire a resolver that turns an unresolved AgentRef
 // into a fresh LockEntry by hitting the agent-repo's git tree. The
 // parser purposely stays I/O-free; resolution lives one layer up.
-func ParseLockFile(body []byte) (*domain.LockFile, error) {
+func ParseLockFile(body []byte) (*LockFile, error) {
 	var wire lockWire
 	dec := yaml.NewDecoder(bytes.NewReader(body))
 	dec.KnownFields(true)
@@ -47,36 +46,36 @@ func ParseLockFile(body []byte) (*domain.LockFile, error) {
 		if errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf(".hangrix/agents.lock is empty")
 		}
-		return nil, fmt.Errorf("%w: %s", domain.ErrUnknownField, err.Error())
+		return nil, fmt.Errorf("%w: %s", ErrUnknownField, err.Error())
 	}
 
 	if wire.Version != 1 {
-		return nil, fmt.Errorf("%w: got %d, want 1", domain.ErrInvalidVersion, wire.Version)
+		return nil, fmt.Errorf("%w: got %d, want 1", ErrInvalidVersion, wire.Version)
 	}
 
-	out := make(map[string]domain.LockEntry, len(wire.Agents))
+	out := make(map[string]LockEntry, len(wire.Agents))
 	for i, e := range wire.Agents {
-		ref, err := domain.ParseAgentRef(e.Ref)
+		ref, err := ParseAgentRef(e.Ref)
 		if err != nil {
 			return nil, fmt.Errorf("agents[%d].ref: %w", i, err)
 		}
 		key := LockKey(ref)
 		if _, dup := out[key]; dup {
-			return nil, fmt.Errorf("%w: %q", domain.ErrDuplicateLockKey, key)
+			return nil, fmt.Errorf("%w: %q", ErrDuplicateLockKey, key)
 		}
 		if !isValidSHA40(e.ResolvedSHA) {
-			return nil, fmt.Errorf("%w: agents[%d].resolved_sha=%q", domain.ErrInvalidLockEntry, i, e.ResolvedSHA)
+			return nil, fmt.Errorf("%w: agents[%d].resolved_sha=%q", ErrInvalidLockEntry, i, e.ResolvedSHA)
 		}
 		if e.ResolvedAt.IsZero() {
-			return nil, fmt.Errorf("%w: agents[%d].resolved_at is zero", domain.ErrInvalidLockEntry, i)
+			return nil, fmt.Errorf("%w: agents[%d].resolved_at is zero", ErrInvalidLockEntry, i)
 		}
-		out[key] = domain.LockEntry{
+		out[key] = LockEntry{
 			ResolvedSHA: e.ResolvedSHA,
 			ResolvedAt:  e.ResolvedAt.UTC(),
 		}
 	}
 
-	return &domain.LockFile{
+	return &LockFile{
 		Version: wire.Version,
 		Agents:  out,
 	}, nil
@@ -86,9 +85,9 @@ func ParseLockFile(body []byte) (*domain.LockFile, error) {
 // Keys are sorted lexicographically so the same logical lock content
 // produces byte-identical output run-to-run — git diff stays meaningful
 // and CI lock-drift checks work.
-func SerializeLockFile(lf *domain.LockFile) ([]byte, error) {
+func SerializeLockFile(lf *LockFile) ([]byte, error) {
 	if lf.Version != 1 {
-		return nil, fmt.Errorf("%w: got %d, want 1", domain.ErrInvalidVersion, lf.Version)
+		return nil, fmt.Errorf("%w: got %d, want 1", ErrInvalidVersion, lf.Version)
 	}
 
 	keys := make([]string, 0, len(lf.Agents))
@@ -101,10 +100,10 @@ func SerializeLockFile(lf *domain.LockFile) ([]byte, error) {
 	for _, k := range keys {
 		v := lf.Agents[k]
 		if !isValidSHA40(v.ResolvedSHA) {
-			return nil, fmt.Errorf("%w: %q resolved_sha=%q", domain.ErrInvalidLockEntry, k, v.ResolvedSHA)
+			return nil, fmt.Errorf("%w: %q resolved_sha=%q", ErrInvalidLockEntry, k, v.ResolvedSHA)
 		}
 		if v.ResolvedAt.IsZero() {
-			return nil, fmt.Errorf("%w: %q resolved_at is zero", domain.ErrInvalidLockEntry, k)
+			return nil, fmt.Errorf("%w: %q resolved_at is zero", ErrInvalidLockEntry, k)
 		}
 		entries = append(entries, lockEntryWire{
 			Ref:         k,
@@ -130,7 +129,7 @@ func SerializeLockFile(lf *domain.LockFile) ([]byte, error) {
 // LockKey is the canonical map key for LockFile.Agents — exactly the
 // AgentRef wire form. Centralised so callers can't accidentally
 // hand-format a key with the wrong separator.
-func LockKey(ref domain.AgentRef) string {
+func LockKey(ref AgentRef) string {
 	return ref.String()
 }
 

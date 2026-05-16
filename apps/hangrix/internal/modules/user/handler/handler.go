@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	"net/http"
 	"net/mail"
 	"strconv"
@@ -70,7 +71,7 @@ func toPublic(u *domain.User, includeEmail bool) publicUser {
 
 func (h *Handler) getMe(w http.ResponseWriter, r *http.Request) {
 	u, _ := authdomain.UserFromRequest(r)
-	writeJSON(w, http.StatusOK, toPublic(u, true))
+	httpx.WriteJSON(w, http.StatusOK, toPublic(u, true))
 }
 
 type patchMeReq struct {
@@ -84,7 +85,7 @@ func (h *Handler) patchMe(w http.ResponseWriter, r *http.Request) {
 
 	var req patchMeReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 
@@ -94,16 +95,16 @@ func (h *Handler) patchMe(w http.ResponseWriter, r *http.Request) {
 	if req.Email != nil {
 		email := strings.TrimSpace(strings.ToLower(*req.Email))
 		if _, err := mail.ParseAddress(email); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid email")
+			httpx.WriteError(w, http.StatusBadRequest, "invalid email")
 			return
 		}
 		out, err := h.users.UpdateProfile(ctx, u.ID, email)
 		if err != nil {
 			if errors.Is(err, domain.ErrUserConflict) {
-				writeError(w, http.StatusConflict, "email already in use")
+				httpx.WriteError(w, http.StatusConflict, "email already in use")
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		updated = out
@@ -111,48 +112,48 @@ func (h *Handler) patchMe(w http.ResponseWriter, r *http.Request) {
 
 	if req.NewPassword != nil {
 		if req.OldPassword == nil {
-			writeError(w, http.StatusBadRequest, "old_password required")
+			httpx.WriteError(w, http.StatusBadRequest, "old_password required")
 			return
 		}
 		if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(*req.OldPassword)); err != nil {
-			writeError(w, http.StatusUnauthorized, "old password incorrect")
+			httpx.WriteError(w, http.StatusUnauthorized, "old password incorrect")
 			return
 		}
 		if len(*req.NewPassword) < 8 {
-			writeError(w, http.StatusBadRequest, "new password must be >= 8 chars")
+			httpx.WriteError(w, http.StatusBadRequest, "new password must be >= 8 chars")
 			return
 		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(*req.NewPassword), bcrypt.DefaultCost)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "hash failed")
+			httpx.WriteError(w, http.StatusInternalServerError, "hash failed")
 			return
 		}
 		if err := h.users.UpdatePassword(ctx, u.ID, string(hash)); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	}
 
-	writeJSON(w, http.StatusOK, toPublic(updated, true))
+	httpx.WriteJSON(w, http.StatusOK, toPublic(updated, true))
 }
 
 func (h *Handler) getByID(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, chi.URLParam(r, "id"))
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "id"))
 	if !ok {
 		return
 	}
 	u, err := h.users.GetByID(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, domain.ErrUserNotFound) {
-			writeError(w, http.StatusNotFound, "user not found")
+			httpx.WriteError(w, http.StatusNotFound, "user not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	caller, _ := authdomain.UserFromRequest(r)
 	includeEmail := caller.ID == u.ID || caller.Role == domain.RoleAdmin
-	writeJSON(w, http.StatusOK, toPublic(u, includeEmail))
+	httpx.WriteJSON(w, http.StatusOK, toPublic(u, includeEmail))
 }
 
 type listResp struct {
@@ -166,12 +167,12 @@ func (h *Handler) adminList(w http.ResponseWriter, r *http.Request) {
 
 	users, err := h.users.List(ctx, offset, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	total, err := h.users.Count(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -179,7 +180,7 @@ func (h *Handler) adminList(w http.ResponseWriter, r *http.Request) {
 	for _, u := range users {
 		items = append(items, toPublic(u, true))
 	}
-	writeJSON(w, http.StatusOK, listResp{Items: items, Total: total})
+	httpx.WriteJSON(w, http.StatusOK, listResp{Items: items, Total: total})
 }
 
 type adminUpdateReq struct {
@@ -188,13 +189,13 @@ type adminUpdateReq struct {
 }
 
 func (h *Handler) adminUpdate(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, chi.URLParam(r, "id"))
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "id"))
 	if !ok {
 		return
 	}
 	var req adminUpdateReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 
@@ -206,11 +207,11 @@ func (h *Handler) adminUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.Role != nil {
 		role := domain.Role(*req.Role)
 		if !role.Valid() {
-			writeError(w, http.StatusBadRequest, "invalid role")
+			httpx.WriteError(w, http.StatusBadRequest, "invalid role")
 			return
 		}
 		if id == caller.ID && role != domain.RoleAdmin {
-			writeError(w, http.StatusBadRequest, "cannot demote yourself")
+			httpx.WriteError(w, http.StatusBadRequest, "cannot demote yourself")
 			return
 		}
 		out, err := h.users.UpdateRole(ctx, id, role)
@@ -222,7 +223,7 @@ func (h *Handler) adminUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Disabled != nil {
 		if id == caller.ID && *req.Disabled {
-			writeError(w, http.StatusBadRequest, "cannot disable yourself")
+			httpx.WriteError(w, http.StatusBadRequest, "cannot disable yourself")
 			return
 		}
 		out, err := h.users.UpdateDisabled(ctx, id, *req.Disabled)
@@ -233,20 +234,20 @@ func (h *Handler) adminUpdate(w http.ResponseWriter, r *http.Request) {
 		updated = out
 	}
 	if updated == nil {
-		writeError(w, http.StatusBadRequest, "no changes")
+		httpx.WriteError(w, http.StatusBadRequest, "no changes")
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublic(updated, true))
+	httpx.WriteJSON(w, http.StatusOK, toPublic(updated, true))
 }
 
 func (h *Handler) adminDisable(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, chi.URLParam(r, "id"))
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "id"))
 	if !ok {
 		return
 	}
 	caller, _ := authdomain.UserFromRequest(r)
 	if id == caller.ID {
-		writeError(w, http.StatusBadRequest, "cannot disable yourself")
+		httpx.WriteError(w, http.StatusBadRequest, "cannot disable yourself")
 		return
 	}
 	out, err := h.users.UpdateDisabled(r.Context(), id, true)
@@ -254,24 +255,15 @@ func (h *Handler) adminDisable(w http.ResponseWriter, r *http.Request) {
 		handleUpdateErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublic(out, true))
+	httpx.WriteJSON(w, http.StatusOK, toPublic(out, true))
 }
 
 func handleUpdateErr(w http.ResponseWriter, err error) {
 	if errors.Is(err, domain.ErrUserNotFound) {
-		writeError(w, http.StatusNotFound, "user not found")
+		httpx.WriteError(w, http.StatusNotFound, "user not found")
 		return
 	}
-	writeError(w, http.StatusInternalServerError, err.Error())
-}
-
-func parseID(w http.ResponseWriter, raw string) (int64, bool) {
-	id, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid id")
-		return 0, false
-	}
-	return id, true
+	httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 }
 
 func parsePaging(r *http.Request) (limit, offset int32) {
@@ -287,14 +279,4 @@ func parsePaging(r *http.Request) (limit, offset int32) {
 		}
 	}
 	return
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

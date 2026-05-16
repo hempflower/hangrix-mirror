@@ -1,4 +1,4 @@
-package service
+package agentsconfig
 
 import (
 	"bytes"
@@ -9,7 +9,6 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agents_config/domain"
 )
 
 // hostWire mirrors `.hangrix/agents.yml` on the wire. Anything not
@@ -69,7 +68,7 @@ type scopeWire struct {
 // that. Keeping the two passes distinct lets callers tell "user wrote
 // 'collaborators' explicitly" apart from "user wrote nothing" if they
 // ever need to.
-func ParseHostConfig(body []byte) (*domain.HostConfig, error) {
+func ParseHostConfig(body []byte) (*HostConfig, error) {
 	// Duplicate role-key scan first. yaml.v3 KnownFields(true) also
 	// rejects duplicates but does so with a generic "mapping key X
 	// already defined" message; promoting the role-key case to its
@@ -86,22 +85,22 @@ func ParseHostConfig(body []byte) (*domain.HostConfig, error) {
 		if errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf(".hangrix/agents.yml is empty")
 		}
-		return nil, fmt.Errorf("%w: %s", domain.ErrUnknownField, err.Error())
+		return nil, fmt.Errorf("%w: %s", ErrUnknownField, err.Error())
 	}
 
 	if wire.Version != 1 {
-		return nil, fmt.Errorf("%w: got %d, want 1", domain.ErrInvalidVersion, wire.Version)
+		return nil, fmt.Errorf("%w: got %d, want 1", ErrInvalidVersion, wire.Version)
 	}
 
 	if wire.Container == nil {
-		return nil, fmt.Errorf("%w: container block missing", domain.ErrContainerSourceConflict)
+		return nil, fmt.Errorf("%w: container block missing", ErrContainerSourceConflict)
 	}
 	container, err := buildContainer(wire.Container)
 	if err != nil {
 		return nil, err
 	}
 
-	var teamLLM *domain.LLMConfig
+	var teamLLM *LLMConfig
 	if wire.LLM != nil {
 		llm, err := buildLLM(wire.LLM, "llm")
 		if err != nil {
@@ -111,13 +110,13 @@ func ParseHostConfig(body []byte) (*domain.HostConfig, error) {
 	}
 
 	if len(wire.Roles) == 0 {
-		return nil, domain.ErrEmptyRoles
+		return nil, ErrEmptyRoles
 	}
 
-	roles := make(map[string]*domain.Role, len(wire.Roles))
+	roles := make(map[string]*Role, len(wire.Roles))
 	for key, rw := range wire.Roles {
 		if !isValidRoleKey(key) {
-			return nil, fmt.Errorf("%w: %q", domain.ErrInvalidRoleKey, key)
+			return nil, fmt.Errorf("%w: %q", ErrInvalidRoleKey, key)
 		}
 		if rw == nil {
 			return nil, fmt.Errorf("roles.%s: empty role body", key)
@@ -129,7 +128,7 @@ func ParseHostConfig(body []byte) (*domain.HostConfig, error) {
 		roles[key] = role
 	}
 
-	return &domain.HostConfig{
+	return &HostConfig{
 		Version:   wire.Version,
 		Container: container,
 		LLM:       teamLLM,
@@ -141,23 +140,23 @@ func ParseHostConfig(body []byte) (*domain.HostConfig, error) {
 //
 // image/build is a mutual-exclusive pair: exactly one set. The other
 // fields (env, secrets, volumes) are each independently validated.
-func buildContainer(w *containerWire) (domain.Container, error) {
-	var c domain.Container
+func buildContainer(w *containerWire) (Container, error) {
+	var c Container
 
 	hasImage := w.Image != ""
 	hasBuild := w.Build != nil
 	if hasImage == hasBuild {
 		// Both true OR both false -> conflict.
-		return c, fmt.Errorf("%w: image=%t build=%t", domain.ErrContainerSourceConflict, hasImage, hasBuild)
+		return c, fmt.Errorf("%w: image=%t build=%t", ErrContainerSourceConflict, hasImage, hasBuild)
 	}
 	if hasImage {
 		c.Image = w.Image
 	}
 	if hasBuild {
 		if w.Build.Dockerfile == "" {
-			return c, fmt.Errorf("%w: build.dockerfile is required", domain.ErrContainerSourceConflict)
+			return c, fmt.Errorf("%w: build.dockerfile is required", ErrContainerSourceConflict)
 		}
-		c.Build = &domain.Build{
+		c.Build = &Build{
 			Dockerfile: w.Build.Dockerfile,
 			Context:    w.Build.Context,
 			Args:       w.Build.Args,
@@ -166,27 +165,27 @@ func buildContainer(w *containerWire) (domain.Container, error) {
 
 	for k := range w.Env {
 		if !isValidEnvKey(k) {
-			return c, fmt.Errorf("%w: %q", domain.ErrInvalidEnvKey, k)
+			return c, fmt.Errorf("%w: %q", ErrInvalidEnvKey, k)
 		}
 	}
 	c.Env = w.Env
 
 	for _, name := range w.Secrets {
 		if !isValidEnvKey(name) {
-			return c, fmt.Errorf("%w: %q", domain.ErrInvalidSecretName, name)
+			return c, fmt.Errorf("%w: %q", ErrInvalidSecretName, name)
 		}
 	}
 	c.Secrets = w.Secrets
 
-	c.Volumes = make([]domain.Volume, 0, len(w.Volumes))
+	c.Volumes = make([]Volume, 0, len(w.Volumes))
 	for i, v := range w.Volumes {
 		if v.Name == "" {
-			return c, fmt.Errorf("%w: volumes[%d].name empty", domain.ErrInvalidVolumeMount, i)
+			return c, fmt.Errorf("%w: volumes[%d].name empty", ErrInvalidVolumeMount, i)
 		}
 		if !isValidMountPath(v.Mount) {
-			return c, fmt.Errorf("%w: volumes[%d].mount=%q", domain.ErrInvalidVolumeMount, i, v.Mount)
+			return c, fmt.Errorf("%w: volumes[%d].mount=%q", ErrInvalidVolumeMount, i, v.Mount)
 		}
-		c.Volumes = append(c.Volumes, domain.Volume{Name: v.Name, Mount: v.Mount})
+		c.Volumes = append(c.Volumes, Volume{Name: v.Name, Mount: v.Mount})
 	}
 
 	return c, nil
@@ -195,20 +194,20 @@ func buildContainer(w *containerWire) (domain.Container, error) {
 // buildLLM validates an llm block and lifts it. ctx names the parent
 // path ("llm" / "roles.backend.llm") so the error message can pinpoint
 // the offending block.
-func buildLLM(w *llmWire, ctx string) (*domain.LLMConfig, error) {
+func buildLLM(w *llmWire, ctx string) (*LLMConfig, error) {
 	if w.Model == "" {
-		return nil, fmt.Errorf("%w: %s.model empty", domain.ErrInvalidModel, ctx)
+		return nil, fmt.Errorf("%w: %s.model empty", ErrInvalidModel, ctx)
 	}
 	if w.MaxTokens < 0 {
-		return nil, fmt.Errorf("%w: %s.max_tokens=%d (must be >= 0)", domain.ErrInvalidLLMParam, ctx, w.MaxTokens)
+		return nil, fmt.Errorf("%w: %s.max_tokens=%d (must be >= 0)", ErrInvalidLLMParam, ctx, w.MaxTokens)
 	}
 	if w.Temperature < 0 || w.Temperature > 2 {
-		return nil, fmt.Errorf("%w: %s.temperature=%v (must be in [0,2])", domain.ErrInvalidLLMParam, ctx, w.Temperature)
+		return nil, fmt.Errorf("%w: %s.temperature=%v (must be in [0,2])", ErrInvalidLLMParam, ctx, w.Temperature)
 	}
 	if w.TopP < 0 || w.TopP > 1 {
-		return nil, fmt.Errorf("%w: %s.top_p=%v (must be in [0,1])", domain.ErrInvalidLLMParam, ctx, w.TopP)
+		return nil, fmt.Errorf("%w: %s.top_p=%v (must be in [0,1])", ErrInvalidLLMParam, ctx, w.TopP)
 	}
-	return &domain.LLMConfig{
+	return &LLMConfig{
 		Model:       w.Model,
 		MaxTokens:   w.MaxTokens,
 		Temperature: w.Temperature,
@@ -219,40 +218,40 @@ func buildLLM(w *llmWire, ctx string) (*domain.LLMConfig, error) {
 // buildRole validates and lifts one role. The role key is passed in so
 // error messages can include it without the caller re-wrapping every
 // returned error.
-func buildRole(key string, w *roleWire) (*domain.Role, error) {
-	ref, err := domain.ParseAgentRef(w.Agent)
+func buildRole(key string, w *roleWire) (*Role, error) {
+	ref, err := ParseAgentRef(w.Agent)
 	if err != nil {
 		return nil, fmt.Errorf("roles.%s.agent: %w", key, err)
 	}
 
 	if len(w.Triggers) == 0 {
-		return nil, fmt.Errorf("roles.%s.triggers: %w", key, domain.ErrEmptyTriggers)
+		return nil, fmt.Errorf("roles.%s.triggers: %w", key, ErrEmptyTriggers)
 	}
 	for i, t := range w.Triggers {
-		if !domain.IsValidTrigger(t) {
-			return nil, fmt.Errorf("roles.%s.triggers[%d]=%q: %w", key, i, t, domain.ErrUnknownTrigger)
+		if !IsValidTrigger(t) {
+			return nil, fmt.Errorf("roles.%s.triggers[%d]=%q: %w", key, i, t, ErrUnknownTrigger)
 		}
 	}
 
 	if w.Prompt != "" && w.PromptFile != "" {
-		return nil, fmt.Errorf("roles.%s: %w", key, domain.ErrPromptMutuallyExclusive)
+		return nil, fmt.Errorf("roles.%s: %w", key, ErrPromptMutuallyExclusive)
 	}
 	if w.PromptFile != "" && !strings.HasPrefix(w.PromptFile, ".hangrix/prompts/") {
-		return nil, fmt.Errorf("roles.%s.prompt_file=%q: %w", key, w.PromptFile, domain.ErrInvalidPromptFilePath)
+		return nil, fmt.Errorf("roles.%s.prompt_file=%q: %w", key, w.PromptFile, ErrInvalidPromptFilePath)
 	}
 	if w.PromptFile != "" && strings.Contains(w.PromptFile, "..") {
 		// Even with the required prefix, a `..` segment could let
 		// an operator escape the prompts directory; treat that as a
 		// separate sentinel violation rather than collapsing it.
-		return nil, fmt.Errorf("roles.%s.prompt_file=%q: %w", key, w.PromptFile, domain.ErrInvalidPromptFilePath)
+		return nil, fmt.Errorf("roles.%s.prompt_file=%q: %w", key, w.PromptFile, ErrInvalidPromptFilePath)
 	}
 
-	mentionBy := domain.MentionBy(w.MentionBy)
-	if w.MentionBy != "" && !domain.IsValidMentionBy(mentionBy) {
-		return nil, fmt.Errorf("roles.%s.mention_by=%q: %w", key, w.MentionBy, domain.ErrInvalidMentionBy)
+	mentionBy := MentionBy(w.MentionBy)
+	if w.MentionBy != "" && !IsValidMentionBy(mentionBy) {
+		return nil, fmt.Errorf("roles.%s.mention_by=%q: %w", key, w.MentionBy, ErrInvalidMentionBy)
 	}
 
-	var roleLLM *domain.LLMConfig
+	var roleLLM *LLMConfig
 	if w.LLM != nil {
 		llm, err := buildLLM(w.LLM, "roles."+key+".llm")
 		if err != nil {
@@ -261,12 +260,12 @@ func buildRole(key string, w *roleWire) (*domain.Role, error) {
 		roleLLM = llm
 	}
 
-	var scope domain.Scope
+	var scope Scope
 	if w.Scope != nil {
 		scope.Paths = w.Scope.Paths
 	}
 
-	return &domain.Role{
+	return &Role{
 		Agent:      ref,
 		Triggers:   w.Triggers,
 		Can:        w.Can,
@@ -360,7 +359,7 @@ func rejectDuplicateRoleKeys(body []byte) error {
 		for j := 0; j+1 < len(rolesNode.Content); j += 2 {
 			k := rolesNode.Content[j].Value
 			if _, dup := seen[k]; dup {
-				return fmt.Errorf("%w: %q", domain.ErrDuplicateRoleKey, k)
+				return fmt.Errorf("%w: %q", ErrDuplicateRoleKey, k)
 			}
 			seen[k] = struct{}{}
 		}

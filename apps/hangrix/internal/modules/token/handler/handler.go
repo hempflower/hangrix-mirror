@@ -8,8 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
+
+	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 
 	"github.com/go-chi/chi/v5"
 
@@ -87,7 +88,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 
 	var req createReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 
@@ -100,7 +101,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if req.ExpiresAt != nil && *req.ExpiresAt != "" {
 		t, err := time.Parse(time.RFC3339, *req.ExpiresAt)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid expires_at (RFC3339 required)")
+			httpx.WriteError(w, http.StatusBadRequest, "invalid expires_at (RFC3339 required)")
 			return
 		}
 		expiresAt = &t
@@ -110,16 +111,16 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, domain.ErrInvalidName):
-			writeError(w, http.StatusBadRequest, "invalid name (1-64 chars)")
+			httpx.WriteError(w, http.StatusBadRequest, "invalid name (1-64 chars)")
 		case errors.Is(err, domain.ErrInvalidScope):
-			writeError(w, http.StatusBadRequest, "invalid scope")
+			httpx.WriteError(w, http.StatusBadRequest, "invalid scope")
 		default:
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		}
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, createResp{
+	httpx.WriteJSON(w, http.StatusCreated, createResp{
 		Token:     toPublic(created.Token),
 		Plaintext: created.Plaintext,
 	})
@@ -133,48 +134,29 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authdomain.UserFromRequest(r)
 	rows, err := h.store.ListByUser(r.Context(), caller.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	items := make([]publicToken, 0, len(rows))
 	for _, t := range rows {
 		items = append(items, toPublic(t))
 	}
-	writeJSON(w, http.StatusOK, listResp{Items: items})
+	httpx.WriteJSON(w, http.StatusOK, listResp{Items: items})
 }
 
 func (h *Handler) revoke(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authdomain.UserFromRequest(r)
-	id, ok := parseID(w, chi.URLParam(r, "id"))
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "id"))
 	if !ok {
 		return
 	}
 	if err := h.store.Revoke(r.Context(), id, caller.ID); err != nil {
 		if errors.Is(err, domain.ErrTokenNotFound) {
-			writeError(w, http.StatusNotFound, "token not found")
+			httpx.WriteError(w, http.StatusNotFound, "token not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func parseID(w http.ResponseWriter, raw string) (int64, bool) {
-	id, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid id")
-		return 0, false
-	}
-	return id, true
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

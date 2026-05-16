@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	"net/http"
 	"regexp"
 	"strings"
@@ -126,18 +127,18 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 
 	var req createReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	req.DisplayName = strings.TrimSpace(req.DisplayName)
 	req.Description = strings.TrimSpace(req.Description)
 	if !orgNameRe.MatchString(req.Name) {
-		writeError(w, http.StatusBadRequest, "invalid name")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid name")
 		return
 	}
 	if domain.IsReservedName(req.Name) {
-		writeError(w, http.StatusConflict, "name is reserved")
+		httpx.WriteError(w, http.StatusConflict, "name is reserved")
 		return
 	}
 
@@ -146,30 +147,30 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	// inside organizations is enforced by the DB; cross-table uniqueness
 	// (users ∪ orgs) we enforce here.
 	if _, err := h.users.GetByUsername(ctx, req.Name); err == nil {
-		writeError(w, http.StatusConflict, "name already taken")
+		httpx.WriteError(w, http.StatusConflict, "name already taken")
 		return
 	} else if !errors.Is(err, userdomain.ErrUserNotFound) {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	org, err := h.orgs.Create(ctx, req.Name, req.DisplayName, req.Description, caller.ID)
 	if err != nil {
 		if errors.Is(err, domain.ErrOrgConflict) {
-			writeError(w, http.StatusConflict, "name already taken")
+			httpx.WriteError(w, http.StatusConflict, "name already taken")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	// Creator becomes the bootstrap owner. If membership write fails the
 	// org row is orphaned with zero members — we surface a 500; admin can
 	// recover the row out-of-band.
 	if err := h.orgs.AddMember(ctx, org.ID, caller.ID, caller.ID, domain.RoleOwner); err != nil {
-		writeError(w, http.StatusInternalServerError, "seed owner: "+err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, "seed owner: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, toPublic(org))
+	httpx.WriteJSON(w, http.StatusCreated, toPublic(org))
 }
 
 func (h *Handler) getOne(w http.ResponseWriter, r *http.Request) {
@@ -178,10 +179,10 @@ func (h *Handler) getOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.canRead(r, org) {
-		writeError(w, http.StatusForbidden, "forbidden")
+		httpx.WriteError(w, http.StatusForbidden, "forbidden")
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublic(org))
+	httpx.WriteJSON(w, http.StatusOK, toPublic(org))
 }
 
 type patchReq struct {
@@ -196,13 +197,13 @@ func (h *Handler) patchOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.canManage(r, org) {
-		writeError(w, http.StatusForbidden, "forbidden")
+		httpx.WriteError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 
 	var req patchReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 
@@ -220,10 +221,10 @@ func (h *Handler) patchOne(w http.ResponseWriter, r *http.Request) {
 	}
 	updated, err := h.orgs.UpdateMeta(r.Context(), org.ID, displayName, description, avatarURL)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublic(updated))
+	httpx.WriteJSON(w, http.StatusOK, toPublic(updated))
 }
 
 func (h *Handler) deleteOne(w http.ResponseWriter, r *http.Request) {
@@ -232,11 +233,11 @@ func (h *Handler) deleteOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.canManage(r, org) {
-		writeError(w, http.StatusForbidden, "forbidden")
+		httpx.WriteError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	if err := h.orgs.SoftDelete(r.Context(), org.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -248,19 +249,19 @@ func (h *Handler) listForCaller(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authdomain.UserFromRequest(r)
 	memberOf := r.URL.Query().Get("member_of")
 	if memberOf != "me" {
-		writeError(w, http.StatusBadRequest, "only member_of=me is supported")
+		httpx.WriteError(w, http.StatusBadRequest, "only member_of=me is supported")
 		return
 	}
 	orgs, err := h.orgs.ListOrgsForUser(r.Context(), caller.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	items := make([]publicOrg, 0, len(orgs))
 	for _, o := range orgs {
 		items = append(items, toPublic(o))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 // listForUser serves `GET /api/users/{username}/orgs` — used on the user
@@ -269,28 +270,28 @@ func (h *Handler) listForCaller(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) listForUser(w http.ResponseWriter, r *http.Request) {
 	username := chi.URLParam(r, "username")
 	if !orgNameRe.MatchString(username) {
-		writeError(w, http.StatusBadRequest, "invalid username")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid username")
 		return
 	}
 	target, err := h.users.GetByUsername(r.Context(), username)
 	if err != nil {
 		if errors.Is(err, userdomain.ErrUserNotFound) {
-			writeError(w, http.StatusNotFound, "user not found")
+			httpx.WriteError(w, http.StatusNotFound, "user not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	orgs, err := h.orgs.ListOrgsForUser(r.Context(), target.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	items := make([]publicOrg, 0, len(orgs))
 	for _, o := range orgs {
 		items = append(items, toPublic(o))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 // ---- members ----
@@ -301,19 +302,19 @@ func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.canRead(r, org) {
-		writeError(w, http.StatusForbidden, "forbidden")
+		httpx.WriteError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	members, err := h.orgs.ListMembers(r.Context(), org.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	out := make([]publicMember, 0, len(members))
 	for _, m := range members {
 		out = append(out, toPublicMember(m))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": out})
 }
 
 type addMemberReq struct {
@@ -327,18 +328,18 @@ func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.canManage(r, org) {
-		writeError(w, http.StatusForbidden, "forbidden")
+		httpx.WriteError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 
 	var req addMemberReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	req.Username = strings.TrimSpace(req.Username)
 	if !orgNameRe.MatchString(req.Username) {
-		writeError(w, http.StatusBadRequest, "invalid username")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid username")
 		return
 	}
 	role := domain.Role(strings.TrimSpace(req.Role))
@@ -346,35 +347,35 @@ func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {
 		role = domain.RoleMember
 	}
 	if !role.Valid() {
-		writeError(w, http.StatusBadRequest, "invalid role")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid role")
 		return
 	}
 
 	target, err := h.users.GetByUsername(r.Context(), req.Username)
 	if err != nil {
 		if errors.Is(err, userdomain.ErrUserNotFound) {
-			writeError(w, http.StatusNotFound, "user not found")
+			httpx.WriteError(w, http.StatusNotFound, "user not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	caller, _ := authdomain.UserFromRequest(r)
 	if err := h.orgs.AddMember(r.Context(), org.ID, target.ID, caller.ID, role); err != nil {
 		if errors.Is(err, domain.ErrMemberConflict) {
-			writeError(w, http.StatusConflict, "already a member")
+			httpx.WriteError(w, http.StatusConflict, "already a member")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	m, err := h.orgs.GetMember(r.Context(), org.ID, target.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, toPublicMember(m))
+	httpx.WriteJSON(w, http.StatusCreated, toPublicMember(m))
 }
 
 type patchMemberReq struct {
@@ -387,7 +388,7 @@ func (h *Handler) patchMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.canManage(r, org) {
-		writeError(w, http.StatusForbidden, "forbidden")
+		httpx.WriteError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	target, ok := h.loadMemberUser(w, r)
@@ -397,12 +398,12 @@ func (h *Handler) patchMember(w http.ResponseWriter, r *http.Request) {
 
 	var req patchMemberReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	role := domain.Role(strings.TrimSpace(req.Role))
 	if !role.Valid() {
-		writeError(w, http.StatusBadRequest, "invalid role")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid role")
 		return
 	}
 
@@ -412,34 +413,34 @@ func (h *Handler) patchMember(w http.ResponseWriter, r *http.Request) {
 	current, err := h.orgs.GetMember(r.Context(), org.ID, target.ID)
 	if err != nil {
 		if errors.Is(err, domain.ErrMemberNotFound) {
-			writeError(w, http.StatusNotFound, "member not found")
+			httpx.WriteError(w, http.StatusNotFound, "member not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if current.Role == domain.RoleOwner && role != domain.RoleOwner {
 		owners, err := h.orgs.CountOwners(r.Context(), org.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if owners <= 1 {
-			writeError(w, http.StatusConflict, "cannot demote the last owner")
+			httpx.WriteError(w, http.StatusConflict, "cannot demote the last owner")
 			return
 		}
 	}
 
 	if err := h.orgs.UpdateMemberRole(r.Context(), org.ID, target.ID, role); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	m, err := h.orgs.GetMember(r.Context(), org.ID, target.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublicMember(m))
+	httpx.WriteJSON(w, http.StatusOK, toPublicMember(m))
 }
 
 func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
@@ -455,32 +456,32 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 	// A user may always remove themselves; otherwise it's an owner-only
 	// operation.
 	if caller.ID != target.ID && !h.canManage(r, org) {
-		writeError(w, http.StatusForbidden, "forbidden")
+		httpx.WriteError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 
 	current, err := h.orgs.GetMember(r.Context(), org.ID, target.ID)
 	if err != nil {
 		if errors.Is(err, domain.ErrMemberNotFound) {
-			writeError(w, http.StatusNotFound, "member not found")
+			httpx.WriteError(w, http.StatusNotFound, "member not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if current.Role == domain.RoleOwner {
 		owners, err := h.orgs.CountOwners(r.Context(), org.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if owners <= 1 {
-			writeError(w, http.StatusConflict, "cannot remove the last owner")
+			httpx.WriteError(w, http.StatusConflict, "cannot remove the last owner")
 			return
 		}
 	}
 	if err := h.orgs.RemoveMember(r.Context(), org.ID, target.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -491,16 +492,16 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) loadOrgByName(w http.ResponseWriter, r *http.Request) (*domain.Org, bool) {
 	name := chi.URLParam(r, "name")
 	if !orgNameRe.MatchString(name) {
-		writeError(w, http.StatusBadRequest, "invalid name")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid name")
 		return nil, false
 	}
 	org, err := h.orgs.GetByName(r.Context(), name)
 	if err != nil {
 		if errors.Is(err, domain.ErrOrgNotFound) {
-			writeError(w, http.StatusNotFound, "org not found")
+			httpx.WriteError(w, http.StatusNotFound, "org not found")
 			return nil, false
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return nil, false
 	}
 	return org, true
@@ -509,16 +510,16 @@ func (h *Handler) loadOrgByName(w http.ResponseWriter, r *http.Request) (*domain
 func (h *Handler) loadMemberUser(w http.ResponseWriter, r *http.Request) (*userdomain.User, bool) {
 	username := chi.URLParam(r, "username")
 	if !orgNameRe.MatchString(username) {
-		writeError(w, http.StatusBadRequest, "invalid username")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid username")
 		return nil, false
 	}
 	u, err := h.users.GetByUsername(r.Context(), username)
 	if err != nil {
 		if errors.Is(err, userdomain.ErrUserNotFound) {
-			writeError(w, http.StatusNotFound, "user not found")
+			httpx.WriteError(w, http.StatusNotFound, "user not found")
 			return nil, false
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return nil, false
 	}
 	return u, true
@@ -560,14 +561,4 @@ func (h *Handler) membership(ctx context.Context, orgID, userID int64) (domain.R
 		return "", false, err
 	}
 	return m.Role, true, nil
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

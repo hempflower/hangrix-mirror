@@ -1,4 +1,4 @@
-package domain
+package agentsconfig
 
 // HostConfig models the parsed `.hangrix/agents.yml`. It is the single
 // source of truth for which roles a host repo runs, in what container,

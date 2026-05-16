@@ -1,9 +1,8 @@
-package domain_test
+package agentsconfig
 
 import (
 	"testing"
 
-	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agents_config/domain"
 )
 
 func TestIsValidTrigger(t *testing.T) {
@@ -19,7 +18,7 @@ func TestIsValidTrigger(t *testing.T) {
 		"ci.status_changed",
 	}
 	for _, s := range valid {
-		if !domain.IsValidTrigger(s) {
+		if !IsValidTrigger(s) {
 			t.Fatalf("expected %q valid", s)
 		}
 	}
@@ -32,7 +31,7 @@ func TestIsValidTrigger(t *testing.T) {
 		"issue.comment", // not the full path
 	}
 	for _, s := range invalid {
-		if domain.IsValidTrigger(s) {
+		if IsValidTrigger(s) {
 			t.Fatalf("expected %q invalid", s)
 		}
 	}
@@ -41,20 +40,20 @@ func TestIsValidTrigger(t *testing.T) {
 func TestIsValidMentionBy(t *testing.T) {
 	t.Parallel()
 
-	valid := []domain.MentionBy{
-		domain.MentionByOwner,
-		domain.MentionByCollaborators,
-		domain.MentionByAnyone,
+	valid := []MentionBy{
+		MentionByOwner,
+		MentionByCollaborators,
+		MentionByAnyone,
 	}
 	for _, v := range valid {
-		if !domain.IsValidMentionBy(v) {
+		if !IsValidMentionBy(v) {
 			t.Fatalf("expected %q valid", v)
 		}
 	}
 
-	invalid := []domain.MentionBy{"", "OWNER", "team", "self"}
+	invalid := []MentionBy{"", "OWNER", "team", "self"}
 	for _, v := range invalid {
-		if domain.IsValidMentionBy(v) {
+		if IsValidMentionBy(v) {
 			t.Fatalf("expected %q invalid", v)
 		}
 	}

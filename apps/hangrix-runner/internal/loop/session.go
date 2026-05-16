@@ -22,6 +22,17 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix-runner/internal/orchestrator"
 )
 
+// BundleResolver turns the task's `AgentRepo` pin (a "<owner>/<name>@<sha>"
+// triple) into an absolute host directory the orchestrator can bind-mount
+// read-only into the agent container at /opt/hangrix/bundle. The
+// resolver owns the content-addressed cache + the platform fetch when a
+// sha is missing locally. Empty input returns ("", nil) so M6c smoke
+// sessions that don't carry an agent bundle (the image bakes one) still
+// work.
+type BundleResolver interface {
+	Resolve(ctx context.Context, agentRepo string) (hostDir string, err error)
+}
+
 // SessionDriver runs one claimed session end-to-end:
 //
 //	1. Resolve host paths (workdir, addendum file, bundle).
@@ -35,6 +46,7 @@ import (
 type SessionDriver struct {
 	Client       *client.Client
 	Orchestrator orchestrator.Orchestrator
+	Bundles      BundleResolver
 
 	// Host paths the orchestrator binds into the container.
 	AgentBinaryPath string
@@ -71,11 +83,23 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 
 	env := buildAgentEnv(task, d.LLMEndpoint, d.MCPEndpoint)
 
+	hostBundleDir := ""
+	if task.AgentRepo != "" {
+		if d.Bundles == nil {
+			return -1, d.fail(ctx, task.SessionID, fmt.Errorf("bundle resolver not configured but task pins agent_repo=%s", task.AgentRepo))
+		}
+		path, err := d.Bundles.Resolve(ctx, task.AgentRepo)
+		if err != nil {
+			return -1, d.fail(ctx, task.SessionID, fmt.Errorf("resolve bundle %s: %w", task.AgentRepo, err))
+		}
+		hostBundleDir = path
+	}
+
 	otask := orchestrator.Task{
 		SessionID:        task.SessionID,
 		Image:            task.AgentImage,
 		AgentBinaryPath:  d.AgentBinaryPath,
-		HostBundleDir:    task.BundleDir,
+		HostBundleDir:    hostBundleDir,
 		HostAddendumPath: hostAddendumPath,
 		HostWorkdir:      hostWorkdir,
 		Env:              env,
