@@ -43,6 +43,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/httpx"
 )
 
 // Message is the agent's flat in-memory message shape. Mirrors the
@@ -140,8 +142,10 @@ func New(endpoint, token string) *Client {
 		token:    token,
 		// 5-minute non-stream cap matches the proxy's upstreamTimeout, so a
 		// timeout we see here means the proxy timed out too — we won't be
-		// "stealing" a still-running upstream request.
-		http:      &http.Client{Timeout: 5 * time.Minute},
+		// "stealing" a still-running upstream request. httpx.NewClient
+		// honours HANGRIX_INSECURE_SKIP_TLS_VERIFY for the missing-CA
+		// escape hatch.
+		http:      httpx.NewClient(5 * time.Minute),
 		userAgent: "hangrix-agent/0.1",
 	}
 }

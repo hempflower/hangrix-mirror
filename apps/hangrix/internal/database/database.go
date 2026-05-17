@@ -20,7 +20,13 @@ type PoolDeps struct {
 
 // NewPool constructs a pgx connection pool from the DSN in config. It pings the
 // database before returning so startup fails loudly if Postgres is unreachable.
+//
+// Also latches the `database.migrate` config switch into the package-level
+// Enabled flag so every module's downstream call to Migrate (which depends
+// on Pool and therefore runs after NewPool) sees the operator's choice.
 func NewPool(deps *PoolDeps) *pgxpool.Pool {
+	Enabled = deps.Config.Database.Migrate
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

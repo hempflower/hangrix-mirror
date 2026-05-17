@@ -9,6 +9,12 @@ server:
 
 database:
   dsn: "postgres://hangrix:hangrix@postgres:5432/hangrix?sslmode=disable"
+  # `migrate: true` runs each module's goose `up` at server boot (the
+  # local-dev path — one DSN that owns the schema). Flip to `false` on
+  # production deploys where the runtime DB user has no CREATE on the
+  # `public` schema (the PG 15+ default) and schema DDL is applied
+  # out-of-band by a privileged migrator role.
+  migrate: true
 
 redis:
   addr: "redis:6379"

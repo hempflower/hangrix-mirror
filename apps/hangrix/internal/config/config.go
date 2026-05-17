@@ -61,6 +61,13 @@ type ServerConfig struct {
 
 type DatabaseConfig struct {
 	DSN string `mapstructure:"dsn"`
+	// Migrate controls whether each module runs its goose up at boot.
+	// Defaults to true so single-DSN dev / devcontainer setups work
+	// out of the box. Set false on production deploys where schema
+	// DDL is handled out-of-band by a privileged migrator role —
+	// typical on PG 15+, where the runtime DB user has no CREATE on
+	// the `public` schema.
+	Migrate bool `mapstructure:"migrate"`
 }
 
 type RedisConfig struct {
@@ -84,6 +91,7 @@ func NewConfig(path string) (*Config, error) {
 	v.SetDefault("server.addr", ":8080")
 	v.SetDefault("server.url", "")
 	v.SetDefault("database.dsn", "postgres://hangrix:hangrix@localhost:5432/hangrix?sslmode=disable")
+	v.SetDefault("database.migrate", true)
 	v.SetDefault("redis.addr", "localhost:6379")
 	v.SetDefault("redis.password", "")
 	v.SetDefault("redis.db", 0)

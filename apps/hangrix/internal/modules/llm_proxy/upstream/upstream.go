@@ -74,8 +74,13 @@ type Request struct {
 	// x-api-key for Anthropic.
 	APIKey string
 
-	// BaseURL is the upstream base (no path). Adapters append their
-	// own native paths (e.g. "/v1/chat/completions") to this.
+	// BaseURL is the upstream base — for OpenAI-compat adapters it
+	// MUST already include any API version segment (e.g.
+	// `https://api.deepseek.com/v1`), because the adapter appends the
+	// bare native path (`/chat/completions`, `/responses`, …) without
+	// prefixing `/v1`. Operators configuring a new provider should
+	// copy the version-suffixed base URL straight from the vendor's
+	// docs.
 	BaseURL string
 
 	// Client is the HTTP client to use for the upstream call. Owned by

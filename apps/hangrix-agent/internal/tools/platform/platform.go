@@ -36,6 +36,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/httpx"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/local"
 )
 
@@ -51,7 +52,10 @@ func NewClient(baseURL, token string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		token:   token,
-		http:    &http.Client{Timeout: 60 * time.Second},
+		// httpx.NewClient honours HANGRIX_INSECURE_SKIP_TLS_VERIFY
+		// so the platform-tools path uses the same TLS knob as the
+		// LLM client when the container's CA store is broken.
+		http: httpx.NewClient(60 * time.Second),
 	}
 }
 

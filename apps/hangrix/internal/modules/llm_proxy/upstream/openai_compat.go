@@ -13,11 +13,17 @@ import (
 )
 
 // OpenAICompat talks to vendors that speak OpenAI's older Chat
-// Completions wire (POST /v1/chat/completions) — DeepSeek, OpenRouter,
+// Completions wire (POST <base>/chat/completions) — DeepSeek, OpenRouter,
 // vLLM, Together, Groq, Mistral, …. Most "OpenAI-compatible" providers
 // stopped at Chat Completions and never shipped Responses API, so this
 // adapter is the one that actually does the translation work for
 // downstream consumers using the modern Responses-API surface.
+//
+// The operator-configured `base_url` MUST already include any API
+// version segment (e.g. `https://api.deepseek.com/v1`). This adapter
+// appends `/chat/completions` literally and does not assume `/v1/`,
+// which lets newer non-versioned hosts (private vLLM deployments,
+// self-hosted gateways) be configured cleanly too.
 //
 // Reasoning models exposed through this surface (DeepSeek-Reasoner,
 // Mistral reasoning tier, …) emit a `reasoning_content` field beside
@@ -42,7 +48,7 @@ func (*OpenAICompat) Respond(ctx context.Context, req *Request) (*Response, erro
 	if err != nil {
 		return nil, fmt.Errorf("encode chat-completions request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +69,7 @@ func (*OpenAICompat) Respond(ctx context.Context, req *Request) (*Response, erro
 }
 
 // chatRequest / chatMessage / chatTool* are the typed shapes the
-// /v1/chat/completions wire expects. Content is a *string (not plain
+// /chat/completions wire expects. Content is a *string (not plain
 // string + omitempty) because Chat Completions wants `"content": null`
 // explicitly on an assistant message that has only tool_calls — an
 // omitted field is rejected by DeepSeek among others, and an empty
@@ -112,7 +118,7 @@ type chatToolCallFunction struct {
 	Arguments string `json:"arguments"`
 }
 
-// buildChatCompletionsBody emits a `/v1/chat/completions` request from
+// buildChatCompletionsBody emits a `/chat/completions` request from
 // a typed Request. The bulk of the work is folding the flat InputItem
 // array into the nested-message shape Chat Completions expects:
 //
