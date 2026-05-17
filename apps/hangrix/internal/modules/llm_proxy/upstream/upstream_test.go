@@ -436,6 +436,131 @@ func TestAnthropicRoundTripsThinkingOnSubsequentTurn(t *testing.T) {
 	}
 }
 
+// TestAnthropicRoundTripsToolUse covers the full tool-calling flow on
+// the Anthropic adapter: tools array forwarded on the request, a
+// prior turn's tool_call + tool_result history mapped to
+// (assistant.tool_use, user.tool_result) content blocks, and an
+// upstream tool_use response decoded into Response.ToolCalls.
+func TestAnthropicRoundTripsToolUse(t *testing.T) {
+	var seen map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &seen)
+		// Upstream replies with one text block + one tool_use block,
+		// in that order — matches how Anthropic emits real responses.
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "msg_2",
+			"content": []map[string]any{
+				{"type": "text", "text": "looking it up"},
+				{
+					"type":  "tool_use",
+					"id":    "toolu_xyz",
+					"name":  "issue_read",
+					"input": map[string]any{"issue_number": 7},
+				},
+			},
+			"usage": map[string]any{"input_tokens": 12, "output_tokens": 4},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	req := &upstream.Request{
+		Model:   "claude-x",
+		APIKey:  "k",
+		BaseURL: srv.URL,
+		Client:  srv.Client(),
+		Tools: []upstream.Tool{{
+			Name:        "issue_read",
+			Description: "Read an issue.",
+			Parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"issue_number": map[string]any{"type": "integer"}},
+				"required":   []string{"issue_number"},
+			},
+		}},
+		Input: []upstream.InputItem{
+			{Kind: upstream.KindMessage, Role: "user", Text: "look up issue 7"},
+			{Kind: upstream.KindMessage, Role: "assistant", Text: "calling tool"},
+			{Kind: upstream.KindToolCall, ToolCallID: "toolu_prev", ToolName: "issue_read", ToolArgs: `{"issue_number":1}`},
+			{Kind: upstream.KindToolResult, ToolCallID: "toolu_prev", ToolResult: `{"title":"hello"}`},
+		},
+	}
+	resp, err := upstream.NewAnthropic().Respond(context.Background(), req)
+	if err != nil {
+		t.Fatalf("respond: %v", err)
+	}
+
+	// ---- request side ----
+	tools, _ := seen["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool advertised, got %v", seen["tools"])
+	}
+	tool, _ := tools[0].(map[string]any)
+	if tool["name"] != "issue_read" {
+		t.Errorf("tool name = %v", tool["name"])
+	}
+	// Anthropic uses input_schema, not parameters.
+	if _, hasSchema := tool["input_schema"]; !hasSchema {
+		t.Errorf("tool missing input_schema: %v", tool)
+	}
+	if _, hasParams := tool["parameters"]; hasParams {
+		t.Errorf("tool should not carry OpenAI-style `parameters`: %v", tool)
+	}
+
+	msgs, _ := seen["messages"].([]any)
+	// user(text) / assistant(text + tool_use) / user(tool_result)
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d: %v", len(msgs), msgs)
+	}
+	assistant, _ := msgs[1].(map[string]any)
+	if assistant["role"] != "assistant" {
+		t.Errorf("msg[1] role = %v, want assistant", assistant["role"])
+	}
+	aBlocks, _ := assistant["content"].([]any)
+	// Expected order: text, tool_use (thinking would come first if present).
+	if len(aBlocks) != 2 {
+		t.Fatalf("assistant blocks = %v", aBlocks)
+	}
+	toolUse, _ := aBlocks[1].(map[string]any)
+	if toolUse["type"] != "tool_use" || toolUse["id"] != "toolu_prev" || toolUse["name"] != "issue_read" {
+		t.Errorf("tool_use block = %v", toolUse)
+	}
+	// input is an object on the wire (NOT a re-quoted JSON string).
+	input, ok := toolUse["input"].(map[string]any)
+	if !ok {
+		t.Errorf("tool_use.input must be an object, got %T: %v", toolUse["input"], toolUse["input"])
+	} else if input["issue_number"].(float64) != 1 {
+		t.Errorf("tool_use.input = %v", input)
+	}
+
+	userResult, _ := msgs[2].(map[string]any)
+	uBlocks, _ := userResult["content"].([]any)
+	resultBlock, _ := uBlocks[0].(map[string]any)
+	if resultBlock["type"] != "tool_result" || resultBlock["tool_use_id"] != "toolu_prev" {
+		t.Errorf("tool_result block = %v", resultBlock)
+	}
+	if resultBlock["content"] != `{"title":"hello"}` {
+		t.Errorf("tool_result content = %v", resultBlock["content"])
+	}
+
+	// ---- response side ----
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("expected 1 ToolCall in response, got %v", resp.ToolCalls)
+	}
+	got := resp.ToolCalls[0]
+	if got.ID != "toolu_xyz" || got.Name != "issue_read" {
+		t.Errorf("ToolCall = %+v", got)
+	}
+	// Arguments must be a JSON string the rest of the agent's pipeline
+	// can re-encode untouched.
+	if got.Arguments != `{"issue_number":7}` {
+		t.Errorf("ToolCall.Arguments = %q, want {\"issue_number\":7}", got.Arguments)
+	}
+	if resp.Text != "looking it up" {
+		t.Errorf("resp.Text = %q", resp.Text)
+	}
+}
+
 // ---- wire converters ----
 
 // TestParseAndMarshalRoundTrip verifies the public wire shape

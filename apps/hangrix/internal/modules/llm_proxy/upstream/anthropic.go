@@ -30,7 +30,12 @@ const defaultMaxTokens = 4096
 // Anthropic talks to upstreams that speak Anthropic's Messages API
 // (POST /v1/messages). Translates a typed Request into Messages shape
 // and back. Extended thinking is wired in via Request.ReasoningEffort
-// → thinking.budget_tokens.
+// → thinking.budget_tokens. Tool calling is fully bidirectional:
+// Request.Tools become the `tools` array; prior KindToolCall /
+// KindToolResult input items materialise as (assistant.tool_use,
+// user.tool_result) content blocks; upstream tool_use blocks decode
+// back into Response.ToolCalls so the rest of the agent pipeline sees
+// the same shape as OpenAI-style providers.
 type Anthropic struct{}
 
 func NewAnthropic() *Anthropic { return &Anthropic{} }
@@ -81,6 +86,7 @@ type anthropicRequest struct {
 	MaxTokens   int                `json:"max_tokens"`
 	Temperature *float64           `json:"temperature,omitempty"`
 	Thinking    *anthropicThinking `json:"thinking,omitempty"`
+	Tools       []anthropicTool    `json:"tools,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -89,15 +95,41 @@ type anthropicMessage struct {
 }
 
 // anthropicContentBlock covers every block type Anthropic accepts on
-// the request side today: text, thinking (with optional signature),
-// and — in the future — tool_use / tool_result. Per-kind fields use
-// omitempty so a text block doesn't carry an empty thinking string and
-// vice versa.
+// the request and response side: text, thinking (with optional
+// signature), tool_use (assistant's request to call a tool), and
+// tool_result (caller's reply to a prior tool_use). Per-kind fields
+// use omitempty so a text block doesn't carry empty tool_use fields
+// and vice versa.
 type anthropicContentBlock struct {
 	Type      string `json:"type"`
 	Text      string `json:"text,omitempty"`
 	Thinking  string `json:"thinking,omitempty"`
 	Signature string `json:"signature,omitempty"`
+
+	// tool_use blocks (assistant → caller). ID is the toolu_ handle
+	// the matching tool_result must echo back. Input is the tool's
+	// JSON-object argument — RawMessage so the agent's already-JSON
+	// argument string round-trips as a nested object on the wire,
+	// not as a re-quoted string.
+	ID    string          `json:"id,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
+
+	// tool_result blocks (caller → assistant). ToolUseID points back
+	// to the tool_use this is answering; Content is the textual
+	// payload the tool produced.
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	Content   string `json:"content,omitempty"`
+	IsError   bool   `json:"is_error,omitempty"`
+}
+
+// anthropicTool mirrors the entry shape in the request's `tools`
+// array. Note `input_schema` not `parameters` — Anthropic uses its
+// own JSON-Schema field name.
+type anthropicTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"input_schema"`
 }
 
 type anthropicThinking struct {
@@ -143,6 +175,24 @@ func buildAnthropicBody(req *Request) anthropicRequest {
 			body.MaxTokens = minMax
 		}
 	}
+	if len(req.Tools) > 0 {
+		body.Tools = make([]anthropicTool, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			schema := t.Parameters
+			if schema == nil {
+				// Anthropic requires input_schema; fall back to the
+				// permissive empty-object form so a poorly-described
+				// upstream tool is still callable rather than 400-ing
+				// the whole request.
+				schema = map[string]any{"type": "object"}
+			}
+			body.Tools = append(body.Tools, anthropicTool{
+				Name:        t.Name,
+				Description: t.Description,
+				InputSchema: schema,
+			})
+		}
+	}
 	return body
 }
 
@@ -161,48 +211,67 @@ func thinkingBudgetTokens(effort string) int {
 	return 0
 }
 
-// inputItemsToAnthropicMessages folds the flat InputItem array into the
-// nested-content-block shape Anthropic expects. Same merging pattern as
-// the chat-completions translator: a contiguous (reasoning?, assistant
-// message?) run collapses into one assistant message with content
-// blocks in [thinking?, text?] order.
+// inputItemsToAnthropicMessages folds the flat InputItem array into
+// the nested-content-block shape Anthropic expects.
 //
-// Tool calls are NOT mapped today — Anthropic's tool_use / tool_result
-// blocks have a slightly different shape and no current caller of this
-// proxy exercises the Anthropic-tools path. Tool-call items are dropped
-// silently when this adapter is invoked; the agent should not yet
-// schedule sessions against anthropic-type providers if it needs tools.
+// Two side-buckets run in parallel:
+//
+//   - pendingA: the assistant message under construction (zero or
+//     more of: thinking, text, tool_use blocks, in spec-order). A
+//     single assistant turn can contain many tool_use blocks
+//     side-by-side with text, and Anthropic preserves the order.
+//   - pendingU: the user message under construction. Accumulates
+//     consecutive tool_result blocks (and optionally text) so a turn
+//     that resolved N parallel tool_use calls becomes ONE user
+//     message with N tool_result blocks — the protocol shape
+//     Anthropic enforces.
+//
+// When the stream type switches direction (assistant → user or vice
+// versa), the bucket on the other side flushes. A trailing
+// flushA/flushU at the end emits anything left.
 func inputItemsToAnthropicMessages(items []InputItem) []anthropicMessage {
 	out := make([]anthropicMessage, 0, len(items))
 
-	var pending struct {
+	var pendingA struct {
 		active            bool
 		text              string
 		thinking          string
 		thinkingSignature string
+		toolUses          []anthropicContentBlock
 	}
-	flush := func() {
-		if !pending.active {
+	flushA := func() {
+		if !pendingA.active {
 			return
 		}
 		blocks := []anthropicContentBlock{}
-		if pending.thinking != "" {
+		if pendingA.thinking != "" {
 			blocks = append(blocks, anthropicContentBlock{
 				Type:      "thinking",
-				Thinking:  pending.thinking,
-				Signature: pending.thinkingSignature,
+				Thinking:  pendingA.thinking,
+				Signature: pendingA.thinkingSignature,
 			})
 		}
-		if pending.text != "" {
-			blocks = append(blocks, anthropicContentBlock{Type: "text", Text: pending.text})
+		if pendingA.text != "" {
+			blocks = append(blocks, anthropicContentBlock{Type: "text", Text: pendingA.text})
 		}
+		blocks = append(blocks, pendingA.toolUses...)
 		if len(blocks) > 0 {
 			out = append(out, anthropicMessage{Role: "assistant", Content: blocks})
 		}
-		pending.active = false
-		pending.text = ""
-		pending.thinking = ""
-		pending.thinkingSignature = ""
+		pendingA.active = false
+		pendingA.text = ""
+		pendingA.thinking = ""
+		pendingA.thinkingSignature = ""
+		pendingA.toolUses = nil
+	}
+
+	var pendingU []anthropicContentBlock
+	flushU := func() {
+		if len(pendingU) == 0 {
+			return
+		}
+		out = append(out, anthropicMessage{Role: "user", Content: pendingU})
+		pendingU = nil
 	}
 
 	for _, it := range items {
@@ -219,49 +288,72 @@ func inputItemsToAnthropicMessages(items []InputItem) []anthropicMessage {
 				continue
 			}
 			if role == "assistant" {
-				if pending.active {
-					pending.text += it.Text
-				} else {
-					pending.active = true
-					pending.text = it.Text
-				}
+				flushU()
+				pendingA.active = true
+				pendingA.text += it.Text
 				continue
 			}
-			flush()
-			out = append(out, anthropicMessage{
-				Role:    role,
-				Content: []anthropicContentBlock{{Type: "text", Text: it.Text}},
-			})
+			// role == "user" (or any unknown role we treat as user).
+			flushA()
+			pendingU = append(pendingU, anthropicContentBlock{Type: "text", Text: it.Text})
 		case KindReasoning:
-			if !pending.active {
-				pending.active = true
-			}
-			pending.thinking += it.Reasoning
+			flushU()
+			pendingA.active = true
+			pendingA.thinking += it.Reasoning
 			if it.ReasoningSignature != "" {
-				pending.thinkingSignature = it.ReasoningSignature
+				pendingA.thinkingSignature = it.ReasoningSignature
 			}
-		case KindToolCall, KindToolResult:
-			// Not in scope for the M6a anthropic adapter; the
-			// in-package documentation calls this out. Drop silently.
+		case KindToolCall:
+			flushU()
+			pendingA.active = true
+			input := json.RawMessage(strings.TrimSpace(it.ToolArgs))
+			if len(input) == 0 {
+				// Anthropic requires input to be a JSON object even
+				// when the tool takes no arguments. Empty-string from
+				// the agent maps to `{}`.
+				input = json.RawMessage("{}")
+			}
+			pendingA.toolUses = append(pendingA.toolUses, anthropicContentBlock{
+				Type:  "tool_use",
+				ID:    it.ToolCallID,
+				Name:  it.ToolName,
+				Input: input,
+			})
+		case KindToolResult:
+			flushA()
+			pendingU = append(pendingU, anthropicContentBlock{
+				Type:      "tool_result",
+				ToolUseID: it.ToolCallID,
+				Content:   it.ToolResult,
+			})
 		}
 	}
-	flush()
+	flushA()
+	flushU()
 	return out
 }
 
 // parseAnthropicBody decodes an Anthropic Messages response into a
 // typed Response. content blocks split between Text (concatenated
-// `text` blocks) and Reasoning (concatenated `thinking` blocks).
-// Signed thinking captures the signature so the next turn can echo it
-// back to satisfy Anthropic's strict-mode verification.
+// `text` blocks), Reasoning (concatenated `thinking` blocks), and
+// ToolCalls (one per `tool_use` block, in order). Signed thinking
+// captures the signature so the next turn can echo it back to satisfy
+// Anthropic's strict-mode verification.
+//
+// Tool-use blocks carry their `input` as a JSON object on the wire;
+// we re-encode it back to a string so it matches the OpenAI-shaped
+// `function.arguments` the rest of the proxy / agent path expects.
 func parseAnthropicBody(raw []byte, statusCode int) (*Response, error) {
 	var wire struct {
 		ID      string `json:"id"`
 		Content []struct {
-			Type      string `json:"type"`
-			Text      string `json:"text"`
-			Thinking  string `json:"thinking"`
-			Signature string `json:"signature"`
+			Type      string          `json:"type"`
+			Text      string          `json:"text"`
+			Thinking  string          `json:"thinking"`
+			Signature string          `json:"signature"`
+			ID        string          `json:"id"`
+			Name      string          `json:"name"`
+			Input     json.RawMessage `json:"input"`
 		} `json:"content"`
 		Usage struct {
 			Input  int `json:"input_tokens"`
@@ -287,6 +379,16 @@ func parseAnthropicBody(raw []byte, statusCode int) (*Response, error) {
 			if b.Signature != "" {
 				out.ReasoningSignature = b.Signature
 			}
+		case "tool_use":
+			args := strings.TrimSpace(string(b.Input))
+			if args == "" {
+				args = "{}"
+			}
+			out.ToolCalls = append(out.ToolCalls, ToolCall{
+				ID:        b.ID,
+				Name:      b.Name,
+				Arguments: args,
+			})
 		}
 	}
 	out.Text = text.String()
