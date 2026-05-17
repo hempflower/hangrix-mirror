@@ -20,6 +20,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import FileDiffList from '@/components/repo/FileDiffList.vue'
+import MarkdownBody from '@/components/MarkdownBody.vue'
 import type { Issue, IssueState, IssueTimeline, IssueMergeResp } from '~/types/issue'
 import type { Commit, FileDiff } from '~/types/repo'
 import { relativeTime } from '~/utils/time'
@@ -463,9 +464,10 @@ onUnmounted(stopRefreshTimer)
                       {{ rel(issue.created_at) }}
                     </span>
                   </div>
-                  <p class="whitespace-pre-wrap px-4 py-3 text-sm">
-                    {{ issue.body || '—' }}
-                  </p>
+                  <div class="px-4 py-3 text-sm">
+                    <MarkdownBody v-if="issue.body" :source="issue.body" />
+                    <p v-else class="text-muted-foreground">—</p>
+                  </div>
                 </CardContent>
               </Card>
 
@@ -486,7 +488,9 @@ onUnmounted(stopRefreshTimer)
                         {{ rel(it.data.created_at) }}
                       </span>
                     </div>
-                    <p class="whitespace-pre-wrap px-4 py-3 text-sm">{{ it.data.body }}</p>
+                    <div class="px-4 py-3 text-sm">
+                      <MarkdownBody :source="it.data.body" />
+                    </div>
                   </CardContent>
                 </Card>
 
