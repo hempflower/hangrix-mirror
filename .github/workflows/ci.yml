@@ -44,6 +44,17 @@ jobs:
       - name: Install JS deps
         run: pnpm install --frozen-lockfile
 
+      # hangrix's web package //go:embed-s apps/hangrix/internal/web/
+      # dist via `all:dist`, which fails at compile time if the dir
+      # is empty. Generate the bundle first, then copy-web-dist.mjs
+      # both fills it AND writes a .gitkeep so even a generate-skip
+      # path still satisfies the embed.
+      - name: Generate web bundle
+        run: pnpm --filter web run generate
+
+      - name: Stage web dist into hangrix embed dir
+        run: node apps/hangrix/scripts/copy-web-dist.mjs
+
       - name: Go test
         # `./...` from the workspace root doesn't expand across go.work
         # members — list each module's tree explicitly.
@@ -55,15 +66,9 @@ jobs:
                   ./pkg/cryptobox/... \
                   ./pkg/ioc/...
 
-      - name: Generate web bundle
-        # Produces apps/web/.output/public — what copy-web-dist.mjs
-        # picks up before hangrix's go build. Catches Vue / Nuxt
-        # compile errors that vue-tsc would also catch (minus the two
-        # pre-existing ignored ones).
-        run: pnpm --filter web run generate
-
       - name: Build hangrix (with embeds)
-        # Exercises the full embed pipeline: web dist + agent +
-        # runner binaries, then go build of the server. Output is
-        # discarded — we only care that it compiles end-to-end.
+        # Exercises the full embed pipeline: web dist + per-arch
+        # runner binaries (each with the matching agent embedded),
+        # then go build of the server. Output is discarded — we
+        # only care that it compiles end-to-end.
         run: pnpm --filter hangrix run build
