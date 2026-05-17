@@ -1,0 +1,116 @@
+# smoke environment — self-contained docker-compose stack.
+#
+# Five services on one bridge network (`hangrix-smoke`):
+#
+#   postgres  → state for users / repos / issues / sessions
+#   redis     → session-cookie store
+#   server    → hangrix platform binary, exposes :8080 on the host
+#   runner    → spawns agent containers (talks to host docker daemon
+#               over the bind-mounted socket; new agent containers
+#               join the same `hangrix-smoke` network)
+#   agent-image-bake → one-shot service whose only job is to build
+#               the hangrix-smoke-agent:latest image the runner uses
+#               for every session container.
+#
+# Replaces the devcontainer-specific hacks in the old run.sh:
+#   - HANGRIX_RUNNER_HOST_PATH_MAP is no longer needed because both
+#     the runner container and the docker daemon agree on a single
+#     state path (we bind-mount ${HANGRIX_SMOKE_STATE_DIR} at the
+#     SAME absolute path inside the runner container).
+#   - HANGRIX_RUNNER_DOCKER_NETWORK is set to the compose network so
+#     agent containers reach the server by service name.
+#   - server.url is `http://server:8080` (docker-compose DNS).
+#
+# Usage:
+#   export HANGRIX_SMOKE_STATE_DIR=$(pwd)/data/smoke
+#   export LLM_API_KEY=sk-...        # only needed by run.sh setup
+#   docker compose -f scripts/smoke/compose.yml up --build -d
+#
+# Or via the wrapper:  bash scripts/smoke/run.sh up
+
+name: hangrix-smoke
+
+networks:
+  default:
+    name: hangrix-smoke
+
+volumes:
+  postgres-data:
+  repos:
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hangrix
+      POSTGRES_PASSWORD: hangrix
+      POSTGRES_DB: hangrix
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hangrix -d hangrix"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  server:
+    build:
+      context: ../..
+      dockerfile: scripts/smoke/Dockerfile
+      target: server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      # Exposed for the host's smoke runner script + curl probes.
+      - "8080:8080"
+    volumes:
+      - repos:/data/repos
+
+  runner:
+    build:
+      context: ../..
+      dockerfile: scripts/smoke/Dockerfile
+      target: runner
+    depends_on:
+      server:
+        condition: service_started
+    command:
+      - "serve"
+      - "--state-dir"
+      - "${HANGRIX_SMOKE_STATE_DIR}"
+    environment:
+      HANGRIX_RUNNER_STATE_DIR: "${HANGRIX_SMOKE_STATE_DIR}"
+      # Agent containers spawn on the same compose network so they reach
+      # `server:8080` and `postgres:5432` by service name.
+      HANGRIX_RUNNER_DOCKER_NETWORK: "hangrix-smoke"
+    volumes:
+      # The host docker daemon socket — the runner uses the host's docker
+      # to spawn sibling agent containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # State directory mirrored from host at the SAME absolute path:
+      # `<host>/data/smoke` → `<host>/data/smoke` inside the
+      # runner container. This lets the runner pass paths to the docker
+      # daemon verbatim — daemon resolves them on the host filesystem
+      # and finds the same files the runner just wrote.
+      - ${HANGRIX_SMOKE_STATE_DIR}:${HANGRIX_SMOKE_STATE_DIR}
+
+# The agent base image (`hangrix-smoke-agent:latest`) is built directly
+# by run.sh against the host docker daemon — bind-mounting paths into a
+# sibling docker:cli container hits the same daemon-vs-container path
+# disagreement we work around for the runner state directory. Calling
+# `docker build` straight from the runner script (which already has the
+# daemon socket via /var/run/docker.sock) sidesteps the whole dance.

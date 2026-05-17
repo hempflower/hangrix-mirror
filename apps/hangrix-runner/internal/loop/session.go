@@ -302,6 +302,9 @@ func buildAgentEnv(task *client.Task, llmEndpoint, mcpEndpoint string) map[strin
 	if task.Role != "" {
 		env["HANGRIX_ROLE"] = task.Role
 	}
+	if task.Model != "" {
+		env["HANGRIX_LLM_MODEL"] = task.Model
+	}
 	if task.WorkingBranch != "" {
 		env["HANGRIX_WORKING_BRANCH"] = task.WorkingBranch
 	}

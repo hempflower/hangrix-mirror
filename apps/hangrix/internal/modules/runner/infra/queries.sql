@@ -110,18 +110,51 @@ WHERE (sqlc.narg('runner_id')::BIGINT IS NULL OR runner_id = sqlc.narg('runner_i
 ORDER BY id DESC
 LIMIT sqlc.arg('lim');
 
--- name: ClaimNextSessionLock :one
--- Skip-locked claim: pins the oldest pending session for this runner so a
--- concurrent claim by another runner-thread races on a different row.
+-- name: ListSessionsByIssue :many
+-- Returns every agent_session row for the (repo, issue) tuple in spawn
+-- order. Powers the M7a audit query view: a caller hands an issue, gets
+-- back the entire role roster (with snapshot pins) that has touched it.
 SELECT * FROM agent_sessions
-WHERE status = 'pending' AND runner_id = sqlc.arg('runner_id')
+WHERE repo_id      = sqlc.arg('repo_id')
+  AND issue_number = sqlc.arg('issue_number')
+ORDER BY id ASC;
+
+-- name: ArchiveSessionsByIssue :execrows
+-- Flip every non-archived session on this (repo, issue) to archived.
+-- Driven by issue.closed / issue.merged: the parent issue is the only
+-- thing that can archive sessions — there is no per-session admin
+-- archive button (docs/agent-config.md §"Session 模型"). Already-archived
+-- rows are skipped so the call is idempotent. session_token_sealed is
+-- NULL'd so a leaked DB snapshot of an archived session can't expose the
+-- bearer plaintext.
+UPDATE agent_sessions
+SET status               = 'archived',
+    ended_at             = COALESCE(ended_at, NOW()),
+    session_token_sealed = NULL
+WHERE repo_id      = sqlc.arg('repo_id')
+  AND issue_number = sqlc.arg('issue_number')
+  AND status      != 'archived';
+
+-- name: ClaimNextSessionLock :one
+-- Skip-locked claim: pins the oldest pending session this runner is
+-- eligible to run. M7a relaxed the rule from "pinned-to-this-runner
+-- only" to "pinned OR unpinned": the spawner now leaves runner_id NULL
+-- when no pre-assignment policy applies, and any eligible runner picks
+-- the row up. The follow-up ClaimSessionUpdate writes runner_id so the
+-- audit row records who actually ran it.
+SELECT * FROM agent_sessions
+WHERE status = 'pending'
+  AND (runner_id = sqlc.arg('runner_id') OR runner_id IS NULL)
 ORDER BY created_at ASC, id ASC
 FOR UPDATE SKIP LOCKED
 LIMIT 1;
 
 -- name: ClaimSessionUpdate :exec
+-- Pins runner_id at claim time so unpinned rows record who took them.
 UPDATE agent_sessions
-SET status = 'claimed', claimed_at = NOW()
+SET status = 'claimed',
+    claimed_at = NOW(),
+    runner_id = sqlc.arg('runner_id')
 WHERE id = sqlc.arg('id');
 
 -- name: MarkSessionRunning :execrows
@@ -132,13 +165,21 @@ WHERE id = sqlc.arg('id') AND status IN ('claimed', 'running');
 -- name: MarkSessionTerminal :execrows
 -- session_token_sealed is NULL'd at terminate time so a leaked DB
 -- snapshot of a dead session no longer carries the bearer plaintext.
+--
+-- The NOT IN guard MUST list every terminal state — otherwise a late
+-- runner terminate (e.g. container exited just as issue.closed fired)
+-- could overwrite an `archived` row with `succeeded` and lose the
+-- "session ended because the issue closed" signal in the audit chain.
+-- `archived` was added in migration 00002; we updated this guard at
+-- the same time the agent_session module landed.
 UPDATE agent_sessions
 SET status               = sqlc.arg('status'),
     ended_at             = NOW(),
     exit_code            = sqlc.narg('exit_code'),
     error_message        = sqlc.arg('error_message'),
     session_token_sealed = NULL
-WHERE id = sqlc.arg('id') AND status NOT IN ('succeeded', 'failed', 'cancelled');
+WHERE id = sqlc.arg('id')
+  AND status NOT IN ('succeeded', 'failed', 'cancelled', 'archived');
 
 -- ---- messages ----
 

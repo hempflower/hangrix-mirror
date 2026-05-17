@@ -152,6 +152,11 @@ type Task struct {
 	SessionID  int64  `json:"session_id"`
 	AgentImage string `json:"agent_image"`
 	Role       string `json:"role"`
+	// Model is the resolved LLM model name the spawner picked for this
+	// session (role.llm.model > host.llm.model). Surfaced into the
+	// container as HANGRIX_LLM_MODEL so the agent's LLM client knows
+	// which model to ask the proxy for.
+	Model string `json:"model"`
 	// AgentRepo is the bundle pin in `<owner>/<name>@<sha>` form. The
 	// runner resolves the `<sha>` against its content-addressed cache
 	// under ~/.hangrix/agent-bundles/<sha>/; on miss it pulls

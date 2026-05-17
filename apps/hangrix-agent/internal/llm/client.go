@@ -49,11 +49,19 @@ import (
 // HistoryItem in pkg/ipc but stays inside the LLM package boundary so we
 // could swap out the IPC layer (e.g. for a unit test) without touching the
 // runtime context.
+//
+// Reasoning + ReasoningSignature carry the chain-of-thought that "thinking"
+// models (DeepSeek-Reasoner, OpenAI o-series, …) emit alongside Content.
+// They are set ONLY on assistant messages; downstream providers reject the
+// next turn if a reasoning block was elided, so the agent rounds-trip them
+// verbatim. Roles other than "assistant" leave these empty.
 type Message struct {
-	Role       string     // "system" | "user" | "assistant" | "tool"
-	Content    string     // plain-text body
-	ToolCalls  []ToolCall // populated on assistant messages with function calls
-	ToolCallID string     // populated on tool messages, joins back to ToolCall.ID
+	Role               string     // "system" | "user" | "assistant" | "tool"
+	Content            string     // plain-text body
+	Reasoning          string     // assistant: chain-of-thought summary
+	ReasoningSignature string     // assistant: opaque verification token (encrypted_content)
+	ToolCalls          []ToolCall // populated on assistant messages with function calls
+	ToolCallID         string     // populated on tool messages, joins back to ToolCall.ID
 }
 
 // ToolCall mirrors the OpenAI function_call shape. Arguments stays as a
@@ -88,14 +96,19 @@ type CreateRequest struct {
 
 // CreateResponse is the parsed result. Content is the concatenated text of
 // every output_text item in the assistant message; ToolCalls are the
-// function_call items in the order they appeared.
+// function_call items in the order they appeared. Reasoning carries the
+// upstream's chain-of-thought block when the provider emitted one
+// (DeepSeek-Reasoner, OpenAI o-series, …) — the agent stores it on the
+// resulting assistant Message so the next turn round-trips it.
 type CreateResponse struct {
-	ID         string
-	Content    string
-	ToolCalls  []ToolCall
-	Usage      Usage
-	StatusCode int    // upstream HTTP status (always 2xx on success)
-	Raw        []byte // unparsed response body — kept for audit, never logged here
+	ID                 string
+	Content            string
+	Reasoning          string
+	ReasoningSignature string
+	ToolCalls          []ToolCall
+	Usage              Usage
+	StatusCode         int    // upstream HTTP status (always 2xx on success)
+	Raw                []byte // unparsed response body — kept for audit, never logged here
 }
 
 type Usage struct {
@@ -240,6 +253,22 @@ func ToInputItems(msgs []Message) []map[string]any {
 				"content": []map[string]any{{"type": "input_text", "text": m.Content}},
 			})
 		case "assistant":
+			// Reasoning items must precede the assistant text + tool
+			// calls — that's the spec order, and "thinking" providers
+			// (DeepSeek-Reasoner, OpenAI o-series) reject any history
+			// that elides the prior turn's reasoning_content.
+			if m.Reasoning != "" {
+				item := map[string]any{
+					"type": "reasoning",
+					"summary": []map[string]any{
+						{"type": "summary_text", "text": m.Reasoning},
+					},
+				}
+				if m.ReasoningSignature != "" {
+					item["encrypted_content"] = m.ReasoningSignature
+				}
+				out = append(out, item)
+			}
 			if m.Content != "" {
 				out = append(out, map[string]any{
 					"type":    "message",
@@ -294,15 +323,20 @@ func parseResponse(resp *http.Response) (*CreateResponse, error) {
 	var wire struct {
 		ID     string `json:"id"`
 		Output []struct {
-			Type    string `json:"type"`
-			Role    string `json:"role"`
-			CallID  string `json:"call_id"`
-			Name    string `json:"name"`
-			Args    string `json:"arguments"`
-			Content []struct {
+			Type             string `json:"type"`
+			Role             string `json:"role"`
+			CallID           string `json:"call_id"`
+			Name             string `json:"name"`
+			Args             string `json:"arguments"`
+			Content          []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
 			} `json:"content"`
+			Summary []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"summary"`
+			EncryptedContent string `json:"encrypted_content"`
 		} `json:"output"`
 		Usage struct {
 			Input  int `json:"input_tokens"`
@@ -323,7 +357,7 @@ func parseResponse(resp *http.Response) (*CreateResponse, error) {
 			TotalTokens:  wire.Usage.Total,
 		},
 	}
-	var textBuf strings.Builder
+	var textBuf, reasonBuf strings.Builder
 	for _, item := range wire.Output {
 		switch item.Type {
 		case "message":
@@ -338,9 +372,22 @@ func parseResponse(resp *http.Response) (*CreateResponse, error) {
 				Name:      item.Name,
 				Arguments: item.Args,
 			})
+		case "reasoning":
+			for _, s := range item.Summary {
+				if s.Type == "" || s.Type == "summary_text" {
+					reasonBuf.WriteString(s.Text)
+				}
+			}
+			if item.EncryptedContent != "" {
+				// Multiple reasoning blocks would each carry their own
+				// signature in principle; we keep the last non-empty one
+				// — that's typically the only one a server emits anyway.
+				out.ReasoningSignature = item.EncryptedContent
+			}
 		}
 	}
 	out.Content = textBuf.String()
+	out.Reasoning = reasonBuf.String()
 	return out, nil
 }
 

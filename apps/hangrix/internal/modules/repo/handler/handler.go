@@ -26,6 +26,7 @@ import (
 	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/infra"
+	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 	tokendomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/token/domain"
 	userdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/user/domain"
 )
@@ -46,17 +47,22 @@ var repoNameRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$`)
 var usernameRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$`)
 
 type Handler struct {
-	store       domain.Store
-	protections domain.ProtectionStore
-	storage     *infra.Storage
-	git         gitdomain.Git
-	users       userdomain.Repo
-	orgs        orgdomain.OrgRepo
-	resolver    orgdomain.Resolver
-	tokens      tokendomain.Validator
-	middleware  authdomain.Middleware
-	guards      []domain.BranchWriteGuard
-	observers   []domain.PushObserver
+	store         domain.Store
+	protections   domain.ProtectionStore
+	storage       *infra.Storage
+	git           gitdomain.Git
+	users         userdomain.Repo
+	orgs          orgdomain.OrgRepo
+	resolver      orgdomain.Resolver
+	tokens        tokendomain.Validator
+	// sessions validates hgxs_ agent session tokens for git push. Nil
+	// in test configurations that don't load the runner module; the
+	// inline auth path nil-checks before consulting it.
+	sessions      runnerdomain.SessionTokenValidator
+	middleware    authdomain.Middleware
+	guards        []domain.BranchWriteGuard
+	observers     []domain.PushObserver
+	kindRefresher domain.KindRefresher
 }
 
 type HandlerDeps struct {
@@ -71,6 +77,11 @@ type HandlerDeps struct {
 	Orgs       orgdomain.OrgRepo
 	Resolver   orgdomain.Resolver
 	Tokens     tokendomain.Validator
+	// Sessions resolves an `hgxs_*` Basic-auth password to its
+	// agent_session row so the M7b agent path can `git push` over the
+	// same Smart-HTTP endpoint humans use. Optional — repo handler
+	// works without it (no agent push support).
+	Sessions   runnerdomain.SessionTokenValidator
 	Middleware authdomain.Middleware
 	// Guards is injected as the slice of every BranchWriteGuard registered
 	// in the ioc container — currently 0 or 1 element (the issue module's
@@ -80,21 +91,27 @@ type HandlerDeps struct {
 	// pipeline. M4's issue module uses this to sync its sidecar before each
 	// push and append commit_pushed events afterwards.
 	Observers []domain.PushObserver
+	// KindRefresher reclassifies a repo's `kind` after the default branch
+	// changes (M7a Phase 2). Both this handler's post-receive path and
+	// the issue handler's merge endpoint consume it.
+	KindRefresher domain.KindRefresher
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
-		store:       deps.Store,
-		protections: deps.Protections,
-		storage:     deps.Storage,
-		git:         deps.Git,
-		users:       deps.Users,
-		orgs:        deps.Orgs,
-		resolver:    deps.Resolver,
-		tokens:      deps.Tokens,
-		middleware:  deps.Middleware,
-		guards:      deps.Guards,
-		observers:   deps.Observers,
+		store:         deps.Store,
+		protections:   deps.Protections,
+		storage:       deps.Storage,
+		git:           deps.Git,
+		users:         deps.Users,
+		orgs:          deps.Orgs,
+		resolver:      deps.Resolver,
+		tokens:        deps.Tokens,
+		sessions:      deps.Sessions,
+		middleware:    deps.Middleware,
+		guards:        deps.Guards,
+		observers:     deps.Observers,
+		kindRefresher: deps.KindRefresher,
 	}
 }
 

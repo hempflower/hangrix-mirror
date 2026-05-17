@@ -13,10 +13,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
+	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 	tokendomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/token/domain"
 	userdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/user/domain"
 )
@@ -37,25 +37,38 @@ import (
 //     repos. PAT used over HTTP Basic must carry `repo:write` scope.
 //
 // Credentials are checked in this order on every Basic-auth attempt:
-//   1. password looks like a PAT (`hgx_*`) → validate via Validator
-//   2. otherwise bcrypt-compare against the user's password_hash
+//   1. password looks like an agent session token (`hgxs_*`) → validate
+//      via SessionTokenValidator; the request is authorized for the
+//      session's bound repo only. This is the M7b agent push path.
+//   2. password looks like a PAT (`hgx_*`) → validate via Validator
+//   3. otherwise bcrypt-compare against the user's password_hash
 //
 // gitCaller wraps the resolved identity. authMethod is "cookie" / "pat" /
-// "password" — used downstream to enforce PAT scopes.
+// "password" / "session" — used downstream to enforce per-method rules
+// (PAT scopes, session repo binding).
 type gitCaller struct {
 	user       *userdomain.User
-	token      *tokendomain.Token // nil unless authMethod == "pat"
+	token      *tokendomain.Token            // nil unless authMethod == "pat"
+	session    *runnerdomain.AgentSession    // nil unless authMethod == "session"
 	authMethod string
 }
 
 func (g *gitCaller) hasWriteScope() bool {
-	// Cookie and password sessions are equivalent to "full user"; only PATs
-	// are scope-limited. (Future: we may revisit cookie scopes when a web
-	// flow needs to mint a narrow session.)
-	if g.authMethod != "pat" || g.token == nil {
+	switch g.authMethod {
+	case "pat":
+		if g.token == nil {
+			return false
+		}
+		return g.token.HasScope(tokendomain.ScopeRepoWrite)
+	case "session":
+		// Session tokens are the agent's identity for everything the
+		// platform exposes — including git push. Per-repo scoping is
+		// enforced via canAccessRepo (session.RepoID match) rather
+		// than a scope flag.
 		return true
 	}
-	return g.token.HasScope(tokendomain.ScopeRepoWrite)
+	// Cookie and password sessions are equivalent to "full user".
+	return true
 }
 
 func (h *Handler) gitInfoRefs(w http.ResponseWriter, r *http.Request) {
@@ -151,60 +164,13 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 	// default branch tip. Same swallow-errors stance: the client's push has
 	// already succeeded; a transient git or DB hiccup just means the
 	// kind column lags a turn until the next push.
-	h.refreshRepoKind(postCtx, repo, fsPath)
+	if h.kindRefresher != nil {
+		h.kindRefresher.Refresh(postCtx, repo, fsPath)
+	}
 }
 
-// refreshRepoKind inspects the default branch tip for a root agent.yml
-// and reclassifies the repo accordingly. A repo is KindAgent iff:
-//
-//   1. `<default_branch>:agent.yml` exists as a blob.
-//   2. Its bytes parse against the strict agents_config schema (no
-//      container / env / secrets / volumes fields, valid entry.base_prompt,
-//      etc. — principle 7).
-//
-// A failed parse keeps the repo classified KindStandard so an owner can
-// still push fixes (push is the only path to repair the file). The
-// validation cost is one extra `git cat-file -p` per push to a repo
-// that has an agent.yml — negligible compared to the receive-pack work
-// the same push already did.
-//
-// All errors are swallowed: the push has already succeeded by the time
-// this runs, and a transient git / parse / DB hiccup just means the
-// cached kind lags one turn until the next push.
-func (h *Handler) refreshRepoKind(ctx context.Context, repo *domain.Repo, fsPath string) {
-	branch := repo.DefaultBranch
-	if branch == "" {
-		return
-	}
-	kind := domain.KindStandard
-	if body, ok := readBlobAtRef(ctx, fsPath, branch, "agent.yml"); ok {
-		if _, err := agentsconfig.ParseAgentManifest(body); err == nil {
-			kind = domain.KindAgent
-		}
-	}
-	_ = h.store.UpdateKind(ctx, repo.ID, kind)
-}
-
-// readBlobAtRef returns the bytes of <ref>:<path> via `git cat-file -p`.
-// The second return is false when the blob is missing (caller treats this
-// as KindStandard) or the read errors (same — we never elevate kind on
-// uncertain reads). Stderr is discarded so the common "missing file"
-// case doesn't spam server logs.
-func readBlobAtRef(ctx context.Context, fsPath, ref, path string) ([]byte, bool) {
-	cmd := exec.CommandContext(ctx,
-		"git",
-		"--git-dir="+fsPath,
-		"cat-file",
-		"-p",
-		ref+":"+path,
-	)
-	cmd.Stderr = io.Discard
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, false
-	}
-	return out, true
-}
+// refreshRepoKind moved to repo/service/kind_refresher.go in M7a P2 so the
+// issue module's merge endpoint can call it without importing repo/handler.
 
 // runStatelessRPC streams the request body into `git <sub> --stateless-rpc`
 // stdin and the subprocess stdout into the response body. Same shape for
@@ -252,7 +218,7 @@ func (h *Handler) authorizeGitRead(w http.ResponseWriter, r *http.Request) (*dom
 			challengeBasicAuth(w)
 			return nil, "", false
 		}
-		if !h.canAccessRepo(r.Context(), caller.user, repo, false) {
+		if !h.canAccessRepo(r.Context(), caller, repo, false) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return nil, "", false
 		}
@@ -281,7 +247,7 @@ func (h *Handler) authorizeGitWrite(w http.ResponseWriter, r *http.Request) (*do
 		challengeBasicAuth(w)
 		return nil, "", false
 	}
-	if !h.canAccessRepo(r.Context(), caller.user, repo, true) {
+	if !h.canAccessRepo(r.Context(), caller, repo, true) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return nil, "", false
 	}
@@ -314,15 +280,40 @@ func (h *Handler) loadGitRepo(w http.ResponseWriter, r *http.Request, owner, rep
 	return repo, fsPath, true
 }
 
-// canAccessRepo answers "may this user read or write the repo?" — the smart-
-// HTTP wrappers further restrict writes via hasWriteScope. User-owned repos
-// allow the owner themselves; org-owned repos allow any member for read and
-// owner-role members for write. The org/domain Resolver carries the
-// membership check; admin always passes.
-func (h *Handler) canAccessRepo(ctx context.Context, user *userdomain.User, repo *domain.Repo, write bool) bool {
-	if user == nil {
+// canAccessRepo answers "may this caller read or write the repo?" — the
+// smart-HTTP wrappers further restrict writes via hasWriteScope. The
+// caller can be one of:
+//
+//   - A user (cookie / PAT / password). User-owned repos allow the
+//     owner; org-owned repos allow any member to read and only
+//     owner-role members to write. Admin always passes.
+//   - An agent session (M7b). Authorized only for the repo the session
+//     is bound to. The session is itself bound to a (repo, issue) when
+//     the spawner creates it; we treat that as the authority.
+func (h *Handler) canAccessRepo(ctx context.Context, caller *gitCaller, repo *domain.Repo, write bool) bool {
+	if caller == nil {
 		return false
 	}
+	if caller.authMethod == "session" && caller.session != nil {
+		// Session is bound to a specific (repo, issue). Refuse any
+		// access to a different repo even if the same operator
+		// happens to have another active session — keeps the blast
+		// radius of a leaked agent token strictly per-session.
+		if caller.session.RepoID == nil || *caller.session.RepoID != repo.ID {
+			return false
+		}
+		// Terminal / archived sessions are rejected upstream by the
+		// validator; double-check here so a token whose row was just
+		// flipped doesn't sneak through a race.
+		if caller.session.Status.Terminal() {
+			return false
+		}
+		return true
+	}
+	if caller.user == nil {
+		return false
+	}
+	user := caller.user
 	if user.Role == userdomain.RoleAdmin {
 		return true
 	}
@@ -351,10 +342,14 @@ func challengeBasicAuth(w http.ResponseWriter) {
 //
 //  1. Session cookie injected by RequireAuth — kept so a logged-in browser
 //     can hit these endpoints uniformly. Cookie auth has no scope.
-//  2. HTTP Basic with a PAT-shaped password (`hgx_*`) — validates via the
+//  2. HTTP Basic with an agent session token (`hgxs_*`) — validates via
+//     the runner module's SessionTokenValidator. The resulting caller is
+//     bound to the session's RepoID; canAccessRepo enforces the match.
+//     This is the M7b agent push path.
+//  3. HTTP Basic with a PAT-shaped password (`hgx_*`) — validates via the
 //     token module. Captures the resolved token so write paths can check
 //     its scope.
-//  3. HTTP Basic with a raw password — bcrypt-compares the user's stored
+//  4. HTTP Basic with a raw password — bcrypt-compares the user's stored
 //     password_hash. Same trust level as cookie.
 func (h *Handler) identifyGitCaller(r *http.Request) (*gitCaller, bool) {
 	if u, ok := authdomain.UserFromRequest(r); ok && !u.Disabled {
@@ -367,6 +362,23 @@ func (h *Handler) identifyGitCaller(r *http.Request) (*gitCaller, bool) {
 	}
 
 	ctx := r.Context()
+
+	// hgxs_ short-circuits before hgx_ because both prefixes start with
+	// "hgx" — checking the longer prefix first prevents an agent token
+	// from falling through to the PAT validator (which would reject it).
+	if h.sessions != nil && strings.HasPrefix(password, "hgxs_") {
+		sess, err := h.sessions.ValidateSessionToken(ctx, password)
+		if err == nil && sess != nil {
+			// We don't materialise a user here — agents have no row in
+			// `users`. Downstream `canAccessRepo` checks the session's
+			// RepoID directly when authMethod == "session". The
+			// `username` field of HTTP Basic is ignored (git CLI uses
+			// "x" by convention).
+			return &gitCaller{session: sess, authMethod: "session"}, true
+		}
+		// Soft-fail through to PAT/password — same rationale as the
+		// PAT path below.
+	}
 
 	// PAT-shaped credentials short-circuit the password path. We use a
 	// prefix check instead of trying the validator unconditionally because

@@ -73,16 +73,51 @@ func (q *Queries) AppendMessage(ctx context.Context, arg AppendMessageParams) (A
 	return i, err
 }
 
+const archiveSessionsByIssue = `-- name: ArchiveSessionsByIssue :execrows
+UPDATE agent_sessions
+SET status               = 'archived',
+    ended_at             = COALESCE(ended_at, NOW()),
+    session_token_sealed = NULL
+WHERE repo_id      = $1
+  AND issue_number = $2
+  AND status      != 'archived'
+`
+
+type ArchiveSessionsByIssueParams struct {
+	RepoID      pgtype.Int8
+	IssueNumber pgtype.Int4
+}
+
+// Flip every non-archived session on this (repo, issue) to archived.
+// Driven by issue.closed / issue.merged: the parent issue is the only
+// thing that can archive sessions — there is no per-session admin
+// archive button (docs/agent-config.md §"Session 模型"). Already-archived
+// rows are skipped so the call is idempotent. session_token_sealed is
+// NULL'd so a leaked DB snapshot of an archived session can't expose the
+// bearer plaintext.
+func (q *Queries) ArchiveSessionsByIssue(ctx context.Context, arg ArchiveSessionsByIssueParams) (int64, error) {
+	result, err := q.db.Exec(ctx, archiveSessionsByIssue, arg.RepoID, arg.IssueNumber)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const claimNextSessionLock = `-- name: ClaimNextSessionLock :one
 SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, agent_repo, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, agent_sha, repo_sha, role_key, cause_kind, cause_id, role_config FROM agent_sessions
-WHERE status = 'pending' AND runner_id = $1
+WHERE status = 'pending'
+  AND (runner_id = $1 OR runner_id IS NULL)
 ORDER BY created_at ASC, id ASC
 FOR UPDATE SKIP LOCKED
 LIMIT 1
 `
 
-// Skip-locked claim: pins the oldest pending session for this runner so a
-// concurrent claim by another runner-thread races on a different row.
+// Skip-locked claim: pins the oldest pending session this runner is
+// eligible to run. M7a relaxed the rule from "pinned-to-this-runner
+// only" to "pinned OR unpinned": the spawner now leaves runner_id NULL
+// when no pre-assignment policy applies, and any eligible runner picks
+// the row up. The follow-up ClaimSessionUpdate writes runner_id so the
+// audit row records who actually ran it.
 func (q *Queries) ClaimNextSessionLock(ctx context.Context, runnerID pgtype.Int8) (AgentSession, error) {
 	row := q.db.QueryRow(ctx, claimNextSessionLock, runnerID)
 	var i AgentSession
@@ -163,12 +198,20 @@ func (q *Queries) ClaimPendingInputsLock(ctx context.Context, arg ClaimPendingIn
 
 const claimSessionUpdate = `-- name: ClaimSessionUpdate :exec
 UPDATE agent_sessions
-SET status = 'claimed', claimed_at = NOW()
-WHERE id = $1
+SET status = 'claimed',
+    claimed_at = NOW(),
+    runner_id = $1
+WHERE id = $2
 `
 
-func (q *Queries) ClaimSessionUpdate(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, claimSessionUpdate, id)
+type ClaimSessionUpdateParams struct {
+	RunnerID pgtype.Int8
+	ID       int64
+}
+
+// Pins runner_id at claim time so unpinned rows record who took them.
+func (q *Queries) ClaimSessionUpdate(ctx context.Context, arg ClaimSessionUpdateParams) error {
+	_, err := q.db.Exec(ctx, claimSessionUpdate, arg.RunnerID, arg.ID)
 	return err
 }
 
@@ -721,6 +764,72 @@ func (q *Queries) ListSessions(ctx context.Context, arg ListSessionsParams) ([]A
 	return items, nil
 }
 
+const listSessionsByIssue = `-- name: ListSessionsByIssue :many
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, agent_repo, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, agent_sha, repo_sha, role_key, cause_kind, cause_id, role_config FROM agent_sessions
+WHERE repo_id      = $1
+  AND issue_number = $2
+ORDER BY id ASC
+`
+
+type ListSessionsByIssueParams struct {
+	RepoID      pgtype.Int8
+	IssueNumber pgtype.Int4
+}
+
+// Returns every agent_session row for the (repo, issue) tuple in spawn
+// order. Powers the M7a audit query view: a caller hands an issue, gets
+// back the entire role roster (with snapshot pins) that has touched it.
+func (q *Queries) ListSessionsByIssue(ctx context.Context, arg ListSessionsByIssueParams) ([]AgentSession, error) {
+	rows, err := q.db.Query(ctx, listSessionsByIssue, arg.RepoID, arg.IssueNumber)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentSession{}
+	for rows.Next() {
+		var i AgentSession
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunnerID,
+			&i.RepoID,
+			&i.IssueNumber,
+			&i.Status,
+			&i.Role,
+			&i.Model,
+			&i.AgentImage,
+			&i.AgentRepo,
+			&i.WorkingBranch,
+			&i.BaseBranch,
+			&i.HostAddendum,
+			&i.Env,
+			&i.SessionTokenPrefix,
+			&i.SessionTokenHash,
+			&i.SessionTokenSealed,
+			&i.SessionTokenRevokedAt,
+			&i.ExitCode,
+			&i.ErrorMessage,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.ClaimedAt,
+			&i.StartedAt,
+			&i.EndedAt,
+			&i.AgentSha,
+			&i.RepoSha,
+			&i.RoleKey,
+			&i.CauseKind,
+			&i.CauseID,
+			&i.RoleConfig,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markInputsConsumed = `-- name: MarkInputsConsumed :exec
 UPDATE agent_session_inputs SET consumed_at = NOW() WHERE id = ANY($1::BIGINT[])
 `
@@ -751,7 +860,8 @@ SET status               = $1,
     exit_code            = $2,
     error_message        = $3,
     session_token_sealed = NULL
-WHERE id = $4 AND status NOT IN ('succeeded', 'failed', 'cancelled')
+WHERE id = $4
+  AND status NOT IN ('succeeded', 'failed', 'cancelled', 'archived')
 `
 
 type MarkSessionTerminalParams struct {
@@ -763,6 +873,13 @@ type MarkSessionTerminalParams struct {
 
 // session_token_sealed is NULL'd at terminate time so a leaked DB
 // snapshot of a dead session no longer carries the bearer plaintext.
+//
+// The NOT IN guard MUST list every terminal state — otherwise a late
+// runner terminate (e.g. container exited just as issue.closed fired)
+// could overwrite an `archived` row with `succeeded` and lose the
+// "session ended because the issue closed" signal in the audit chain.
+// `archived` was added in migration 00002; we updated this guard at
+// the same time the agent_session module landed.
 func (q *Queries) MarkSessionTerminal(ctx context.Context, arg MarkSessionTerminalParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markSessionTerminal,
 		arg.Status,

@@ -1,0 +1,10 @@
+version: 1
+kind: agent
+entry:
+  base_prompt: prompts/system.md
+declared_tools:
+  - issue_read
+  - issue_diff
+  - issue_checks
+  - issue_merge
+  - issue_close

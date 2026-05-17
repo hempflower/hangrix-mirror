@@ -22,24 +22,33 @@ import (
 // fakeFetcher serves deterministic in-memory tarballs and counts hits so
 // tests can verify caching + single-flight behaviour without spinning a
 // real HTTP server.
+//
+// When headerOverride is set, it's returned verbatim as the
+// X-Hangrix-SHA256 value instead of sha256(body) — used to simulate a
+// dishonest / mangled response.
 type fakeFetcher struct {
-	mu       sync.Mutex
-	calls    atomic.Int32
-	bodies   map[string][]byte // sha → tar.gz bytes
-	pause    chan struct{}     // optional gate to test concurrent resolves
-	releaser sync.Once
+	mu             sync.Mutex
+	calls          atomic.Int32
+	bodies         map[string][]byte // sha → tar.gz bytes
+	pause          chan struct{}     // optional gate to test concurrent resolves
+	releaser       sync.Once
+	headerOverride string
 }
 
 func (f *fakeFetcher) FetchAgentBundle(ctx context.Context, owner, name, sha string, w io.Writer) (string, error) {
 	f.calls.Add(1)
 	f.mu.Lock()
 	body := f.bodies[sha]
+	override := f.headerOverride
 	f.mu.Unlock()
 	if f.pause != nil {
 		<-f.pause
 	}
 	if _, err := w.Write(body); err != nil {
 		return "", err
+	}
+	if override != "" {
+		return override, nil
 	}
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:]), nil
@@ -200,18 +209,29 @@ func TestResolveRejectsInvalidPin(t *testing.T) {
 	}
 }
 
+// TestResolveDetectsShaMismatch covers the defence-in-depth check that
+// the runner runs against the X-Hangrix-SHA256 header. The git-commit
+// sha and the tarball sha256 are different hash functions, so the
+// runner doesn't compare body bytes against the URL-path sha (the
+// server's `git archive <sha>` already authoritatively pins identity).
+// What we DO catch: a server / transport intermediary that emits a
+// header whose value disagrees with the body bytes.
 func TestResolveDetectsShaMismatch(t *testing.T) {
 	dir := t.TempDir()
-	tarA := mkTarGz(t, map[string]string{"a.txt": "A"})
-	tarB := mkTarGz(t, map[string]string{"b.txt": "B"})
-	shaA := sha256.Sum256(tarA)
-	// Fetcher returns tarB but the pin says shaA.
-	ff := &fakeFetcher{bodies: map[string][]byte{hex.EncodeToString(shaA[:]): tarB}}
+	// Pin is a synthetic git-sha-shaped value; the body is a tarball whose
+	// own sha256 is unrelated. The fake fetcher returns a deliberately
+	// wrong header so the runner's body↔header check trips.
+	pin := strings.Repeat("ab", 20) // 40 hex chars
+	tar := mkTarGz(t, map[string]string{"a.txt": "A"})
+	ff := &fakeFetcher{
+		bodies:         map[string][]byte{pin: tar},
+		headerOverride: strings.Repeat("cd", 32), // 64 hex chars, mismatching
+	}
 	c, err := bundles.New(bundles.Config{Root: dir}, ff)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	_, err = c.Resolve(context.Background(), "owner/name@"+hex.EncodeToString(shaA[:]))
+	_, err = c.Resolve(context.Background(), "owner/name@"+pin)
 	if err == nil || !strings.Contains(err.Error(), "sha mismatch") {
 		t.Fatalf("expected sha mismatch error, got %v", err)
 	}

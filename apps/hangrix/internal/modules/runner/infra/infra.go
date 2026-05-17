@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
+	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/infra/runnerdb"
 )
@@ -38,11 +39,19 @@ type PostgresRepo struct {
 
 type PostgresRepoDeps struct {
 	Pool *pgxpool.Pool
+	// Repos forces the repo module's migrations to run before our own.
+	// `agent_sessions.repo_id` is a FK on `repos(id)` — a fresh-DB
+	// boot that constructs runner.PostgresRepo before repo.PostgresStore
+	// would otherwise hit "relation repos does not exist" inside our
+	// 00001_create_runners.sql. The dependency is purely an ordering
+	// signal to ioc; we never call methods on it.
+	Repos repodomain.Store
 }
 
 // NewPostgresRepo applies migrations up-front so a schema drift surfaces at
 // startup, not on the first runner enrollment.
 func NewPostgresRepo(deps *PostgresRepoDeps) *PostgresRepo {
+	_ = deps.Repos // dependency-only — see PostgresRepoDeps docstring.
 	sub, err := fs.Sub(migrationsFS, "migrations")
 	if err != nil {
 		panic(fmt.Errorf("runner migrations sub-fs: %w", err))
@@ -351,6 +360,35 @@ func (r *PostgresRepo) ListSessions(ctx context.Context, runnerID *int64, status
 	return out, nil
 }
 
+// ListSessionsByIssue returns every agent_session for a (repo, issue) tuple
+// in spawn order. Powers the M7a agent_session orchestrator: spawn
+// idempotency (skip a role with an existing row for the issue) and the
+// audit query view.
+func (r *PostgresRepo) ListSessionsByIssue(ctx context.Context, repoID int64, issueNumber int32) ([]*domain.AgentSession, error) {
+	rows, err := r.q.ListSessionsByIssue(ctx, runnerdb.ListSessionsByIssueParams{
+		RepoID:      pgtype.Int8{Int64: repoID, Valid: true},
+		IssueNumber: pgtype.Int4{Int32: issueNumber, Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*domain.AgentSession, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, sessionFromRow(row))
+	}
+	return out, nil
+}
+
+// ArchiveSessionsByIssue flips every non-archived session for the (repo,
+// issue) tuple to 'archived'. Idempotent — re-running on an already-
+// archived set is a zero-row update.
+func (r *PostgresRepo) ArchiveSessionsByIssue(ctx context.Context, repoID int64, issueNumber int32) (int64, error) {
+	return r.q.ArchiveSessionsByIssue(ctx, runnerdb.ArchiveSessionsByIssueParams{
+		RepoID:      pgtype.Int8{Int64: repoID, Valid: true},
+		IssueNumber: pgtype.Int4{Int32: issueNumber, Valid: true},
+	})
+}
+
 // ClaimNextSession picks the oldest pending session pinned to the runner
 // (or unpinned, M7a-style) and flips it to 'claimed'. A returning rowless
 // case is ErrNoPendingSession — the runner long-poller treats that as "wait
@@ -370,7 +408,10 @@ func (r *PostgresRepo) ClaimNextSession(ctx context.Context, runnerID int64) (*d
 		}
 		return nil, err
 	}
-	if err := qtx.ClaimSessionUpdate(ctx, row.ID); err != nil {
+	if err := qtx.ClaimSessionUpdate(ctx, runnerdb.ClaimSessionUpdateParams{
+		ID:       row.ID,
+		RunnerID: pgtype.Int8{Int64: runnerID, Valid: true},
+	}); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -380,6 +421,10 @@ func (r *PostgresRepo) ClaimNextSession(ctx context.Context, runnerID int64) (*d
 	s.Status = domain.SessionStatusClaimed
 	now := time.Now()
 	s.ClaimedAt = &now
+	// Reflect the runner_id we just wrote so callers see the pinned
+	// row even before re-querying.
+	pinned := runnerID
+	s.RunnerID = &pinned
 	return s, nil
 }
 

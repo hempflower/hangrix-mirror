@@ -146,6 +146,16 @@ type PathResolver interface {
 	ResolvePath(ownerUsername, repoName string) (string, error)
 }
 
+// KindRefresher reclassifies a repo's `kind` column from its current
+// default-branch tip. The receive-pack post-receive path runs this
+// automatically; the issue merge endpoint also needs it because merges
+// land commits on the base branch without going through receive-pack.
+// Refresh is no-op-on-failure: any git / parse / DB hiccup just leaves
+// the cached kind one merge behind until the next push fixes it.
+type KindRefresher interface {
+	Refresh(ctx context.Context, repo *Repo, fsPath string)
+}
+
 // Store is the persistence abstraction for repo metadata. The owner is
 // addressed as a (kind, id) pair: kind tells the implementation whether to
 // store the id in owner_user_id or owner_org_id. Implementations must map

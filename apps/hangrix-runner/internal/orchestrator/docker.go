@@ -27,17 +27,89 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 type DockerOrchestrator struct {
 	bin string // path to docker CLI
+	// pathMap rewrites bind-mount source paths from the runner's view
+	// onto the docker daemon's view. Each entry is `from=to`; the
+	// first matching prefix wins. Needed when the runner runs inside
+	// a container whose workspace bind-mount points elsewhere on the
+	// host (devcontainer / docker-from-docker). Populated from the
+	// HANGRIX_RUNNER_HOST_PATH_MAP env at construction time.
+	pathMap []pathRemap
+	// network sets `docker run --network <value>`. Defaults to "host"
+	// (matches the runner-protocol spec: agent shares the host's
+	// network so it can reach localhost-bound platform endpoints).
+	// Operators running the runner inside a docker-compose / dev
+	// container override this via HANGRIX_RUNNER_DOCKER_NETWORK to
+	// drop the agent onto the same bridge network as the server.
+	network string
+}
+
+type pathRemap struct {
+	from string
+	to   string
 }
 
 func NewDocker(bin string) *DockerOrchestrator {
 	if bin == "" {
 		bin = "docker"
 	}
-	return &DockerOrchestrator{bin: bin}
+	network := strings.TrimSpace(os.Getenv("HANGRIX_RUNNER_DOCKER_NETWORK"))
+	if network == "" {
+		network = "host"
+	}
+	return &DockerOrchestrator{
+		bin:     bin,
+		pathMap: parsePathMap(os.Getenv("HANGRIX_RUNNER_HOST_PATH_MAP")),
+		network: network,
+	}
+}
+
+// parsePathMap reads "from=to[,from2=to2…]" into a normalized list.
+// Each "from" is matched as a directory prefix; "to" replaces it
+// verbatim. Trailing slashes are normalised away so `/workspaces` and
+// `/workspaces/` behave the same.
+func parsePathMap(raw string) []pathRemap {
+	if raw == "" {
+		return nil
+	}
+	out := make([]pathRemap, 0, 2)
+	for _, pair := range filepath.SplitList(strings.ReplaceAll(raw, ",", string(filepath.ListSeparator))) {
+		// SplitList honours the OS path-list separator; the comma
+		// fallback above keeps the env value portable across shells
+		// that escape `:` differently.
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		eq := strings.IndexByte(pair, '=')
+		if eq <= 0 || eq == len(pair)-1 {
+			continue
+		}
+		from := strings.TrimRight(pair[:eq], "/")
+		to := strings.TrimRight(pair[eq+1:], "/")
+		if from != "" && to != "" {
+			out = append(out, pathRemap{from: from, to: to})
+		}
+	}
+	return out
+}
+
+// remapHostPath applies the pathMap to a bind-mount source. Returns
+// the input unchanged when no entry matches.
+func (o *DockerOrchestrator) remapHostPath(p string) string {
+	for _, m := range o.pathMap {
+		if p == m.from {
+			return m.to
+		}
+		if strings.HasPrefix(p, m.from+"/") {
+			return m.to + p[len(m.from):]
+		}
+	}
+	return p
 }
 
 // dockerHandle wraps an exec.Cmd and its stdio pipes. The exec.Cmd is
@@ -98,17 +170,17 @@ func (o *DockerOrchestrator) Start(ctx context.Context, t Task) (Handle, error) 
 
 	args := []string{
 		"run", "--rm", "-i",
-		"--network", "host",
+		"--network", o.network,
 		"--workdir", "/workspace",
 		"--entrypoint", "/usr/local/bin/hangrix-agent",
-		"-v", absMount(t.AgentBinaryPath, "/usr/local/bin/hangrix-agent", true),
-		"-v", absMount(t.HostWorkdir, "/workspace", false),
+		"-v", o.absMount(t.AgentBinaryPath, "/usr/local/bin/hangrix-agent", true),
+		"-v", o.absMount(t.HostWorkdir, "/workspace", false),
 	}
 	if t.HostBundleDir != "" {
-		args = append(args, "-v", absMount(t.HostBundleDir, "/opt/hangrix/bundle", true))
+		args = append(args, "-v", o.absMount(t.HostBundleDir, "/opt/hangrix/bundle", true))
 	}
 	if t.HostAddendumPath != "" {
-		args = append(args, "-v", absMount(t.HostAddendumPath, "/opt/hangrix/host_addendum.md", true))
+		args = append(args, "-v", o.absMount(t.HostAddendumPath, "/opt/hangrix/host_addendum.md", true))
 	}
 	// Surface canonical env keys that point at in-container paths.
 	env := map[string]string{}
@@ -145,15 +217,19 @@ func (o *DockerOrchestrator) Start(ctx context.Context, t Task) (Handle, error) 
 	return &dockerHandle{cmd: cmd, stdin: stdin, stdout: stdout, stderr: stderr}, nil
 }
 
-// absMount turns (host, container) into the `-v` arg form docker expects.
-// Trailing :ro flag added when ro is true. host is converted to an
-// absolute path because docker rejects relative bind-mount sources.
-func absMount(host, container string, ro bool) string {
+// absMount turns (host, container) into the `-v` arg form docker
+// expects. Trailing :ro flag added when ro is true. host is converted
+// to an absolute path because docker rejects relative bind-mount
+// sources, then run through the orchestrator's path map (if any) so a
+// devcontainer's view of `/workspaces/foo` becomes the docker
+// daemon's `/home/user/foo`.
+func (o *DockerOrchestrator) absMount(host, container string, ro bool) string {
 	if !filepath.IsAbs(host) {
 		if abs, err := filepath.Abs(host); err == nil {
 			host = abs
 		}
 	}
+	host = o.remapHostPath(host)
 	v := host + ":" + container
 	if ro {
 		v += ":ro"

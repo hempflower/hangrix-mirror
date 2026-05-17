@@ -62,6 +62,22 @@ func (c *Context) AppendAssistant(content string, calls []llm.ToolCall) {
 	})
 }
 
+// AppendAssistantWithReasoning is the thinking-model variant: the
+// upstream emitted a `reasoning` output item alongside the assistant
+// text + tool calls. Providers like DeepSeek-Reasoner reject the next
+// turn if the prior reasoning_content is missing from the history, so
+// we attach it verbatim to the assistant Message and ToInputItems
+// echoes it back on the next request.
+func (c *Context) AppendAssistantWithReasoning(content, reasoning, signature string, calls []llm.ToolCall) {
+	c.messages = append(c.messages, llm.Message{
+		Role:               "assistant",
+		Content:            content,
+		Reasoning:          reasoning,
+		ReasoningSignature: signature,
+		ToolCalls:          calls,
+	})
+}
+
 func (c *Context) AppendToolResult(callID, content string) {
 	c.messages = append(c.messages, llm.Message{
 		Role:       "tool",

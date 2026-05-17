@@ -1,0 +1,36 @@
+# Server config for the docker-compose smoke stack.
+#
+# Hostnames here are docker-compose service names — `postgres`, `redis`,
+# `server` — so they resolve over the `hangrix-smoke` bridge network the
+# compose file defines. The agent containers the runner spawns join the
+# same network and reach the server at the same `server:8080`.
+server:
+  addr: ":8080"
+  url: "http://server:8080"
+
+database:
+  dsn: "postgres://hangrix:hangrix@postgres:5432/hangrix?sslmode=disable"
+
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: 0
+
+auth:
+  cookie_name: "hangrix_session"
+  cookie_secure: false
+  session_ttl: "168h"
+
+storage:
+  # Mounted in via the `repos` named volume so the bare repos survive
+  # `docker compose down` without being recreated.
+  repos_path: "/data/repos"
+
+llm:
+  # 32-byte base64 master key. Generated per-stack — rotate by changing
+  # this value and dropping the compose volumes (provider api_keys are
+  # sealed with this key; new key → existing rows unreadable).
+  encryption_key: "wAO53V1ifCfBbm5ZVmjR9haeymmvhIobK4b99+D4Eq8="
+
+runner:
+  default_agent_image: "hangrix-smoke-agent:latest"

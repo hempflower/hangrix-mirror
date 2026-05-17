@@ -1,4 +1,4 @@
-package handler
+package service
 
 import (
 	"context"
@@ -106,9 +106,9 @@ func seedRepoWith(t *testing.T, files map[string]string) string {
 func callRefresh(t *testing.T, fsPath string) []kindCall {
 	t.Helper()
 	store := &stubKindStore{}
-	h := &Handler{store: store}
+	h := &KindRefresher{store: store}
 	repo := &domain.Repo{ID: 99, DefaultBranch: "main"}
-	h.refreshRepoKind(context.Background(), repo, fsPath)
+	h.Refresh(context.Background(), repo, fsPath)
 	return store.updates
 }
 
@@ -165,8 +165,8 @@ func TestRefreshRepoKindStandardWhenManifestUnparseable(t *testing.T) {
 func TestRefreshRepoKindNoOpWhenDefaultBranchEmpty(t *testing.T) {
 	// repo.DefaultBranch == "" → handler bails before touching the store.
 	store := &stubKindStore{}
-	h := &Handler{store: store}
-	h.refreshRepoKind(context.Background(), &domain.Repo{ID: 99, DefaultBranch: ""}, "/nonexistent")
+	h := &KindRefresher{store: store}
+	h.Refresh(context.Background(), &domain.Repo{ID: 99, DefaultBranch: ""}, "/nonexistent")
 	if len(store.updates) != 0 {
 		t.Fatalf("UpdateKind unexpectedly called: %+v", store.updates)
 	}
@@ -180,8 +180,8 @@ var _ domain.Store = (*stubKindStore)(nil)
 func TestRefreshRepoKindSwallowsStoreError(t *testing.T) {
 	bare := seedRepoWith(t, map[string]string{"README.md": "# hi"})
 	store := &stubKindStore{err: errors.New("boom")}
-	h := &Handler{store: store}
-	h.refreshRepoKind(context.Background(), &domain.Repo{ID: 1, DefaultBranch: "main"}, bare)
+	h := &KindRefresher{store: store}
+	h.Refresh(context.Background(), &domain.Repo{ID: 1, DefaultBranch: "main"}, bare)
 	if len(store.updates) != 1 {
 		t.Fatalf("expected 1 update call, got %d", len(store.updates))
 	}

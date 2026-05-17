@@ -32,11 +32,47 @@ func (s State) Valid() bool {
 type EventKind string
 
 const (
-	EventCommitPushed   EventKind = "commit_pushed"
-	EventBranchMerged   EventKind = "branch_merged"
-	EventStateChanged   EventKind = "state_changed"
-	EventTitleChanged   EventKind = "title_changed"
+	EventCommitPushed EventKind = "commit_pushed"
+	EventBranchMerged EventKind = "branch_merged"
+	EventStateChanged EventKind = "state_changed"
+	EventTitleChanged EventKind = "title_changed"
+
+	// EventReviewVote is the M7b record of a reviewer agent (or human)
+	// recording approve / request_changes / abstain on an issue. The
+	// payload follows ReviewVotePayload. Maintainer roles subscribe to
+	// the corresponding spawner trigger (review_vote.posted) so they
+	// wake when a vote lands.
+	EventReviewVote EventKind = "review_vote"
 )
+
+// ReviewVoteValue enumerates the three vote outcomes a reviewer (agent or
+// human) can record. The string values are stable wire format; do not
+// rename without a migration.
+type ReviewVoteValue string
+
+const (
+	ReviewVoteApprove        ReviewVoteValue = "approve"
+	ReviewVoteRequestChanges ReviewVoteValue = "request_changes"
+	ReviewVoteAbstain        ReviewVoteValue = "abstain"
+)
+
+// Valid reports whether v is one of the three documented values.
+func (v ReviewVoteValue) Valid() bool {
+	switch v {
+	case ReviewVoteApprove, ReviewVoteRequestChanges, ReviewVoteAbstain:
+		return true
+	}
+	return false
+}
+
+// ReviewVotePayload is the JSON shape stored in Event.Payload for
+// EventReviewVote. Value is the outcome; Reason is the reviewer's free-text
+// rationale (always present in the agent path, may be empty in a future
+// human path).
+type ReviewVotePayload struct {
+	Value  ReviewVoteValue `json:"value"`
+	Reason string          `json:"reason,omitempty"`
+}
 
 // Issue is the metadata row. HeadSHA is the current tip of the issue branch
 // (empty until the first push). BaseBranch records the merge target at the
@@ -64,15 +100,25 @@ type Issue struct {
 	MergeCommitSHA string
 }
 
-// Comment is a human (or in M5, agent) message attached to an issue. When
+// Comment is a human or agent message attached to an issue. When
 // FilePath / Line are non-empty the comment is anchored to a code line —
 // rendered inline on the diff tab — otherwise it's a top-level comment on
 // the conversation timeline.
+//
+// Authorship is mutually exclusive:
+//
+//   - Human comment: AuthorID > 0 (FK into users), AuthorName is the
+//     username, AgentRole is empty.
+//   - Agent comment: AuthorID == 0 (the DB stores NULL), AuthorName is
+//     empty, AgentRole is the host yaml role key (`backend` /
+//     `reviewer` / …). The CHECK constraint on the column enforces
+//     this XOR at the DB level too.
 type Comment struct {
 	ID         int64
 	IssueID    int64
 	AuthorID   int64
 	AuthorName string
+	AgentRole  string
 	Body       string
 	FilePath   string
 	Line       int
@@ -82,16 +128,28 @@ type Comment struct {
 
 // Event is a system-generated timeline entry. Payload carries kind-specific
 // fields as JSON (e.g. commit SHAs for EventCommitPushed); handlers decode
-// based on Kind. ActorID is the user who triggered the event (may be 0 for
-// system-only events; M4 always has a human actor).
+// based on Kind.
+//
+// Attribution is one of three flavours, distinguished by which of
+// (ActorID, AgentRole) is set:
+//
+//   - Human-driven (M4): ActorID > 0, ActorName is the username, AgentRole
+//     empty. e.g. a `state_changed open→closed` event triggered by a user
+//     click.
+//   - Agent-driven (M7b): ActorID == 0, ActorName empty, AgentRole is the
+//     role key. e.g. a `review_vote` posted by the reviewer role via
+//     issue_review_vote.
+//   - System (rare): ActorID == 0, both name fields empty. The legacy
+//     fallback used when no actor is known.
 type Event struct {
-	ID         int64
-	IssueID    int64
-	Kind       EventKind
-	Payload    []byte
-	ActorID    int64
-	ActorName  string
-	CreatedAt  time.Time
+	ID        int64
+	IssueID   int64
+	Kind      EventKind
+	Payload   []byte
+	ActorID   int64
+	ActorName string
+	AgentRole string
+	CreatedAt time.Time
 }
 
 // CommitPushedPayload is the JSON shape stored in Event.Payload for
@@ -157,8 +215,17 @@ type Store interface {
 	ListOpenIssueNumbers(ctx context.Context, repoID int64) ([]int64, error)
 
 	CreateComment(ctx context.Context, issueID, authorID int64, body, filePath string, line int) (*Comment, error)
+	// CreateAgentComment writes an agent-authored comment row. AuthorID
+	// is implicitly NULL on the DB side (the CHECK constraint enforces
+	// exactly-one-of with agentRole). agentRole must match the role-key
+	// grammar — the service layer validates before calling.
+	CreateAgentComment(ctx context.Context, issueID int64, agentRole, body, filePath string, line int) (*Comment, error)
 	ListComments(ctx context.Context, issueID int64) ([]*Comment, error)
 
 	CreateEvent(ctx context.Context, issueID int64, kind EventKind, payload []byte, actorID int64) (*Event, error)
+	// CreateAgentEvent attributes the event to a host yaml role rather
+	// than a user. ActorID is implicitly 0 (DB NULL); the row's
+	// agent_role column carries the role key.
+	CreateAgentEvent(ctx context.Context, issueID int64, kind EventKind, payload []byte, agentRole string) (*Event, error)
 	ListEvents(ctx context.Context, issueID int64) ([]*Event, error)
 }

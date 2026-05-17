@@ -181,26 +181,20 @@ func (c *Cache) fetchAndExtract(ctx context.Context, owner, name, sha string) (s
 	if err != nil {
 		return "", fmt.Errorf("fetch bundle %s/%s@%s: %w", owner, name, sha, err)
 	}
-	// Two independent sha checks:
+	// Integrity check: body bytes vs. X-Hangrix-SHA256 header. The
+	// header value is sha256(tarball) emitted by the platform after
+	// `git archive <sha> | gzip -n`; the runner recomputes from the
+	// received bytes and rejects on mismatch (tampering / a transport
+	// intermediary that re-compressed the response).
 	//
-	//   1. body bytes vs. requested pin — the agent_repo identity. A
-	//      mismatch here means the platform handed us bytes that don't
-	//      belong to the sha we asked for: tampering, a server bug, or
-	//      a wedge where the runner cache is poisoned with a stale
-	//      mapping. Hard fail.
-	//   2. body bytes vs. X-Hangrix-SHA256 header — protects against a
-	//      transport intermediary that re-compressed (gzip mtime etc.)
-	//      the response. We emit deterministic gzip server-side; any
-	//      header divergence either means the server is broken or
-	//      something between us mangled the bytes. Hard fail.
-	//
-	// Only the requested-sha check is load-bearing for correctness;
-	// the header check is defence-in-depth.
+	// We deliberately do NOT compare the tarball's sha256 against the
+	// requested git commit sha — those are different hash functions
+	// over different data and can never be equal. The git-sha identity
+	// is enforced server-side: the platform runs `git archive <sha>`
+	// against the agent repo's bare tree, so the bytes by construction
+	// come from the requested commit.
 	sum := sha256.Sum256(buf.Bytes())
 	calc := hex.EncodeToString(sum[:])
-	if calc != sha {
-		return "", fmt.Errorf("bundle sha mismatch: requested %s, body %s", sha, calc)
-	}
 	if got != "" && got != calc {
 		return "", fmt.Errorf("bundle sha mismatch: header %s != body %s", got, calc)
 	}

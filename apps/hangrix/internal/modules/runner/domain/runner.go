@@ -449,9 +449,20 @@ type Repo interface {
 	GetSessionByID(ctx context.Context, id int64) (*AgentSession, error)
 	GetSessionByTokenPrefix(ctx context.Context, prefix string) (*AgentSession, error)
 	ListSessions(ctx context.Context, runnerID *int64, status *SessionStatus, limit int) ([]*AgentSession, error)
+	// ListSessionsByIssue returns every session row scoped to a (repo,
+	// issue) tuple in spawn order. The agent_session module composes this
+	// to (a) skip duplicate spawns on a role that already has a session
+	// for an issue and (b) drive the M7a audit query view.
+	ListSessionsByIssue(ctx context.Context, repoID int64, issueNumber int32) ([]*AgentSession, error)
 	ClaimNextSession(ctx context.Context, runnerID int64) (*AgentSession, error)
 	MarkSessionRunning(ctx context.Context, id int64) error
 	MarkSessionTerminal(ctx context.Context, id int64, status SessionStatus, exitCode *int32, errMsg string) error
+	// ArchiveSessionsByIssue flips every non-archived session on the
+	// (repo, issue) tuple to 'archived'. Driven by issue.closed /
+	// issue.merged — there is no per-session manual archive surface.
+	// Returns the number of rows updated so the caller can log/no-op
+	// when the issue had no live sessions.
+	ArchiveSessionsByIssue(ctx context.Context, repoID int64, issueNumber int32) (int64, error)
 
 	// messages
 	AppendMessage(ctx context.Context, m *Message) (*Message, error)

@@ -1,0 +1,21 @@
+# Build-time context trim for the M7b smoke Dockerfile and any other
+# image builds. Keep this conservative: anything new the Dockerfile
+# actually needs has to NOT be ignored here, otherwise the COPY fails.
+**/node_modules
+**/.next
+**/.nuxt
+**/.output
+**/.turbo
+**/dist
+apps/web/.nuxt
+apps/web/.output
+apps/web/node_modules
+apps/hangrix/internal/web/dist/*
+!apps/hangrix/internal/web/dist/.gitkeep
+data/
+bin/
+.vscode
+.idea
+.github
+**/*.log
+.git

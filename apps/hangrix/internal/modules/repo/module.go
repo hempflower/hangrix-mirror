@@ -8,6 +8,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/handler"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/infra"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/service"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/server"
 	"github.com/hangrix/hangrix/pkg/ioc"
 )
@@ -22,6 +23,11 @@ func Module() *ioc.Module {
 	// runner agent-bundles endpoint can compute fsPaths without taking
 	// a hard dep on the concrete *infra.Storage.
 	storage.ToInterface(new(domain.PathResolver))
+	// M7a Phase 2: kind reclassification on default-branch tip change.
+	// Both receive-pack post-receive AND issue merge consume this through
+	// the narrow domain interface so the issue module doesn't have to
+	// import repo/service or repo/handler.
+	m.Provide(service.NewKindRefresher).ToInterface(new(domain.KindRefresher))
 	m.Provide(handler.NewHandler).ToInterface(new(server.RouteProvider))
 	return m
 }

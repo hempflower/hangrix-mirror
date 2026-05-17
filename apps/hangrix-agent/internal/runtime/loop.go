@@ -57,6 +57,15 @@ func NewLoop(
 // messages array. We treat a non-history first frame as a runner bug and
 // bail; the alternative (proceeding with empty history) would cause the
 // agent to hallucinate prior context on a re-spawn after a crash.
+//
+// M7b lifecycle: the agent exits after processing one event so the
+// runner's per-session container holds a single trigger. The next
+// trigger fires a fresh container against the same agent_sessions row
+// (status flips back to pending; see spawner.go::OnTrigger). This keeps
+// the runner-concurrency=1 invariant intact while letting multiple
+// roles run in parallel as separate sessions on separate containers.
+// (M9+ may upgrade to a long-lived agent that handles many events per
+// container, once we have runner-side concurrency and graceful idle.)
 func (l *Loop) Run(ctx context.Context) error {
 	first, err := l.in.Read()
 	if err != nil {
@@ -92,6 +101,10 @@ func (l *Loop) Run(ctx context.Context) error {
 			if err := l.handleEvent(ctx, cctx, frame); err != nil {
 				return err
 			}
+			// One container, one event. After handleEvent emits `done`
+			// we exit so the runner can claim the next pending session
+			// (often a sibling role woken by our tool calls).
+			return nil
 		case "history":
 			// A second history frame is a re-sync (runner re-attaching
 			// after agent restart). Replace the working context with the
@@ -130,7 +143,14 @@ func (l *Loop) handleEvent(ctx context.Context, cctx *Context, frame *ipc.Inboun
 			_ = l.out.Done(turnID)
 			return nil
 		}
-		cctx.AppendAssistant(resp.Content, resp.ToolCalls)
+		// Preserve `reasoning` blocks if the upstream emitted any. Some
+		// providers (DeepSeek-Reasoner, OpenAI o-series) reject the next
+		// turn if the prior reasoning_content was elided from history.
+		if resp.Reasoning != "" || resp.ReasoningSignature != "" {
+			cctx.AppendAssistantWithReasoning(resp.Content, resp.Reasoning, resp.ReasoningSignature, resp.ToolCalls)
+		} else {
+			cctx.AppendAssistant(resp.Content, resp.ToolCalls)
+		}
 		_ = l.out.Message("assistant", resp.Content, toIPCToolCalls(resp.ToolCalls))
 
 		if len(resp.ToolCalls) == 0 {

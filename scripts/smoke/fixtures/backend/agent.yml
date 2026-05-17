@@ -1,0 +1,13 @@
+version: 1
+kind: agent
+entry:
+  base_prompt: prompts/system.md
+declared_tools:
+  - issue_read
+  - issue_comment
+  - read
+  - write
+  - edit
+  - glob
+  - grep
+  - bash

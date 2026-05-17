@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
+	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
@@ -51,8 +53,43 @@ func (h *Handler) SyncIssueBranch(ctx context.Context, repo *repodomain.Repo, fs
 		if _, err := h.issues.CreateEvent(ctx, iss.ID, domain.EventCommitPushed, raw, actorID); err != nil {
 			return err
 		}
+		// M7b: fan a commit.pushed trigger out to any subscribing roles
+		// (typically reviewer / maintainer). Best-effort — a session-
+		// spawn hiccup must not break the head-sha update or the
+		// timeline event we just wrote.
+		//
+		// When the push observer invokes us with actorID=0 (no human
+		// pushed; usually an agent acting via session token), fall
+		// back to the issue's author so the new session row has a
+		// valid created_by — agent_sessions.created_by FKs users(id)
+		// and rejects 0.
+		spawnActor := actorID
+		if spawnActor == 0 {
+			spawnActor = iss.AuthorID
+		}
+		h.fireCommitPushed(ctx, repo, iss, headSHA, raw, spawnActor)
 	}
 	return nil
+}
+
+// fireCommitPushed dispatches the commit.pushed trigger. CauseID is the
+// new head sha so each push produces a distinct cause-key (subsequent
+// pushes don't dedupe against earlier ones). Payload carries the
+// commit list so the agent can read the changes without an issue_diff
+// roundtrip — the data is already on the platform side.
+func (h *Handler) fireCommitPushed(ctx context.Context, repo *repodomain.Repo, iss *domain.Issue, headSHA string, commitsJSON []byte, actorID int64) {
+	if h.spawner == nil {
+		return
+	}
+	_, _ = h.spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
+		Trigger:     agentsconfig.TriggerCommitPushed,
+		CauseKind:   agentsessiondomain.CauseKindCommitPushed,
+		CauseID:     headSHA,
+		RepoID:      repo.ID,
+		IssueNumber: int32(iss.Number),
+		ActorID:     actorID,
+		Payload:     commitsJSON,
+	})
 }
 
 // collectNewCommits walks the new branch tip until it hits a commit that's
