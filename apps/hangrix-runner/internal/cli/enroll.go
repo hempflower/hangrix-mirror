@@ -67,8 +67,7 @@ func Enroll(ctx context.Context, cfg *config.Config) error {
 // and downloads any binaries whose sha changed (or were never cached).
 // Used by both enroll (first-time) and serve (refresh on startup).
 func applyBootstrap(ctx context.Context, cli *client.Client, stateDir string, state *store.State, b *client.BootstrapPayload) error {
-	state.LLMEndpoint = b.LLMEndpoint
-	state.MCPEndpoint = b.MCPEndpoint
+	state.BaseURL = b.BaseURL
 	state.DefaultAgentImage = b.DefaultAgentImage
 	state.PollWaitSec = b.PollWaitSec
 	state.HeartbeatSec = b.HeartbeatSec
@@ -104,8 +103,21 @@ func ensureBinary(ctx context.Context, cli *client.Client, stateDir, name string
 		return store.BinaryEntry{}, err
 	}
 	dst := store.AgentBinaryPathFor(stateDir, info.SHA256)
-	if stat, err := os.Stat(dst); err == nil && (info.Size == 0 || stat.Size() == info.Size) {
+	// Cache hit: existing regular file with the expected size.
+	// `IsRegular` matters because Docker silently creates an empty
+	// directory at the bind-mount source when the file is missing —
+	// re-running enroll under that state must overwrite, not accept
+	// the directory.
+	if stat, err := os.Stat(dst); err == nil && stat.Mode().IsRegular() && (info.Size == 0 || stat.Size() == info.Size) {
 		return store.BinaryEntry{URL: info.URL, SHA256: info.SHA256, Size: info.Size, LocalPath: dst}, nil
+	}
+	// If dst exists but isn't a regular file (most often: a stray
+	// directory Docker materialised), clear it so the rename below
+	// can land the real binary.
+	if stat, err := os.Stat(dst); err == nil && !stat.Mode().IsRegular() {
+		if err := os.RemoveAll(dst); err != nil {
+			return store.BinaryEntry{}, fmt.Errorf("clear stale cache at %s: %w", dst, err)
+		}
 	}
 	tmp := dst + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)

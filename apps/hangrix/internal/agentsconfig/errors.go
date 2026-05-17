@@ -18,41 +18,6 @@ var (
 	// the field, so the sentinel only needs to discriminate this class.
 	ErrUnknownField = errors.New("unknown field in config")
 
-	// ErrAgentSchemaForbiddenField fires when an agent.yml contains a
-	// key that belongs in the host config (container, env, secrets,
-	// volumes, llm, roles). The host/agent split is principle 7 — the
-	// agent repo must not pin a toolchain.
-	ErrAgentSchemaForbiddenField = errors.New("field forbidden in agent.yml schema")
-
-	// ErrInvalidKind fires when an agent.yml's `kind:` is not "agent".
-	ErrInvalidKind = errors.New("invalid kind for agent manifest")
-
-	// ErrMissingBasePrompt fires when `entry.base_prompt` is empty.
-	ErrMissingBasePrompt = errors.New("entry.base_prompt is required")
-
-	// ErrInvalidBasePromptPath fires for absolute paths, ".." escapes,
-	// or other shapes that would let an agent manifest reference files
-	// outside its own repo root.
-	ErrInvalidBasePromptPath = errors.New("entry.base_prompt must be a relative path under the repo root")
-
-	// ErrInvalidDeclaredTool fires for empty or non-slug tool names in
-	// the agent manifest's `declared_tools` list.
-	ErrInvalidDeclaredTool = errors.New("declared_tools entry must be a non-empty slug")
-
-	// ErrMissingAgentRef fires when a host yaml role omits the
-	// `@<ref>` suffix on its `agent:` value. We reject empty ref
-	// deliberately: floating refs (no pin) would defeat the lock-file
-	// model that ties session audit to a concrete commit.
-	ErrMissingAgentRef = errors.New("agent reference must include @<ref>")
-
-	// ErrInvalidAgentRef fires for any other malformed agent ref —
-	// missing owner, missing name, illegal characters.
-	ErrInvalidAgentRef = errors.New("invalid agent reference")
-
-	// ErrInvalidMentionBy fires when mention_by is set to something
-	// other than owner / collaborators / anyone.
-	ErrInvalidMentionBy = errors.New("invalid mention_by value")
-
 	// ErrUnknownTrigger fires when a role declares a trigger event the
 	// platform does not emit. The allow-list lives in triggers.go.
 	ErrUnknownTrigger = errors.New("unknown trigger event")
@@ -68,6 +33,11 @@ var (
 	// ErrInvalidPromptFilePath fires when `prompt_file` does not begin
 	// with `.hangrix/prompts/` or escapes via `..`.
 	ErrInvalidPromptFilePath = errors.New("prompt_file must start with .hangrix/prompts/")
+
+	// ErrPromptMissing fires when a role has neither `prompt:` nor
+	// `prompt_file:`. Host yaml is the only place a prompt can live —
+	// a role with no prompt source has nothing to run.
+	ErrPromptMissing = errors.New("role must declare one of prompt or prompt_file")
 
 	// ErrInvalidRoleKey fires when a role key violates the
 	// `^[a-z][a-z0-9-]{0,38}$` grammar — the same shape used in the
@@ -106,12 +76,4 @@ var (
 	// host yaml's `roles:` map. yaml.v3 normally returns the last value
 	// silently — the parser explicitly catches duplicates.
 	ErrDuplicateRoleKey = errors.New("duplicate role key")
-
-	// ErrDuplicateLockKey fires when the lock file lists the same
-	// owner/name@ref pair twice.
-	ErrDuplicateLockKey = errors.New("duplicate lock key")
-
-	// ErrInvalidLockEntry fires for empty resolved_sha or zero
-	// resolved_at on a lock entry.
-	ErrInvalidLockEntry = errors.New("invalid lock entry")
 )

@@ -22,7 +22,6 @@ type Deps struct {
 // the documented single-line stderr exit.
 func NewProvider(deps *Deps) *Assembled {
 	a, err := Assemble(Inputs{
-		BundleDir:        deps.Cfg.BundleDir,
 		HostAddendumPath: deps.Cfg.HostAddendumPath,
 		Role:             deps.Cfg.Role,
 		HostRepo:         deps.Cfg.HostRepo,

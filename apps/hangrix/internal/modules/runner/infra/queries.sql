@@ -41,6 +41,13 @@ SET status = 'disabled',
     updated_at = NOW()
 WHERE id = sqlc.arg('id');
 
+-- name: DeleteRunner :execrows
+-- Hard-delete a runner row. agent_sessions.runner_id has ON DELETE SET
+-- NULL so historical session rows survive — runner_id just goes blank
+-- on them. Use this for "remove from list" semantics; for "stop running
+-- but keep the row" use DisableRunner.
+DELETE FROM runners WHERE id = sqlc.arg('id');
+
 -- name: UpdateRunnerHeartbeat :execrows
 UPDATE runners
 SET last_heartbeat_at = NOW(),
@@ -67,10 +74,10 @@ WHERE id = sqlc.arg('id');
 -- name: CreateSession :one
 INSERT INTO agent_sessions (
     runner_id, repo_id, issue_number, status, role, model,
-    agent_image, agent_repo, working_branch, base_branch,
+    agent_image, working_branch, base_branch,
     host_addendum, env, session_token_prefix, session_token_hash,
     session_token_sealed, created_by,
-    agent_sha, repo_sha, role_key, cause_kind, cause_id, role_config
+    repo_sha, role_key, cause_kind, cause_id, role_config
 ) VALUES (
     sqlc.narg('runner_id'),
     sqlc.narg('repo_id'),
@@ -79,7 +86,6 @@ INSERT INTO agent_sessions (
     sqlc.arg('role'),
     sqlc.arg('model'),
     sqlc.arg('agent_image'),
-    sqlc.arg('agent_repo'),
     sqlc.arg('working_branch'),
     sqlc.arg('base_branch'),
     sqlc.arg('host_addendum'),
@@ -88,7 +94,6 @@ INSERT INTO agent_sessions (
     sqlc.arg('session_token_hash'),
     sqlc.narg('session_token_sealed'),
     sqlc.arg('created_by'),
-    sqlc.arg('agent_sha'),
     sqlc.arg('repo_sha'),
     sqlc.arg('role_key'),
     sqlc.arg('cause_kind'),
@@ -112,12 +117,25 @@ LIMIT sqlc.arg('lim');
 
 -- name: ListSessionsByIssue :many
 -- Returns every agent_session row for the (repo, issue) tuple in spawn
--- order. Powers the M7a audit query view: a caller hands an issue, gets
+-- order. Powers the audit query view: a caller hands an issue, gets
 -- back the entire role roster (with snapshot pins) that has touched it.
 SELECT * FROM agent_sessions
 WHERE repo_id      = sqlc.arg('repo_id')
   AND issue_number = sqlc.arg('issue_number')
 ORDER BY id ASC;
+
+-- name: ListRecentSessions :many
+-- Returns the most-recent agent_sessions across the whole platform with
+-- optional filters. Powers the admin "global agent sessions" audit view
+-- under /api/admin/agent-sessions. Every filter is independent and
+-- nullable; the caller composes whichever set of constraints applies.
+SELECT * FROM agent_sessions
+WHERE (sqlc.narg('role_key')::TEXT   IS NULL OR role_key   = sqlc.narg('role_key')::TEXT)
+  AND (sqlc.narg('status')::TEXT     IS NULL OR status     = sqlc.narg('status')::TEXT)
+  AND (sqlc.narg('repo_id')::BIGINT  IS NULL OR repo_id    = sqlc.narg('repo_id')::BIGINT)
+  AND (sqlc.narg('since')::TIMESTAMPTZ IS NULL OR created_at >= sqlc.narg('since')::TIMESTAMPTZ)
+ORDER BY id DESC
+LIMIT sqlc.arg('lim');
 
 -- name: ArchiveSessionsByIssue :execrows
 -- Flip every non-archived session on this (repo, issue) to archived.

@@ -63,10 +63,15 @@ func (g *GoGit) Init(path string, defaultBranch string) error {
 	return nil
 }
 
-// SeedReadme writes a single README.md commit directly via the object storer
-// (no worktree, no index), then advances refs/heads/<defaultBranch> to it.
-// Returns nil if the branch already has a commit.
-func (g *GoGit) SeedReadme(path, defaultBranch, repoName, description, authorName, authorEmail string) error {
+// SeedInitialCommit writes one initial commit containing every entry in
+// files (keyed by repo-relative slash-separated path), then advances
+// refs/heads/<defaultBranch> to it. No-op when the branch already has
+// commits. Nested paths (e.g. ".hangrix/agents.yml") are split on "/" so
+// the necessary tree objects are materialised automatically.
+func (g *GoGit) SeedInitialCommit(path, defaultBranch string, files map[string][]byte, authorName, authorEmail string) error {
+	if len(files) == 0 {
+		return fmt.Errorf("seed: no files supplied")
+	}
 	repo, err := openRepo(path)
 	if err != nil {
 		return err
@@ -76,71 +81,123 @@ func (g *GoGit) SeedReadme(path, defaultBranch, repoName, description, authorNam
 	if _, err := repo.Reference(branchRef, false); err == nil {
 		return nil
 	} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
-		return fmt.Errorf("seed readme: check branch: %w", err)
+		return fmt.Errorf("seed: check branch: %w", err)
 	}
-
-	if description == "" {
-		description = "This repository was created by Hangrix."
-	}
-	readmeContent := fmt.Sprintf("# %s\n\n%s\n", repoName, description)
 
 	st := repo.Storer
 
-	// blob
-	blobObj := st.NewEncodedObject()
-	blobObj.SetType(plumbing.BlobObject)
-	blobObj.SetSize(int64(len(readmeContent)))
-	w, err := blobObj.Writer()
-	if err != nil {
-		return fmt.Errorf("seed readme: blob writer: %w", err)
+	// Step 1: write every file body as a blob, remember each by its
+	// slash-split path so the tree-builder can walk by directory.
+	type fileEntry struct {
+		segments []string
+		hash     plumbing.Hash
 	}
-	if _, err := w.Write([]byte(readmeContent)); err != nil {
-		_ = w.Close()
-		return fmt.Errorf("seed readme: write blob: %w", err)
-	}
-	if err := w.Close(); err != nil {
-		return fmt.Errorf("seed readme: close blob: %w", err)
-	}
-	blobHash, err := st.SetEncodedObject(blobObj)
-	if err != nil {
-		return fmt.Errorf("seed readme: store blob: %w", err)
+	entries := make([]fileEntry, 0, len(files))
+	for relPath, body := range files {
+		if relPath == "" || strings.HasPrefix(relPath, "/") || strings.Contains(relPath, "..") {
+			return fmt.Errorf("seed: bad path %q", relPath)
+		}
+		blobObj := st.NewEncodedObject()
+		blobObj.SetType(plumbing.BlobObject)
+		blobObj.SetSize(int64(len(body)))
+		w, err := blobObj.Writer()
+		if err != nil {
+			return fmt.Errorf("seed: blob writer (%s): %w", relPath, err)
+		}
+		if _, err := w.Write(body); err != nil {
+			_ = w.Close()
+			return fmt.Errorf("seed: write blob (%s): %w", relPath, err)
+		}
+		if err := w.Close(); err != nil {
+			return fmt.Errorf("seed: close blob (%s): %w", relPath, err)
+		}
+		blobHash, err := st.SetEncodedObject(blobObj)
+		if err != nil {
+			return fmt.Errorf("seed: store blob (%s): %w", relPath, err)
+		}
+		entries = append(entries, fileEntry{
+			segments: strings.Split(relPath, "/"),
+			hash:     blobHash,
+		})
 	}
 
-	// tree
-	tree := &object.Tree{
-		Entries: []object.TreeEntry{
-			{Name: "README.md", Mode: filemode.Regular, Hash: blobHash},
-		},
-	}
-	treeObj := st.NewEncodedObject()
-	if err := tree.Encode(treeObj); err != nil {
-		return fmt.Errorf("seed readme: encode tree: %w", err)
-	}
-	treeHash, err := st.SetEncodedObject(treeObj)
-	if err != nil {
-		return fmt.Errorf("seed readme: store tree: %w", err)
+	// Step 2: build the root tree by recursing over the entries. Group
+	// by first path segment; for groups whose member paths are deeper
+	// than one segment, recurse to build a subtree blob, then point a
+	// tree entry at it. Sort children alphabetically so the resulting
+	// tree hash is deterministic for the same input.
+	var buildTree func(prefix string, group []fileEntry) (plumbing.Hash, error)
+	buildTree = func(prefix string, group []fileEntry) (plumbing.Hash, error) {
+		// Bucket by the next segment.
+		buckets := map[string][]fileEntry{}
+		var leaves []object.TreeEntry
+		for _, e := range group {
+			if len(e.segments) == 1 {
+				leaves = append(leaves, object.TreeEntry{
+					Name: e.segments[0],
+					Mode: filemode.Regular,
+					Hash: e.hash,
+				})
+				continue
+			}
+			head := e.segments[0]
+			buckets[head] = append(buckets[head], fileEntry{
+				segments: e.segments[1:],
+				hash:     e.hash,
+			})
+		}
+		treeEntries := append([]object.TreeEntry(nil), leaves...)
+		for name, child := range buckets {
+			subHash, err := buildTree(prefix+name+"/", child)
+			if err != nil {
+				return plumbing.ZeroHash, err
+			}
+			treeEntries = append(treeEntries, object.TreeEntry{
+				Name: name,
+				Mode: filemode.Dir,
+				Hash: subHash,
+			})
+		}
+		sort.Slice(treeEntries, func(i, j int) bool {
+			return treeEntries[i].Name < treeEntries[j].Name
+		})
+		treeObj := st.NewEncodedObject()
+		tree := &object.Tree{Entries: treeEntries}
+		if err := tree.Encode(treeObj); err != nil {
+			return plumbing.ZeroHash, fmt.Errorf("seed: encode tree (%s): %w", prefix, err)
+		}
+		h, err := st.SetEncodedObject(treeObj)
+		if err != nil {
+			return plumbing.ZeroHash, fmt.Errorf("seed: store tree (%s): %w", prefix, err)
+		}
+		return h, nil
 	}
 
-	// commit
+	rootHash, err := buildTree("", entries)
+	if err != nil {
+		return err
+	}
+
+	// Step 3: write the commit pointing at the root tree.
 	now := time.Now()
 	sig := object.Signature{Name: authorName, Email: authorEmail, When: now}
 	commit := &object.Commit{
 		Author:    sig,
 		Committer: sig,
 		Message:   "Initial commit\n",
-		TreeHash:  treeHash,
+		TreeHash:  rootHash,
 	}
 	commitObj := st.NewEncodedObject()
 	if err := commit.Encode(commitObj); err != nil {
-		return fmt.Errorf("seed readme: encode commit: %w", err)
+		return fmt.Errorf("seed: encode commit: %w", err)
 	}
 	commitHash, err := st.SetEncodedObject(commitObj)
 	if err != nil {
-		return fmt.Errorf("seed readme: store commit: %w", err)
+		return fmt.Errorf("seed: store commit: %w", err)
 	}
 
 	if err := st.SetReference(plumbing.NewHashReference(branchRef, commitHash)); err != nil {
-		return fmt.Errorf("seed readme: set branch ref: %w", err)
+		return fmt.Errorf("seed: set branch ref: %w", err)
 	}
 	return nil
 }

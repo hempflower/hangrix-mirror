@@ -7,7 +7,6 @@ import (
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
-	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 )
 
 // hostYAMLWithPromptFile uses prompt_file: instead of an inline prompt:.
@@ -20,7 +19,6 @@ llm:
   model: claude-sonnet-4-6
 roles:
   backend:
-    agent: acme/coder@v1.0.0
     triggers: [issue.opened]
     can: [issue_read]
     prompt_file: .hangrix/prompts/backend.md
@@ -53,74 +51,6 @@ func TestSpawnerLoadsPromptFile(t *testing.T) {
 	}
 }
 
-// TestSpawnerRejectsKindStandardAgentRepo enforces the security
-// boundary: a role that points at a kind=standard repo (no agent.yml)
-// must not produce a session. M7a P1 added KindAgent; spawner is the
-// pre-spawn check the runner bundle endpoint mirrors at fetch time.
-func TestSpawnerRejectsKindStandardAgentRepo(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAML), nil)
-	// Flip the agent repo's kind to KindStandard. The spawner should
-	// refuse to materialise a non-agent repo into an agent container.
-	for _, r := range h.repos.byID {
-		if r.OwnerName == "acme" && r.Name == "coder" {
-			r.Kind = repodomain.KindStandard
-		}
-	}
-	got, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
-		Trigger:     agentsconfig.TriggerIssueOpened,
-		CauseKind:   domain.CauseKindIssueOpened,
-		RepoID:      1,
-		IssueNumber: 1,
-		ActorID:     1,
-	})
-	if err != nil {
-		t.Fatalf("OnTrigger should not return whole-config error on per-role skip, got: %v", err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("got %d sessions, want 0 (kind=standard agent repo must be rejected)", len(got))
-	}
-	if len(h.runner.sessions) != 0 {
-		t.Fatalf("stub stored %d rows, want 0", len(h.runner.sessions))
-	}
-}
-
-// TestSpawnerSkipsMissingAgentRepo: the role's agent: points at a
-// `<owner>/<name>` that doesn't exist. Per-role failure should be
-// isolated — other matched roles continue to spawn.
-func TestSpawnerSkipsMissingAgentRepo(t *testing.T) {
-	// Two-role yaml: one role pinned to a missing repo, one to a real
-	// one. Expect exactly the real one to spawn.
-	yaml := `version: 1
-container:
-  image: ghcr.io/acme/dev:1.2.3
-llm:
-  model: claude-sonnet-4-6
-roles:
-  ghost:
-    agent: acme/does-not-exist@v1.0.0
-    triggers: [issue.opened]
-    can: [issue_read]
-  backend:
-    agent: acme/coder@v1.0.0
-    triggers: [issue.opened]
-    can: [issue_read]
-`
-	h := newTestSpawner(t, []byte(yaml), nil)
-	got, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
-		Trigger:     agentsconfig.TriggerIssueOpened,
-		CauseKind:   domain.CauseKindIssueOpened,
-		RepoID:      1,
-		IssueNumber: 1,
-		ActorID:     1,
-	})
-	if err != nil {
-		t.Fatalf("per-role failure should not propagate to caller, got: %v", err)
-	}
-	if len(got) != 1 || got[0].RoleKey != "backend" {
-		t.Fatalf("expected only `backend` to spawn, got %+v", got)
-	}
-}
-
 // TestSpawnerRequiresLLMModel: a role + host both omit llm.model. The
 // spawner refuses to write a row with an empty model column (the
 // runner's env injection would emit `MODEL=` which the agent's LLM
@@ -131,7 +61,7 @@ container:
   image: ghcr.io/acme/dev:1.2.3
 roles:
   backend:
-    agent: acme/coder@v1.0.0
+    prompt: hi
     triggers: [issue.opened]
     can: [issue_read]
 `
@@ -164,7 +94,7 @@ llm:
   model: claude-sonnet-4-6
 roles:
   backend:
-    agent: acme/coder@v1.0.0
+    prompt: hi
     triggers: [issue.opened]
     can: [issue_read]
     llm:
@@ -221,15 +151,15 @@ llm:
   model: claude-sonnet-4-6
 roles:
   backend:
-    agent: acme/coder@v1.0.0
+    prompt: hi
     triggers: [issue.opened]
     can: [issue_read]
   dispatcher:
-    agent: acme/dispatcher@v1.0.0
+    prompt: hi
     triggers: [issue.opened]
     can: [issue_read]
   reviewer:
-    agent: acme/reviewer@v1.0.0
+    prompt: hi
     triggers: [issue.opened]
     can: [issue_read]
 `

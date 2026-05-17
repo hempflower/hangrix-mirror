@@ -2,13 +2,13 @@
 
 [← ROADMAP](../ROADMAP.md)
 
-容器里跑的 agent 需要一张令牌才能跟平台说话。这张令牌的语义是「agent 身份」—— 它代表一次 agent_session 的身份，**而不是**对某个 LLM provider 的临时授权。同一张 token 给 LLM proxy、平台 MCP server、未来的 git push helper 共用。
+容器里跑的 agent 需要一张令牌才能跟平台说话。这张令牌的语义是「agent 身份」—— 它代表一次 agent_session 的身份，**而不是**对某个 LLM provider 的临时授权。同一张 token 给 LLM proxy、平台 agent-tools REST 端点、未来的 git push helper 共用。
 
 ## 演化
 
 M6a 时把 session token 挂在 `modules/llm_provider`，每张 token 绑死到 (provider, model)。M6c 闭环时发现这个绑定有两个问题：
 
-1. **耦合错位。** Token 表面是 LLM 设施的产物，实际是 agent 在容器里跑的身份凭证。Agent 调平台 MCP / 推 git 跟 LLM provider 没关系。
+1. **耦合错位。** Token 表面是 LLM 设施的产物，实际是 agent 在容器里跑的身份凭证。Agent 调平台 agent-tools 端点 / 推 git 跟 LLM provider 没关系。
 2. **路由绕弯。** 既然 token 绑 (provider, model)，代理 URL 又带 `{provider_name}` —— 两份冗余信息在校验链里反复对账。
 
 重构后：
@@ -66,14 +66,14 @@ Enrollment redemption（`hgxe_`）例外：它是 stateful 状态转移（`FOR U
 ## 跨模块消费
 
 ```
-llm_proxy ─┐
-mcp_server ├─► runner/domain.SessionTokenValidator ─► *AgentSession
-push helper┘                                            ├─ ID / RunnerID / RepoID 等业务字段
-                                                        ├─ Model（agent 应该调哪个 LLM）
-                                                        └─ 终态判定 / 显式 revoke
+llm_proxy   ─┐
+agent_tools  ├─► runner/domain.SessionTokenValidator ─► *AgentSession
+push helper ─┘                                            ├─ ID / RunnerID / RepoID 等业务字段
+                                                          ├─ Model（agent 应该调哪个 LLM）
+                                                          └─ 终态判定 / 显式 revoke
 ```
 
-每个消费者拿到 `*AgentSession` 后按自己的 policy 验更多东西（llm_proxy 看 model，未来 mcp_server 看 role，push helper 看 repo + branch）；通用部分（"这个 token 活的吗"）只校验一次。
+每个消费者拿到 `*AgentSession` 后按自己的 policy 验更多东西（llm_proxy 看 model，agent-tools handler 看 role 的 `can:` / `not:` ACL，push helper 看 repo + branch）；通用部分（"这个 token 活的吗"）只校验一次。
 
 ## 三种 token 一览
 
@@ -82,7 +82,7 @@ push helper┘                                            ├─ ID / RunnerID /
 | `hgx_` | user | PAT，git push + admin API | `modules/token` |
 | `hgxe_` | runner | 一次性 enrollment | `modules/runner/infra.RedeemEnrollment` |
 | `hgxr_` | runner | 长期 agent token，runner ↔ server | `modules/runner/service.AgentTokenValidator` |
-| `hgxs_` | agent_session | agent ↔ 平台（LLM / MCP / git） | `modules/runner/service.SessionTokenValidator` |
+| `hgxs_` | agent_session | agent ↔ 平台（LLM / agent-tools / git） | `modules/runner/service.SessionTokenValidator` |
 
 四种前缀互不重叠 —— 一个 Bearer 头一眼可以分流到对应 validator。
 

@@ -65,7 +65,7 @@ func (s Status) Valid() bool {
 //
 // Capabilities is opaque JSON the runner self-reports on heartbeat — image
 // pull cache state, cgroup version, cpu/mem ceilings, etc. The platform
-// stores it as-is for diagnostics; M6c does not parse it.
+// stores it as-is for diagnostics and does not parse it.
 type Runner struct {
 	ID                  int64
 	Name                string
@@ -145,13 +145,10 @@ const (
 
 // Terminal reports whether the row will never run again. Archived is
 // terminal (issue is gone); idle is NOT terminal (the row waits for the
-// next trigger and goes back to pending). Succeeded/failed/cancelled are
-// terminal in the M6c sense — they describe the most recent container,
-// but the row itself can still get a fresh pending turn under M7a if the
-// session is per-role-not-per-container; for now we keep the M6c semantics
-// (terminal=row done) because the per-role lifecycle module is M7a Phase 2
-// and the new idle / archived states are how the row signals "still
-// active" vs. "permanently done" to that module.
+// next trigger and goes back to pending). Succeeded / failed / cancelled
+// describe the most recent container and are also terminal — the
+// per-role session module signals "still active" with idle and
+// "permanently done" with archived.
 func (s SessionStatus) Terminal() bool {
 	switch s {
 	case SessionStatusSucceeded, SessionStatusFailed, SessionStatusCancelled, SessionStatusArchived:
@@ -183,14 +180,6 @@ type AgentSession struct {
 	Role                  string
 	Model                 string
 	AgentImage            string
-	// AgentRepo is the agent bundle the runner should materialise, as
-	// "<owner>/<name>@<sha>" (sha is required, resolved from the host
-	// yaml ref via the agents.lock file). The runner downloads the
-	// corresponding tarball from /api/runner/agent-bundles/... and
-	// mounts it read-only at /opt/hangrix/bundle. M6c's bundle_dir
-	// (a runner-side filesystem path) has been retired in migration
-	// 00002 — this field is what runners read now.
-	AgentRepo             string
 	WorkingBranch         string
 	BaseBranch            string
 	HostAddendum          string
@@ -207,16 +196,15 @@ type AgentSession struct {
 	StartedAt             *time.Time
 	EndedAt               *time.Time
 
-	// M7a snapshot fields. Frozen at session-spawn so a later audit can
-	// reconstruct exactly which agent + host configuration produced any
-	// commit made by this session. See docs/agent-config.md §"Session
-	// 模型".
-	AgentSHA   string          // agent repo commit sha pulled by runner
-	RepoSHA    string          // host repo base-branch sha at spawn time
-	RoleKey    string          // role identifier from host yaml; commit author for pushes
-	CauseKind  string          // trigger family (e.g. "issue_opened", "comment_mentioned")
-	CauseID    string          // upstream artefact id (opaque to runner)
-	RoleConfig []byte          // resolved role config snapshot (JSON), empty == "{}"
+	// Snapshot fields frozen at session-spawn so a later audit can
+	// reconstruct exactly which host configuration + code state produced
+	// any commit made by this session. See docs/agent-config.md
+	// §"Session 模型".
+	RepoSHA    string // host repo base-branch sha at spawn time
+	RoleKey    string // role identifier from host yaml; commit author for pushes
+	CauseKind  string // trigger family (e.g. "issue_opened", "comment_mentioned")
+	CauseID    string // upstream artefact id (opaque to runner)
+	RoleConfig []byte // resolved role config snapshot (JSON), empty == "{}"
 }
 
 // SessionTokenActive reports whether the session's identity token is
@@ -230,6 +218,16 @@ func (s *AgentSession) SessionTokenActive(now time.Time) bool {
 		return false
 	}
 	return true
+}
+
+// SessionFilter is the optional-filter bag for ListRecentSessions. Each
+// field is nil-means-no-constraint; the caller composes whichever set
+// applies. Used by the admin global audit handler.
+type SessionFilter struct {
+	RoleKey *string
+	Status  *string
+	RepoID  *int64
+	Since   *time.Time
 }
 
 // MessageKind is the discriminator on agent_session_messages.kind. The set
@@ -317,17 +315,17 @@ func (in CreateRunnerInput) Validate() error {
 }
 
 // CreateSessionInput is what the admin handler hands the repo when starting
-// a test session. RunnerID pins the session to a specific runner row; M6c
-// always pins, M7a's dispatcher will widen this.
+// a test session. RunnerID pins the session to a specific runner row when
+// non-nil; the session spawner can leave it nil for unpinned rows that any
+// eligible runner will claim.
 //
 // SessionTokenPrefix / SessionTokenHash / SessionTokenSealed are all minted
 // by the caller (it holds the cryptobox) before this call lands. The repo
 // only stores them; it never sees the plaintext on its own.
 //
-// The M7a snapshot fields (AgentSHA / RepoSHA / RoleKey / Cause* /
-// RoleConfig) carry zero defaults so the M6c admin path keeps working
-// uninstrumented. The M7a session-spawn orchestrator MUST populate them;
-// audit consumers detect "M6c-era row" by an empty AgentSHA.
+// The snapshot fields (RepoSHA / RoleKey / Cause* / RoleConfig) carry zero
+// defaults so the admin smoke path keeps working uninstrumented; the
+// session-spawn orchestrator populates them on the real trigger path.
 type CreateSessionInput struct {
 	RunnerID           *int64
 	RepoID             *int64
@@ -335,7 +333,6 @@ type CreateSessionInput struct {
 	Role               string
 	Model              string
 	AgentImage         string
-	AgentRepo          string // "<owner>/<name>@<sha>"
 	WorkingBranch      string
 	BaseBranch         string
 	HostAddendum       string
@@ -345,8 +342,7 @@ type CreateSessionInput struct {
 	SessionTokenSealed string
 	CreatedBy          int64
 
-	// M7a snapshot.
-	AgentSHA   string
+	// Snapshot.
 	RepoSHA    string
 	RoleKey    string
 	CauseKind  string
@@ -422,6 +418,12 @@ type Repo interface {
 	GetRunnerByAgentTokenPrefix(ctx context.Context, prefix string) (*Runner, error)
 	ListRunners(ctx context.Context, ownerUserID *int64, visibility *Visibility) ([]*Runner, error)
 	DisableRunner(ctx context.Context, id int64) error
+	// DeleteRunner is a hard delete — removes the row from `runners`.
+	// agent_sessions.runner_id is ON DELETE SET NULL, so historical
+	// session rows survive but lose the runner pointer. Use this for
+	// "remove from list" semantics; for "stop running but keep the
+	// row" use DisableRunner.
+	DeleteRunner(ctx context.Context, id int64) error
 	UpdateRunnerHeartbeat(ctx context.Context, id int64, capabilities []byte) error
 
 	// RedeemEnrollment runs the redemption transaction:
@@ -452,8 +454,12 @@ type Repo interface {
 	// ListSessionsByIssue returns every session row scoped to a (repo,
 	// issue) tuple in spawn order. The agent_session module composes this
 	// to (a) skip duplicate spawns on a role that already has a session
-	// for an issue and (b) drive the M7a audit query view.
+	// for an issue and (b) drive the audit query view.
 	ListSessionsByIssue(ctx context.Context, repoID int64, issueNumber int32) ([]*AgentSession, error)
+	// ListRecentSessions returns the most-recent agent_sessions across
+	// the platform, newest first, with optional filters. Powers the
+	// global admin audit view (/api/admin/agent-sessions).
+	ListRecentSessions(ctx context.Context, filter SessionFilter, limit int) ([]*AgentSession, error)
 	ClaimNextSession(ctx context.Context, runnerID int64) (*AgentSession, error)
 	MarkSessionRunning(ctx context.Context, id int64) error
 	MarkSessionTerminal(ctx context.Context, id int64, status SessionStatus, exitCode *int32, errMsg string) error

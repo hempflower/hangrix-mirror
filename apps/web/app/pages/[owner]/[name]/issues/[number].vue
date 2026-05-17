@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
+  Bot,
   CircleDot,
   CornerDownRight,
   Diff as DiffIcon,
@@ -12,6 +13,7 @@ import {
   Plus,
 } from 'lucide-vue-next'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import AgentSessionsView from '@/components/issue/AgentSessionsView.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -63,13 +65,14 @@ const mergeBusy = ref(false)
 const actionError = ref<string | null>(null)
 const actionInfo = ref<string | null>(null)
 
-type IssueTab = 'conversation' | 'commits' | 'diff'
+type IssueTab = 'conversation' | 'commits' | 'diff' | 'agents'
 
 // tab state is mirrored into ?tab= so the URL is shareable / refresh-stable.
 // `conversation` is the implicit default — we drop the query key entirely
 // when it's selected so deep links to "/issues/N" stay clean.
 function parseTab(raw: unknown): IssueTab {
-  return raw === 'commits' || raw === 'diff' ? raw : 'conversation'
+  if (raw === 'commits' || raw === 'diff' || raw === 'agents') return raw
+  return 'conversation'
 }
 const tab = ref<IssueTab>(parseTab(route.query.tab))
 
@@ -436,6 +439,10 @@ onUnmounted(stopRefreshTimer)
                 <DiffIcon class="size-4" />
                 {{ t('issue.tabs.diff') }}
               </TabsTrigger>
+              <TabsTrigger value="agents">
+                <Bot class="size-4" />
+                {{ t('issue.tabs.agents') }}
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="conversation" class="space-y-3">
@@ -594,6 +601,15 @@ onUnmounted(stopRefreshTimer)
                 :name="name"
                 :ref-before="issue.base_branch"
                 :ref-after="issue.branch_name"
+              />
+            </TabsContent>
+
+            <TabsContent value="agents" class="space-y-4">
+              <AgentSessionsView
+                :active="tab === 'agents'"
+                :owner="owner"
+                :name="name"
+                :issue-number="Number(number)"
               />
             </TabsContent>
           </Tabs>

@@ -14,10 +14,11 @@ type Deps struct {
 }
 
 // NewProvider is the ioc-shaped constructor. config.NewConfig has
-// already panicked if HANGRIX_LLM_ENDPOINT or HANGRIX_SESSION_TOKEN is
-// missing, so the two fields read here are guaranteed non-empty.
+// already panicked if HANGRIX_PLATFORM_BASE_URL or
+// HANGRIX_SESSION_TOKEN is missing, so the values read here are
+// guaranteed non-empty.
 func NewProvider(deps *Deps) *Client {
-	return New(deps.Cfg.LLMEndpoint, deps.Cfg.SessionToken)
+	return New(deps.Cfg.LLMEndpoint(), deps.Cfg.SessionToken)
 }
 
 func Module() *ioc.Module {

@@ -61,7 +61,7 @@ func (r *Registry) issueCommentTool() *platformmcpdomain.Tool {
 				return errorResult("body is required"), nil
 			}
 			if sess.RoleKey == "" {
-				return errorResult("session has no role_key (M6c admin path?)"), nil
+				return errorResult("session has no role_key (admin smoke path?)"), nil
 			}
 			c, err := r.deps.Issues.CreateAgentComment(
 				ctx, scope.issue.ID, sess.RoleKey, body, strings.TrimSpace(req.FilePath), req.Line,
@@ -207,7 +207,7 @@ func (r *Registry) issueCloseTool() *platformmcpdomain.Tool {
 
 // issueMergeTool merges the issue branch into base. The work is the
 // same as the web-API merge handler: three-way merge → state →
-// timeline events → archive sessions → repo kind refresh.
+// timeline events → archive sessions.
 //
 // The agent path differs from the web path in one place: there's no
 // canManage permission check here because the `can: [issue_merge]`
@@ -279,9 +279,6 @@ func (r *Registry) issueMergeTool() *platformmcpdomain.Tool {
 			})
 			_, _ = r.deps.Issues.CreateAgentEvent(ctx, scope.issue.ID, issuedomain.EventStateChanged, statePayload, sess.RoleKey)
 
-			if r.deps.KindRefresher != nil {
-				r.deps.KindRefresher.Refresh(ctx, scope.repo, scope.fsPath)
-			}
 			if r.deps.Archiver != nil {
 				_, _ = r.deps.Archiver.OnIssueClosed(ctx, scope.repo.ID, *sess.IssueNumber)
 			}

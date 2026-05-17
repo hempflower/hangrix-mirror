@@ -58,14 +58,15 @@ func NewLoop(
 // bail; the alternative (proceeding with empty history) would cause the
 // agent to hallucinate prior context on a re-spawn after a crash.
 //
-// M7b lifecycle: the agent exits after processing one event so the
+// Lifecycle: the agent exits after processing one event so the
 // runner's per-session container holds a single trigger. The next
 // trigger fires a fresh container against the same agent_sessions row
 // (status flips back to pending; see spawner.go::OnTrigger). This keeps
 // the runner-concurrency=1 invariant intact while letting multiple
 // roles run in parallel as separate sessions on separate containers.
-// (M9+ may upgrade to a long-lived agent that handles many events per
-// container, once we have runner-side concurrency and graceful idle.)
+// A future milestone may upgrade to a long-lived agent that handles
+// many events per container, once runner-side concurrency + graceful
+// idle land.
 func (l *Loop) Run(ctx context.Context) error {
 	first, err := l.in.Read()
 	if err != nil {

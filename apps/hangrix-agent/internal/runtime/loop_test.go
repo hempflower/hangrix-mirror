@@ -15,23 +15,23 @@ import (
 
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/ipc"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/llm"
-	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/mcp"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/runtime"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/local"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/platform"
 )
 
-// TestLoopSmoke is the M6b exit-condition rehearsal: scripted LLM
-// (returns one tool call, then a final message) + mock MCP (one stub
-// platform tool) + real local tools, driven through the runtime loop.
-// We assert the end state from the outbound IPC stream:
+// TestLoopSmoke is the end-to-end rehearsal: scripted LLM (returns
+// one tool call, then a final message) + mock platform tools server
+// (echoing `issue_read`) + real local tools, driven through the
+// runtime loop. We assert the end state from the outbound IPC stream:
 //
 //   - one local tool call was executed (read on a temp file)
-//   - one MCP tool call was executed (the stub)
+//   - one platform tool call was executed (issue_read)
 //   - a final assistant message arrived
 //   - a `done` frame closed the turn
 //
-// This intentionally goes end-to-end through the real ipc/llm/mcp
+// This intentionally goes end-to-end through the real ipc/llm/tools
 // machinery — only the upstream HTTP servers are mocked. A failure
 // here means the seam between two of those packages broke.
 func TestLoopSmoke(t *testing.T) {
@@ -68,7 +68,7 @@ func TestLoopSmoke(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		if isFirst {
-			// Two tool calls: one local (`read`), one MCP (`stub.ping`).
+			// Two tool calls: one local (`read`), one platform (`issue_read`).
 			resp := map[string]any{
 				"id": "resp_1",
 				"output": []map[string]any{
@@ -80,9 +80,9 @@ func TestLoopSmoke(t *testing.T) {
 					},
 					{
 						"type":      "function_call",
-						"call_id":   "tc_mcp_1",
-						"name":      "stub.ping",
-						"arguments": `{"who":"agent"}`,
+						"call_id":   "tc_platform_1",
+						"name":      "issue_read",
+						"arguments": `{}`,
 					},
 				},
 				"usage": map[string]any{"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
@@ -108,63 +108,36 @@ func TestLoopSmoke(t *testing.T) {
 	}))
 	t.Cleanup(llmServer.Close)
 
-	// (3) Mock MCP server. tools/list returns one stub tool;
-	// tools/call returns a fixed text content payload.
-	mcpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		var rpc struct {
-			ID     int64           `json:"id"`
-			Method string          `json:"method"`
-			Params json.RawMessage `json:"params"`
-		}
-		if err := json.Unmarshal(body, &rpc); err != nil {
-			http.Error(w, "bad json", http.StatusBadRequest)
+	// (3) Mock platform tools server. POST /<tool-name> returns the
+	// REST envelope the real handler produces: {is_error, text}. We
+	// hard-code one canned reply for issue_read; any other tool path
+	// 404s so a typo in the test surfaces immediately.
+	platformServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		var result any
-		switch rpc.Method {
-		case "tools/list":
-			result = map[string]any{
-				"tools": []map[string]any{{
-					"name":        "stub.ping",
-					"description": "reply with pong",
-					"inputSchema": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"who": map[string]any{"type": "string"},
-						},
-					},
-				}},
-			}
-		case "tools/call":
-			result = map[string]any{
-				"isError": false,
-				"content": []map[string]any{
-					{"type": "text", "text": "pong"},
-				},
-			}
-		default:
-			http.Error(w, "unknown method", http.StatusBadRequest)
+		if !strings.HasSuffix(r.URL.Path, "/issue_read") {
+			http.Error(w, "unknown tool", http.StatusNotFound)
 			return
 		}
-		out := map[string]any{"jsonrpc": "2.0", "id": rpc.ID, "result": result}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(out)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"is_error": false,
+			"text":     "pong",
+		})
 	}))
-	t.Cleanup(mcpServer.Close)
+	t.Cleanup(platformServer.Close)
 
 	// (4) Wire the agent the same way main does, but with in/out as
 	// in-memory pipes so the test can inject inbound frames and read
 	// the outbound stream.
 	llmClient := llm.New(llmServer.URL, "test-token")
-	mcpClient := mcp.New(mcpServer.URL, "test-token")
+	platformClient := platform.NewClient(platformServer.URL, "test-token")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	registry, err := tools.Build(ctx, local.All(), mcpClient, nil)
-	if err != nil {
-		t.Fatalf("build registry: %v", err)
-	}
+	registry := tools.Build(local.All(), platform.All(platformClient), nil)
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -213,11 +186,11 @@ func TestLoopSmoke(t *testing.T) {
 	//   one assistant message with content "all done", no tool calls
 	//   one done frame
 	var (
-		gotReadCall    bool
-		gotStubCall    bool
-		gotDone        bool
-		assistantMsgs  int
-		finalContent   string
+		gotReadCall     bool
+		gotPlatformCall bool
+		gotDone         bool
+		assistantMsgs   int
+		finalContent    string
 	)
 	for _, f := range frames {
 		switch f.Kind {
@@ -228,10 +201,10 @@ func TestLoopSmoke(t *testing.T) {
 					t.Errorf("read tool result missing file content: %s", f.Result)
 				}
 			}
-			if f.Name == "stub.ping" {
-				gotStubCall = true
+			if f.Name == "issue_read" {
+				gotPlatformCall = true
 				if !strings.Contains(string(f.Result), "pong") {
-					t.Errorf("stub.ping result missing pong: %s", f.Result)
+					t.Errorf("issue_read result missing pong: %s", f.Result)
 				}
 			}
 		case "message":
@@ -246,8 +219,8 @@ func TestLoopSmoke(t *testing.T) {
 	if !gotReadCall {
 		t.Error("expected a tool_call for `read`")
 	}
-	if !gotStubCall {
-		t.Error("expected a tool_call for `stub.ping`")
+	if !gotPlatformCall {
+		t.Error("expected a tool_call for `issue_read`")
 	}
 	if !gotDone {
 		t.Error("expected a `done` frame")

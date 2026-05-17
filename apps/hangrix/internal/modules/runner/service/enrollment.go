@@ -31,7 +31,7 @@ func NewEnroller(deps *EnrollerDeps) *Enroller {
 	return &Enroller{repo: deps.Repo}
 }
 
-// RedeemEnrollment runs the M6c enrollment exchange:
+// RedeemEnrollment runs the enrollment exchange:
 //
 //  1. Validate wire format + split (prefix, secret).
 //  2. Mint a fresh agent token plaintext + bcrypt(secret).

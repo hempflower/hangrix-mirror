@@ -3,7 +3,6 @@ package agentsconfig
 import (
 	"errors"
 	"testing"
-
 )
 
 const goldenHost = `
@@ -26,12 +25,12 @@ llm:
 
 roles:
   dispatcher:
-    agent: hangrix/dispatcher@v1.2.0
     triggers: [issue.opened, issue.comment.any]
     can: [issue_read, issue_comment, roster_list]
+    prompt: |
+      You are the dispatcher.
 
   backend:
-    agent: acme/backend-coder@v0.3.1
     triggers: [issue.comment.mentioned]
     scope: { paths: ["apps/api/**", "internal/**"] }
     can:
@@ -40,15 +39,12 @@ roles:
       - issue_comment
       - read
       - write
-    mention_by: collaborators
     prompt: |
       Always git pull --rebase before push.
 
   reviewer:
-    agent: hangrix/reviewer@v1.0.0
     triggers: [commit.pushed, issue.comment.mentioned]
     can: [issue_read, issue_diff, issue_comment]
-    mention_by: collaborators
     prompt_file: .hangrix/prompts/reviewer.md
     llm:
       model: claude-opus-4-7
@@ -93,8 +89,8 @@ func TestParseHostConfig_Happy(t *testing.T) {
 	if disp == nil {
 		t.Fatalf("dispatcher missing")
 	}
-	if disp.Agent.Owner != "hangrix" || disp.Agent.Name != "dispatcher" || disp.Agent.Ref != "v1.2.0" {
-		t.Fatalf("dispatcher agent: %+v", disp.Agent)
+	if disp.Prompt == "" {
+		t.Fatalf("dispatcher prompt empty")
 	}
 	if len(disp.Triggers) != 2 {
 		t.Fatalf("dispatcher triggers: %+v", disp.Triggers)
@@ -126,8 +122,8 @@ container:
     args: { GO_VERSION: "1.26" }
 roles:
   only:
-    agent: a/b@v1
     triggers: [issue.opened]
+    prompt: hi
 `
 	cfg, err := ParseHostConfig([]byte(body))
 	if err != nil {
@@ -154,7 +150,7 @@ func TestParseHostConfig_Errors(t *testing.T) {
 			body: `
 version: 2
 container: { image: x }
-roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
+roles: { r: { triggers: [issue.opened], prompt: hi } }
 `,
 			target: ErrInvalidVersion,
 		},
@@ -162,7 +158,7 @@ roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
 			name: "missing-container",
 			body: `
 version: 1
-roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
+roles: { r: { triggers: [issue.opened], prompt: hi } }
 `,
 			target: ErrContainerSourceConflict,
 		},
@@ -174,7 +170,7 @@ container:
   image: x
   build:
     dockerfile: D
-roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
+roles: { r: { triggers: [issue.opened], prompt: hi } }
 `,
 			target: ErrContainerSourceConflict,
 		},
@@ -183,7 +179,7 @@ roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
 			body: `
 version: 1
 container: { env: { FOO: bar } }
-roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
+roles: { r: { triggers: [issue.opened], prompt: hi } }
 `,
 			target: ErrContainerSourceConflict,
 		},
@@ -194,7 +190,7 @@ version: 1
 container:
   image: x
   env: { node_env: 1 }
-roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
+roles: { r: { triggers: [issue.opened], prompt: hi } }
 `,
 			target: ErrInvalidEnvKey,
 		},
@@ -205,7 +201,7 @@ version: 1
 container:
   image: x
   secrets: [github_token]
-roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
+roles: { r: { triggers: [issue.opened], prompt: hi } }
 `,
 			target: ErrInvalidSecretName,
 		},
@@ -217,7 +213,7 @@ container:
   image: x
   volumes:
     - { name: cache, mount: caches/foo }
-roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
+roles: { r: { triggers: [issue.opened], prompt: hi } }
 `,
 			target: ErrInvalidVolumeMount,
 		},
@@ -229,7 +225,7 @@ container:
   image: x
   volumes:
     - { name: cache, mount: /caches/../../etc }
-roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
+roles: { r: { triggers: [issue.opened], prompt: hi } }
 `,
 			target: ErrInvalidVolumeMount,
 		},
@@ -241,7 +237,7 @@ container:
   image: x
   volumes:
     - { name: "", mount: /caches/x }
-roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
+roles: { r: { triggers: [issue.opened], prompt: hi } }
 `,
 			target: ErrInvalidVolumeMount,
 		},
@@ -259,25 +255,25 @@ roles: {}
 			body: `
 version: 1
 container: { image: x }
-roles: { Backend: { agent: a/b@v1, triggers: [issue.opened] } }
+roles: { Backend: { triggers: [issue.opened], prompt: hi } }
 `,
 			target: ErrInvalidRoleKey,
 		},
 		{
-			name: "missing-agent-ref",
+			name: "missing-prompt",
 			body: `
 version: 1
 container: { image: x }
-roles: { r: { agent: a/b, triggers: [issue.opened] } }
+roles: { r: { triggers: [issue.opened] } }
 `,
-			target: ErrMissingAgentRef,
+			target: ErrPromptMissing,
 		},
 		{
 			name: "empty-triggers",
 			body: `
 version: 1
 container: { image: x }
-roles: { r: { agent: a/b@v1, triggers: [] } }
+roles: { r: { triggers: [], prompt: hi } }
 `,
 			target: ErrEmptyTriggers,
 		},
@@ -286,7 +282,7 @@ roles: { r: { agent: a/b@v1, triggers: [] } }
 			body: `
 version: 1
 container: { image: x }
-roles: { r: { agent: a/b@v1, triggers: [issue.weird] } }
+roles: { r: { triggers: [issue.weird], prompt: hi } }
 `,
 			target: ErrUnknownTrigger,
 		},
@@ -297,7 +293,6 @@ version: 1
 container: { image: x }
 roles:
   r:
-    agent: a/b@v1
     triggers: [issue.opened]
     prompt: hi
     prompt_file: .hangrix/prompts/r.md
@@ -311,7 +306,6 @@ version: 1
 container: { image: x }
 roles:
   r:
-    agent: a/b@v1
     triggers: [issue.opened]
     prompt_file: prompts/r.md
 `,
@@ -324,24 +318,10 @@ version: 1
 container: { image: x }
 roles:
   r:
-    agent: a/b@v1
     triggers: [issue.opened]
     prompt_file: .hangrix/prompts/../../etc/x
 `,
 			target: ErrInvalidPromptFilePath,
-		},
-		{
-			name: "bad-mention-by",
-			body: `
-version: 1
-container: { image: x }
-roles:
-  r:
-    agent: a/b@v1
-    triggers: [issue.opened]
-    mention_by: maintainers
-`,
-			target: ErrInvalidMentionBy,
 		},
 		{
 			name: "bad-llm-temp",
@@ -351,7 +331,7 @@ container: { image: x }
 llm:
   model: m
   temperature: 5
-roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
+roles: { r: { triggers: [issue.opened], prompt: hi } }
 `,
 			target: ErrInvalidLLMParam,
 		},
@@ -363,7 +343,7 @@ container: { image: x }
 llm:
   model: m
   top_p: 2
-roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
+roles: { r: { triggers: [issue.opened], prompt: hi } }
 `,
 			target: ErrInvalidLLMParam,
 		},
@@ -375,7 +355,7 @@ container: { image: x }
 llm:
   model: m
   max_tokens: -1
-roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
+roles: { r: { triggers: [issue.opened], prompt: hi } }
 `,
 			target: ErrInvalidLLMParam,
 		},
@@ -385,7 +365,7 @@ roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
 version: 1
 container: { image: x }
 llm: { max_tokens: 100 }
-roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
+roles: { r: { triggers: [issue.opened], prompt: hi } }
 `,
 			target: ErrInvalidModel,
 		},
@@ -396,8 +376,8 @@ version: 1
 container: { image: x }
 roles:
   r:
-    agent: a/b@v1
     triggers: [issue.opened]
+    prompt: hi
     llm: { max_tokens: 100 }
 `,
 			target: ErrInvalidModel,
@@ -408,7 +388,7 @@ roles:
 version: 1
 container: { image: x }
 weird: 1
-roles: { r: { agent: a/b@v1, triggers: [issue.opened] } }
+roles: { r: { triggers: [issue.opened], prompt: hi } }
 `,
 			target: ErrUnknownField,
 		},
@@ -419,15 +399,15 @@ version: 1
 container: { image: x }
 roles:
   r:
-    agent: a/b@v1
     triggers: [issue.opened]
+    prompt: hi
     weird: 1
 `,
 			target: ErrUnknownField,
 		},
 		{
 			name: "duplicate-role-key",
-			body: "version: 1\ncontainer: { image: x }\nroles:\n  r:\n    agent: a/b@v1\n    triggers: [issue.opened]\n  r:\n    agent: a/c@v1\n    triggers: [issue.opened]\n",
+			body: "version: 1\ncontainer: { image: x }\nroles:\n  r:\n    triggers: [issue.opened]\n    prompt: hi\n  r:\n    triggers: [issue.opened]\n    prompt: hi\n",
 			target: ErrDuplicateRoleKey,
 		},
 	}
@@ -445,44 +425,3 @@ roles:
 	}
 }
 
-func TestNormalizeHostConfig_FillsMentionByDefault(t *testing.T) {
-	t.Parallel()
-
-	body := `
-version: 1
-container: { image: x }
-roles:
-  explicit:
-    agent: a/b@v1
-    triggers: [issue.opened]
-    mention_by: owner
-  implicit:
-    agent: a/c@v1
-    triggers: [issue.opened]
-`
-	cfg, err := ParseHostConfig([]byte(body))
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if cfg.Roles["explicit"].MentionBy != MentionByOwner {
-		t.Fatalf("explicit: %q", cfg.Roles["explicit"].MentionBy)
-	}
-	// Before normalize: implicit is empty.
-	if cfg.Roles["implicit"].MentionBy != "" {
-		t.Fatalf("implicit pre-normalize: %q", cfg.Roles["implicit"].MentionBy)
-	}
-
-	NormalizeHostConfig(cfg)
-	if cfg.Roles["explicit"].MentionBy != MentionByOwner {
-		t.Fatalf("explicit post-normalize changed: %q", cfg.Roles["explicit"].MentionBy)
-	}
-	if cfg.Roles["implicit"].MentionBy != MentionByCollaborators {
-		t.Fatalf("implicit default: %q", cfg.Roles["implicit"].MentionBy)
-	}
-
-	// Idempotent.
-	NormalizeHostConfig(cfg)
-	if cfg.Roles["implicit"].MentionBy != MentionByCollaborators {
-		t.Fatalf("not idempotent: %q", cfg.Roles["implicit"].MentionBy)
-	}
-}

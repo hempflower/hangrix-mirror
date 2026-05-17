@@ -5,19 +5,23 @@
 // Container layout the orchestrator establishes:
 //
 //	/usr/local/bin/hangrix-agent   ← bind mount of AgentBinaryPath
-//	/opt/hangrix/bundle            ← bind mount of HostBundleDir (read-only)
 //	/opt/hangrix/host_addendum.md  ← bind mount of HostAddendumPath (ro)
 //	/workspace                     ← bind mount of HostWorkdir (rw)
 //
-// Env passed via -e, with HANGRIX_AGENT_BUNDLE / HANGRIX_HOST_ADDENDUM
-// pointing at the in-container paths above. HANGRIX_SESSION_TOKEN is
-// sourced from Task.Env (the runner has the plaintext from the dispatch
-// response and merges it in before calling Start).
+// Env passed via -e, with HANGRIX_HOST_ADDENDUM pointing at the
+// in-container path above. HANGRIX_SESSION_TOKEN is sourced from
+// Task.Env (the runner has the plaintext from the dispatch response
+// and merges it in before calling Start).
 //
-// Network: --network host gives the agent direct access to the platform
-// LLM proxy + MCP server at the same host:port the runner already uses.
-// Inside docker-in-docker setups operators may prefer
-// host.docker.internal:8080 via env override.
+// Network: defaults to Docker's `bridge` so each agent container is
+// network-isolated from the host and from sibling sessions. The agent
+// reaches the platform via HANGRIX_PLATFORM_BASE_URL, which must
+// resolve from inside that network (use `host.docker.internal` on
+// Docker Desktop, the host's routable IP on bare metal, or set
+// HANGRIX_RUNNER_DOCKER_NETWORK to drop sessions onto an existing
+// user-defined bridge that already contains the server). Operators
+// who really want the previous "share the host stack" behaviour can
+// still set HANGRIX_RUNNER_DOCKER_NETWORK=host.
 package orchestrator
 
 import (
@@ -39,12 +43,15 @@ type DockerOrchestrator struct {
 	// host (devcontainer / docker-from-docker). Populated from the
 	// HANGRIX_RUNNER_HOST_PATH_MAP env at construction time.
 	pathMap []pathRemap
-	// network sets `docker run --network <value>`. Defaults to "host"
-	// (matches the runner-protocol spec: agent shares the host's
-	// network so it can reach localhost-bound platform endpoints).
-	// Operators running the runner inside a docker-compose / dev
-	// container override this via HANGRIX_RUNNER_DOCKER_NETWORK to
-	// drop the agent onto the same bridge network as the server.
+	// network sets `docker run --network <value>`. Defaults to
+	// "bridge" — each session gets Docker's stock isolated bridge,
+	// so a misbehaving agent can't reach the host's loopback, the
+	// runner's own ports, or sibling sessions. Operators wiring the
+	// agent onto an existing user-defined bridge (typical in
+	// docker-compose / devcontainer deploys where the server lives
+	// on the same network) override via HANGRIX_RUNNER_DOCKER_NETWORK.
+	// The legacy "share the host stack" behaviour is opt-in via
+	// HANGRIX_RUNNER_DOCKER_NETWORK=host.
 	network string
 }
 
@@ -59,7 +66,9 @@ func NewDocker(bin string) *DockerOrchestrator {
 	}
 	network := strings.TrimSpace(os.Getenv("HANGRIX_RUNNER_DOCKER_NETWORK"))
 	if network == "" {
-		network = "host"
+		// Isolated by default — never share the host's network stack
+		// unless the operator opts in explicitly. See package doc.
+		network = "bridge"
 	}
 	return &DockerOrchestrator{
 		bin:     bin,
@@ -155,8 +164,17 @@ func (o *DockerOrchestrator) Start(ctx context.Context, t Task) (Handle, error) 
 	if t.AgentBinaryPath == "" {
 		return nil, fmt.Errorf("AgentBinaryPath is required")
 	}
-	if _, err := os.Stat(t.AgentBinaryPath); err != nil {
+	// Docker's bind-mount creates a directory on the target path when
+	// the source is itself a directory. The container then panics with
+	// `exec: "/usr/local/bin/hangrix-agent": is a directory` deep
+	// inside runc. Catch that here so the error names the real problem
+	// (host-side cache holds a dir, not a file) instead.
+	info, err := os.Stat(t.AgentBinaryPath)
+	if err != nil {
 		return nil, fmt.Errorf("agent binary not found at %s: %w", t.AgentBinaryPath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("agent binary at %s is not a regular file (mode=%s); the runner cache is corrupted — remove the path and re-enroll", t.AgentBinaryPath, info.Mode())
 	}
 	if t.Image == "" {
 		return nil, fmt.Errorf("Image is required")
@@ -176,9 +194,6 @@ func (o *DockerOrchestrator) Start(ctx context.Context, t Task) (Handle, error) 
 		"-v", o.absMount(t.AgentBinaryPath, "/usr/local/bin/hangrix-agent", true),
 		"-v", o.absMount(t.HostWorkdir, "/workspace", false),
 	}
-	if t.HostBundleDir != "" {
-		args = append(args, "-v", o.absMount(t.HostBundleDir, "/opt/hangrix/bundle", true))
-	}
 	if t.HostAddendumPath != "" {
 		args = append(args, "-v", o.absMount(t.HostAddendumPath, "/opt/hangrix/host_addendum.md", true))
 	}
@@ -186,9 +201,6 @@ func (o *DockerOrchestrator) Start(ctx context.Context, t Task) (Handle, error) 
 	env := map[string]string{}
 	for k, v := range t.Env {
 		env[k] = v
-	}
-	if t.HostBundleDir != "" {
-		env["HANGRIX_AGENT_BUNDLE"] = "/opt/hangrix/bundle"
 	}
 	if t.HostAddendumPath != "" {
 		env["HANGRIX_HOST_ADDENDUM"] = "/opt/hangrix/host_addendum.md"

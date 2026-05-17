@@ -10,6 +10,10 @@
     "profile": "个人资料",
     "settings": "设置",
     "users": "用户管理",
+    "llmProviders": "LLM Provider",
+    "runners": "Runner",
+    "llmUsage": "LLM 用量",
+    "agentSessions": "Agent 会话",
     "logout": "退出登录",
     "toggleSidebar": "切换侧边栏",
     "backToWorkspace": "返回工作区"
@@ -81,8 +85,12 @@
     "saving": "保存中…",
     "loading": "加载中…",
     "submit": "提交",
+    "submitting": "提交中…",
     "cancel": "取消",
+    "edit": "编辑",
+    "delete": "删除",
     "actions": "操作",
+    "acknowledge": "我已记下",
     "id": "ID",
     "email": "邮箱",
     "username": "用户名",
@@ -152,6 +160,152 @@
       "disable": "禁用",
       "loadFailed": "加载失败",
       "updateFailed": "更新失败"
+    },
+    "llm": {
+      "title": "LLM Provider",
+      "subtitle": "配置上游 LLM 接入点，以及每个 provider 允许 agent 路由到的模型白名单。",
+      "cardTitle": "Provider 列表",
+      "cardDescription": "代理按请求中的 model 名匹配各 provider 的 allowed_models 来路由；API key 始终加密存储且永不返回。",
+      "create": "添加 Provider",
+      "createTitle": "添加 LLM Provider",
+      "createSubtitle": "名称创建后不可修改，需要改名只能删除重建。",
+      "createFailed": "创建失败",
+      "editTitle": "编辑 Provider · {name}",
+      "editSubtitle": "可改 base URL、轮换 API key、调整模型白名单。",
+      "updateFailed": "更新失败",
+      "deleteConfirm": "删除 Provider「{name}」？依赖它的会话会立即开始失败。",
+      "deleteFailed": "删除失败",
+      "loadFailed": "加载失败",
+      "empty": "暂无 Provider",
+      "emptyHint": "至少需要一个 Provider，agent 才能调 LLM。",
+      "apiKeySet": "已配置",
+      "apiKeyMissing": "未配置",
+      "cols": {
+        "name": "名称",
+        "type": "类型",
+        "baseUrl": "Base URL",
+        "apiKey": "API Key",
+        "models": "允许的模型"
+      },
+      "fields": {
+        "name": "名称",
+        "nameHint": "小写 slug ([a-z0-9-])。用于管理 / 审计视图标识 provider；代理按 model 名匹配 allowed_models 路由，URL 中不带 provider 段。",
+        "type": "类型",
+        "baseUrl": "Base URL",
+        "apiKey": "API Key",
+        "apiKeyHint": "加密保存，仅平台能解密。",
+        "apiKeyEditHint": "留空 = 保留当前 key；填新值即轮换。",
+        "allowedModels": "允许的模型",
+        "allowedModelsHint": "用逗号或空格分隔。任何不在白名单内的模型都会在代理层被拒绝。"
+      }
+    },
+    "runners": {
+      "title": "Runner",
+      "subtitle": "拉取 agent 会话并起容器跑 agent 的执行机。",
+      "cardTitle": "已注册的 Runner",
+      "cardDescription": "每个 Runner 用一次性 token 完成 enroll，之后靠心跳维持 active 状态。",
+      "create": "添加 Runner",
+      "createTitle": "添加 Runner",
+      "createSubtitle": "Admin 入口固定创建 platform 可见度的 Runner；用户自服务入口走另一条路径。",
+      "createFailed": "创建失败",
+      "disable": "禁用",
+      "disableConfirm": "禁用 Runner「{name}」？它当前持有的会话会在下次心跳时失败。",
+      "disableFailed": "禁用失败",
+      "loadFailed": "加载失败",
+      "empty": "暂无 Runner",
+      "emptyHint": "没有 Runner，所有 agent 会话会卡在 pending。",
+      "enrolled": "已 enroll",
+      "notEnrolled": "待 enroll",
+      "neverHeartbeat": "从未",
+      "remove": "移除",
+      "removeConfirm": "永久移除 Runner「{name}」？历史会话会保留但 runner_id 被置空，此操作不可撤销。",
+      "removeFailed": "移除失败",
+      "enrollTitle": "Enrollment Token（仅此一次）",
+      "enrollWarning": "立即复制 token —— 这是唯一一次明文展示的机会。Runner 用这枚 token 换取长期 agent token 后，平台只保留 bcrypt 哈希。",
+      "runnerCreated": "Runner「{name}」已创建。",
+      "enrollToken": "Token",
+      "installOneLiner": "一键安装并 enroll",
+      "installHint": "在想跑 hangrix-runner 的机器上执行；需要 root 或对 /usr/local/bin 可写。",
+      "copyToken": "复制 Token",
+      "copyInstall": "复制安装命令",
+      "copied": "已复制",
+      "directDownloads": "直接下载链接",
+      "manualHeader": "手动 enroll（已在 PATH 中）",
+      "manualHint": "如果你已经装好了 hangrix-runner（包管理器 / 源码编译等），直接跑这条命令即可。",
+      "cols": {
+        "name": "名称",
+        "visibility": "可见度",
+        "status": "状态",
+        "enroll": "Enroll",
+        "lastHeartbeat": "最近心跳"
+      },
+      "fields": {
+        "name": "名称",
+        "nameHint": "小写 slug ([a-z0-9-])。"
+      }
+    },
+    "usage": {
+      "title": "LLM 用量",
+      "subtitle": "每次 agent 调 LLM 的明细 —— tokens、延迟、错误率。",
+      "cardTitle": "最近调用",
+      "cardDescription": "按 Provider 或时间范围筛选。点 session 链接可跳回 issue 的审计视图。",
+      "loadFailed": "加载失败",
+      "empty": "当前范围内无调用记录",
+      "applyFilters": "应用筛选",
+      "totalCalls": "调用次数",
+      "totalTokens": "Tokens",
+      "avgLatency": "平均延迟",
+      "errors": "错误数",
+      "filters": {
+        "provider": "Provider",
+        "providerAny": "任意 Provider",
+        "since": "起始时间",
+        "limit": "条数"
+      },
+      "cols": {
+        "time": "时间",
+        "provider": "Provider",
+        "model": "Model",
+        "prompt": "Prompt",
+        "completion": "Completion",
+        "total": "Total",
+        "latency": "延迟",
+        "status": "状态",
+        "session": "Session"
+      }
+    },
+    "agentSessions": {
+      "title": "Agent 会话",
+      "subtitle": "跨 issue 的全局视图，列出平台 spawn 过的所有 agent 会话。",
+      "cardTitle": "会话列表",
+      "cardDescription": "按 role、状态、仓库或时间筛选。查看消息日志请打开对应 issue 的 Agents tab。",
+      "loadFailed": "加载失败",
+      "empty": "当前筛选下无会话",
+      "applyFilters": "应用筛选",
+      "openHint": "打开 issue 的 Agents tab 查看每个 session 的消息日志。",
+      "summary": {
+        "total": "会话总数",
+        "live": "活跃中",
+        "failed": "失败"
+      },
+      "filters": {
+        "role": "Role key",
+        "status": "状态",
+        "statusAny": "任意状态",
+        "repoId": "Repo ID",
+        "since": "起始时间"
+      },
+      "cols": {
+        "id": "ID",
+        "role": "Role",
+        "status": "状态",
+        "cause": "Cause",
+        "repoIssue": "Repo / Issue",
+        "repoSha": "Repo SHA",
+        "created": "创建时间",
+        "duration": "时长",
+        "error": "错误"
+      }
     }
   },
   "home": {
@@ -191,8 +345,13 @@
     "visibilityPublicHint": "任何登录用户可以查看",
     "visibilityPrivateHint": "仅你和管理员可见",
     "defaultBranch": "默认分支",
-    "initReadme": "用一条 README 初始提交开局",
-    "initReadmeHint": "勾上：repo 立即可 clone。不勾：需要你先 push。",
+    "initReadme": "初始化仓库",
+    "initReadmeHint": "首笔 initial commit 一并落 README.md 与 .hangrix/ 多 role 启动模板，下方可继续调整。",
+    "agentConfig": {
+      "title": "智能体团队 yaml",
+      "subtitle": "这是随仓库种入的 .hangrix/agents.yml。可直接在此编辑，提交时由服务端解析校验。",
+      "reset": "重置为默认"
+    },
     "submit": "创建",
     "submitting": "创建中…",
     "createFailed": "创建失败",
@@ -397,7 +556,8 @@
     "tabs": {
       "conversation": "对话",
       "commits": "提交",
-      "diff": "Diff"
+      "diff": "Diff",
+      "agents": "智能体"
     },
     "commitsEmpty": "暂无提交。推送到 {branch} 来引入变更。",
     "commentForm": {
@@ -501,5 +661,31 @@
   },
   "errors": {
     "unknown": "发生未知错误"
+  },
+  "agentSessions": {
+    "loadFailed": "加载智能体会话失败",
+    "empty": "暂无智能体运行",
+    "emptyHint": "在 .hangrix/agents.yml 里配好角色，spawn 之后会出现在这里。",
+    "spawnedBy": "触发源",
+    "messages": "消息日志",
+    "messagesEmpty": "该会话尚未产生输出。",
+    "collapse": "收起",
+    "expand": "展开",
+    "field": {
+      "image": "容器镜像",
+      "model": "模型",
+      "repoSha": "仓库 sha",
+      "can": "工具白名单",
+      "exitCode": "退出码",
+      "errorMessage": "错误信息"
+    },
+    "failureTitle": "会话异常退出",
+    "failureNoDetail": "没有错误详情。查看下方消息日志中 agent 最后输出的几帧来定位原因。",
+    "cause": {
+      "issueOpened": "issue.opened",
+      "commentMentioned": "提及 · 评论 #{id}",
+      "commitPushed": "push · {sha}",
+      "reviewVote": "review vote #{id}"
+    }
   }
 }

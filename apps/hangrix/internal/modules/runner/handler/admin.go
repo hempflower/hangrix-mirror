@@ -2,7 +2,7 @@
 //
 //   - AdminHandler is mounted at /api/admin/runners. Cookie + RequireAdmin
 //     gated. Used for runner enrollment lifecycle and admin-triggered test
-//     sessions (the M6c exit condition path).
+//     sessions.
 //
 //   - AgentHandler is mounted at /api/runner. Bearer hgxe_/hgxr_ gated. The
 //     `hangrix-runner` binary speaks here over plain HTTP — outbound-only,
@@ -77,7 +77,13 @@ func (h *AdminHandler) RegisterRoutes(r chi.Router) {
 		r.Get("/{id}", h.getRunner)
 		r.Delete("/{id}", h.disableRunner)
 
-		// Admin-triggered test session — the M6c exit condition.
+		// Hard-delete a runner row. Use POST /disable for the soft
+		// variant; this one removes the row from the listing entirely
+		// (agent_sessions.runner_id is ON DELETE SET NULL so audit
+		// history survives).
+		r.Delete("/{id}/permanent", h.removeRunner)
+
+		// Admin-triggered test session for smoke / debug.
 		r.Post("/{id}/sessions", h.createSession)
 		r.Get("/sessions/{sid}", h.getSession)
 		r.Get("/sessions/{sid}/messages", h.listMessages)
@@ -136,9 +142,8 @@ type createRunnerResp struct {
 	EnrollTokenPlaintext string       `json:"enroll_token"`
 }
 
-// createRunner is admin-only. M6c forces visibility=platform on this path —
-// user-level runner registration lands when M7a exposes the equivalent
-// surface to non-admin users.
+// createRunner is admin-only. Forces visibility=platform on this path —
+// user-level runner registration is a separate non-admin surface.
 func (h *AdminHandler) createRunner(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authdomain.UserFromRequest(r)
 
@@ -158,9 +163,9 @@ func (h *AdminHandler) createRunner(w http.ResponseWriter, r *http.Request) {
 	}
 	v := domain.Visibility(req.Visibility)
 	if v == domain.VisibilityUser {
-		// Admin creating a user runner on behalf of someone is out of M6c
-		// scope. The user-self-service path lives in M7a.
-		httpx.WriteError(w, http.StatusBadRequest, "M6c admin path only supports platform runners")
+		// Admin creating a user runner on behalf of someone else is out
+		// of scope here — the user-self-service surface owns that.
+		httpx.WriteError(w, http.StatusBadRequest, "admin path only supports platform runners")
 		return
 	}
 	in := domain.CreateRunnerInput{Name: req.Name, Visibility: v, CreatedBy: caller.ID}
@@ -241,6 +246,25 @@ func (h *AdminHandler) disableRunner(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// removeRunner hard-deletes a runner row. agent_sessions.runner_id has
+// ON DELETE SET NULL so any historical session this runner served keeps
+// its row intact (the runner pointer just goes blank).
+func (h *AdminHandler) removeRunner(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	if err := h.repo.DeleteRunner(r.Context(), id); err != nil {
+		if errors.Is(err, domain.ErrRunnerNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "runner not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ---- session DTOs ----
 
 type createSessionReq struct {
@@ -249,9 +273,9 @@ type createSessionReq struct {
 	// pick a provider directly.
 	Model string `json:"model"`
 
-	// Image is the container image the runner pulls. M7a starts driving
-	// this from host repo .hangrix/agents.yml; for M6c the admin chooses
-	// it directly.
+	// Image is the container image the runner pulls. The real session
+	// path drives this from the host repo's `.hangrix/agents.yml`; this
+	// admin path lets the operator override it directly for smoke tests.
 	AgentImage string `json:"agent_image"`
 
 	// Optional contextual fields surfaced into the agent's env / prompt.
@@ -260,19 +284,12 @@ type createSessionReq struct {
 	IssueNumber   *int32 `json:"issue_number,omitempty"`
 	WorkingBranch string `json:"working_branch,omitempty"`
 	BaseBranch    string `json:"base_branch,omitempty"`
-	// AgentRepo is the bundle pin in `<owner>/<name>@<sha>` form. The
-	// runner downloads the corresponding tarball from
-	// /api/runner/agent-bundles/... and mounts it read-only at
-	// /opt/hangrix/bundle. Optional on the M6c admin smoke path
-	// (admin tests can spawn against an image that bakes its own
-	// bundle); M7a session-spawn always populates this.
-	AgentRepo    string `json:"agent_repo,omitempty"`
 	HostAddendum string `json:"host_addendum,omitempty"`
 
 	// MockEvent is the first inbound event the runner pushes into the
 	// agent's stdin queue right after the seed history frame. The
 	// platform persists it as a kind='event' message so audit shows the
-	// trigger. M7b wires real events through this queue.
+	// trigger.
 	MockEvent struct {
 		Name    string          `json:"name"`
 		Payload json.RawMessage `json:"payload"`
@@ -294,12 +311,10 @@ type publicSession struct {
 	AgentImage    string            `json:"agent_image"`
 	WorkingBranch string            `json:"working_branch"`
 	BaseBranch    string            `json:"base_branch"`
-	AgentRepo     string            `json:"agent_repo"`
 	HostAddendum  string            `json:"host_addendum"`
-	// M7a snapshot. Empty on M6c-era rows; populated on M7a session-
-	// spawn. Surfaced on the admin view so audit consumers can verify
-	// the snapshot pin from outside the runner module.
-	AgentSHA  string `json:"agent_sha,omitempty"`
+	// Snapshot. Populated at session-spawn; surfaced on the admin view
+	// so audit consumers can verify the pin from outside the runner
+	// module.
 	RepoSHA   string `json:"repo_sha,omitempty"`
 	RoleKey   string `json:"role_key,omitempty"`
 	CauseKind string `json:"cause_kind,omitempty"`
@@ -329,7 +344,6 @@ func toPublicSession(s *domain.AgentSession) publicSession {
 		AgentImage:    s.AgentImage,
 		WorkingBranch: s.WorkingBranch,
 		BaseBranch:    s.BaseBranch,
-		AgentRepo:     s.AgentRepo,
 		HostAddendum:  s.HostAddendum,
 		Env:           env,
 		ExitCode:      s.ExitCode,
@@ -338,7 +352,6 @@ func toPublicSession(s *domain.AgentSession) publicSession {
 		ClaimedAt:     s.ClaimedAt,
 		StartedAt:     s.StartedAt,
 		EndedAt:       s.EndedAt,
-		AgentSHA:      s.AgentSHA,
 		RepoSHA:       s.RepoSHA,
 		RoleKey:       s.RoleKey,
 		CauseKind:     s.CauseKind,
@@ -346,7 +359,7 @@ func toPublicSession(s *domain.AgentSession) publicSession {
 	}
 }
 
-// createSession is the admin-triggered M6c exit path: mint a session token
+// createSession is the admin-triggered smoke path: mint a session token
 // (agent identity, NOT an LLM-provider binding), build env, persist a
 // pending session pinned to the chosen runner, and seed the inputs queue
 // with (a) a history=[] frame and (b) the mock event.
@@ -406,13 +419,12 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve host repo id if a slug was supplied. M6c keeps it loose:
-	// missing repo just leaves repo_id NULL — the smoke path doesn't push.
+	// host_repo is "owner/name" — currently informational only on the
+	// admin path; the real session-spawn orchestrator resolves it for
+	// production triggers. Missing repo leaves repo_id NULL — the smoke
+	// path doesn't push.
 	var repoID *int64
 	if req.HostRepo != "" {
-		// host_repo is "owner/name"; M6c does not yet wire the lookup,
-		// so the field is informational. M7a's host-yaml resolver wires
-		// the real lookup.
 		_ = repoID
 	}
 
@@ -423,7 +435,6 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 		Role:               req.Role,
 		Model:              req.Model,
 		AgentImage:         req.AgentImage,
-		AgentRepo:          req.AgentRepo,
 		WorkingBranch:      req.WorkingBranch,
 		BaseBranch:         req.BaseBranch,
 		HostAddendum:       req.HostAddendum,
@@ -449,7 +460,7 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.MockEvent.Name != "" {
 		// Persist the event as a kind=event message too, so the audit
-		// log shows the trigger even if M7b's bus is not yet writing.
+		// log shows the trigger.
 		msgPayload := map[string]any{
 			"event":   req.MockEvent.Name,
 			"payload": rawOrNull(req.MockEvent.Payload),

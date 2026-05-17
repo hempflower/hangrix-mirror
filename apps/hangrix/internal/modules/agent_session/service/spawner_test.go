@@ -31,7 +31,7 @@ llm:
   model: claude-sonnet-4-6
 roles:
   backend:
-    agent: acme/coder@v1.0.0
+    prompt: hi
     triggers: [issue.opened]
     can: [issue_read, issue_comment]
 `
@@ -46,11 +46,11 @@ llm:
   model: claude-sonnet-4-6
 roles:
   dispatcher:
-    agent: acme/dispatcher@v1.0.0
+    prompt: hi
     triggers: [issue.opened]
     can: [issue_read, issue_comment, roster_list]
   reviewer:
-    agent: acme/reviewer@v1.0.0
+    prompt: hi
     triggers: [commit.pushed]
     can: [issue_read, issue_diff]
 `
@@ -67,11 +67,11 @@ llm:
   model: claude-sonnet-4-6
 roles:
   backend:
-    agent: acme/coder@v1.0.0
+    prompt: hi
     triggers: [issue.comment.mentioned]
     can: [issue_read, issue_comment]
   frontend:
-    agent: acme/dispatcher@v1.0.0
+    prompt: hi
     triggers: [issue.comment.mentioned]
     can: [issue_read, issue_comment]
 `
@@ -103,7 +103,6 @@ func newTestSpawner(t *testing.T, hostBody, lockBody []byte) *testHarness {
 		OwnerName:     "alice",
 		Name:          "myproject",
 		DefaultBranch: "main",
-		Kind:          repodomain.KindStandard,
 	}
 	repos.add(hostRepo)
 	// Agent repos for the host yaml's roles.
@@ -114,7 +113,6 @@ func newTestSpawner(t *testing.T, hostBody, lockBody []byte) *testHarness {
 		OwnerName:     "acme",
 		Name:          "coder",
 		DefaultBranch: "main",
-		Kind:          repodomain.KindAgent,
 	})
 	repos.add(&repodomain.Repo{
 		ID:            11,
@@ -123,7 +121,6 @@ func newTestSpawner(t *testing.T, hostBody, lockBody []byte) *testHarness {
 		OwnerName:     "acme",
 		Name:          "dispatcher",
 		DefaultBranch: "main",
-		Kind:          repodomain.KindAgent,
 	})
 	repos.add(&repodomain.Repo{
 		ID:            12,
@@ -132,7 +129,6 @@ func newTestSpawner(t *testing.T, hostBody, lockBody []byte) *testHarness {
 		OwnerName:     "acme",
 		Name:          "reviewer",
 		DefaultBranch: "main",
-		Kind:          repodomain.KindAgent,
 	})
 
 	resolver := newStubResolver()
@@ -201,18 +197,11 @@ func TestOnTriggerHappyPath(t *testing.T) {
 	if got[0].RoleKey != "backend" {
 		t.Fatalf("role_key = %q, want backend", got[0].RoleKey)
 	}
-	wantPin := "acme/coder@coderSHA0000000000000000000000000000000"
-	if got[0].AgentRepo != wantPin {
-		t.Fatalf("agent_repo = %q, want %q", got[0].AgentRepo, wantPin)
-	}
 
 	if len(h.runner.sessions) != 1 {
 		t.Fatalf("stub stored %d sessions, want 1", len(h.runner.sessions))
 	}
 	s := h.runner.sessions[0]
-	if s.AgentSHA != "coderSHA0000000000000000000000000000000" {
-		t.Fatalf("agent_sha = %q", s.AgentSHA)
-	}
 	if s.RepoSHA != "repoSHA00000000000000000000000000000000" {
 		t.Fatalf("repo_sha = %q", s.RepoSHA)
 	}
@@ -265,20 +254,14 @@ func TestOnTriggerHappyPath(t *testing.T) {
 	if env["HANGRIX_ROLE_KEY"] != "backend" {
 		t.Fatalf("HANGRIX_ROLE_KEY = %q", env["HANGRIX_ROLE_KEY"])
 	}
-	// Audit pins are injected so the in-container agent can include
-	// them in its own logs / tool-call payloads without an extra
+	// Audit pin is injected so the in-container agent can include it
+	// in its own logs / tool-call payloads without an extra
 	// platform-MCP roundtrip.
-	if env["HANGRIX_AGENT_SHA"] != "coderSHA0000000000000000000000000000000" {
-		t.Fatalf("HANGRIX_AGENT_SHA = %q", env["HANGRIX_AGENT_SHA"])
-	}
 	if env["HANGRIX_REPO_SHA"] != "repoSHA00000000000000000000000000000000" {
 		t.Fatalf("HANGRIX_REPO_SHA = %q", env["HANGRIX_REPO_SHA"])
 	}
 	if env["HANGRIX_CAUSE_KIND"] != string(domain.CauseKindIssueOpened) {
 		t.Fatalf("HANGRIX_CAUSE_KIND = %q", env["HANGRIX_CAUSE_KIND"])
-	}
-	if env["HANGRIX_AGENT_REPO"] != "acme/coder@coderSHA0000000000000000000000000000000" {
-		t.Fatalf("HANGRIX_AGENT_REPO = %q", env["HANGRIX_AGENT_REPO"])
 	}
 	// Host yaml's container.env keys flow through.
 	if env["NODE_ENV"] != "development" {
@@ -374,45 +357,6 @@ func TestOnTriggerMissingHostYAMLNoOp(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("got %d sessions, want 0", len(got))
-	}
-}
-
-// TestOnTriggerLockFileWins asserts that when the lock file has an
-// entry for the role's agent ref, the spawner uses the locked sha
-// instead of falling back to live ResolveCommit on the agent repo.
-// (Important for reproducibility — the lock is what makes audit
-// chains deterministic when the agent repo's `@v1.0.0` tag is later
-// moved.)
-func TestOnTriggerLockFileWins(t *testing.T) {
-	// Lock file shape: `agents:` is a YAML list (not a map). Key is on
-	// `ref:` and resolved_sha must be 40 lowercase hex chars (the
-	// parser enforces this — see agentsconfig/parse_lock.go).
-	lock := []byte(`version: 1
-agents:
-  - ref: acme/coder@v1.0.0
-    resolved_sha: 1111222233334444555566667777888899990000
-    resolved_at: 2025-01-01T00:00:00Z
-`)
-	h := newTestSpawner(t, []byte(hostYAML), lock)
-	got, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
-		Trigger:     agentsconfig.TriggerIssueOpened,
-		CauseKind:   domain.CauseKindIssueOpened,
-		RepoID:      1,
-		IssueNumber: 42,
-		ActorID:     1,
-	})
-	if err != nil {
-		t.Fatalf("OnTrigger err: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("got %d sessions, want 1", len(got))
-	}
-	if got[0].AgentRepo != "acme/coder@1111222233334444555566667777888899990000" {
-		t.Fatalf("agent_repo = %q (expected lock-resolved sha to win)", got[0].AgentRepo)
-	}
-	s := h.runner.sessions[0]
-	if s.AgentSHA != "1111222233334444555566667777888899990000" {
-		t.Fatalf("agent_sha = %q", s.AgentSHA)
 	}
 }
 
@@ -563,8 +507,9 @@ func TestOnTriggerPayloadMergedIntoCauseFrame(t *testing.T) {
 	}
 }
 
-// TestLoadHostConfigReturnsParsedRoles covers the M7b interface the
-// issue handler uses to apply mention_by ACLs.
+// TestLoadHostConfigReturnsParsedRoles covers the interface the issue
+// handler uses to resolve `@agent-<role-key>` mentions against the
+// host yaml's role declarations.
 func TestLoadHostConfigReturnsParsedRoles(t *testing.T) {
 	h := newTestSpawner(t, []byte(hostYAMLMentions), nil)
 	cfg, err := h.spawner.LoadHostConfig(context.Background(), 1)
@@ -576,10 +521,6 @@ func TestLoadHostConfigReturnsParsedRoles(t *testing.T) {
 	}
 	if _, ok := cfg.Roles["backend"]; !ok {
 		t.Fatalf("config missing backend role; got keys %v", roleKeyNames(cfg.Roles))
-	}
-	// Normalize default fills mention_by → collaborators.
-	if cfg.Roles["backend"].MentionBy != agentsconfig.MentionByCollaborators {
-		t.Fatalf("backend mention_by = %q, want collaborators", cfg.Roles["backend"].MentionBy)
 	}
 }
 
@@ -628,8 +569,8 @@ func TestAuditorReturnsSnapshotColumns(t *testing.T) {
 	if r.RoleKey != "backend" {
 		t.Fatalf("role_key = %q", r.RoleKey)
 	}
-	if r.AgentSHA == "" || r.RepoSHA == "" {
-		t.Fatalf("audit row missing sha pins: agent=%q repo=%q", r.AgentSHA, r.RepoSHA)
+	if r.RepoSHA == "" {
+		t.Fatalf("audit row missing repo_sha pin: %q", r.RepoSHA)
 	}
 	if r.CauseKind != string(domain.CauseKindIssueOpened) {
 		t.Fatalf("cause_kind = %q", r.CauseKind)

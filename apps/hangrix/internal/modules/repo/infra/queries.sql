@@ -44,7 +44,6 @@ FROM repos r
 JOIN users u ON u.id = r.owner_user_id
 WHERE r.owner_user_id = $1
   AND (sqlc.arg(include_private)::bool OR r.visibility = 'public')
-  AND (sqlc.narg('kind')::TEXT IS NULL OR r.kind = sqlc.narg('kind'))
 ORDER BY r.created_at DESC, r.id DESC
 LIMIT $2 OFFSET $3;
 
@@ -52,8 +51,7 @@ LIMIT $2 OFFSET $3;
 SELECT COUNT(*)
 FROM repos r
 WHERE r.owner_user_id = $1
-  AND (sqlc.arg(include_private)::bool OR r.visibility = 'public')
-  AND (sqlc.narg('kind')::TEXT IS NULL OR r.kind = sqlc.narg('kind'));
+  AND (sqlc.arg(include_private)::bool OR r.visibility = 'public');
 
 -- name: ListReposByOrgOwner :many
 SELECT r.*,
@@ -64,7 +62,6 @@ JOIN organizations o ON o.id = r.owner_org_id
 WHERE r.owner_org_id = $1
   AND o.deleted_at IS NULL
   AND (sqlc.arg(include_private)::bool OR r.visibility = 'public')
-  AND (sqlc.narg('kind')::TEXT IS NULL OR r.kind = sqlc.narg('kind'))
 ORDER BY r.created_at DESC, r.id DESC
 LIMIT $2 OFFSET $3;
 
@@ -74,18 +71,7 @@ FROM repos r
 JOIN organizations o ON o.id = r.owner_org_id
 WHERE r.owner_org_id = $1
   AND o.deleted_at IS NULL
-  AND (sqlc.arg(include_private)::bool OR r.visibility = 'public')
-  AND (sqlc.narg('kind')::TEXT IS NULL OR r.kind = sqlc.narg('kind'));
-
--- name: UpdateRepoKind :execrows
--- Called by the receive-pack post-receive observer when the default branch
--- advances. Idempotent and cheap; the index on kind='agent' means the
--- transition itself triggers an index update only when kind actually
--- changes. Validation of the agent.yml content lives in the service
--- layer (agents_config parser); this query is dumb.
-UPDATE repos
-SET kind = sqlc.arg('kind'), updated_at = NOW()
-WHERE id = sqlc.arg('id') AND kind IS DISTINCT FROM sqlc.arg('kind');
+  AND (sqlc.arg(include_private)::bool OR r.visibility = 'public');
 
 -- name: DeleteRepo :execrows
 DELETE FROM repos WHERE id = $1;

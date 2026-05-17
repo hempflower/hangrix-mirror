@@ -128,13 +128,14 @@ func (r *Registry) issueChildrenTool() *platformmcpdomain.Tool {
 	}
 }
 
-// issueChecksTool returns CI / check state. M8 will populate this; in
-// M7b it returns an empty list — the schema is the same so maintainer
-// can write its merge gate today and have it auto-populate later.
+// issueChecksTool returns CI / check state. The CI module lands in a
+// later milestone; today this returns an empty list with a stable schema
+// so the maintainer role can ship its merge gate now and have it
+// auto-populate when checks come online.
 func (r *Registry) issueChecksTool() *platformmcpdomain.Tool {
 	return &platformmcpdomain.Tool{
 		Name:        "issue_checks",
-		Description: "List the latest state of each CI check on the issue's head commit. M8+: returns []  in M7b.",
+		Description: "List the latest state of each CI check on the issue's head commit. Currently always returns [].",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -168,7 +169,7 @@ func (r *Registry) rosterListTool() *platformmcpdomain.Tool {
 				items = append(items, map[string]any{
 					"role_key":   s.RoleKey,
 					"status":     string(s.Status),
-					"agent_repo": s.AgentRepo,
+					"repo_sha":   s.RepoSHA,
 					"created_at": stableTime(s.CreatedAt),
 				})
 			}

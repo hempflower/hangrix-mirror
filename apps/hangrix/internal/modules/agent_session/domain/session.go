@@ -2,22 +2,23 @@
 // the orchestration layer that sits on top of runner.domain.Repo and turns
 // host-repo issue events into per-role session rows. Persistence stays in
 // the runner module (one agent_sessions table, owned by runner/infra); this
-// package only adds the M7a lifecycle semantics on top.
+// package only adds the lifecycle semantics on top.
 //
 // Three interfaces, each consumed by a different caller:
 //
-//   - Spawner — the issue module calls it on issue.opened (and, in M7b,
-//     other triggers) so the per-role sessions wake on their own. The
-//     spawner reads `.hangrix/agents.yml` at the host base-branch HEAD,
-//     resolves each role's agent ref to a sha, and writes a session row
-//     with the M7a snapshot columns populated.
+//   - Spawner — the issue module calls it on issue.opened (and other
+//     triggers like comment-mention / push / review vote) so the per-role
+//     sessions wake on their own. The spawner reads `.hangrix/agents.yml`
+//     at the host base-branch HEAD and writes a session row pinned to
+//     that commit.
 //
 //   - Archiver — the issue module calls it on issue.closed /
 //     issue.merged. Per spec there is no per-session manual archive; the
 //     parent issue is the sole archiver.
 //
-//   - Auditor — the admin / future swim-lane UI calls ListByIssue to
-//     reconstruct the (agent_sha, repo_sha, cause) audit chain.
+//   - Auditor — the admin / agents-tab UI calls ListByIssue + GetSession
+//     + ListMessages to reconstruct the (repo_sha, cause, role_config)
+//     audit chain plus the per-session message log.
 package domain
 
 import (
@@ -30,9 +31,9 @@ import (
 )
 
 // CauseKind classifies the upstream event that spawned a session. It maps
-// onto agent_sessions.cause_kind (TEXT, free-form so M7b can extend
-// without a migration). Values stay short slug-style: audit consumers
-// branch on them.
+// onto agent_sessions.cause_kind (TEXT, free-form so future trigger
+// classes can extend without a migration). Values stay short slug-style:
+// audit consumers branch on them.
 type CauseKind string
 
 const (
@@ -41,18 +42,16 @@ const (
 	// agentsconfig.TriggerIssueOpened wake here.
 	CauseKindIssueOpened CauseKind = "issue_opened"
 
-	// CauseKindCommentMentioned — M7b: a comment @-mentioned the role.
-	// Defined here so cause-kind values stay in one place even though
-	// M7a doesn't yet emit them.
+	// CauseKindCommentMentioned — a comment @-mentioned the role.
 	CauseKindCommentMentioned CauseKind = "comment_mentioned"
 
-	// CauseKindCommitPushed — M7b: a push landed on the issue branch.
+	// CauseKindCommitPushed — a push landed on the issue branch.
 	CauseKindCommitPushed CauseKind = "commit_pushed"
 
-	// CauseKindReviewVote — M7b: a reviewer voted approve / reject.
+	// CauseKindReviewVote — a reviewer voted approve / reject.
 	CauseKindReviewVote CauseKind = "review_vote"
 
-	// CauseKindManual — admin spawn path (M6c smoke / debug tooling).
+	// CauseKindManual — admin spawn path (smoke / debug tooling).
 	CauseKindManual CauseKind = "manual"
 )
 
@@ -62,9 +61,9 @@ const (
 // agent's inputs queue with the cause event.
 //
 // One TriggerInput fans out to N session rows — one per role on the host
-// yaml whose triggers list includes Trigger and whose `mention_by` (when
-// the cause is a mention) accepts the actor. M7a only emits
-// TriggerIssueOpened; M7b adds the rest.
+// yaml whose triggers list includes Trigger. Mention routing is open
+// (any commenter can wake any role); the spawn loop does not consult
+// any per-role actor gate.
 type TriggerInput struct {
 	// Trigger is the agentsconfig event the spawn should match against
 	// each role's `triggers:` list. A role with no matching trigger is
@@ -72,12 +71,12 @@ type TriggerInput struct {
 	Trigger agentsconfig.Trigger
 
 	// CauseKind is what gets persisted onto the new session's
-	// cause_kind column. Pairs with CauseID for the M7a audit chain.
+	// cause_kind column. Pairs with CauseID for the audit chain.
 	CauseKind CauseKind
 
 	// CauseID is the opaque upstream-artefact id (e.g. comment id, sha,
-	// review vote id). M7a: empty for issue.opened. Stored on the row
-	// so audit consumers can join back to the originating record.
+	// review vote id). Empty for issue.opened. Stored on the row so
+	// audit consumers can join back to the originating record.
 	CauseID string
 
 	// RepoID identifies the host repo.
@@ -119,7 +118,6 @@ type TriggerInput struct {
 type SpawnedSession struct {
 	SessionID int64
 	RoleKey   string
-	AgentRepo string // "<owner>/<name>@<sha>" — the snapshot pin
 	RunnerID  *int64 // nil when no runner is pinned at spawn time
 
 	// Action records what the spawner did for this role. "spawned" for
@@ -154,11 +152,9 @@ const (
 // implementation in service/spawner.go is pure-Go orchestration; it does
 // not own state of its own. Composes:
 //
-//   - agentsconfig parser   (host yaml + lock file + agent manifest)
+//   - agentsconfig parser   (host yaml)
 //   - HostBlobReader        (read files at <ref>:<path> from a bare repo)
-//   - git.Git               (resolve agent ref → sha when no lock entry)
-//   - repo.Store            (locate the host + agent repos, validate
-//                            kind=agent on the agent repo)
+//   - repo.Store            (locate the host repo)
 //   - runner.Repo           (persist the session + history seed)
 //   - RunnerPicker          (pick a runner_id by visibility + capacity)
 //
@@ -181,9 +177,9 @@ type Spawner interface {
 	//     queue. The agent (or the runner that will claim it) sees
 	//     the event on its next stdin read.
 	//   - Else if the role's most recent session is archived → skip
-	//     the role. Issue is dead for it (M7a: parent issue is the
-	//     only thing that can archive).
-	//   - Else → spawn a fresh row (the M7a row + history seed path).
+	//     the role. Issue is dead for it (parent issue is the only
+	//     thing that can archive).
+	//   - Else → spawn a fresh row (row + history seed path).
 	//
 	// Returns one SpawnedSession per role that was either spawned or
 	// enqueued; rows that were skipped (no match / archived / exact
@@ -195,13 +191,13 @@ type Spawner interface {
 	// (non-agent host — the common case). Surfaces ErrHostConfigInvalid
 	// for parse failures so the caller can log and continue.
 	//
-	// Exposed so the issue handler can apply the per-role `mention_by`
-	// gate before invoking OnTrigger — the policy needs the role's
-	// MentionBy + the caller's actor permissions, both of which live
-	// outside the spawner's purview. Re-resolving the host yaml each
-	// call is fine: the file is small, the operation is read-only
-	// (just a `git cat-file -p`), and a memoising layer would have to
-	// invalidate on every push so it isn't worth the complication.
+	// Exposed so the issue handler can resolve `@agent-<role-key>`
+	// mentions against the role declarations before invoking
+	// OnTrigger — anything that doesn't match a declared role is
+	// silently dropped. Re-resolving the host yaml each call is fine:
+	// the file is small, the operation is read-only (just a `git
+	// cat-file -p`), and a memoising layer would have to invalidate
+	// on every push so it isn't worth the complication.
 	LoadHostConfig(ctx context.Context, repoID int64) (*agentsconfig.HostConfig, error)
 }
 
@@ -216,38 +212,90 @@ type Archiver interface {
 	OnIssueClosed(ctx context.Context, repoID int64, issueNumber int32) (int64, error)
 }
 
-// AuditSession is one row of the cross-session query view promised in
-// roadmap.md §M7a Phase 2. Contains the snapshot pins so a consumer can
-// re-checkout exactly the agent + host state that produced any commit
-// the session made (`(agent_sha, repo_sha)` pair is the reproducibility
-// anchor).
+// AuditSession is one row of the cross-session query view. Contains the
+// snapshot pin (`repo_sha`) so a consumer can re-checkout exactly the
+// host state that produced any commit the session made.
+//
+// Failure fields (ExitCode / ErrorMessage) are populated by the runner
+// via MarkSessionTerminal when a session ends in a non-success status.
+// They give the audit consumer a one-line "why did this fail" hook
+// without having to fetch the full message log.
 type AuditSession struct {
-	SessionID  int64
-	RunnerID   *int64
-	RepoID     int64
-	Issue      int32
-	RoleKey    string
-	Status     string
-	AgentRepo  string // canonical "<owner>/<name>@<sha>" pin
-	AgentSHA   string
-	RepoSHA    string
-	CauseKind  string
-	CauseID    string
-	RoleConfig json.RawMessage
-	CreatedAt  time.Time
-	EndedAt    *time.Time
+	SessionID    int64
+	RunnerID     *int64
+	RepoID       int64
+	Issue        int32
+	RoleKey      string
+	Status       string
+	RepoSHA      string
+	CauseKind    string
+	CauseID      string
+	RoleConfig   json.RawMessage
+	ExitCode     *int32
+	ErrorMessage string
+	CreatedAt    time.Time
+	EndedAt      *time.Time
 }
 
-// Auditor exposes the M7a audit chain as a queryable view. The admin
-// handler mounts ListByIssue at /api/admin/issues/{repo_id}/{issue}/
-// agent-sessions so an operator can verify "this commit was made by
-// session S, role R, agent_sha A, repo_sha P, caused by comment C".
+// SessionMessage is one frame of a session's message log. Agents emit
+// these on stdout (kind=message / tool_call / status / log / done) and
+// the platform appends synthetic frames (kind=event for the trigger,
+// kind=system for orchestration errors). Payload carries kind-specific
+// JSON the columns can't represent cleanly (e.g. tool_call.args /
+// result, message.tool_calls).
+type SessionMessage struct {
+	ID         int64
+	Seq        int32
+	Kind       string
+	Role       string
+	Content    string
+	EventName  string
+	ToolCallID string
+	ToolName   string
+	Payload    json.RawMessage
+	CreatedAt  time.Time
+}
+
+// RecentFilter is the optional-filter bag for Auditor.ListRecent. Each
+// pointer field is nil-means-no-constraint. Limit <= 0 falls back to a
+// server-side default.
+type RecentFilter struct {
+	RoleKey *string
+	Status  *string
+	RepoID  *int64
+	Since   *time.Time
+	Limit   int
+}
+
+// Auditor exposes the agent-session audit view. Mounted under the issue
+// route (`/api/repos/{owner}/{name}/issues/{n}/agent-sessions`) for
+// non-admin readers, and under `/api/admin/agent-sessions` for the
+// admin audit pages.
 type Auditor interface {
 	// ListByIssue returns every session ever spawned on the (repo,
 	// issue) in spawn order. Includes already-archived rows — the
 	// audit view is append-only.
 	ListByIssue(ctx context.Context, repoID int64, issueNumber int32) ([]AuditSession, error)
+
+	// ListRecent returns the most-recent sessions across the platform
+	// (newest first), filtered by optional role / status / repo /
+	// since. Powers the admin global audit view.
+	ListRecent(ctx context.Context, opts RecentFilter) ([]AuditSession, error)
+
+	// GetSession returns one session by id. Caller is responsible for
+	// any (repo, issue) scoping — the method does not enforce it on
+	// its own.
+	GetSession(ctx context.Context, sessionID int64) (*AuditSession, error)
+
+	// ListMessages returns every message frame for a session, ordered
+	// by seq ascending. Empty slice for a session that hasn't yet
+	// produced any output. Returns ErrSessionNotFound if the session
+	// itself doesn't exist.
+	ListMessages(ctx context.Context, sessionID int64) ([]SessionMessage, error)
 }
+
+// ErrSessionNotFound is returned when a session lookup misses.
+var ErrSessionNotFound = errors.New("agent session not found")
 
 // HostBlobReader resolves <ref>:<path> in a bare repo to bytes. The repo
 // module already implements this via `git cat-file -p`; abstracting it
@@ -274,23 +322,11 @@ var (
 	// the file then resyncs.
 	ErrHostConfigInvalid = errors.New("host repo .hangrix/agents.yml is invalid")
 
-	// ErrAgentRepoNotFound means the role's `agent: <owner>/<name>@<ref>`
-	// points at a repo that doesn't exist on this platform (or isn't
-	// kind=agent). The spawner aborts the per-role spawn but continues
-	// with other roles.
-	ErrAgentRepoNotFound = errors.New("agent repo not found")
-
-	// ErrAgentRefUnresolved means neither the lock file nor the
-	// agent repo's live refs resolved the role's ref to a sha. Same
-	// per-role skip rule.
-	ErrAgentRefUnresolved = errors.New("agent ref unresolved to a sha")
-
 	// ErrNoRunner means no eligible runner is currently active for
 	// the host repo's visibility class. Spawner pins runner_id = NULL
-	// in that case (M7a accepts unpinned rows; the first eligible
-	// runner picks it up via ClaimNextSession). The error is only
-	// returned by RunnerPicker implementations that strictly require
-	// a pin at spawn time — the default policy uses unpinned-OK and
-	// never raises it.
+	// in that case; the first eligible runner picks it up via
+	// ClaimNextSession. The error is only returned by RunnerPicker
+	// implementations that strictly require a pin at spawn time —
+	// the default policy uses unpinned-OK and never raises it.
 	ErrNoRunner = errors.New("no eligible runner")
 )

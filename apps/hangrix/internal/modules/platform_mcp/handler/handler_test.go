@@ -29,14 +29,8 @@ func (s *stubValidator) ValidateSessionToken(_ context.Context, token string) (*
 	return nil, runnerdomain.ErrInvalidSessionToken
 }
 
-// stubRegistry returns a fixed tool catalogue. FilterForSession is a
-// no-op pass-through — per-role filtering correctness is tested via
-// service.CanCallTool (a pure function), not against this stub.
 type stubRegistry struct {
-	tools     []*platformmcpdomain.Tool
-	calls     int
-	lastName  string
-	lastArgs  string
+	tools []*platformmcpdomain.Tool
 }
 
 func (s *stubRegistry) ByName(name string) *platformmcpdomain.Tool {
@@ -49,30 +43,11 @@ func (s *stubRegistry) ByName(name string) *platformmcpdomain.Tool {
 }
 
 func (s *stubRegistry) FilterForSession(_ *runnerdomain.AgentSession) []*platformmcpdomain.Tool {
-	// Honour the same allow-list the real registry would: read the
-	// session's role_config and intersect. The handler tests rely on
-	// the can-filter for one of the assertions; we replicate the
-	// behaviour explicitly so the test stays decoupled from the
-	// shape of role_config JSON. The default session below has
-	// can:[issue_read, issue_comment].
 	out := make([]*platformmcpdomain.Tool, 0, len(s.tools))
 	for _, t := range s.tools {
 		out = append(out, t)
 	}
 	return out
-}
-
-func newRequest(t *testing.T, body any, token string) *http.Request {
-	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal body: %v", err)
-	}
-	req := httptest.NewRequest(http.MethodPost, "/api/mcp/v1/", bytes.NewReader(raw))
-	req.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	return req
 }
 
 func newTestRouter(h *Handler) http.Handler {
@@ -81,7 +56,7 @@ func newTestRouter(h *Handler) http.Handler {
 	return r
 }
 
-func newTestHandler(tools []*platformmcpdomain.Tool, canList []string) (*Handler, *stubRegistry, *runnerdomain.AgentSession) {
+func newTestHandler(tools []*platformmcpdomain.Tool, canList []string) (*Handler, *runnerdomain.AgentSession) {
 	roleCfg, _ := json.Marshal(map[string]any{"can": canList})
 	sess := &runnerdomain.AgentSession{
 		ID:         42,
@@ -90,66 +65,67 @@ func newTestHandler(tools []*platformmcpdomain.Tool, canList []string) (*Handler
 	}
 	validator := &stubValidator{validToken: "hgxs_TESTTEST_secretsecretsecretsecretsecre", session: sess}
 	reg := &stubRegistry{tools: tools}
-	return NewHandlerWithRegistry(reg, validator), reg, sess
+	return NewHandlerWithRegistry(reg, validator), sess
 }
 
-func TestDispatchRejectsMissingToken(t *testing.T) {
-	h, _, _ := newTestHandler(nil, nil)
-	router := newTestRouter(h)
+func postCall(t *testing.T, router http.Handler, name string, args any, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/tools/"+name, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, newRequest(t, map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
-	}, ""))
+	router.ServeHTTP(rr, req)
+	return rr
+}
+
+func TestCallRejectsMissingToken(t *testing.T) {
+	h, _ := newTestHandler(nil, nil)
+	rr := postCall(t, newTestRouter(h), "issue_read", map[string]any{}, "")
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("got status %d, want 401", rr.Code)
 	}
 }
 
-func TestDispatchRejectsInvalidToken(t *testing.T) {
-	h, _, _ := newTestHandler(nil, nil)
-	router := newTestRouter(h)
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, newRequest(t, map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
-	}, "hgxs_BADTOKEN_garbagegarbagegarbagegarbage"))
+func TestCallRejectsInvalidToken(t *testing.T) {
+	h, _ := newTestHandler(nil, nil)
+	rr := postCall(t, newTestRouter(h), "issue_read", map[string]any{}, "hgxs_BADTOKEN_garbagegarbagegarbagegarbage")
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("got status %d, want 403", rr.Code)
 	}
 }
 
-func TestToolsListReturnsRegistry(t *testing.T) {
+func TestListReturnsRegistry(t *testing.T) {
 	tool := &platformmcpdomain.Tool{
 		Name:        "issue_read",
 		Description: "read issue",
 		InputSchema: map[string]any{"type": "object"},
 	}
-	h, _, _ := newTestHandler([]*platformmcpdomain.Tool{tool}, []string{"issue_read"})
-	router := newTestRouter(h)
+	h, _ := newTestHandler([]*platformmcpdomain.Tool{tool}, []string{"issue_read"})
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/tools/", nil)
+	req.Header.Set("Authorization", "Bearer hgxs_TESTTEST_secretsecretsecretsecretsecre")
 	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, newRequest(t, map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
-	}, "hgxs_TESTTEST_secretsecretsecretsecretsecre"))
+	newTestRouter(h).ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
-		t.Fatalf("got status %d, want 200", rr.Code)
+		t.Fatalf("got status %d, want 200, body=%s", rr.Code, rr.Body.String())
 	}
 	var resp struct {
-		Result struct {
-			Tools []map[string]any `json:"tools"`
-		} `json:"result"`
-		Error any `json:"error"`
+		Tools []map[string]any `json:"tools"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Error != nil {
-		t.Fatalf("got error: %v", resp.Error)
-	}
-	if len(resp.Result.Tools) != 1 || resp.Result.Tools[0]["name"] != "issue_read" {
-		t.Fatalf("tools = %+v", resp.Result.Tools)
+	if len(resp.Tools) != 1 || resp.Tools[0]["name"] != "issue_read" {
+		t.Fatalf("tools = %+v", resp.Tools)
 	}
 }
 
-func TestToolsCallDispatchesToImpl(t *testing.T) {
+func TestCallDispatchesToImpl(t *testing.T) {
 	called := false
 	echoTool := &platformmcpdomain.Tool{
 		Name:        "issue_comment",
@@ -160,40 +136,27 @@ func TestToolsCallDispatchesToImpl(t *testing.T) {
 			return platformmcpdomain.Result{Text: `{"echoed":` + string(args) + `}`}, nil
 		},
 	}
-	h, _, _ := newTestHandler([]*platformmcpdomain.Tool{echoTool}, []string{"issue_comment"})
-	router := newTestRouter(h)
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, newRequest(t, map[string]any{
-		"jsonrpc": "2.0", "id": 7, "method": "tools/call",
-		"params": map[string]any{
-			"name":      "issue_comment",
-			"arguments": map[string]any{"body": "hello"},
-		},
-	}, "hgxs_TESTTEST_secretsecretsecretsecretsecre"))
+	h, _ := newTestHandler([]*platformmcpdomain.Tool{echoTool}, []string{"issue_comment"})
+	rr := postCall(t, newTestRouter(h), "issue_comment", map[string]any{"body": "hello"}, "hgxs_TESTTEST_secretsecretsecretsecretsecre")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("got status %d, want 200, body=%s", rr.Code, rr.Body.String())
 	}
 	if !called {
 		t.Fatalf("tool.Call was not invoked")
 	}
-	var resp struct {
-		Result struct {
-			IsError bool             `json:"isError"`
-			Content []map[string]any `json:"content"`
-		} `json:"result"`
-	}
+	var resp callResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Result.IsError {
-		t.Fatalf("isError unexpectedly true: %+v", resp.Result)
+	if resp.IsError {
+		t.Fatalf("is_error unexpectedly true: %+v", resp)
 	}
-	if !strings.Contains(resp.Result.Content[0]["text"].(string), `"body":"hello"`) {
-		t.Fatalf("echoed args missing: %v", resp.Result.Content)
+	if !strings.Contains(resp.Text, `"body":"hello"`) {
+		t.Fatalf("echoed args missing: %v", resp.Text)
 	}
 }
 
-func TestToolsCallDeniedByRoleCanList(t *testing.T) {
+func TestCallDeniedByRoleCanList(t *testing.T) {
 	mergeTool := &platformmcpdomain.Tool{
 		Name:        "issue_merge",
 		Description: "merge",
@@ -203,55 +166,36 @@ func TestToolsCallDeniedByRoleCanList(t *testing.T) {
 			return platformmcpdomain.Result{}, nil
 		},
 	}
-	// Role can only call issue_read — issue_merge must be rejected by
-	// the per-role filter even though it lives in the registry.
-	h, _, _ := newTestHandler([]*platformmcpdomain.Tool{mergeTool}, []string{"issue_read"})
-	router := newTestRouter(h)
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, newRequest(t, map[string]any{
-		"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-		"params": map[string]any{
-			"name":      "issue_merge",
-			"arguments": map[string]any{},
-		},
-	}, "hgxs_TESTTEST_secretsecretsecretsecretsecre"))
+	// Role only grants issue_read — issue_merge must be rejected by the
+	// per-role ACL even though it lives in the registry.
+	h, _ := newTestHandler([]*platformmcpdomain.Tool{mergeTool}, []string{"issue_read"})
+	rr := postCall(t, newTestRouter(h), "issue_merge", map[string]any{}, "hgxs_TESTTEST_secretsecretsecretsecretsecre")
 	if rr.Code != http.StatusOK {
-		t.Fatalf("got status %d, want 200 (errors come back as isError)", rr.Code)
+		t.Fatalf("got status %d, want 200 (soft errors come back as is_error)", rr.Code)
 	}
-	var resp struct {
-		Result struct {
-			IsError bool             `json:"isError"`
-			Content []map[string]any `json:"content"`
-		} `json:"result"`
-	}
+	var resp callResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !resp.Result.IsError {
-		t.Fatalf("expected isError=true, got false")
+	if !resp.IsError {
+		t.Fatalf("expected is_error=true, got false")
 	}
-	if !strings.Contains(resp.Result.Content[0]["text"].(string), "not granted") {
-		t.Fatalf("expected 'not granted' in error text, got: %v", resp.Result.Content)
+	if !strings.Contains(resp.Text, "not granted") {
+		t.Fatalf("expected 'not granted' in text, got: %q", resp.Text)
 	}
 }
 
-func TestMethodNotFound(t *testing.T) {
-	h, _, _ := newTestHandler(nil, []string{"issue_read"})
-	router := newTestRouter(h)
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, newRequest(t, map[string]any{
-		"jsonrpc": "2.0", "id": 9, "method": "resources/list",
-	}, "hgxs_TESTTEST_secretsecretsecretsecretsecre"))
-	var resp struct {
-		Error *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
+func TestCallUnknownTool(t *testing.T) {
+	h, _ := newTestHandler(nil, []string{"issue_read"})
+	rr := postCall(t, newTestRouter(h), "issue_read", map[string]any{}, "hgxs_TESTTEST_secretsecretsecretsecretsecre")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200, body=%s", rr.Code, rr.Body.String())
 	}
+	var resp callResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Error == nil || resp.Error.Code != codeMethodNotFound {
-		t.Fatalf("expected method-not-found, got %+v", resp.Error)
+	if !resp.IsError || !strings.Contains(resp.Text, "unknown tool") {
+		t.Fatalf("expected unknown-tool soft error, got %+v", resp)
 	}
 }

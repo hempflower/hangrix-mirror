@@ -53,7 +53,7 @@ func (h *Handler) SyncIssueBranch(ctx context.Context, repo *repodomain.Repo, fs
 		if _, err := h.issues.CreateEvent(ctx, iss.ID, domain.EventCommitPushed, raw, actorID); err != nil {
 			return err
 		}
-		// M7b: fan a commit.pushed trigger out to any subscribing roles
+		// Fan a commit.pushed trigger out to any subscribing roles
 		// (typically reviewer / maintainer). Best-effort — a session-
 		// spawn hiccup must not break the head-sha update or the
 		// timeline event we just wrote.

@@ -18,18 +18,11 @@ import (
 type Loop struct {
 	Client       *client.Client
 	Orchestrator orchestrator.Orchestrator
-	// Bundles resolves an `<owner>/<name>@<sha>` task.AgentRepo pin into
-	// a host directory the orchestrator bind-mounts at
-	// /opt/hangrix/bundle:ro. Optional in tests that hand-craft Tasks
-	// with empty AgentRepo (e.g. session_test.go); SessionDriver fails
-	// the task if a Task carries AgentRepo and this is nil.
-	Bundles BundleResolver
 
 	AgentBinaryPath string
 	WorkspaceRoot   string
 
-	LLMEndpoint string
-	MCPEndpoint string
+	BaseURL string
 
 	HeartbeatEvery time.Duration
 }
@@ -38,9 +31,9 @@ type Loop struct {
 //
 //   - heartbeat ticker fires every HeartbeatEvery; reports capability snapshot.
 //   - task poller calls /tasks (long-poll, 20s); on a hit, runs the session
-//     synchronously before returning to poll again. M6c keeps concurrency
-//     at 1 because the docker side-effects don't need to be racing yet;
-//     M7a's dispatcher will widen this to runner.capabilities.parallelism.
+//     synchronously before returning to poll again. Concurrency is fixed
+//     at 1 for now — a future dispatcher will widen this to
+//     runner.capabilities.parallelism.
 func (l *Loop) Run(ctx context.Context) error {
 	if l.HeartbeatEvery <= 0 {
 		l.HeartbeatEvery = 20 * time.Second
@@ -74,11 +67,9 @@ func (l *Loop) Run(ctx context.Context) error {
 		drv := &SessionDriver{
 			Client:          l.Client,
 			Orchestrator:    l.Orchestrator,
-			Bundles:         l.Bundles,
 			AgentBinaryPath: l.AgentBinaryPath,
 			WorkspaceRoot:   l.WorkspaceRoot,
-			LLMEndpoint:     l.LLMEndpoint,
-			MCPEndpoint:     l.MCPEndpoint,
+			BaseURL:         l.BaseURL,
 		}
 		exit, err := drv.Run(ctx, task)
 		log.Printf("session %d finished: exit=%d err=%v", task.SessionID, exit, err)

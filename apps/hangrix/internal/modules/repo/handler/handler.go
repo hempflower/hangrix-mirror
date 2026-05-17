@@ -62,7 +62,6 @@ type Handler struct {
 	middleware    authdomain.Middleware
 	guards        []domain.BranchWriteGuard
 	observers     []domain.PushObserver
-	kindRefresher domain.KindRefresher
 }
 
 type HandlerDeps struct {
@@ -78,9 +77,9 @@ type HandlerDeps struct {
 	Resolver   orgdomain.Resolver
 	Tokens     tokendomain.Validator
 	// Sessions resolves an `hgxs_*` Basic-auth password to its
-	// agent_session row so the M7b agent path can `git push` over the
-	// same Smart-HTTP endpoint humans use. Optional — repo handler
-	// works without it (no agent push support).
+	// agent_session row so the agent path can `git push` over the same
+	// Smart-HTTP endpoint humans use. Optional — repo handler works
+	// without it (no agent push support).
 	Sessions   runnerdomain.SessionTokenValidator
 	Middleware authdomain.Middleware
 	// Guards is injected as the slice of every BranchWriteGuard registered
@@ -91,27 +90,22 @@ type HandlerDeps struct {
 	// pipeline. M4's issue module uses this to sync its sidecar before each
 	// push and append commit_pushed events afterwards.
 	Observers []domain.PushObserver
-	// KindRefresher reclassifies a repo's `kind` after the default branch
-	// changes (M7a Phase 2). Both this handler's post-receive path and
-	// the issue handler's merge endpoint consume it.
-	KindRefresher domain.KindRefresher
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
-		store:         deps.Store,
-		protections:   deps.Protections,
-		storage:       deps.Storage,
-		git:           deps.Git,
-		users:         deps.Users,
-		orgs:          deps.Orgs,
-		resolver:      deps.Resolver,
-		tokens:        deps.Tokens,
-		sessions:      deps.Sessions,
-		middleware:    deps.Middleware,
-		guards:        deps.Guards,
-		observers:     deps.Observers,
-		kindRefresher: deps.KindRefresher,
+		store:       deps.Store,
+		protections: deps.Protections,
+		storage:     deps.Storage,
+		git:         deps.Git,
+		users:       deps.Users,
+		orgs:        deps.Orgs,
+		resolver:    deps.Resolver,
+		tokens:      deps.Tokens,
+		sessions:    deps.Sessions,
+		middleware:  deps.Middleware,
+		guards:      deps.Guards,
+		observers:   deps.Observers,
 	}
 }
 
@@ -120,6 +114,10 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Use(h.middleware.RequireAuth)
 		r.Post("/", h.create)
 		r.Get("/me", h.listMine)
+		// Static segment, must register before the `/{owner}/{name}`
+		// catch-all so chi picks the literal route on a GET for
+		// `/api/repos/default-agents-yaml`.
+		r.Get("/default-agents-yaml", h.getDefaultAgentsYAML)
 		r.Get("/{owner}/{name}", h.getOne)
 		r.Patch("/{owner}/{name}", h.patchOne)
 		r.Delete("/{owner}/{name}", h.deleteOne)
@@ -184,31 +182,20 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 // alias so the existing UI can continue to build clone URLs without caring
 // whether the owner is a user or an org).
 type publicRepo struct {
-	ID            int64  `json:"id"`
-	OwnerKind     string `json:"owner_kind"`
-	OwnerID       int64  `json:"owner_id"`
-	OwnerName     string `json:"owner_name"`
-	OwnerUsername string `json:"owner_username"`
-	Name          string `json:"name"`
-	Description   string `json:"description"`
-	Visibility    string `json:"visibility"`
-	DefaultBranch string `json:"default_branch"`
-	// Kind is "standard" or "agent". M7a-introduced; reflects the
-	// cached classification computed from the default branch tip
-	// (presence of root agent.yml that parses cleanly).
-	Kind      string    `json:"kind"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID            int64     `json:"id"`
+	OwnerKind     string    `json:"owner_kind"`
+	OwnerID       int64     `json:"owner_id"`
+	OwnerName     string    `json:"owner_name"`
+	OwnerUsername string    `json:"owner_username"`
+	Name          string    `json:"name"`
+	Description   string    `json:"description"`
+	Visibility    string    `json:"visibility"`
+	DefaultBranch string    `json:"default_branch"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func toPublic(r *domain.Repo) publicRepo {
-	kind := string(r.Kind)
-	if kind == "" {
-		// Defensive default — rows predating migration 00004 have NOT
-		// NULL DEFAULT 'standard', so this branch should never fire,
-		// but a stale read shouldn't surface an empty value to clients.
-		kind = string(domain.KindStandard)
-	}
 	return publicRepo{
 		ID:            r.ID,
 		OwnerKind:     string(r.OwnerKind),
@@ -219,27 +206,9 @@ func toPublic(r *domain.Repo) publicRepo {
 		Description:   r.Description,
 		Visibility:    string(r.Visibility),
 		DefaultBranch: r.DefaultBranch,
-		Kind:          kind,
 		CreatedAt:     r.CreatedAt,
 		UpdatedAt:     r.UpdatedAt,
 	}
-}
-
-// parseKindFilter pulls the optional `?kind=agent|standard` query param.
-// Returns (nil, ok=true) for "no filter", (*Kind, true) for a valid value,
-// (nil, false) for an explicit invalid value so the caller can 400. The
-// empty string is treated as "no filter" — clients that omit the param
-// and clients that send an empty value behave identically.
-func parseKindFilter(r *http.Request) (*domain.Kind, bool) {
-	raw := strings.TrimSpace(r.URL.Query().Get("kind"))
-	if raw == "" {
-		return nil, true
-	}
-	k := domain.Kind(raw)
-	if !k.Valid() {
-		return nil, false
-	}
-	return &k, true
 }
 
 // ---- CRUD ----
@@ -254,6 +223,13 @@ type createReq struct {
 	// "the calling user"; a non-empty value must resolve to a user (the
 	// caller themselves) or an org of which the caller is a member.
 	Owner string `json:"owner,omitempty"`
+	// AgentsYAML is an optional override for the seeded `.hangrix/
+	// agents.yml`. Only consulted when InitReadme=true. Empty means
+	// "use the bundled template verbatim". The handler parses the
+	// body via agentsconfig.ParseHostConfig before writing — invalid
+	// yaml short-circuits with 400 so we never seed a repo with a
+	// config the runtime would reject on first spawn.
+	AgentsYAML string `json:"agents_yaml,omitempty"`
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
@@ -302,11 +278,28 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If the caller pasted a custom `.hangrix/agents.yml` body we
+	// validate it (so a bad config can't land in the seed commit and
+	// brick `agent spawn` later) then write it as the seed file. We
+	// also write stub prompt files for any role keys the body refers
+	// to that the bundled `templates/initial/.hangrix/prompts/`
+	// doesn't already cover.
+	var overrides map[string][]byte
+	if req.InitReadme && strings.TrimSpace(req.AgentsYAML) != "" {
+		files, err := prepareAgentFiles(req.AgentsYAML)
+		if err != nil {
+			_ = h.store.Delete(ctx, repo.ID)
+			httpx.WriteError(w, http.StatusBadRequest, "agents.yml: "+err.Error())
+			return
+		}
+		overrides = files
+	}
+
 	// Best-effort filesystem init. On failure we roll back the DB row so the
 	// caller can retry with the same name; otherwise the metadata row would
 	// orphan a missing bare repo. The seed commit's author identity is still
 	// the calling user regardless of who ends up owning the repo.
-	if err := h.storage.InitOnDisk(repo, ownerName, req.InitReadme, caller.Username, caller.Email); err != nil {
+	if err := h.storage.InitOnDisk(repo, ownerName, req.InitReadme, overrides, caller.Username, caller.Email); err != nil {
 		_ = h.store.Delete(ctx, repo.ID)
 		httpx.WriteError(w, http.StatusInternalServerError, "init repo: "+err.Error())
 		return
@@ -366,13 +359,8 @@ type listResp struct {
 func (h *Handler) listMine(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authdomain.UserFromRequest(r)
 	offset, limit := parseOffsetLimit(r)
-	kind, ok := parseKindFilter(r)
-	if !ok {
-		httpx.WriteError(w, http.StatusBadRequest, "invalid kind filter")
-		return
-	}
 
-	repos, total, err := h.store.ListByOwner(r.Context(), domain.OwnerKindUser, caller.ID, true, kind, offset, limit)
+	repos, total, err := h.store.ListByOwner(r.Context(), domain.OwnerKindUser, caller.ID, true, offset, limit)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -400,12 +388,7 @@ func (h *Handler) listByUsername(w http.ResponseWriter, r *http.Request) {
 	includePrivate := caller.ID == owner.ID || caller.Role == userdomain.RoleAdmin
 
 	offset, limit := parseOffsetLimit(r)
-	kind, ok := parseKindFilter(r)
-	if !ok {
-		httpx.WriteError(w, http.StatusBadRequest, "invalid kind filter")
-		return
-	}
-	repos, total, err := h.store.ListByOwner(r.Context(), domain.OwnerKindUser, owner.ID, includePrivate, kind, offset, limit)
+	repos, total, err := h.store.ListByOwner(r.Context(), domain.OwnerKindUser, owner.ID, includePrivate, offset, limit)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -441,12 +424,7 @@ func (h *Handler) listByOrg(w http.ResponseWriter, r *http.Request) {
 	includePrivate := isMember || caller.Role == userdomain.RoleAdmin
 
 	offset, limit := parseOffsetLimit(r)
-	kind, ok := parseKindFilter(r)
-	if !ok {
-		httpx.WriteError(w, http.StatusBadRequest, "invalid kind filter")
-		return
-	}
-	repos, total, err := h.store.ListByOwner(r.Context(), domain.OwnerKindOrg, org.ID, includePrivate, kind, offset, limit)
+	repos, total, err := h.store.ListByOwner(r.Context(), domain.OwnerKindOrg, org.ID, includePrivate, offset, limit)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return

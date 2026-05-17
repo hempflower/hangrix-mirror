@@ -2,16 +2,14 @@ package agentsconfig
 
 // HostConfig models the parsed `.hangrix/agents.yml`. It is the single
 // source of truth for which roles a host repo runs, in what container,
-// with which secrets, and under whose LLM defaults. Per principle 7
-// the host owns toolchain decisions; the agent repo only documents
-// what it expects.
+// with which secrets, under whose LLM defaults, and with which prompts.
 type HostConfig struct {
-	// Version pins the schema. Only `1` is accepted in M7a.
+	// Version pins the schema. Only `1` is currently accepted.
 	Version int
 
 	// Container is the runtime environment all roles in this host
-	// share. M7a is one container shape per host repo; per-role
-	// container overrides land in a later milestone.
+	// share. One container shape per host repo; per-role container
+	// overrides land in a later milestone.
 	Container Container
 
 	// LLM is the team-default LLM configuration. nil means "fall
@@ -22,7 +20,7 @@ type HostConfig struct {
 	// Roles maps role-key → Role. The map is guaranteed non-empty by
 	// the parser; an empty `roles:` is a misconfiguration. Iteration
 	// order is not stable — callers that need deterministic order
-	// (audit, lock-file generation) must sort keys themselves.
+	// (audit, etc.) must sort keys themselves.
 	Roles map[string]*Role
 }
 

@@ -17,7 +17,7 @@ import (
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
 
-// Registry is the M7b platform-tool catalogue. It exposes every tool a
+// Registry is the platform-tool catalogue. It exposes every tool a
 // session's role may invoke via MCP. Per-role filtering happens via the
 // session's role_config snapshot (see RoleCanList) — the catalogue
 // itself is global.
@@ -27,14 +27,13 @@ type Registry struct {
 }
 
 type RegistryDeps struct {
-	Issues        issuedomain.Store
-	Repos         repodomain.Store
-	Storage       repodomain.PathResolver
-	Git           gitdomain.Git
-	Runner        runnerdomain.Repo
-	Spawner       agentsessiondomain.Spawner
-	Archiver      agentsessiondomain.Archiver
-	KindRefresher repodomain.KindRefresher
+	Issues   issuedomain.Store
+	Repos    repodomain.Store
+	Storage  repodomain.PathResolver
+	Git      gitdomain.Git
+	Runner   runnerdomain.Repo
+	Spawner  agentsessiondomain.Spawner
+	Archiver agentsessiondomain.Archiver
 }
 
 // NewRegistry assembles the tool catalogue at startup. Tools share the
@@ -74,17 +73,14 @@ func (r *Registry) ByName(name string) *platformmcpdomain.Tool {
 }
 
 // FilterForSession returns the subset of tools the session's role is
-// allowed to invoke. The `can:` list is read off the role_config
-// snapshot frozen at spawn time — host yaml changes mid-session don't
-// affect a running agent.
+// allowed to invoke. The ACL is read off the role_config snapshot
+// frozen at spawn time — host yaml changes mid-session don't affect
+// a running agent. Whitelist (`can:`) wins over blacklist (`not:`)
+// when both are set; an entirely empty ACL fails closed.
 func (r *Registry) FilterForSession(sess *runnerdomain.AgentSession) []*platformmcpdomain.Tool {
-	allow := map[string]struct{}{}
-	for _, n := range RoleCanList(sess) {
-		allow[n] = struct{}{}
-	}
 	out := make([]*platformmcpdomain.Tool, 0, len(r.tools))
 	for _, t := range r.tools {
-		if _, ok := allow[t.Name]; ok {
+		if CanCallTool(sess, t.Name) {
 			out = append(out, t)
 		}
 	}
@@ -95,8 +91,8 @@ func (r *Registry) FilterForSession(sess *runnerdomain.AgentSession) []*platform
 
 // resolveRepoForSession centralises the (session → repo, fsPath, issue)
 // lookup every tool needs. Tools without a host repo / issue context
-// (M6c admin smoke sessions) get a tagged "no scope" error so the LLM
-// sees a clear message instead of a panic.
+// (admin smoke sessions) get a tagged "no scope" error so the LLM sees
+// a clear message instead of a panic.
 type sessionScope struct {
 	repo   *repodomain.Repo
 	fsPath string
@@ -202,12 +198,10 @@ func (r *Registry) fanCommentMentions(ctx context.Context, sess *runnerdomain.Ag
 		if _, ok := cfg.Roles[roleKey]; !ok {
 			continue
 		}
-		// mention_by enforcement is the issue-handler's job for the
-		// human path; for the agent path the comment author is the
-		// agent role itself, which is always allowed under the
-		// `collaborators` and `anyone` defaults. We elect not to
-		// gate agent→agent mentions for v1 — the host yaml's `can:`
-		// for `issue_comment` already governs who can write.
+		// Mention routing is open: any commenter (human or agent) can
+		// wake any role declared in the host yaml. The host yaml's
+		// `can:` for `issue_comment` already governs who is allowed
+		// to author the originating comment.
 		_, _ = r.deps.Spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
 			Trigger:     agentsconfig.TriggerIssueCommentMentioned,
 			CauseKind:   agentsessiondomain.CauseKindCommentMentioned,

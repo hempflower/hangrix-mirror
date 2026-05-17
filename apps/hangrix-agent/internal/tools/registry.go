@@ -1,16 +1,15 @@
-// Package tools is the merge point between local in-process tools and
-// remote MCP-served platform tools. It exposes:
-//
-//   - Catalog: the list of ToolDescriptor handed to the LLM.
-//   - Call: dispatches a function call (by name) to either a local Tool
-//     or the MCP client, returning a JSON-serialisable result.
+// Package tools owns the merged tool catalogue the agent exposes to
+// the LLM: in-process locals (read / write / edit / glob / grep / bash
+// / webfetch) plus the platform tools (issue_read, issue_diff,
+// issue_comment, …) which are hardcoded built-ins talking HTTP to
+// `<HANGRIX_PLATFORM_BASE_URL>/api/agent/tools/<name>`.
 //
 // HANGRIX_TOOL_CATALOG is parsed by the caller (cmd/hangrix-agent) and
 // passed in as Allow. An empty Allow means "no filter — every tool is
 // visible"; a non-empty Allow restricts the catalogue to listed names
 // (unknown names are dropped silently). The filter applies to *both*
-// local and MCP-served tools so a role can shut off `bash` or
-// `issue.merge` symmetrically.
+// local and platform tools so a role can shut off `bash` or
+// `issue_merge` symmetrically.
 package tools
 
 import (
@@ -21,35 +20,32 @@ import (
 	"strings"
 
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/llm"
-	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/mcp"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/local"
 )
 
-// Source distinguishes a local in-process tool from a remote MCP one.
-// We surface this in CallResult so the IPC tool_call frame can carry it
-// for audit — the runner needs to know "this commit was driven by a
-// platform-side issue.merge call, not by a `git push` from bash" to
-// classify the audit event correctly.
+// Source distinguishes a local in-process tool from a remote platform
+// one. We surface this in CallResult so the IPC tool_call frame can
+// carry it for audit — the runner needs to know "this commit was
+// driven by a platform-side issue_merge call, not by a `git push`
+// from bash" to classify the audit event correctly.
 type Source string
 
 const (
-	SourceLocal Source = "local"
-	SourceMCP   Source = "mcp"
+	SourceLocal    Source = "local"
+	SourcePlatform Source = "platform"
 )
 
-// Registry is the single dispatch point. Built once at startup; goroutine
-// safe because both local Tool.Call and mcp.Client.CallTool are safe to
-// invoke concurrently.
+// Registry is the single dispatch point. Built once at startup;
+// goroutine safe because every backing tool's Call is.
 type Registry struct {
-	descriptors []llm.ToolDescriptor
-	localByName map[string]local.Tool
-	mcpByName   map[string]mcp.Tool
-	mcpClient   *mcp.Client
+	descriptors      []llm.ToolDescriptor
+	byName           map[string]local.Tool
+	platformByName   map[string]struct{} // set of names sourced from platform
 }
 
 // CallResult is what the runtime persists. ResultJSON is what gets fed
-// back to the LLM as the function-call output; Source + IsError + ErrMsg
-// are agent-side metadata.
+// back to the LLM as the function-call output; Source + IsError +
+// ErrMsg are agent-side metadata.
 type CallResult struct {
 	Source     Source
 	ResultJSON json.RawMessage
@@ -57,57 +53,40 @@ type CallResult struct {
 	ErrMsg     string
 }
 
-// Build assembles the registry. localTools is typically the output of
-// local.All(); mcpClient may be nil (no platform connection — the agent
-// runs without remote tools, useful in M6b smoke tests).
-//
-// The order of the catalogue is local first then MCP (in MCP server's
-// declared order); within each group, the original order is preserved.
-// Stable order matters because the LLM has a small bias toward earlier
-// tools in long catalogues.
-func Build(ctx context.Context, localTools []local.Tool, mcpClient *mcp.Client, allow []string) (*Registry, error) {
+// Build assembles the registry. platformTools may be empty (no
+// platform connection — useful in offline tests). The catalogue order
+// is local first then platform; within each group the supplied order
+// is preserved.
+func Build(localTools, platformTools []local.Tool, allow []string) *Registry {
 	allowSet := buildAllowSet(allow)
 	r := &Registry{
-		localByName: map[string]local.Tool{},
-		mcpByName:   map[string]mcp.Tool{},
-		mcpClient:   mcpClient,
+		byName:         map[string]local.Tool{},
+		platformByName: map[string]struct{}{},
 	}
 	for _, t := range localTools {
 		if !allowSet.permit(t.Name()) {
 			continue
 		}
-		r.localByName[t.Name()] = t
+		r.byName[t.Name()] = t
 		r.descriptors = append(r.descriptors, llm.ToolDescriptor{
 			Name:        t.Name(),
 			Description: t.Description(),
 			Parameters:  t.Schema(),
 		})
 	}
-	if mcpClient != nil {
-		mcpTools, err := mcpClient.ListTools(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("tools: list remote: %w", err)
+	for _, t := range platformTools {
+		if !allowSet.permit(t.Name()) {
+			continue
 		}
-		for _, t := range mcpTools {
-			if !allowSet.permit(t.Name) {
-				continue
-			}
-			r.mcpByName[t.Name] = t
-			schema := t.InputSchema
-			if schema == nil {
-				// LLM strictly requires a schema; fall back to "object with
-				// any properties" so a poorly-described upstream tool is
-				// still callable, just under-validated.
-				schema = map[string]any{"type": "object"}
-			}
-			r.descriptors = append(r.descriptors, llm.ToolDescriptor{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  schema,
-			})
-		}
+		r.byName[t.Name()] = t
+		r.platformByName[t.Name()] = struct{}{}
+		r.descriptors = append(r.descriptors, llm.ToolDescriptor{
+			Name:        t.Name(),
+			Description: t.Description(),
+			Parameters:  t.Schema(),
+		})
 	}
-	return r, nil
+	return r
 }
 
 // Catalog returns the LLM-facing tool descriptors. Returned slice is
@@ -119,34 +98,20 @@ func (r *Registry) Catalog() []llm.ToolDescriptor { return r.descriptors }
 // LLM rather than crashing the loop, so the model can self-correct
 // (typo, wrong namespace).
 func (r *Registry) Call(ctx context.Context, name string, args json.RawMessage) CallResult {
-	if t, ok := r.localByName[name]; ok {
-		out, err := t.Call(ctx, args)
-		return r.makeResult(SourceLocal, out, err)
-	}
-	if _, ok := r.mcpByName[name]; ok {
-		if r.mcpClient == nil {
-			return CallResult{Source: SourceMCP, IsError: true, ErrMsg: "remote tool advertised but no MCP client configured"}
-		}
-		res, err := r.mcpClient.CallTool(ctx, name, args)
-		if err != nil {
-			return r.makeResult(SourceMCP, nil, err)
-		}
-		// MCP tools may return text or structured payloads; we forward
-		// the raw `result` envelope so the LLM sees exactly what the
-		// platform returned. IsError reflects the MCP-level signal.
+	t, ok := r.byName[name]
+	if !ok {
 		return CallResult{
-			Source:     SourceMCP,
-			ResultJSON: res.Raw,
-			IsError:    res.IsError,
-			ErrMsg:     "",
+			Source:  SourceLocal,
+			IsError: true,
+			ErrMsg:  fmt.Sprintf("unknown tool %q (available: %s)", name, strings.Join(r.knownNames(), ", ")),
 		}
 	}
-	available := r.knownNames()
-	return CallResult{
-		Source:  SourceLocal, // not really, but the caller doesn't need fidelity here
-		IsError: true,
-		ErrMsg:  fmt.Sprintf("unknown tool %q (available: %s)", name, strings.Join(available, ", ")),
+	src := SourceLocal
+	if _, isPlatform := r.platformByName[name]; isPlatform {
+		src = SourcePlatform
 	}
+	out, err := t.Call(ctx, args)
+	return r.makeResult(src, out, err)
 }
 
 func (r *Registry) makeResult(src Source, value any, err error) CallResult {
@@ -156,6 +121,21 @@ func (r *Registry) makeResult(src Source, value any, err error) CallResult {
 	if value == nil {
 		return CallResult{Source: src, ResultJSON: json.RawMessage("null")}
 	}
+	// Platform tools return a structured `{is_error, text}` envelope on
+	// soft failure (see internal/tools/platform/platform.go). Project
+	// the IsError flag onto our CallResult so the runtime can mark the
+	// tool_call frame; the body itself still rides in ResultJSON so the
+	// LLM sees the explanation verbatim.
+	if m, ok := value.(map[string]any); ok {
+		if flag, has := m["is_error"].(bool); has && flag {
+			raw, mErr := json.Marshal(value)
+			if mErr != nil {
+				return CallResult{Source: src, IsError: true, ErrMsg: fmt.Sprintf("marshal result: %s", mErr)}
+			}
+			text, _ := m["text"].(string)
+			return CallResult{Source: src, ResultJSON: raw, IsError: true, ErrMsg: text}
+		}
+	}
 	raw, mErr := json.Marshal(value)
 	if mErr != nil {
 		return CallResult{Source: src, IsError: true, ErrMsg: fmt.Sprintf("marshal result: %s", mErr)}
@@ -164,20 +144,17 @@ func (r *Registry) makeResult(src Source, value any, err error) CallResult {
 }
 
 func (r *Registry) knownNames() []string {
-	names := make([]string, 0, len(r.localByName)+len(r.mcpByName))
-	for n := range r.localByName {
-		names = append(names, n)
-	}
-	for n := range r.mcpByName {
+	names := make([]string, 0, len(r.byName))
+	for n := range r.byName {
 		names = append(names, n)
 	}
 	return names
 }
 
-// allowSet wraps "no filter" vs "explicit list" so call sites don't have
-// to special-case empty everywhere.
+// allowSet wraps "no filter" vs "explicit list" so call sites don't
+// have to special-case empty everywhere.
 type allowSet struct {
-	none  bool // true means "no filter, allow everything"
+	none  bool
 	names map[string]struct{}
 }
 
@@ -217,5 +194,4 @@ func ParseToolCatalog(raw string) ([]string, error) {
 
 // ErrToolNotAllowed is returned by callers that want to surface a richer
 // error than CallResult.IsError (e.g. the runtime emitting a typed log).
-// Kept here so package boundaries don't proliferate it.
 var ErrToolNotAllowed = errors.New("tool not allowed")

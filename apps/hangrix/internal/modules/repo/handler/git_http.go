@@ -39,7 +39,7 @@ import (
 // Credentials are checked in this order on every Basic-auth attempt:
 //   1. password looks like an agent session token (`hgxs_*`) → validate
 //      via SessionTokenValidator; the request is authorized for the
-//      session's bound repo only. This is the M7b agent push path.
+//      session's bound repo only. This is the agent push path.
 //   2. password looks like a PAT (`hgx_*`) → validate via Validator
 //   3. otherwise bcrypt-compare against the user's password_hash
 //
@@ -160,17 +160,7 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 	for _, obs := range h.observers {
 		_ = obs.PostReceive(postCtx, repo, fsPath)
 	}
-	// Refresh the M7a agent-vs-standard kind classification from the new
-	// default branch tip. Same swallow-errors stance: the client's push has
-	// already succeeded; a transient git or DB hiccup just means the
-	// kind column lags a turn until the next push.
-	if h.kindRefresher != nil {
-		h.kindRefresher.Refresh(postCtx, repo, fsPath)
-	}
 }
-
-// refreshRepoKind moved to repo/service/kind_refresher.go in M7a P2 so the
-// issue module's merge endpoint can call it without importing repo/handler.
 
 // runStatelessRPC streams the request body into `git <sub> --stateless-rpc`
 // stdin and the subprocess stdout into the response body. Same shape for
@@ -287,8 +277,8 @@ func (h *Handler) loadGitRepo(w http.ResponseWriter, r *http.Request, owner, rep
 //   - A user (cookie / PAT / password). User-owned repos allow the
 //     owner; org-owned repos allow any member to read and only
 //     owner-role members to write. Admin always passes.
-//   - An agent session (M7b). Authorized only for the repo the session
-//     is bound to. The session is itself bound to a (repo, issue) when
+//   - An agent session. Authorized only for the repo the session is
+//     bound to. The session is itself bound to a (repo, issue) when
 //     the spawner creates it; we treat that as the authority.
 func (h *Handler) canAccessRepo(ctx context.Context, caller *gitCaller, repo *domain.Repo, write bool) bool {
 	if caller == nil {
@@ -345,7 +335,6 @@ func challengeBasicAuth(w http.ResponseWriter) {
 //  2. HTTP Basic with an agent session token (`hgxs_*`) — validates via
 //     the runner module's SessionTokenValidator. The resulting caller is
 //     bound to the session's RepoID; canAccessRepo enforces the match.
-//     This is the M7b agent push path.
 //  3. HTTP Basic with a PAT-shaped password (`hgx_*`) — validates via the
 //     token module. Captures the resolved token so write paths can check
 //     its scope.

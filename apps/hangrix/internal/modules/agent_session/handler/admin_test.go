@@ -31,6 +31,18 @@ func (s *stubAuditor) ListByIssue(_ context.Context, repoID int64, issueNumber i
 	return s.rows, s.err
 }
 
+func (s *stubAuditor) GetSession(_ context.Context, _ int64) (*domain.AuditSession, error) {
+	return nil, domain.ErrSessionNotFound
+}
+
+func (s *stubAuditor) ListMessages(_ context.Context, _ int64) ([]domain.SessionMessage, error) {
+	return nil, nil
+}
+
+func (s *stubAuditor) ListRecent(_ context.Context, _ domain.RecentFilter) ([]domain.AuditSession, error) {
+	return s.rows, s.err
+}
+
 // noopMiddleware satisfies authdomain.Middleware without any actual
 // auth — the unit test focuses on the handler's JSON shape, not the
 // auth chain. RequireAuth / RequireAdmin both just pass through.
@@ -56,8 +68,6 @@ func TestAdminListByIssueRoundTrip(t *testing.T) {
 		Issue:      7,
 		RoleKey:    "backend",
 		Status:     "pending",
-		AgentRepo:  "acme/coder@abc",
-		AgentSHA:   "abc",
 		RepoSHA:    "def",
 		CauseKind:  "issue_opened",
 		CauseID:    "comment-1",
@@ -96,8 +106,8 @@ func TestAdminListByIssueRoundTrip(t *testing.T) {
 	if got.SessionID != 42 || got.RoleKey != "backend" {
 		t.Fatalf("unexpected row: %+v", got)
 	}
-	if got.AgentSHA != "abc" || got.RepoSHA != "def" {
-		t.Fatalf("snapshot pins lost: %+v", got)
+	if got.RepoSHA != "def" {
+		t.Fatalf("snapshot pin lost: %+v", got)
 	}
 	if got.CauseKind != "issue_opened" || got.CauseID != "comment-1" {
 		t.Fatalf("cause fields lost: %+v", got)

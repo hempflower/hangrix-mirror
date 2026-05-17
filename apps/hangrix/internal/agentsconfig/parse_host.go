@@ -48,11 +48,10 @@ type llmWire struct {
 }
 
 type roleWire struct {
-	Agent      string     `yaml:"agent"`
 	Triggers   []string   `yaml:"triggers"`
 	Can        []string   `yaml:"can"`
+	Not        []string   `yaml:"not"`
 	Scope      *scopeWire `yaml:"scope"`
-	MentionBy  string     `yaml:"mention_by"`
 	Prompt     string     `yaml:"prompt"`
 	PromptFile string     `yaml:"prompt_file"`
 	LLM        *llmWire   `yaml:"llm"`
@@ -218,12 +217,10 @@ func buildLLM(w *llmWire, ctx string) (*LLMConfig, error) {
 // buildRole validates and lifts one role. The role key is passed in so
 // error messages can include it without the caller re-wrapping every
 // returned error.
+//
+// Every role MUST supply exactly one of `prompt:` / `prompt_file:` —
+// host yaml is the single source of truth for role prompts (M7c).
 func buildRole(key string, w *roleWire) (*Role, error) {
-	ref, err := ParseAgentRef(w.Agent)
-	if err != nil {
-		return nil, fmt.Errorf("roles.%s.agent: %w", key, err)
-	}
-
 	if len(w.Triggers) == 0 {
 		return nil, fmt.Errorf("roles.%s.triggers: %w", key, ErrEmptyTriggers)
 	}
@@ -240,15 +237,10 @@ func buildRole(key string, w *roleWire) (*Role, error) {
 		return nil, fmt.Errorf("roles.%s.prompt_file=%q: %w", key, w.PromptFile, ErrInvalidPromptFilePath)
 	}
 	if w.PromptFile != "" && strings.Contains(w.PromptFile, "..") {
-		// Even with the required prefix, a `..` segment could let
-		// an operator escape the prompts directory; treat that as a
-		// separate sentinel violation rather than collapsing it.
 		return nil, fmt.Errorf("roles.%s.prompt_file=%q: %w", key, w.PromptFile, ErrInvalidPromptFilePath)
 	}
-
-	mentionBy := MentionBy(w.MentionBy)
-	if w.MentionBy != "" && !IsValidMentionBy(mentionBy) {
-		return nil, fmt.Errorf("roles.%s.mention_by=%q: %w", key, w.MentionBy, ErrInvalidMentionBy)
+	if w.Prompt == "" && w.PromptFile == "" {
+		return nil, fmt.Errorf("roles.%s: %w", key, ErrPromptMissing)
 	}
 
 	var roleLLM *LLMConfig
@@ -265,12 +257,17 @@ func buildRole(key string, w *roleWire) (*Role, error) {
 		scope.Paths = w.Scope.Paths
 	}
 
+	for i, n := range w.Not {
+		if strings.TrimSpace(n) == "" {
+			return nil, fmt.Errorf("roles.%s.not[%d]: empty tool name", key, i)
+		}
+	}
+
 	return &Role{
-		Agent:      ref,
 		Triggers:   w.Triggers,
 		Can:        w.Can,
+		Not:        w.Not,
 		Scope:      scope,
-		MentionBy:  mentionBy,
 		Prompt:     w.Prompt,
 		PromptFile: w.PromptFile,
 		LLM:        roleLLM,

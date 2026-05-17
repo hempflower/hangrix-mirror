@@ -9,21 +9,25 @@ import (
 )
 
 // Git operates on bare repositories rooted at a filesystem path. All methods
-// are read-only except Init and SeedReadme; nothing here writes ref updates
-// beyond the initial seed commit. Push lives in M3.
+// are read-only except Init and SeedInitialCommit; nothing here writes ref
+// updates beyond the initial seed commit. Push lives in M3.
 type Git interface {
 	// Init creates a bare repository at path with the given default branch
 	// name (no leading "refs/heads/"). The directory is created if missing.
 	// Returns nil if the path already contains a bare repo.
 	Init(path string, defaultBranch string) error
 
-	// SeedReadme adds a single initial commit containing README.md to an
-	// otherwise-empty bare repo, advancing the default branch to point at
-	// it. No-op if the repo already has commits on the default branch.
-	// Author identifies the human who triggered the create; the committer
-	// is set to the same identity. Used so freshly-created repos can be
-	// cloned without first needing M3 push.
-	SeedReadme(path, defaultBranch, repoName, description, authorName, authorEmail string) error
+	// SeedInitialCommit writes a single initial commit containing every
+	// (path, body) pair in files. The bare repo MUST be otherwise empty
+	// — call resolves to a no-op when the default branch already has
+	// commits. Author identifies the human who triggered the create; the
+	// committer is set to the same identity. Used so freshly-created
+	// repos can be cloned without first needing M3 push. Paths are
+	// repo-relative, forward-slash, no leading "./"; nested directories
+	// (e.g. ".hangrix/agents.yml") work without an explicit "tree"
+	// entry — the implementation builds the nested tree structure from
+	// the slash-separated keys.
+	SeedInitialCommit(path, defaultBranch string, files map[string][]byte, authorName, authorEmail string) error
 
 	// ListRefs returns branch and tag heads, plus the repo's resolved
 	// default-branch SHA (empty string when the repo has no commits).

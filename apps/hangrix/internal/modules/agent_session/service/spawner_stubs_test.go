@@ -73,15 +73,12 @@ func (s *stubRepoStore) GetByOwnerAndName(_ context.Context, _ repodomain.OwnerK
 func (s *stubRepoStore) Create(context.Context, repodomain.OwnerKind, int64, string, string, string, repodomain.Visibility) (*repodomain.Repo, error) {
 	panic("Create not stubbed")
 }
-func (s *stubRepoStore) ListByOwner(context.Context, repodomain.OwnerKind, int64, bool, *repodomain.Kind, int32, int32) ([]*repodomain.Repo, int64, error) {
+func (s *stubRepoStore) ListByOwner(context.Context, repodomain.OwnerKind, int64, bool, int32, int32) ([]*repodomain.Repo, int64, error) {
 	panic("ListByOwner not stubbed")
 }
 func (s *stubRepoStore) Delete(context.Context, int64) error { panic("Delete not stubbed") }
 func (s *stubRepoStore) UpdateMeta(context.Context, int64, string, string, repodomain.Visibility) (*repodomain.Repo, error) {
 	panic("UpdateMeta not stubbed")
-}
-func (s *stubRepoStore) UpdateKind(context.Context, int64, repodomain.Kind) error {
-	panic("UpdateKind not stubbed")
 }
 func (s *stubRepoStore) Transfer(context.Context, int64, repodomain.OwnerKind, int64) (*repodomain.Repo, error) {
 	panic("Transfer not stubbed")
@@ -137,9 +134,9 @@ func (g *stubGit) ResolveCommit(path, ref string) (string, error) {
 	return "", gitdomain.ErrRefNotFound
 }
 
-func (g *stubGit) Init(string, string) error                      { panic("Init not stubbed") }
-func (g *stubGit) SeedReadme(string, string, string, string, string, string) error {
-	panic("SeedReadme not stubbed")
+func (g *stubGit) Init(string, string) error { panic("Init not stubbed") }
+func (g *stubGit) SeedInitialCommit(string, string, map[string][]byte, string, string) error {
+	panic("SeedInitialCommit not stubbed")
 }
 func (g *stubGit) ListRefs(string) (*gitdomain.Refs, error) { panic("ListRefs not stubbed") }
 func (g *stubGit) ListCommits(string, string, int, int) ([]*gitdomain.Commit, error) {
@@ -203,6 +200,12 @@ func (r *stubRunnerRepo) ListSessionsByIssue(_ context.Context, repoID int64, is
 	return out, nil
 }
 
+func (r *stubRunnerRepo) ListRecentSessions(_ context.Context, _ runnerdomain.SessionFilter, _ int) ([]*runnerdomain.AgentSession, error) {
+	return r.sessions, nil
+}
+
+func (r *stubRunnerRepo) DeleteRunner(_ context.Context, _ int64) error { return nil }
+
 func (r *stubRunnerRepo) CreateSession(_ context.Context, in runnerdomain.CreateSessionInput) (*runnerdomain.AgentSession, error) {
 	if r.createErr != nil {
 		return nil, r.createErr
@@ -228,7 +231,6 @@ func (r *stubRunnerRepo) CreateSession(_ context.Context, in runnerdomain.Create
 		Role:               in.Role,
 		Model:              in.Model,
 		AgentImage:         in.AgentImage,
-		AgentRepo:          in.AgentRepo,
 		WorkingBranch:      in.WorkingBranch,
 		BaseBranch:         in.BaseBranch,
 		HostAddendum:       in.HostAddendum,
@@ -238,7 +240,6 @@ func (r *stubRunnerRepo) CreateSession(_ context.Context, in runnerdomain.Create
 		SessionTokenSealed: in.SessionTokenSealed,
 		CreatedBy:          in.CreatedBy,
 		CreatedAt:          time.Now(),
-		AgentSHA:           in.AgentSHA,
 		RepoSHA:            in.RepoSHA,
 		RoleKey:            in.RoleKey,
 		CauseKind:          in.CauseKind,

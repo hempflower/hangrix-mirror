@@ -1,4 +1,4 @@
-// Package runner wires the M6c runner registry + agent-session machinery.
+// Package runner wires the runner registry + agent-session machinery.
 //
 // Persistence vs. service split:
 //

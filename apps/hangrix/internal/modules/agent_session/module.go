@@ -1,10 +1,10 @@
-// Package agent_session wires the M7a Phase 2 per-role session
-// orchestrator: takes issue lifecycle events (issue.opened / closed /
-// merged in M7a; M7b adds more), reads `.hangrix/agents.yml` at the host
-// repo's base-branch tip, and produces one agent_sessions row per
-// matching role. Persistence is owned by the runner module; this module
-// only adds the higher-level semantics (snapshot fields, idempotent
-// spawn, archive-on-close, audit query view).
+// Package agent_session wires the per-role session orchestrator: takes
+// issue lifecycle / comment / push / review events, reads
+// `.hangrix/agents.yml` at the host repo's base-branch tip, and produces
+// one agent_sessions row per matching role. Persistence is owned by the
+// runner module; this module only adds the higher-level semantics
+// (snapshot fields, idempotent spawn, archive-on-close, audit query
+// view).
 package agent_session
 
 import (

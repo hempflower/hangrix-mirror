@@ -18,20 +18,42 @@ import (
 // plain strings (no env access at read time) so consumers can rely on a
 // stable value for the lifetime of the process and tests can construct a
 // Config without touching os.Getenv.
+//
+// PlatformBaseURL is the one network anchor the agent needs. Both the
+// LLM proxy (`<base>/api/llm/v1/responses`) and the platform tool
+// endpoints (`<base>/api/agent/tools/<name>`) are derived from it by
+// the llm and tools/platform modules respectively.
 type Config struct {
 	SessionToken     string
-	LLMEndpoint      string
+	PlatformBaseURL  string
 	Model            string
-	MCPEndpoint      string
 	SessionID        string
 	Role             string
 	HostRepo         string
 	IssueNumber      string
 	WorkingBranch    string
 	BaseBranch       string
-	BundleDir        string
 	HostAddendumPath string
 	ToolCatalog      string
+}
+
+// LLMEndpoint returns the URL the agent POSTs `/responses` against.
+// Centralised here so the suffix lives next to its sibling
+// PlatformToolsBaseURL — neither leaks into other modules.
+func (c *Config) LLMEndpoint() string {
+	if c.PlatformBaseURL == "" {
+		return ""
+	}
+	return strings.TrimRight(c.PlatformBaseURL, "/") + "/api/llm/v1"
+}
+
+// PlatformToolsBaseURL returns the base the platform tool wrappers
+// hit (one POST per tool: `<base>/<tool-name>`).
+func (c *Config) PlatformToolsBaseURL() string {
+	if c.PlatformBaseURL == "" {
+		return ""
+	}
+	return strings.TrimRight(c.PlatformBaseURL, "/") + "/api/agent/tools"
 }
 
 // NewConfig is the ioc-shaped provider: zero parameters, returns *Config.
@@ -41,28 +63,24 @@ type Config struct {
 func NewConfig() *Config {
 	cfg := &Config{
 		SessionToken:     os.Getenv("HANGRIX_SESSION_TOKEN"),
-		LLMEndpoint:      os.Getenv("HANGRIX_LLM_ENDPOINT"),
+		PlatformBaseURL:  os.Getenv("HANGRIX_PLATFORM_BASE_URL"),
 		Model:            os.Getenv("HANGRIX_LLM_MODEL"),
-		MCPEndpoint:      os.Getenv("HANGRIX_PLATFORM_MCP_ENDPOINT"),
 		SessionID:        os.Getenv("HANGRIX_SESSION_ID"),
 		Role:             os.Getenv("HANGRIX_ROLE"),
 		HostRepo:         os.Getenv("HANGRIX_HOST_REPO"),
 		IssueNumber:      os.Getenv("HANGRIX_ISSUE_NUMBER"),
 		WorkingBranch:    os.Getenv("HANGRIX_WORKING_BRANCH"),
 		BaseBranch:       os.Getenv("HANGRIX_BASE_BRANCH"),
-		BundleDir:        os.Getenv("HANGRIX_AGENT_BUNDLE"),
 		HostAddendumPath: os.Getenv("HANGRIX_HOST_ADDENDUM"),
 		ToolCatalog:      os.Getenv("HANGRIX_TOOL_CATALOG"),
 	}
 
-	// MCP endpoint is intentionally optional: M6b smoke-test runs the
-	// agent with local tools only and no platform connection.
 	var missing []string
 	if cfg.SessionToken == "" {
 		missing = append(missing, "HANGRIX_SESSION_TOKEN")
 	}
-	if cfg.LLMEndpoint == "" {
-		missing = append(missing, "HANGRIX_LLM_ENDPOINT")
+	if cfg.PlatformBaseURL == "" {
+		missing = append(missing, "HANGRIX_PLATFORM_BASE_URL")
 	}
 	if cfg.Model == "" {
 		missing = append(missing, "HANGRIX_LLM_MODEL")

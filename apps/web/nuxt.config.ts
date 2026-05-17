@@ -53,6 +53,12 @@ export default defineNuxtConfig({
       // (which uses window.location.origin = the dev host) actually works.
       // In prod the single binary serves /git itself, no proxy needed.
       '/git': { target: 'http://localhost:8080/git', changeOrigin: true },
+      // Runner install endpoints (bash script + binary). Same story as
+      // /git — in prod the single binary serves these itself; in dev
+      // Nuxt is the public entrypoint, so without this proxy a fresh
+      // `curl localhost:3000/install/runner.sh` would hit the SPA
+      // fallback and download index.html instead of the script.
+      '/install': { target: 'http://localhost:8080/install', changeOrigin: true },
     }
   }
 })

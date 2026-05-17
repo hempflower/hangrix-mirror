@@ -17,19 +17,17 @@ import (
 	"github.com/hangrix/hangrix/pkg/cryptobox"
 )
 
-// hostConfigPath / hostLockPath are the canonical relative paths inside a
-// host repo. The agent_session spec pins these — a host yaml lookup never
-// follows a redirect / alternative location.
-const (
-	hostConfigPath = ".hangrix/agents.yml"
-	hostLockPath   = ".hangrix/agents.lock"
-)
+// hostConfigPath is the canonical relative path inside a host repo. The
+// agent_session spec pins this — a host yaml lookup never follows a
+// redirect / alternative location.
+const hostConfigPath = ".hangrix/agents.yml"
 
 // Spawner is the agent_session orchestrator. Composition is deliberately
 // wide — it touches the repo store, the resolver, the bare repo on disk,
-// and the runner module's persistence — because M7a P2 sits exactly at
-// the seam between "issue lifecycle event" and "session row + history
-// frame". Splitting it further produces shells with one method each.
+// and the runner module's persistence — because the orchestrator sits
+// exactly at the seam between "issue lifecycle event" and "session row +
+// history frame". Splitting it further produces shells with one method
+// each.
 type Spawner struct {
 	repos    repodomain.Store
 	resolver orgdomain.Resolver
@@ -72,8 +70,7 @@ func NewSpawner(deps *SpawnerDeps) *Spawner {
 }
 
 // OnTrigger satisfies domain.Spawner. See the interface docstring for
-// the full fan-out / idempotency / live-session-enqueue contract; this
-// implementation is the M7b orchestrator.
+// the full fan-out / idempotency / live-session-enqueue contract.
 //
 // Wide method — most of the spawn flow lives here — because the steps
 // share a lot of resolved state (host repo, fs path, base-branch sha,
@@ -117,8 +114,6 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 		// common case for repos that never opted into agent collaboration.
 		return nil, nil
 	}
-
-	lock, _ := s.loadLockFile(ctx, hostFs, hostRepo.DefaultBranch)
 
 	repoSHA, err := s.git.ResolveCommit(hostFs, hostRepo.DefaultBranch)
 	if err != nil {
@@ -184,8 +179,8 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 			continue
 		}
 		// Idempotency: exact (role, cause_kind, cause_id) was already
-		// processed. M7a's TestOnTriggerIdempotent relies on this for
-		// the issue.opened path where cause_id is "".
+		// processed. The TestOnTriggerIdempotent suite relies on this
+		// for the issue.opened path where cause_id is "".
 		if _, dup := alreadyForCause[causeKey(roleKey, string(in.CauseKind), in.CauseID)]; dup {
 			continue
 		}
@@ -203,7 +198,7 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 			continue
 		}
 
-		spawn, err := s.spawnRole(ctx, in, hostRepo, hostCfg, role, roleKey, repoSHA, lock)
+		spawn, err := s.spawnRole(ctx, in, hostRepo, hostCfg, role, roleKey, repoSHA)
 		if err != nil {
 			// Per-role failure — log and continue with the next role.
 			// We surface the error string on a kind=system message so a
@@ -264,7 +259,6 @@ func (s *Spawner) enqueueOntoLive(ctx context.Context, in domain.TriggerInput, l
 	return domain.SpawnedSession{
 		SessionID: live.ID,
 		RoleKey:   live.RoleKey,
-		AgentRepo: live.AgentRepo,
 		RunnerID:  live.RunnerID,
 		Action:    domain.SpawnActionEnqueued,
 	}, nil
@@ -304,15 +298,8 @@ func (s *Spawner) spawnRole(
 	role *agentsconfig.Role,
 	roleKey string,
 	repoSHA string,
-	lock *agentsconfig.LockFile,
 ) (domain.SpawnedSession, error) {
-	agentSHA, err := s.resolveAgentSHA(ctx, role.Agent, lock)
-	if err != nil {
-		return domain.SpawnedSession{}, fmt.Errorf("resolve agent sha: %w", err)
-	}
-	agentRepo := role.Agent.Owner + "/" + role.Agent.Name + "@" + agentSHA
-
-	// Container image: M7a only supports pre-built `container.image`.
+	// Container image: only pre-built `container.image` is supported.
 	// `container.build` is parsed by agentsconfig but the runner doesn't
 	// build images yet — fail loudly so an operator sees the gap.
 	if hostCfg.Container.Image == "" {
@@ -351,8 +338,8 @@ func (s *Spawner) spawnRole(
 
 	// Pick a runner. Default policy (PickAny) returns nil/nil — leaves
 	// runner_id unset so ClaimNextSession on any eligible runner picks
-	// the row up. M7a accepts unpinned rows; later milestones can
-	// install a smarter picker without changing the spawner.
+	// the row up. Later milestones can install a smarter picker
+	// without changing the spawner.
 	runnerID, err := s.pickRunner(ctx, hostRepo)
 	if err != nil {
 		return domain.SpawnedSession{}, fmt.Errorf("pick runner: %w", err)
@@ -374,15 +361,9 @@ func (s *Spawner) spawnRole(
 
 	// Env: HANGRIX_* injected by the runner orchestrator at container
 	// start; the spawner adds the role identity so the agent's `bash`
-	// tool can `git commit` with the canonical role-key author. M6c env
-	// keys (HANGRIX_SESSION_TOKEN, etc.) come from the runner side, not
-	// here — duplicating them would risk drift.
-	//
-	// The HANGRIX_* snapshot keys (AGENT_SHA / REPO_SHA / CAUSE_KIND /
-	// CAUSE_ID) make the row's audit pins visible to the in-container
-	// agent for log emission. They duplicate what's already on the
-	// agent_sessions row — the agent prefers the env because it would
-	// otherwise need a platform-MCP call to learn its own snapshot.
+	// tool can `git commit` with the canonical role-key author. The
+	// HANGRIX_SESSION_TOKEN family lives on the runner side — duplicating
+	// them here would risk drift.
 	identity := domain.IdentityForRole(roleKey, s.hostURL)
 	env := map[string]string{
 		"GIT_AUTHOR_NAME":     identity.Name,
@@ -390,19 +371,12 @@ func (s *Spawner) spawnRole(
 		"GIT_COMMITTER_NAME":  identity.Name,
 		"GIT_COMMITTER_EMAIL": identity.Email,
 		"HANGRIX_ROLE_KEY":    roleKey,
-		"HANGRIX_AGENT_REPO":  agentRepo,
-		"HANGRIX_AGENT_SHA":   agentSHA,
 		"HANGRIX_REPO_SHA":    repoSHA,
 		"HANGRIX_CAUSE_KIND":  string(in.CauseKind),
 		"HANGRIX_CAUSE_ID":    in.CauseID,
-		// M7b: host repo coordinates the agent needs to clone / push.
-		// Owner + name come from the host repo row; the runner already
-		// forwards HANGRIX_WORKING_BRANCH / HANGRIX_BASE_BRANCH, and
-		// HANGRIX_LLM_ENDPOINT carries the server base URL the agent
-		// can strip down for git over HTTP.
-		"HANGRIX_HOST_OWNER": hostRepo.OwnerName,
-		"HANGRIX_HOST_NAME":  hostRepo.Name,
-		"HANGRIX_HOST_REPO":  hostRepo.OwnerName + "/" + hostRepo.Name,
+		"HANGRIX_HOST_OWNER":  hostRepo.OwnerName,
+		"HANGRIX_HOST_NAME":   hostRepo.Name,
+		"HANGRIX_HOST_REPO":   hostRepo.OwnerName + "/" + hostRepo.Name,
 	}
 	// Host yaml env merges on top of the identity keys. A role yaml that
 	// sets GIT_AUTHOR_NAME wins — though the spec doesn't carve that out
@@ -419,7 +393,6 @@ func (s *Spawner) spawnRole(
 		Role:               roleKey,
 		Model:              model,
 		AgentImage:         hostCfg.Container.Image,
-		AgentRepo:          agentRepo,
 		WorkingBranch:      issueBranchName(in.IssueNumber),
 		BaseBranch:         hostRepo.DefaultBranch,
 		HostAddendum:       addendum,
@@ -428,23 +401,20 @@ func (s *Spawner) spawnRole(
 		SessionTokenHash:   string(hashed),
 		SessionTokenSealed: sealed,
 		CreatedBy:          in.ActorID,
-		// M7a snapshot.
-		AgentSHA:   agentSHA,
-		RepoSHA:    repoSHA,
-		RoleKey:    roleKey,
-		CauseKind:  string(in.CauseKind),
-		CauseID:    in.CauseID,
-		RoleConfig: snapshot,
+		RepoSHA:            repoSHA,
+		RoleKey:            roleKey,
+		CauseKind:          string(in.CauseKind),
+		CauseID:            in.CauseID,
+		RoleConfig:         snapshot,
 	}
 	sess, err := s.runner.CreateSession(ctx, createIn)
 	if err != nil {
 		return domain.SpawnedSession{}, fmt.Errorf("create session row: %w", err)
 	}
 
-	// Seed the inputs queue: history frame first (mirrors the M6c admin
-	// path — agent stdin always opens with a history frame, empty until
-	// M7b's event replay), then the cause event so the agent sees what
-	// woke it.
+	// Seed the inputs queue: history frame first (agent stdin always
+	// opens with a history frame, currently empty until event replay
+	// lands), then the cause event so the agent sees what woke it.
 	history := []byte(`{"kind":"history","messages":[]}`)
 	if _, err := s.runner.EnqueueInput(ctx, sess.ID, history); err != nil {
 		return domain.SpawnedSession{}, fmt.Errorf("enqueue history: %w", err)
@@ -457,8 +427,7 @@ func (s *Spawner) spawnRole(
 		return domain.SpawnedSession{}, fmt.Errorf("enqueue cause: %w", err)
 	}
 	// Persist the cause event onto the message log too so the audit
-	// timeline reflects "what triggered this session" even before M7b's
-	// event bus is wired.
+	// timeline reflects "what triggered this session".
 	_, _ = s.runner.AppendMessage(ctx, &runnerdomain.Message{
 		SessionID: sess.ID,
 		Kind:      runnerdomain.MessageKindEvent,
@@ -469,7 +438,6 @@ func (s *Spawner) spawnRole(
 	return domain.SpawnedSession{
 		SessionID: sess.ID,
 		RoleKey:   roleKey,
-		AgentRepo: agentRepo,
 		RunnerID:  runnerID,
 		Action:    domain.SpawnActionSpawned,
 	}, nil
@@ -488,64 +456,18 @@ func (s *Spawner) loadHostConfig(ctx context.Context, hostFs, branch string) (*a
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", domain.ErrHostConfigInvalid, err)
 	}
-	// Apply schema-level defaults (mention_by, etc.) so consumers don't
-	// have to special-case the empty string. NormalizeHostConfig is
-	// idempotent so calling it on every load is safe.
+	// NormalizeHostConfig is currently a no-op; we still call it so
+	// future schema-level defaults can land in one well-known place
+	// without every consumer needing to be re-touched.
 	agentsconfig.NormalizeHostConfig(cfg)
 	return cfg, nil
 }
 
-// loadLockFile reads `.hangrix/agents.lock`. Missing or unparseable lock
-// is non-fatal: the spawner falls back to live ResolveCommit on the agent
-// repo. (Missing lock file is the common case for a freshly-installed
-// agent until an operator commits the lock — failing here would block
-// every spawn until that lock lands.)
-func (s *Spawner) loadLockFile(ctx context.Context, hostFs, branch string) (*agentsconfig.LockFile, error) {
-	body, ok := s.blob.ReadBlob(ctx, hostFs, branch, hostLockPath)
-	if !ok {
-		return nil, nil
-	}
-	return agentsconfig.ParseLockFile(body)
-}
-
-// resolveAgentSHA turns a role's `agent: <owner>/<name>@<ref>` into a
-// commit sha. Lock file wins when it has an entry; otherwise we resolve
-// against the agent repo's own refs via git.ResolveCommit. The agent
-// repo must (a) exist and (b) be classified kind=agent — refusing to
-// pull non-agent code into an agent container is a defensive check; the
-// runner bundle endpoint enforces the same gate independently.
-func (s *Spawner) resolveAgentSHA(ctx context.Context, ref agentsconfig.AgentRef, lock *agentsconfig.LockFile) (string, error) {
-	if lock != nil {
-		if entry, ok := lock.Agents[agentsconfig.LockKey(ref)]; ok && entry.ResolvedSHA != "" {
-			return entry.ResolvedSHA, nil
-		}
-	}
-	resolved, err := s.resolver.ResolveOwner(ctx, ref.Owner)
-	if err != nil {
-		return "", fmt.Errorf("%w: %s", domain.ErrAgentRepoNotFound, ref.Owner)
-	}
-	agentRepo, err := s.repos.GetByOwnerAndName(ctx, repodomain.OwnerKind(resolved.Kind), resolved.ID, ref.Name)
-	if err != nil {
-		return "", fmt.Errorf("%w: %s/%s", domain.ErrAgentRepoNotFound, ref.Owner, ref.Name)
-	}
-	if agentRepo.Kind != repodomain.KindAgent {
-		return "", fmt.Errorf("%w: %s/%s is kind=%s", domain.ErrAgentRepoNotFound, ref.Owner, ref.Name, agentRepo.Kind)
-	}
-	agentFs, err := s.storage.ResolvePath(agentRepo.OwnerName, agentRepo.Name)
-	if err != nil {
-		return "", fmt.Errorf("resolve agent fs path: %w", err)
-	}
-	sha, err := s.git.ResolveCommit(agentFs, ref.Ref)
-	if err != nil || sha == "" {
-		return "", fmt.Errorf("%w: %s@%s", domain.ErrAgentRefUnresolved, ref.Name, ref.Ref)
-	}
-	return sha, nil
-}
-
-// resolveHostAddendum returns the host-side prompt addendum text. Inline
-// `prompt:` wins when set; otherwise the file at `prompt_file:` is
-// loaded from the base-branch tip and frozen into the snapshot. Empty
-// string for roles with neither.
+// resolveHostAddendum returns the role's prompt text. Inline `prompt:`
+// wins when set; otherwise the file at `prompt_file:` is loaded from
+// the base-branch tip and frozen into the snapshot. Empty string for
+// roles with neither (rejected by the parser, but the helper stays
+// defensive).
 func (s *Spawner) resolveHostAddendum(ctx context.Context, hostRepo *repodomain.Repo, role *agentsconfig.Role) (string, error) {
 	if role.Prompt != "" {
 		return role.Prompt, nil
@@ -624,13 +546,13 @@ func issueBranchName(n int32) string {
 
 // buildRoleSnapshot freezes the resolved role config into the JSON blob
 // stored on `agent_sessions.role_config`. Schema is intentionally
-// open-ended (a JSON object) so M7b can extend without a migration.
+// open-ended (a JSON object) so it can extend without a migration.
 func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, addendum, model string) ([]byte, error) {
 	type rs struct {
 		Triggers     []string        `json:"triggers"`
 		Can          []string        `json:"can"`
+		Not          []string        `json:"not,omitempty"`
 		ScopePaths   []string        `json:"scope_paths,omitempty"`
-		MentionBy    string          `json:"mention_by,omitempty"`
 		HostAddendum string          `json:"host_addendum,omitempty"`
 		Model        string          `json:"model"`
 		LLMMaxTokens int             `json:"llm_max_tokens,omitempty"`
@@ -639,8 +561,8 @@ func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, a
 	snap := rs{
 		Triggers:     append([]string(nil), role.Triggers...),
 		Can:          append([]string(nil), role.Can...),
+		Not:          append([]string(nil), role.Not...),
 		ScopePaths:   append([]string(nil), role.Scope.Paths...),
-		MentionBy:    string(role.MentionBy),
 		HostAddendum: addendum,
 		Model:        model,
 	}
@@ -657,11 +579,11 @@ func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, a
 }
 
 // buildCauseFrame is the JSON the runner writes to agent stdin to tell
-// the agent what woke it. M6c admin used kind=event with a free-form
-// payload; M7a follows the same shape so the agent's IPC parser doesn't
-// branch. M7b layers per-trigger details (comment body, push delta,
-// vote value) on top via in.Payload — the spawner merges them into the
-// payload object without rewriting the wire shape.
+// the agent what woke it. The shape mirrors the kind=event frame the
+// admin smoke path emits, so the agent's IPC parser doesn't branch.
+// Per-trigger details (comment body, push delta, vote value) ride
+// in.Payload — the spawner merges them into the payload object without
+// rewriting the wire shape.
 func buildCauseFrame(in domain.TriggerInput) ([]byte, error) {
 	payload := map[string]any{
 		"repo_id":      in.RepoID,

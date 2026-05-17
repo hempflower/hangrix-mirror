@@ -57,28 +57,3 @@ func IsValidTrigger(s string) bool {
 	_, ok := validTriggers[Trigger(s)]
 	return ok
 }
-
-// MentionBy is the actor-class predicate that gates which `@agent-<role>`
-// mentions actually wake the role. The default (when host yaml omits the
-// field) is `collaborators`; service/normalize.go applies that AFTER
-// validation so absence and explicit value remain distinguishable
-// during parsing.
-type MentionBy string
-
-const (
-	MentionByOwner         MentionBy = "owner"
-	MentionByCollaborators MentionBy = "collaborators"
-	MentionByAnyone        MentionBy = "anyone"
-)
-
-// IsValidMentionBy reports whether s is one of the three allowed
-// values. The empty string is NOT valid here — service-layer normalize
-// fills the default and the parser only accepts the empty case before
-// normalization.
-func IsValidMentionBy(s MentionBy) bool {
-	switch s {
-	case MentionByOwner, MentionByCollaborators, MentionByAnyone:
-		return true
-	}
-	return false
-}

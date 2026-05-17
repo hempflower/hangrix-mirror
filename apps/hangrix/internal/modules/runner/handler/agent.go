@@ -22,8 +22,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
-	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
-	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/binaries"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 	"github.com/hangrix/hangrix/pkg/cryptobox"
@@ -42,13 +40,6 @@ type AgentHandler struct {
 	enrollValidator domain.EnrollValidator
 	box             *cryptobox.Box
 	cfg             *config.Config
-	// Cross-module deps used only by the M7a agent-bundle endpoint.
-	// orgResolver  username/orgname → Owner{Kind,ID,Name}
-	// repos        Metadata + kind validation
-	// paths        bare-repo fsPath for git archive
-	orgResolver orgdomain.Resolver
-	repos       repodomain.Store
-	paths       repodomain.PathResolver
 }
 
 type AgentHandlerDeps struct {
@@ -56,9 +47,6 @@ type AgentHandlerDeps struct {
 	AgentValidator  domain.AgentValidator
 	EnrollValidator domain.EnrollValidator
 	Config          *config.Config
-	OrgResolver     orgdomain.Resolver
-	Repos           repodomain.Store
-	Paths           repodomain.PathResolver
 }
 
 func NewAgentHandler(deps *AgentHandlerDeps) *AgentHandler {
@@ -72,9 +60,6 @@ func NewAgentHandler(deps *AgentHandlerDeps) *AgentHandler {
 		enrollValidator: deps.EnrollValidator,
 		box:             box,
 		cfg:             deps.Config,
-		orgResolver:     deps.OrgResolver,
-		repos:           deps.Repos,
-		paths:           deps.Paths,
 	}
 }
 
@@ -96,12 +81,16 @@ func (h *AgentHandler) RegisterRoutes(r chi.Router) {
 			r.Post("/sessions/{sid}/messages", h.appendMessage)
 			r.Get("/sessions/{sid}/inputs", h.pollInputs)
 			r.Post("/sessions/{sid}/terminate", h.terminate)
-			// M7a agent bundle distribution. Trailing wildcard so
-			// chi keeps the .tar.gz suffix in {*} for parseBundleRef
-			// to validate (other formats are explicitly unsupported).
-			r.Get("/agent-bundles/{owner}/{name}/*", h.getAgentBundle)
 		})
 	})
+
+	// Public install path. Both routes are unauthenticated: the
+	// install script is just a curl|sh entrypoint that does not yet
+	// have an agent token, and the binary itself is a public release
+	// artefact — possessing it without an enroll token still gets the
+	// operator nowhere.
+	r.Get("/install/runner.sh", h.serveInstallScript)
+	r.Get("/install/hangrix-runner", h.serveInstallBinary)
 }
 
 // ---- middleware ----
@@ -167,14 +156,16 @@ type bootstrapPayload struct {
 	// runner" is there so the runner can self-update later.
 	Binaries map[string]binaryInfo `json:"binaries"`
 
-	// In-container endpoints. The runner injects these into HANGRIX_*
-	// env vars before launching the agent.
-	LLMEndpoint string `json:"llm_endpoint"`
-	MCPEndpoint string `json:"mcp_endpoint"`
+	// BaseURL is the single platform base the in-container agent
+	// uses to reach every backend route — LLM proxy + agent tools.
+	// The runner forwards it as HANGRIX_PLATFORM_BASE_URL; the agent
+	// derives `<base>/api/llm/v1/responses` for chat completions and
+	// `<base>/api/agent/tools/<name>` for tool calls.
+	BaseURL string `json:"base_url"`
 
 	// DefaultAgentImage is what the runner falls back to when a session
-	// arrives with no image override. M7a starts driving this per-role
-	// from host repo .hangrix/agents.yml.
+	// arrives with no image override. The real session-spawn path drives
+	// this per-role from the host repo's `.hangrix/agents.yml`.
 	DefaultAgentImage string `json:"default_agent_image,omitempty"`
 
 	// Cadence the runner should match. Mirrors the server-side pollWait
@@ -239,17 +230,15 @@ func (h *AgentHandler) bootstrap(w http.ResponseWriter, r *http.Request) {
 // and /bootstrap return identical shapes — the runner is allowed to
 // trust either one as authoritative.
 //
-// LLMEndpoint / MCPEndpoint are fully-qualified including the API base
-// path so the in-container agent can append "/responses" (LLM) or its
-// MCP method directly. Centralising the path here keeps the agent
-// portable: change the proxy mount point and the runner picks it up on
-// the next bootstrap without an agent re-deploy.
+// BaseURL is the platform's public base; the agent (one container per
+// session) appends its own paths — `/api/llm/v1/responses` for chat
+// completions, `/api/agent/tools/<name>` for tool calls. Routing both
+// off a single value keeps the bootstrap shape small and the agent's
+// view of "where the platform lives" minimal.
 func (h *AgentHandler) buildBootstrap(r *http.Request) bootstrapPayload {
-	base := h.publicBase(r)
 	return bootstrapPayload{
 		Binaries:          h.binariesInfo(),
-		LLMEndpoint:       base + "/api/llm/v1",
-		MCPEndpoint:       base + "/api/mcp/v1",
+		BaseURL:           h.publicBase(r),
 		DefaultAgentImage: h.cfg.Runner.DefaultAgentImage,
 		PollWaitSec:       int(pollWait / time.Second),
 		HeartbeatSec:      20,
@@ -337,17 +326,10 @@ func (h *AgentHandler) heartbeat(w http.ResponseWriter, r *http.Request) {
 // ---- task dispatch ----
 
 type taskResp struct {
-	SessionID  int64  `json:"session_id"`
-	AgentImage string `json:"agent_image"`
-	Role       string `json:"role"`
-	Model      string `json:"model,omitempty"`
-	// AgentRepo is "<owner>/<name>@<sha>". The runner resolves the
-	// `<sha>` against its content-addressed cache; on miss it pulls
-	// the corresponding tarball from
-	// /api/runner/agent-bundles/{owner}/{name}/{sha}.tar.gz and
-	// mounts it read-only at /opt/hangrix/bundle. Empty on M6c-era
-	// admin smoke sessions that don't need a bundle.
-	AgentRepo     string            `json:"agent_repo"`
+	SessionID     int64             `json:"session_id"`
+	AgentImage    string            `json:"agent_image"`
+	Role          string            `json:"role"`
+	Model         string            `json:"model,omitempty"`
 	WorkingBranch string            `json:"working_branch"`
 	BaseBranch    string            `json:"base_branch"`
 	HostAddendum  string            `json:"host_addendum"`
@@ -392,7 +374,6 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 				AgentImage:    sess.AgentImage,
 				Role:          sess.Role,
 				Model:         sess.Model,
-				AgentRepo:     sess.AgentRepo,
 				WorkingBranch: sess.WorkingBranch,
 				BaseBranch:    sess.BaseBranch,
 				HostAddendum:  sess.HostAddendum,

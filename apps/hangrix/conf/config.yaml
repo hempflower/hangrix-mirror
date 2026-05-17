@@ -2,16 +2,16 @@ server:
   addr: ":8080"
   # Public base URL for endpoint advertisement (runner bootstrap, agent
   # env injection, future webhooks). Empty defers to the request host —
-  # fine for `go run ./cmd/hangrix` in a vanilla dev shell. For
-  # docker-compose smoke + production set this explicitly so the value
-  # is reachable from the network the agent containers live on.
+  # fine for `go run ./cmd/hangrix` in a vanilla dev shell. Set
+  # explicitly in production so the value is reachable from the network
+  # the agent containers live on.
   url: ""
 
 database:
-  dsn: "postgres://hangrix:hangrix@hangrix-postgres-dev:5432/hangrix?sslmode=disable"
+  dsn: "postgres://hangrix:hangrix@postgres:5432/hangrix?sslmode=disable"
 
 redis:
-  addr: "hangrix-redis-dev:6379"
+  addr: "redis:6379"
   password: ""
   db: 0
 
@@ -27,4 +27,7 @@ llm:
   encryption_key: "wAO53V1ifCfBbm5ZVmjR9haeymmvhIobK4b99+D4Eq8="
 
 runner:
-  default_agent_image: "hangrix-smoke-agent:latest"
+  # Fallback image the runner pulls when a session doesn't pin one.
+  # The real session-spawn path drives this per-role from the host
+  # repo's `.hangrix/agents.yml`, so this is rarely hit.
+  default_agent_image: "ubuntu:24.04"

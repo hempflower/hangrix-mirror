@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ArrowLeft, LogOut, Shield, User, Users } from 'lucide-vue-next'
+import { Activity, ArrowLeft, Bot, LogOut, Server, Shield, Sparkles, User, Users } from 'lucide-vue-next'
 import {
   Sidebar,
   SidebarContent,
@@ -44,6 +44,10 @@ async function onLogout() {
 
 const manageItems = computed<NavItem[]>(() => [
   { key: 'users', to: '/admin/users', icon: Users, label: t('nav.users') },
+  { key: 'llm', to: '/admin/llm', icon: Sparkles, label: t('nav.llmProviders') },
+  { key: 'runners', to: '/admin/runners', icon: Server, label: t('nav.runners') },
+  { key: 'usage', to: '/admin/llm-usage', icon: Activity, label: t('nav.llmUsage') },
+  { key: 'agentSessions', to: '/admin/agent-sessions', icon: Bot, label: t('nav.agentSessions') },
 ])
 
 function isActive(to: string) {

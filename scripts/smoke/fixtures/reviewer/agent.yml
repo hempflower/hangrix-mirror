@@ -1,9 +1,0 @@
-version: 1
-kind: agent
-entry:
-  base_prompt: prompts/system.md
-declared_tools:
-  - issue_read
-  - issue_diff
-  - issue_comment
-  - issue_review_vote

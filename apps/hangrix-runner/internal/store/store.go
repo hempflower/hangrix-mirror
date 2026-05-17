@@ -32,8 +32,7 @@ type State struct {
 
 	Binaries map[string]BinaryEntry `json:"binaries"`
 
-	LLMEndpoint string `json:"llm_endpoint"`
-	MCPEndpoint string `json:"mcp_endpoint,omitempty"`
+	BaseURL string `json:"base_url"`
 
 	DefaultAgentImage string `json:"default_agent_image,omitempty"`
 	PollWaitSec       int    `json:"poll_wait_sec"`

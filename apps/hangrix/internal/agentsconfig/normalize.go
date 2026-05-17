@@ -1,19 +1,11 @@
 package agentsconfig
 
-
-// NormalizeHostConfig fills schema-level defaults on a HostConfig that
-// already passed ParseHostConfig. Two-pass shape is intentional: the
-// parser surfaces the operator's literal yaml (so "absent" stays
-// distinguishable from "explicit default"), and this pass applies the
-// platform defaults the dispatcher relies on. Idempotent — calling it
-// twice produces the same result as once.
-//
-// Defaults applied:
-//   - role.mention_by: "" -> "collaborators" (the spec default).
+// NormalizeHostConfig is currently a no-op. The schema used to default
+// `mention_by` here; that field has been removed (any mention with a
+// matching trigger now wakes the role). The function is kept so
+// existing call sites that follow the parse → normalize convention
+// don't need to be touched; a future schema-level default would land
+// here as well.
 func NormalizeHostConfig(cfg *HostConfig) {
-	for _, role := range cfg.Roles {
-		if role.MentionBy == "" {
-			role.MentionBy = MentionByCollaborators
-		}
-	}
+	_ = cfg
 }

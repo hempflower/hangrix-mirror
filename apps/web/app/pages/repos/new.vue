@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Label } from '@/components/ui/label'
+import { YamlEditor } from '@/components/ui/yaml-editor'
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form'
 import {
   Select,
@@ -30,11 +31,6 @@ const route = useRoute()
 const { user, refresh: refreshUser } = useCurrentUser()
 const { orgs: myOrgs, refresh: refreshMyOrgs } = useMyOrgs()
 
-// Owner picker options: SELF_SENTINEL = the caller's own user namespace,
-// anything else = an org name they belong to. The sentinel is a non-empty
-// placeholder because reka-ui's <Select> forbids empty-string item values.
-// `?owner=acme` in the URL preselects an org (used by the org profile
-// "Create repo" button).
 const SELF_SENTINEL = '__self__'
 const ownerOptions = computed<{ value: string; label: string }[]>(() => {
   const me = user.value?.username ?? ''
@@ -69,6 +65,34 @@ const initial = computed(() => ({
 
 const formError = ref<string | null>(null)
 
+// The default agents.yml body lives on the backend (embedded under
+// apps/hangrix/internal/modules/repo/templates/initial/) and is
+// fetched once on page mount. We deliberately do NOT keep a
+// duplicate copy here — single source of truth, no risk of drift.
+//
+// `defaultAgentsYAML` is the seed body the editor renders with;
+// `agentsYAML` is the user-editable working copy. Reset just copies
+// the cached default back over `agentsYAML`.
+const defaultAgentsYAML = ref<string>('')
+const agentsYAML = ref<string>('')
+
+async function loadDefaultAgentsYAML() {
+  const body = await $fetch<string>('/api/repos/default-agents-yaml', {
+    credentials: 'include',
+    // The endpoint returns text/yaml; ofetch would try to JSON-parse
+    // by default if Content-Type wasn't recognised. Force a string.
+    parseResponse: (raw) => raw,
+  })
+  defaultAgentsYAML.value = body
+  // Only stamp the editor on first load — never clobber an in-progress
+  // edit if the user navigates away and back.
+  if (!agentsYAML.value) agentsYAML.value = body
+}
+
+function resetAgentsYAML() {
+  agentsYAML.value = defaultAgentsYAML.value
+}
+
 async function onSubmit(values: any) {
   formError.value = null
   const body: Record<string, any> = {
@@ -83,6 +107,14 @@ async function onSubmit(values: any) {
   }
   if (values.default_branch && values.default_branch.trim()) {
     body.default_branch = values.default_branch.trim()
+  }
+  if (body.init_readme) {
+    const yaml = agentsYAML.value
+    // Only forward if the user changed it — empty / equal-to-default
+    // leaves the backend on the bundled template path.
+    if (yaml.trim() && yaml !== defaultAgentsYAML.value) {
+      body.agents_yaml = yaml
+    }
   }
   try {
     const repo = await $fetch<PublicRepo>('/api/repos', {
@@ -99,11 +131,16 @@ async function onSubmit(values: any) {
 onMounted(async () => {
   if (!user.value) await refreshUser()
   await refreshMyOrgs()
+  // Best-effort: a failure here leaves the editor empty, which is
+  // still a valid submit (the backend defaults to its bundled
+  // template when agents_yaml is omitted).
+  try { await loadDefaultAgentsYAML() }
+  catch { /* swallow; editor stays blank, user can paste their own */ }
 })
 </script>
 
 <template>
-  <div class="mx-auto w-full max-w-2xl space-y-6">
+  <div class="mx-auto w-full max-w-4xl space-y-6">
     <header class="space-y-1">
       <h1 class="text-2xl font-semibold tracking-tight">
         {{ t('repo.createTitle') }}
@@ -226,6 +263,20 @@ onMounted(async () => {
               <FormMessage />
             </FormItem>
           </FormField>
+
+          <!-- Agent team yaml: visible only when init_readme is on -->
+          <div v-if="values.init_readme" class="space-y-2 rounded-md border p-4">
+            <div class="flex items-center justify-between gap-2">
+              <div class="space-y-1">
+                <h2 class="text-sm font-semibold">{{ t('repo.agentConfig.title') }}</h2>
+                <p class="text-xs text-muted-foreground">{{ t('repo.agentConfig.subtitle') }}</p>
+              </div>
+              <Button type="button" variant="ghost" size="sm" @click="resetAgentsYAML">
+                {{ t('repo.agentConfig.reset') }}
+              </Button>
+            </div>
+            <YamlEditor v-model="agentsYAML" min-height="44rem" />
+          </div>
 
           <p v-if="formError" class="text-sm text-destructive">
             {{ formError }}

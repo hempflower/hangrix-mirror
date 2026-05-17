@@ -16,15 +16,13 @@ import (
 // Task is the parameter bag for Start. It mirrors client.Task minus
 // transport-only metadata; the loop builds this from a poll response.
 //
-// HostBundleDir / HostAddendumPath / AgentBinaryPath are host-side paths
-// the orchestrator bind-mounts into the container. ContainerWorkdir is
-// where the agent should be invoked from inside the container (canonical
-// /workspace per spec).
+// HostAddendumPath / AgentBinaryPath are host-side paths the orchestrator
+// bind-mounts into the container. HostWorkdir is where the agent should
+// be invoked from inside the container (canonical /workspace per spec).
 type Task struct {
 	SessionID        int64
 	Image            string
 	AgentBinaryPath  string
-	HostBundleDir    string
 	HostAddendumPath string
 	HostWorkdir      string
 	Env              map[string]string

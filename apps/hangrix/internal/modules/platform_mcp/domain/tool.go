@@ -1,5 +1,5 @@
 // Package domain declares the platform-MCP contract: the Tool interface
-// every M7b platform tool implements, the dispatch envelopes the handler
+// every platform tool implements, the dispatch envelopes the handler
 // uses, and the cross-module dependencies tool implementations consume.
 //
 // The platform_mcp module sits above the issue / repo / runner / git
@@ -17,7 +17,7 @@ import (
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
 
-// Tool is one M7b platform-side capability exposed over the MCP server.
+// Tool is one platform-side capability exposed over the MCP server.
 // The handler discovers tools through the slice ToolProvider returns;
 // per-role filtering applies on top via the session's role_config
 // snapshot.

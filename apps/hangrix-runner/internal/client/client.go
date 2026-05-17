@@ -63,8 +63,7 @@ type EnrollResponse struct {
 // the cadence parameters server and runner must agree on.
 type BootstrapPayload struct {
 	Binaries          map[string]BinaryInfo `json:"binaries"`
-	LLMEndpoint       string                `json:"llm_endpoint"`
-	MCPEndpoint       string                `json:"mcp_endpoint"`
+	BaseURL           string                `json:"base_url"`
 	DefaultAgentImage string                `json:"default_agent_image,omitempty"`
 	PollWaitSec       int                   `json:"poll_wait_sec"`
 	HeartbeatSec      int                   `json:"heartbeat_sec"`
@@ -156,15 +155,7 @@ type Task struct {
 	// session (role.llm.model > host.llm.model). Surfaced into the
 	// container as HANGRIX_LLM_MODEL so the agent's LLM client knows
 	// which model to ask the proxy for.
-	Model string `json:"model"`
-	// AgentRepo is the bundle pin in `<owner>/<name>@<sha>` form. The
-	// runner resolves the `<sha>` against its content-addressed cache
-	// under ~/.hangrix/agent-bundles/<sha>/; on miss it pulls
-	// /api/runner/agent-bundles/{owner}/{name}/{sha}.tar.gz and
-	// verifies the X-Hangrix-SHA256 response header before mounting it
-	// at /opt/hangrix/bundle:ro. Empty for M6c-era admin smoke tasks
-	// where the agent image bakes its own bundle.
-	AgentRepo     string            `json:"agent_repo"`
+	Model         string            `json:"model"`
 	WorkingBranch string            `json:"working_branch"`
 	BaseBranch    string            `json:"base_branch"`
 	HostAddendum  string            `json:"host_addendum"`

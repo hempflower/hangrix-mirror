@@ -37,24 +37,3 @@ func TestIsValidTrigger(t *testing.T) {
 	}
 }
 
-func TestIsValidMentionBy(t *testing.T) {
-	t.Parallel()
-
-	valid := []MentionBy{
-		MentionByOwner,
-		MentionByCollaborators,
-		MentionByAnyone,
-	}
-	for _, v := range valid {
-		if !IsValidMentionBy(v) {
-			t.Fatalf("expected %q valid", v)
-		}
-	}
-
-	invalid := []MentionBy{"", "OWNER", "team", "self"}
-	for _, v := range invalid {
-		if IsValidMentionBy(v) {
-			t.Fatalf("expected %q invalid", v)
-		}
-	}
-}

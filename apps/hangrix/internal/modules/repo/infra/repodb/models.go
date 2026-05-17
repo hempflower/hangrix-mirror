@@ -49,7 +49,6 @@ type Repo struct {
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
 	OwnerOrgID    pgtype.Int8
-	Kind          string
 }
 
 type User struct {

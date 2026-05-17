@@ -3,7 +3,7 @@
 //
 //   - Spawner   — host yaml → per-role agent_sessions rows
 //   - Archiver  — issue.closed / issue.merged → sessions to 'archived'
-//   - Auditor   — list sessions on (repo, issue) for the M7a audit chain
+//   - Auditor   — list sessions / messages on (repo, issue) for the audit chain
 //
 // Everything stateful lives behind a small interface (HostBlobReader,
 // RunnerPicker, runner.Repo) so the unit tests in service/*_test.go can

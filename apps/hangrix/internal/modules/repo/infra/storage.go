@@ -10,6 +10,7 @@ import (
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/templates"
 
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 )
@@ -53,10 +54,22 @@ func (s *Storage) ResolvePath(ownerUsername, repoName string) (string, error) {
 	return filepath.Clean(filepath.Join(s.reposPath, ownerUsername, repoName+".git")), nil
 }
 
-// InitOnDisk creates the bare repository for repo and, if seedReadme is true,
-// adds an initial commit so the repo can be cloned immediately. Author
-// identity is recorded on the seed commit only.
-func (s *Storage) InitOnDisk(repo *domain.Repo, ownerUsername string, seedReadme bool, authorName, authorEmail string) error {
+// InitOnDisk creates the bare repository for repo and, if seedReadme is
+// true, writes one initial commit containing:
+//
+//   - README.md          (rendered from the repo's name + description)
+//   - .hangrix/agents.yml + .hangrix/prompts/*.md  (multi-role agent
+//     starter — see internal/modules/repo/templates/initial/)
+//
+// so the repo can be cloned + an agent issue opened straight after
+// create. Author identity is recorded on the seed commit only.
+//
+// overrides lets callers replace any seeded file by repo-relative
+// path (forward-slash, no leading "./"). Typical use: the create
+// handler renders a custom `.hangrix/agents.yml` from the user's
+// form input and passes it here so the seed commit ships the
+// customised team config instead of the stock template.
+func (s *Storage) InitOnDisk(repo *domain.Repo, ownerUsername string, seedReadme bool, overrides map[string][]byte, authorName, authorEmail string) error {
 	path, err := s.ResolvePath(ownerUsername, repo.Name)
 	if err != nil {
 		return err
@@ -65,7 +78,19 @@ func (s *Storage) InitOnDisk(repo *domain.Repo, ownerUsername string, seedReadme
 		return err
 	}
 	if seedReadme {
-		if err := s.git.SeedReadme(path, repo.DefaultBranch, repo.Name, repo.Description, authorName, authorEmail); err != nil {
+		files, err := templates.InitialFiles()
+		if err != nil {
+			return fmt.Errorf("load templates: %w", err)
+		}
+		description := repo.Description
+		if description == "" {
+			description = "This repository was created by Hangrix."
+		}
+		files["README.md"] = []byte(fmt.Sprintf("# %s\n\n%s\n", repo.Name, description))
+		for k, v := range overrides {
+			files[k] = v
+		}
+		if err := s.git.SeedInitialCommit(path, repo.DefaultBranch, files, authorName, authorEmail); err != nil {
 			return err
 		}
 	}

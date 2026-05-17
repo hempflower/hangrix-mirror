@@ -18,15 +18,15 @@ type Config struct {
 	Runner   RunnerConfig   `mapstructure:"runner"`
 }
 
-// RunnerConfig holds M6c runner-orchestration settings.
+// RunnerConfig holds runner-orchestration settings.
 //
 // The agent + runner binaries are //go:embed'd into the server image, so
 // there's no file-path knob to set. The MCP endpoint is also derived
 // from server.url at request time (so a URL change in config naturally
 // rolls forward to every newly dispatched session). The only knob worth
 // exposing today is DefaultAgentImage — the container image the runner
-// pulls when a session doesn't pin one. M7a starts driving this per-role
-// from host repo .hangrix/agents.yml.
+// pulls when a session doesn't pin one; the real session-spawn path
+// drives this per-role from the host repo's `.hangrix/agents.yml`.
 type RunnerConfig struct {
 	DefaultAgentImage string `mapstructure:"default_agent_image"`
 }

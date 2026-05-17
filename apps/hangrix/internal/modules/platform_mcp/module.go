@@ -1,6 +1,6 @@
-// Package platform_mcp wires the M7b platform MCP server: HTTP +
-// JSON-RPC handler in handler/, tool implementations in service/,
-// thin Tool descriptor in domain/.
+// Package platform_mcp wires the platform MCP server: HTTP + JSON-RPC
+// handler in handler/, tool implementations in service/, thin Tool
+// descriptor in domain/.
 //
 // Cross-module dependencies all flow through domain interfaces (issue,
 // repo, runner, git, agent_session). The module imports none of the

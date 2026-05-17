@@ -105,7 +105,7 @@ func TestSessionDriverEndToEnd(t *testing.T) {
 		Orchestrator:    fake,
 		AgentBinaryPath: "/dev/null", // fake doesn't actually need this
 		WorkspaceRoot:   t.TempDir(),
-		LLMEndpoint:     "http://platform.test",
+		BaseURL:         "http://platform.test",
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

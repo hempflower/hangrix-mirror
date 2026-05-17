@@ -45,13 +45,13 @@ type Handler struct {
 	users      userdomain.Repo
 	resolver   orgdomain.Resolver
 	middleware authdomain.Middleware
-	// M7a Phase 2 — agent_session lifecycle hooks. Both are optional
-	// (nil-safe call sites) so the handler keeps working in test
-	// configurations where the module isn't loaded; in production
-	// ioc binds both, so the nil branch never fires.
-	spawner       agentsessiondomain.Spawner
-	archiver      agentsessiondomain.Archiver
-	kindRefresher repodomain.KindRefresher
+	// agent_session lifecycle hooks. All three are optional (nil-safe
+	// call sites) so the handler keeps working in test configurations
+	// where the module isn't loaded; in production ioc binds all of
+	// them, so the nil branches never fire.
+	spawner  agentsessiondomain.Spawner
+	archiver agentsessiondomain.Archiver
+	auditor  agentsessiondomain.Auditor
 }
 
 type HandlerDeps struct {
@@ -62,29 +62,25 @@ type HandlerDeps struct {
 	Users      userdomain.Repo
 	Resolver   orgdomain.Resolver
 	Middleware authdomain.Middleware
-	// Spawner + Archiver come from the agent_session module. Wired
-	// through ioc — see apps/hangrix/internal/modules/agent_session.
+	// Spawner + Archiver + Auditor come from the agent_session module.
+	// Wired through ioc — see apps/hangrix/internal/modules/agent_session.
 	Spawner  agentsessiondomain.Spawner
 	Archiver agentsessiondomain.Archiver
-	// KindRefresher reclassifies repos.kind after merges. The merge
-	// endpoint moves commits onto the base branch without going through
-	// receive-pack, so the push-side refresh in repo/handler doesn't
-	// fire — we have to nudge it explicitly here. Nil-safe.
-	KindRefresher repodomain.KindRefresher
+	Auditor  agentsessiondomain.Auditor
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
-		issues:        deps.Issues,
-		repos:         deps.Repos,
-		storage:       deps.Storage,
-		git:           deps.Git,
-		users:         deps.Users,
-		resolver:      deps.Resolver,
-		middleware:    deps.Middleware,
-		spawner:       deps.Spawner,
-		archiver:      deps.Archiver,
-		kindRefresher: deps.KindRefresher,
+		issues:     deps.Issues,
+		repos:      deps.Repos,
+		storage:    deps.Storage,
+		git:        deps.Git,
+		users:      deps.Users,
+		resolver:   deps.Resolver,
+		middleware: deps.Middleware,
+		spawner:    deps.Spawner,
+		archiver:   deps.Archiver,
+		auditor:    deps.Auditor,
 	}
 }
 
@@ -107,6 +103,11 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Post("/{number}/comments", h.createComment)
 		r.Post("/{number}/merge", h.merge)
 		r.Post("/{number}/sync", h.sync)
+		// M7c — agent session inspector. Same visibility rules as the
+		// rest of the issue API (resolveRepo gates on the repo's
+		// public/private + caller membership).
+		r.Get("/{number}/agent-sessions", h.listAgentSessions)
+		r.Get("/{number}/agent-sessions/{sid}/messages", h.listAgentSessionMessages)
 	})
 }
 
@@ -157,7 +158,7 @@ type publicComment struct {
 	IssueID        int64     `json:"issue_id"`
 	AuthorID       int64     `json:"author_id"`
 	AuthorUsername string    `json:"author_username"`
-	// AgentRole is set on agent-authored comments (M7b). Empty for human
+	// AgentRole is set on agent-authored comments. Empty for human
 	// comments. The frontend uses it to render a role chip / avatar.
 	AgentRole string    `json:"agent_role,omitempty"`
 	Body      string    `json:"body"`
@@ -377,15 +378,15 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	// Keep the receive-pack sidecar in sync so a fresh issue is immediately
 	// pushable.
 	h.refreshIssueMode(r, rc)
-	// M7a Phase 2: fire issue.opened at the agent_session spawner so any
-	// role whose triggers include issue.opened wakes on its own. Failures
-	// don't block issue creation — operator repairs the host yaml then
-	// nudges the issue (M7b will add a manual resync surface).
+	// Fire issue.opened at the agent_session spawner so any role whose
+	// triggers include issue.opened wakes on its own. Failures don't
+	// block issue creation — operator repairs the host yaml then nudges
+	// the issue.
 	h.fireIssueOpened(r.Context(), rc.repo.ID, iss.Number, caller.ID)
 	httpx.WriteJSON(w, http.StatusCreated, toPublic(iss))
 }
 
-// fireIssueOpened dispatches the M7a spawn event. Nil-safe so test
+// fireIssueOpened dispatches the spawn event. Nil-safe so test
 // configurations without the agent_session module still work; production
 // ioc binding always populates spawner.
 func (h *Handler) fireIssueOpened(ctx context.Context, repoID, issueNumber, actorID int64) {
@@ -720,13 +721,13 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// M7b: fan the comment out to any subscribing roles. Best-effort —
-	// a host-yaml hiccup must not block the comment write itself.
+	// Fan the comment out to any subscribing roles. Best-effort — a
+	// host-yaml hiccup must not block the comment write itself.
 	h.fireCommentTriggers(r, rc, iss, c)
 	httpx.WriteJSON(w, http.StatusCreated, toPublicComment(c))
 }
 
-// fireCommentTriggers is the M7b comment → agent fan-out. Per
+// fireCommentTriggers is the comment → agent fan-out. Per
 // docs/agent-config.md §"Mention 协议", the comment becomes:
 //
 //  1. one `issue.comment.any` trigger, fanned to every role whose
@@ -734,13 +735,13 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 //     empty so the spawner walks all subscribers.
 //  2. one `issue.comment.mentioned` trigger per `@agent-<role-key>`
 //     parsed from the body, scoped to the matched role by RoleKey.
-//     mention_by is gated here (the handler knows actor permissions)
-//     so the spawner sees only permitted invocations.
+//     Any authenticated commenter (read access has already been
+//     enforced upstream by resolveRepo) can wake any role declared
+//     in the host yaml — there is no per-role actor gate.
 //
-// Mentions that fail the host-yaml lookup or the mention_by gate are
-// silently skipped — UI chip rendering (M7c) will surface them as
-// "untriggered" with metadata once we persist the events. For M7b v1
-// we don't store rejected-mention metadata.
+// Mentions that don't resolve to a role declared in the host yaml are
+// silently dropped — UI chip rendering will eventually surface them
+// as "untriggered" once we persist the events.
 func (h *Handler) fireCommentTriggers(r *http.Request, rc *repoCtx, iss *domain.Issue, c *domain.Comment) {
 	if h.spawner == nil {
 		return
@@ -791,11 +792,7 @@ func (h *Handler) fireCommentTriggers(r *http.Request, rc *repoCtx, iss *domain.
 		return
 	}
 	for _, roleKey := range mentions {
-		role, ok := cfg.Roles[roleKey]
-		if !ok {
-			continue
-		}
-		if !h.mentionAllowed(r, rc.repo, caller, role.MentionBy) {
+		if _, ok := cfg.Roles[roleKey]; !ok {
 			continue
 		}
 		_, _ = h.spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
@@ -809,39 +806,6 @@ func (h *Handler) fireCommentTriggers(r *http.Request, rc *repoCtx, iss *domain.
 			Payload:     payloadBytes,
 		})
 	}
-}
-
-// mentionAllowed enforces the per-role `mention_by` ACL. Admins always
-// pass. The three modes map cleanly onto existing repo helpers:
-//
-//   - anyone:        any authenticated commenter (resolveRepo already
-//                    gated read access).
-//   - collaborators: any reader (admin / user-repo owner / any-role org
-//                    member).
-//   - owner:         user-repo owner / org owner role / admin.
-//
-// Mirrors the docs/agent-config.md §"Mention 协议" actor-class taxonomy.
-func (h *Handler) mentionAllowed(r *http.Request, repo *repodomain.Repo, caller *userdomain.User, mode agentsconfig.MentionBy) bool {
-	if caller == nil {
-		return false
-	}
-	if caller.Role == userdomain.RoleAdmin {
-		return true
-	}
-	switch mode {
-	case agentsconfig.MentionByAnyone:
-		return true
-	case agentsconfig.MentionByOwner:
-		return h.canManage(r, caller, repo)
-	case agentsconfig.MentionByCollaborators, "":
-		// Empty mode is treated as the collaborators default (matches
-		// agentsconfig.NormalizeHostConfig). canRead returns false on
-		// error too — we treat that as "not permitted" rather than
-		// surfacing the error to the agent path.
-		ok, _ := h.canRead(r, caller, repo)
-		return ok
-	}
-	return false
 }
 
 type mergeReq struct {
@@ -919,18 +883,9 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	// receive-pack sidecar so a follow-up push to issue/<n> is rejected.
 	h.refreshIssueMode(r, rc)
 
-	// M7a Phase 2: merging lands new commits on the base branch without
-	// going through receive-pack, so the post-receive kind refresh in
-	// repo/handler doesn't fire. Nudge the same logic here so a merge
-	// that introduces a root `agent.yml` flips kind=agent immediately.
-	if h.kindRefresher != nil {
-		h.kindRefresher.Refresh(r.Context(), rc.repo, rc.fsPath)
-	}
-
-	// M7a Phase 2: archive every live session on this issue. Per spec
-	// the parent issue is the only thing that can archive sessions —
-	// admin "stop this agent" is "remove the role from host yaml" or
-	// "disable the agent repo", not a per-session button.
+	// Archive every live session on this issue. The parent issue is the
+	// only thing that can archive sessions — admin "stop this agent" is
+	// "remove the role from host yaml", not a per-session button.
 	h.fireIssueClosed(r.Context(), rc.repo.ID, int32(iss.Number))
 
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{

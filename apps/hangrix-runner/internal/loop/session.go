@@ -22,20 +22,9 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix-runner/internal/orchestrator"
 )
 
-// BundleResolver turns the task's `AgentRepo` pin (a "<owner>/<name>@<sha>"
-// triple) into an absolute host directory the orchestrator can bind-mount
-// read-only into the agent container at /opt/hangrix/bundle. The
-// resolver owns the content-addressed cache + the platform fetch when a
-// sha is missing locally. Empty input returns ("", nil) so M6c smoke
-// sessions that don't carry an agent bundle (the image bakes one) still
-// work.
-type BundleResolver interface {
-	Resolve(ctx context.Context, agentRepo string) (hostDir string, err error)
-}
-
 // SessionDriver runs one claimed session end-to-end:
 //
-//	1. Resolve host paths (workdir, addendum file, bundle).
+//	1. Resolve host paths (workdir, addendum file).
 //	2. Start container via orchestrator.
 //	3. Forward platform → agent (poll /inputs, write to stdin).
 //	4. Forward agent → platform (read stdout lines, POST /messages).
@@ -46,17 +35,16 @@ type BundleResolver interface {
 type SessionDriver struct {
 	Client       *client.Client
 	Orchestrator orchestrator.Orchestrator
-	Bundles      BundleResolver
 
 	// Host paths the orchestrator binds into the container.
 	AgentBinaryPath string
 	WorkspaceRoot   string
 
-	// Endpoints the in-container agent talks to. We merge these into the
-	// env the platform sent, so the platform doesn't need to know what
-	// hostname is reachable from inside the container.
-	LLMEndpoint string
-	MCPEndpoint string
+	// BaseURL is the platform's reachable-from-container base. The
+	// runner injects it into HANGRIX_PLATFORM_BASE_URL so the agent
+	// can derive `/api/llm/v1/responses` and `/api/agent/tools/<name>`
+	// for itself.
+	BaseURL string
 }
 
 // Run starts the container for the given task and stays in the IO loop
@@ -81,25 +69,12 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 		hostAddendumPath = path
 	}
 
-	env := buildAgentEnv(task, d.LLMEndpoint, d.MCPEndpoint)
-
-	hostBundleDir := ""
-	if task.AgentRepo != "" {
-		if d.Bundles == nil {
-			return -1, d.fail(ctx, task.SessionID, fmt.Errorf("bundle resolver not configured but task pins agent_repo=%s", task.AgentRepo))
-		}
-		path, err := d.Bundles.Resolve(ctx, task.AgentRepo)
-		if err != nil {
-			return -1, d.fail(ctx, task.SessionID, fmt.Errorf("resolve bundle %s: %w", task.AgentRepo, err))
-		}
-		hostBundleDir = path
-	}
+	env := buildAgentEnv(task, d.BaseURL)
 
 	otask := orchestrator.Task{
 		SessionID:        task.SessionID,
 		Image:            task.AgentImage,
 		AgentBinaryPath:  d.AgentBinaryPath,
-		HostBundleDir:    hostBundleDir,
 		HostAddendumPath: hostAddendumPath,
 		HostWorkdir:      hostWorkdir,
 		Env:              env,
@@ -282,9 +257,11 @@ func (f outboundFrame) toAppendRequest() client.AppendMessageRequest {
 
 // buildAgentEnv assembles the HANGRIX_* env vars the agent expects. We
 // start from whatever the platform sent (its ExtraEnv plus any role
-// hints), then layer the runner-side overrides on top so the in-container
-// agent can reach LLM / MCP endpoints reachable from the runner's network.
-func buildAgentEnv(task *client.Task, llmEndpoint, mcpEndpoint string) map[string]string {
+// hints), then layer the runner-side override on top so the in-container
+// agent knows where the platform lives. The agent derives the LLM
+// `/api/llm/v1/responses` and tool `/api/agent/tools/<name>` paths
+// from the same base — see apps/hangrix-agent/internal/config/config.go.
+func buildAgentEnv(task *client.Task, baseURL string) map[string]string {
 	env := map[string]string{}
 	for k, v := range task.Env {
 		env[k] = v
@@ -292,11 +269,8 @@ func buildAgentEnv(task *client.Task, llmEndpoint, mcpEndpoint string) map[strin
 	if task.SessionToken != "" {
 		env["HANGRIX_SESSION_TOKEN"] = task.SessionToken
 	}
-	if llmEndpoint != "" {
-		env["HANGRIX_LLM_ENDPOINT"] = llmEndpoint
-	}
-	if mcpEndpoint != "" {
-		env["HANGRIX_PLATFORM_MCP_ENDPOINT"] = mcpEndpoint
+	if baseURL != "" {
+		env["HANGRIX_PLATFORM_BASE_URL"] = baseURL
 	}
 	env["HANGRIX_SESSION_ID"] = strconv.FormatInt(task.SessionID, 10)
 	if task.Role != "" {

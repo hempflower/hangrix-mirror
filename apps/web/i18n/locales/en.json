@@ -10,6 +10,10 @@
     "profile": "Profile",
     "settings": "Settings",
     "users": "Users",
+    "llmProviders": "LLM providers",
+    "runners": "Runners",
+    "llmUsage": "LLM usage",
+    "agentSessions": "Agent sessions",
     "logout": "Logout",
     "toggleSidebar": "Toggle sidebar",
     "backToWorkspace": "Back to workspace"
@@ -81,8 +85,12 @@
     "saving": "Saving…",
     "loading": "Loading…",
     "submit": "Submit",
+    "submitting": "Submitting…",
     "cancel": "Cancel",
+    "edit": "Edit",
+    "delete": "Delete",
     "actions": "Actions",
+    "acknowledge": "I've saved it",
     "id": "ID",
     "email": "Email",
     "username": "Username",
@@ -152,6 +160,152 @@
       "disable": "Disable",
       "loadFailed": "Load failed",
       "updateFailed": "Update failed"
+    },
+    "llm": {
+      "title": "LLM providers",
+      "subtitle": "Configure upstream LLM endpoints and the per-provider model whitelists agents can route through.",
+      "cardTitle": "Providers",
+      "cardDescription": "The proxy dispatches by model name (looked up against each provider's allowed_models). API keys are sealed at rest and never returned.",
+      "create": "Add provider",
+      "createTitle": "Add LLM provider",
+      "createSubtitle": "The name is immutable after creation. Delete and recreate to rename.",
+      "createFailed": "Create failed",
+      "editTitle": "Edit provider · {name}",
+      "editSubtitle": "Update base URL, rotate the API key, or change the allowed-models whitelist.",
+      "updateFailed": "Update failed",
+      "deleteConfirm": "Delete provider \"{name}\"? Sessions that depended on it will start failing immediately.",
+      "deleteFailed": "Delete failed",
+      "loadFailed": "Load failed",
+      "empty": "No providers yet",
+      "emptyHint": "Without at least one provider, no agent can call an LLM.",
+      "apiKeySet": "configured",
+      "apiKeyMissing": "missing",
+      "cols": {
+        "name": "Name",
+        "type": "Type",
+        "baseUrl": "Base URL",
+        "apiKey": "API key",
+        "models": "Allowed models"
+      },
+      "fields": {
+        "name": "Name",
+        "nameHint": "Lower-case slug ([a-z0-9-]). Identifies the provider in admin / audit views; proxy routing is by model name, not by URL path.",
+        "type": "Type",
+        "baseUrl": "Base URL",
+        "apiKey": "API key",
+        "apiKeyHint": "Sealed at rest; only the platform can decrypt.",
+        "apiKeyEditHint": "Leave blank to keep the current key. Type a new key to rotate.",
+        "allowedModels": "Allowed models",
+        "allowedModelsHint": "Comma- or whitespace-separated. Requests for any other model are rejected at the proxy layer."
+      }
+    },
+    "runners": {
+      "title": "Runners",
+      "subtitle": "Container hosts that pull agent sessions off the queue and run the per-role agent.",
+      "cardTitle": "Registered runners",
+      "cardDescription": "Each runner enrolls once with a single-use token, then heartbeats to keep its status alive.",
+      "create": "Add runner",
+      "createTitle": "Add runner",
+      "createSubtitle": "Admins always create platform-visibility runners. User-visibility runners live on a separate self-service surface.",
+      "createFailed": "Create failed",
+      "disable": "Disable",
+      "disableConfirm": "Disable runner \"{name}\"? Any sessions it owns will fail their next heartbeat.",
+      "disableFailed": "Disable failed",
+      "loadFailed": "Load failed",
+      "empty": "No runners registered",
+      "emptyHint": "Without a runner, agent sessions stay pending forever.",
+      "enrolled": "enrolled",
+      "notEnrolled": "pending enroll",
+      "neverHeartbeat": "never",
+      "remove": "Remove",
+      "removeConfirm": "Permanently remove runner \"{name}\"? Historical sessions stay but lose their runner pointer. This cannot be undone.",
+      "removeFailed": "Remove failed",
+      "enrollTitle": "Enrollment token (shown once)",
+      "enrollWarning": "Copy this token now — it's the only time it will be shown in plain text. After enrollment the runner stores its long-lived agent token derived from this exchange.",
+      "runnerCreated": "Runner \"{name}\" created.",
+      "enrollToken": "Token",
+      "installOneLiner": "Install + enroll (one-liner)",
+      "installHint": "Run this on the host where you want hangrix-runner installed. Requires root or write access to /usr/local/bin.",
+      "copyToken": "Copy token",
+      "copyInstall": "Copy install command",
+      "copied": "Copied",
+      "directDownloads": "Direct downloads",
+      "manualHeader": "Manual enroll (binary already on PATH)",
+      "manualHint": "If you've already installed hangrix-runner (e.g. via package manager or built from source), run this command directly.",
+      "cols": {
+        "name": "Name",
+        "visibility": "Visibility",
+        "status": "Status",
+        "enroll": "Enroll",
+        "lastHeartbeat": "Last heartbeat"
+      },
+      "fields": {
+        "name": "Name",
+        "nameHint": "Lower-case slug ([a-z0-9-])."
+      }
+    },
+    "usage": {
+      "title": "LLM usage",
+      "subtitle": "Per-call records of every agent session's LLM traffic — tokens, latency, error rate.",
+      "cardTitle": "Recent calls",
+      "cardDescription": "Filter by provider or time range. Click a session link to jump back to the issue audit view.",
+      "loadFailed": "Load failed",
+      "empty": "No usage records in range",
+      "applyFilters": "Apply filters",
+      "totalCalls": "Calls",
+      "totalTokens": "Tokens",
+      "avgLatency": "Avg latency",
+      "errors": "Errors",
+      "filters": {
+        "provider": "Provider",
+        "providerAny": "Any provider",
+        "since": "Since",
+        "limit": "Limit"
+      },
+      "cols": {
+        "time": "Time",
+        "provider": "Provider",
+        "model": "Model",
+        "prompt": "Prompt",
+        "completion": "Completion",
+        "total": "Total",
+        "latency": "Latency",
+        "status": "Status",
+        "session": "Session"
+      }
+    },
+    "agentSessions": {
+      "title": "Agent sessions",
+      "subtitle": "Global, cross-issue view of every agent session the platform has spawned.",
+      "cardTitle": "Sessions",
+      "cardDescription": "Filter by role, status, repo, or time range. To inspect logs, open the issue and use the Agents tab.",
+      "loadFailed": "Load failed",
+      "empty": "No sessions match the current filters",
+      "applyFilters": "Apply filters",
+      "openHint": "Open an issue's Agents tab to inspect per-session message logs.",
+      "summary": {
+        "total": "Sessions",
+        "live": "Live",
+        "failed": "Failed"
+      },
+      "filters": {
+        "role": "Role key",
+        "status": "Status",
+        "statusAny": "Any status",
+        "repoId": "Repo ID",
+        "since": "Since"
+      },
+      "cols": {
+        "id": "ID",
+        "role": "Role",
+        "status": "Status",
+        "cause": "Cause",
+        "repoIssue": "Repo / issue",
+        "repoSha": "Repo SHA",
+        "created": "Created",
+        "duration": "Duration",
+        "error": "Error"
+      }
     }
   },
   "home": {
@@ -191,8 +345,13 @@
     "visibilityPublicHint": "Visible to any signed-in user",
     "visibilityPrivateHint": "Only you and admins can see it",
     "defaultBranch": "Default branch",
-    "initReadme": "Initialize with a README commit",
-    "initReadmeHint": "Checked: the repo is immediately cloneable. Unchecked: you must push first.",
+    "initReadme": "Initialize repository",
+    "initReadmeHint": "Seeds an initial commit with README.md plus a .hangrix/ multi-role agent starter you can tune below.",
+    "agentConfig": {
+      "title": "Agent team yaml",
+      "subtitle": "This is the seeded .hangrix/agents.yml. Edit it inline or leave it as-is; the server validates the body before committing.",
+      "reset": "Reset to default"
+    },
     "submit": "Create",
     "submitting": "Creating…",
     "createFailed": "Create failed",
@@ -397,7 +556,8 @@
     "tabs": {
       "conversation": "Conversation",
       "commits": "Commits",
-      "diff": "Diff"
+      "diff": "Diff",
+      "agents": "Agents"
     },
     "commitsEmpty": "No commits yet. Push to {branch} to introduce changes.",
     "commentForm": {
@@ -501,5 +661,31 @@
   },
   "errors": {
     "unknown": "Unknown error"
+  },
+  "agentSessions": {
+    "loadFailed": "Failed to load agent sessions",
+    "empty": "No agents running yet",
+    "emptyHint": "Configure roles in .hangrix/agents.yml and they will appear here once they spawn.",
+    "spawnedBy": "Spawned by",
+    "messages": "Messages",
+    "messagesEmpty": "This session hasn't emitted any output yet.",
+    "collapse": "Collapse",
+    "expand": "Expand",
+    "field": {
+      "image": "image",
+      "model": "model",
+      "repoSha": "repo sha",
+      "can": "can",
+      "exitCode": "exit code",
+      "errorMessage": "error"
+    },
+    "failureTitle": "Session ended with an error",
+    "failureNoDetail": "No error detail captured. Check the message log below for the agent's last frames.",
+    "cause": {
+      "issueOpened": "issue.opened",
+      "commentMentioned": "mention · comment #{id}",
+      "commitPushed": "push · {sha}",
+      "reviewVote": "review vote #{id}"
+    }
   }
 }

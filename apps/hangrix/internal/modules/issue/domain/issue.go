@@ -37,11 +37,11 @@ const (
 	EventStateChanged EventKind = "state_changed"
 	EventTitleChanged EventKind = "title_changed"
 
-	// EventReviewVote is the M7b record of a reviewer agent (or human)
-	// recording approve / request_changes / abstain on an issue. The
-	// payload follows ReviewVotePayload. Maintainer roles subscribe to
-	// the corresponding spawner trigger (review_vote.posted) so they
-	// wake when a vote lands.
+	// EventReviewVote records a reviewer (agent or human) voting
+	// approve / request_changes / abstain on an issue. The payload
+	// follows ReviewVotePayload. Maintainer roles subscribe to the
+	// corresponding spawner trigger (review_vote.posted) so they wake
+	// when a vote lands.
 	EventReviewVote EventKind = "review_vote"
 )
 
@@ -133,10 +133,10 @@ type Comment struct {
 // Attribution is one of three flavours, distinguished by which of
 // (ActorID, AgentRole) is set:
 //
-//   - Human-driven (M4): ActorID > 0, ActorName is the username, AgentRole
-//     empty. e.g. a `state_changed open→closed` event triggered by a user
-//     click.
-//   - Agent-driven (M7b): ActorID == 0, ActorName empty, AgentRole is the
+//   - Human-driven: ActorID > 0, ActorName is the username, AgentRole
+//     empty. e.g. a `state_changed open→closed` event triggered by a
+//     user click.
+//   - Agent-driven: ActorID == 0, ActorName empty, AgentRole is the
 //     role key. e.g. a `review_vote` posted by the reviewer role via
 //     issue_review_vote.
 //   - System (rare): ActorID == 0, both name fields empty. The legacy

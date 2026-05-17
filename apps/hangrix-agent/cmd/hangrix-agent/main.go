@@ -1,11 +1,11 @@
 // Command hangrix-agent is the long-running per-role agent process.
-// It is bind-mounted into the runner's container by M6c, started with a
+// It is bind-mounted into the runner's container, started with a
 // curated env, and communicates with its runner over stdin/stdout
 // JSON-Lines.
 //
 // The process is assembled by an ioc container (mirroring the host
-// hangrix app): each component module — config, llm, mcp, tools,
-// prompt, ipc, runtime, app — registers its providers in-package, the
+// hangrix app): each component module — config, llm, tools, prompt,
+// ipc, runtime, app — registers its providers in-package, the
 // container resolves the dependency graph, and main resolves the root
 // *app.App and runs it. Construction errors (missing env, bad tool
 // catalogue, unreadable agent bundle) panic from inside the relevant
@@ -25,7 +25,6 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/config"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/ipc"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/llm"
-	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/mcp"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/prompt"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/runtime"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools"
@@ -41,7 +40,6 @@ func buildContainer() *ioc.Container {
 	c.Load(
 		config.Module(),
 		llm.Module(),
-		mcp.Module(),
 		tools.Module(),
 		prompt.Module(),
 		ipc.Module(),

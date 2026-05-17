@@ -144,6 +144,17 @@ func (r *PostgresRepo) DisableRunner(ctx context.Context, id int64) error {
 	return nil
 }
 
+func (r *PostgresRepo) DeleteRunner(ctx context.Context, id int64) error {
+	n, err := r.q.DeleteRunner(ctx, id)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrRunnerNotFound
+	}
+	return nil
+}
+
 func (r *PostgresRepo) UpdateRunnerHeartbeat(ctx context.Context, id int64, capabilities []byte) error {
 	if len(capabilities) == 0 {
 		capabilities = []byte("{}")
@@ -298,7 +309,6 @@ func (r *PostgresRepo) CreateSession(ctx context.Context, in domain.CreateSessio
 		Role:               in.Role,
 		Model:              in.Model,
 		AgentImage:         in.AgentImage,
-		AgentRepo:          in.AgentRepo,
 		WorkingBranch:      in.WorkingBranch,
 		BaseBranch:         in.BaseBranch,
 		HostAddendum:       in.HostAddendum,
@@ -307,7 +317,6 @@ func (r *PostgresRepo) CreateSession(ctx context.Context, in domain.CreateSessio
 		SessionTokenHash:   in.SessionTokenHash,
 		SessionTokenSealed: sealedArg,
 		CreatedBy:          in.CreatedBy,
-		AgentSha:           in.AgentSHA,
 		RepoSha:            in.RepoSHA,
 		RoleKey:            in.RoleKey,
 		CauseKind:          in.CauseKind,
@@ -361,7 +370,7 @@ func (r *PostgresRepo) ListSessions(ctx context.Context, runnerID *int64, status
 }
 
 // ListSessionsByIssue returns every agent_session for a (repo, issue) tuple
-// in spawn order. Powers the M7a agent_session orchestrator: spawn
+// in spawn order. Powers the agent_session orchestrator: spawn
 // idempotency (skip a role with an existing row for the issue) and the
 // audit query view.
 func (r *PostgresRepo) ListSessionsByIssue(ctx context.Context, repoID int64, issueNumber int32) ([]*domain.AgentSession, error) {
@@ -369,6 +378,37 @@ func (r *PostgresRepo) ListSessionsByIssue(ctx context.Context, repoID int64, is
 		RepoID:      pgtype.Int8{Int64: repoID, Valid: true},
 		IssueNumber: pgtype.Int4{Int32: issueNumber, Valid: true},
 	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*domain.AgentSession, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, sessionFromRow(row))
+	}
+	return out, nil
+}
+
+// ListRecentSessions returns the most-recent agent_sessions across the
+// platform with optional filters. Powers the admin global audit view —
+// when all filters are nil it's a "show me the last N sessions" feed.
+func (r *PostgresRepo) ListRecentSessions(ctx context.Context, filter domain.SessionFilter, limit int) ([]*domain.AgentSession, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	params := runnerdb.ListRecentSessionsParams{Lim: int32(limit)}
+	if filter.RoleKey != nil {
+		params.RoleKey = pgtype.Text{String: *filter.RoleKey, Valid: true}
+	}
+	if filter.Status != nil {
+		params.Status = pgtype.Text{String: *filter.Status, Valid: true}
+	}
+	if filter.RepoID != nil {
+		params.RepoID = pgtype.Int8{Int64: *filter.RepoID, Valid: true}
+	}
+	if filter.Since != nil {
+		params.Since = pgtype.Timestamptz{Time: *filter.Since, Valid: true}
+	}
+	rows, err := r.q.ListRecentSessions(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -390,9 +430,9 @@ func (r *PostgresRepo) ArchiveSessionsByIssue(ctx context.Context, repoID int64,
 }
 
 // ClaimNextSession picks the oldest pending session pinned to the runner
-// (or unpinned, M7a-style) and flips it to 'claimed'. A returning rowless
-// case is ErrNoPendingSession — the runner long-poller treats that as "wait
-// and retry" rather than a hard error.
+// (or any unpinned session) and flips it to 'claimed'. A returning rowless
+// case is ErrNoPendingSession — the runner long-poller treats that as
+// "wait and retry" rather than a hard error.
 func (r *PostgresRepo) ClaimNextSession(ctx context.Context, runnerID int64) (*domain.AgentSession, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -471,7 +511,7 @@ func (r *PostgresRepo) MarkSessionTerminal(ctx context.Context, id int64, status
 // AppendMessage assigns the next seq in (session_id) and inserts the row.
 // COALESCE(MAX(seq)+1, 1) is racy under concurrent appends; the unique
 // constraint on (session_id, seq) is the second line of defence and we
-// retry on conflict. M6c only has one writer per session (the runner
+// retry on conflict. There's only one writer per session (the runner
 // forwarding stdout), so the retry path is rarely hit in practice.
 func (r *PostgresRepo) AppendMessage(ctx context.Context, m *domain.Message) (*domain.Message, error) {
 	if !m.Kind.Valid() {
@@ -637,7 +677,6 @@ func sessionFromRow(r runnerdb.AgentSession) *domain.AgentSession {
 		Role:               r.Role,
 		Model:              r.Model,
 		AgentImage:         r.AgentImage,
-		AgentRepo:          r.AgentRepo,
 		WorkingBranch:      r.WorkingBranch,
 		BaseBranch:         r.BaseBranch,
 		HostAddendum:       r.HostAddendum,
@@ -647,7 +686,6 @@ func sessionFromRow(r runnerdb.AgentSession) *domain.AgentSession {
 		ErrorMessage:       r.ErrorMessage,
 		CreatedBy:          r.CreatedBy,
 		CreatedAt:          r.CreatedAt.Time,
-		AgentSHA:           r.AgentSha,
 		RepoSHA:            r.RepoSha,
 		RoleKey:            r.RoleKey,
 		CauseKind:          r.CauseKind,
