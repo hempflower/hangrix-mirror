@@ -57,12 +57,39 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 	}
 
 	hostWorkdir := filepath.Join(d.WorkspaceRoot, fmt.Sprintf("session-%d", task.SessionID))
+	repoCheckout := filepath.Join(hostWorkdir, "repo")
+	if err := os.MkdirAll(hostWorkdir, 0o755); err != nil {
+		return -1, d.fail(ctx, task.SessionID, fmt.Errorf("mkdir workdir: %w", err))
+	}
+
+	// Clone the host repo into hostWorkdir/repo before launching the
+	// container. The agent sees a real working tree at /workspace and
+	// can `git push` straight back to the platform — http.extraHeader
+	// with the session token is baked into the cloned .git/config by
+	// cloneRepo. Sessions without owner/name in env (admin smoke
+	// path) skip the clone and get an empty workdir like before.
+	owner := task.Env["HANGRIX_HOST_OWNER"]
+	name := task.Env["HANGRIX_HOST_NAME"]
+	mountPath := hostWorkdir
+	if owner != "" && name != "" && task.SessionToken != "" {
+		dest, err := cloneRepo(ctx, cloneSpec{
+			BaseURL:       d.BaseURL,
+			Owner:         owner,
+			Name:          name,
+			WorkingBranch: task.WorkingBranch,
+			BaseBranch:    task.BaseBranch,
+			SessionToken:  task.SessionToken,
+			Dest:          repoCheckout,
+		})
+		if err != nil {
+			return -1, d.fail(ctx, task.SessionID, fmt.Errorf("clone host repo: %w", err))
+		}
+		mountPath = dest
+	}
+
 	hostAddendumPath := ""
 	if task.HostAddendum != "" {
 		path := filepath.Join(hostWorkdir, "host_addendum.md")
-		if err := os.MkdirAll(hostWorkdir, 0o755); err != nil {
-			return -1, d.fail(ctx, task.SessionID, fmt.Errorf("mkdir workdir: %w", err))
-		}
 		if err := os.WriteFile(path, []byte(task.HostAddendum), 0o600); err != nil {
 			return -1, d.fail(ctx, task.SessionID, fmt.Errorf("write addendum: %w", err))
 		}
@@ -76,7 +103,7 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 		Image:            task.AgentImage,
 		AgentBinaryPath:  d.AgentBinaryPath,
 		HostAddendumPath: hostAddendumPath,
-		HostWorkdir:      hostWorkdir,
+		HostWorkdir:      mountPath,
 		Env:              env,
 	}
 	handle, err := d.Orchestrator.Start(ctx, otask)
