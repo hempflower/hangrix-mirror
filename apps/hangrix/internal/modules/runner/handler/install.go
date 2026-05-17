@@ -1,10 +1,15 @@
-// Public runner-install surface. Two routes, both unauthenticated:
+// Public runner-install surface. Both routes are unauthenticated:
 //
-//	GET /install/runner.sh        - templated bash one-liner installer
-//	GET /install/hangrix-runner   - the runner binary (embedded payload)
+//	GET /install/runner.sh
+//	    - templated bash one-liner installer. Detects host arch at
+//	      runtime (uname -m → amd64/arm64) and downloads the matching
+//	      embedded asset.
+//	GET /install/{asset-name}
+//	    - serves an embedded runner binary keyed by its asset name,
+//	      e.g. `hangrix-runner_linux_amd64`. The same endpoint answers
+//	      for every variant the build embedded.
 //
-// The script is what the admin runners page surfaces in the enroll-token
-// dialog — the operator on a fresh machine runs:
+// Operator on a fresh machine runs:
 //
 //	curl -fsSL https://<server>/install/runner.sh | sh -s -- hgxe_<token>
 //
@@ -16,6 +21,8 @@ package handler
 import (
 	"fmt"
 	"net/http"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/binaries"
 )
@@ -54,6 +61,21 @@ BIN_DEFAULT="/usr/local/bin/hangrix-runner"
 BIN="${HANGRIX_RUNNER_BIN:-$BIN_DEFAULT}"
 SERVICE_STATE_DIR="${HANGRIX_RUNNER_STATE_DIR:-/var/lib/hangrix}"
 
+# Detect host arch and map to the GOARCH name the server's embedded
+# binaries are keyed by. Linux-only — the project does not ship darwin
+# / windows builds; if you run the installer on those the runner won't
+# work anyway (the docker session pipeline assumes linux).
+OS="linux"
+case "$(uname -m 2>/dev/null || echo unknown)" in
+  x86_64|amd64)   ARCH="amd64" ;;
+  aarch64|arm64)  ARCH="arm64" ;;
+  *)
+    echo "error: unsupported architecture $(uname -m). Hangrix ships linux/amd64 and linux/arm64." >&2
+    exit 2
+    ;;
+esac
+ASSET="hangrix-runner_${OS}_${ARCH}"
+
 TOKEN=""
 SKIP_SERVICE=0
 
@@ -82,10 +104,10 @@ fi
 IS_ROOT=0
 [ "$(id -u 2>/dev/null || echo 1000)" = "0" ] && IS_ROOT=1
 
-echo "==> downloading hangrix-runner -> $BIN"
+echo "==> downloading $ASSET -> $BIN"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
-curl -fsSL "$SERVER/install/hangrix-runner" -o "$TMP"
+curl -fsSL "$SERVER/install/$ASSET" -o "$TMP"
 chmod +x "$TMP"
 
 # Move into place; fall back to ~/.local/bin if /usr/local/bin is not writable.
@@ -173,17 +195,20 @@ func (h *AgentHandler) serveInstallScript(w http.ResponseWriter, r *http.Request
 	_, _ = w.Write([]byte(body))
 }
 
-// serveInstallBinary streams the embedded runner binary. Anonymous on
+// serveInstallBinary streams an embedded runner binary by asset name.
+// Path param is the AssetName (`hangrix-runner_<goos>_<goarch>`); the
+// install script picks the right one based on `uname -m`. Anonymous on
 // purpose — the install script needs to fetch it before the runner has
 // any token. The binary itself contains no secrets.
-func (h *AgentHandler) serveInstallBinary(w http.ResponseWriter, _ *http.Request) {
-	info, err := binaries.Get(binaries.NameRunner)
+func (h *AgentHandler) serveInstallBinary(w http.ResponseWriter, r *http.Request) {
+	asset := chi.URLParam(r, "asset")
+	info, err := binaries.GetByAssetName(asset)
 	if err != nil {
-		http.Error(w, "hangrix-runner binary not embedded in this build", http.StatusNotFound)
+		http.Error(w, "binary not embedded in this build", http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", `attachment; filename="hangrix-runner"`)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, info.AssetName))
 	w.Header().Set("X-Hangrix-SHA256", info.SHA256)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size))
 	_, _ = w.Write(info.Bytes)

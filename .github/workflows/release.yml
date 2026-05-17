@@ -1,0 +1,119 @@
+# Release: triggered by a semver-shaped tag push (e.g. `v0.4.0`).
+# Cross-compiles every Go binary in the workspace for linux/amd64 and
+# linux/arm64, names each artefact `<binary>_<goos>_<goarch>`, and
+# attaches them all to a fresh GitHub Release for the tag.
+#
+# Linux-only on purpose: hangrix-agent runs inside a docker container,
+# so non-linux agent builds are dead weight. hangrix and hangrix-
+# runner are likewise intended for linux deploys (Apple-silicon /
+# Graviton users get linux/arm64).
+#
+# Single source of truth for the embed chain is
+# apps/hangrix/scripts/build-embed-binaries.mjs — this workflow drives
+# it once on a matrix-less ubuntu-latest runner. Each matrix arch
+# `go build`s only the hangrix server itself against the same prebuilt
+# embed payload, so the agent + runner inside every server variant
+# are identical and audited bytes.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # required by softprops/action-gh-release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install JS deps
+        run: pnpm install --frozen-lockfile
+
+      # Build the static web bundle once. copy-web-dist.mjs (run later)
+      # stages it under apps/hangrix/internal/web/dist/ for embedding.
+      - name: Generate web bundle
+        run: pnpm --filter web run generate
+
+      # Build the embed payload exactly once: hangrix-agent for each
+      # supported linux arch, then hangrix-runner for the same arch
+      # (with the agent embedded inside it). The output is one
+      # `hangrix-runner_<goos>_<goarch>` per arch staged under
+      # apps/hangrix/.../runner/binaries/payload/.
+      - name: Build embed payload (agents + per-arch runners)
+        run: node apps/hangrix/scripts/build-embed-binaries.mjs
+
+      # Surface the per-arch runner binaries as top-level release
+      # artefacts too — operators may want to install a runner via
+      # `wget` rather than the curl|sh installer.
+      - name: Stage runner binaries for release
+        run: |
+          mkdir -p dist
+          cp apps/hangrix/internal/modules/runner/binaries/payload/hangrix-runner_* dist/
+
+      # Stage the web bundle inside the server's embed dir, then
+      # cross-compile the server for each linux arch. The server
+      # already carries every runner variant (and thus every agent
+      # variant) via the payload staged above.
+      - name: Copy web dist into server embed
+        run: node apps/hangrix/scripts/copy-web-dist.mjs
+
+      - name: Build hangrix (linux/amd64)
+        working-directory: apps/hangrix
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: |
+          go build -trimpath -ldflags='-s -w' \
+            -o "../../dist/hangrix_linux_amd64" \
+            ./cmd/hangrix
+
+      - name: Build hangrix (linux/arm64)
+        working-directory: apps/hangrix
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: '0'
+        run: |
+          go build -trimpath -ldflags='-s -w' \
+            -o "../../dist/hangrix_linux_arm64" \
+            ./cmd/hangrix
+
+      - name: List release assets
+        run: ls -la dist/
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          # Final asset set per supported arch:
+          #   hangrix_linux_amd64        — server (incl. all runners + agents)
+          #   hangrix_linux_arm64
+          #   hangrix-runner_linux_amd64 — standalone runner (agent embedded)
+          #   hangrix-runner_linux_arm64
+          files: dist/*

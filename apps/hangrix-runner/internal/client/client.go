@@ -10,8 +10,6 @@ package client
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,9 +57,16 @@ type EnrollResponse struct {
 
 // BootstrapPayload is the side of the enroll/bootstrap responses that
 // tells the runner everything it needs to run with no extra flags:
-// endpoints to inject into the agent, binary download URL + sha, and
-// the cadence parameters server and runner must agree on.
+// endpoints to inject into the agent, the embedded runner-binary
+// catalogue (for future self-update), and the cadence parameters
+// server and runner must agree on.
 type BootstrapPayload struct {
+	// Binaries is the catalogue of `hangrix-runner` artefacts embedded
+	// in the server build, keyed by AssetName
+	// (`hangrix-runner_<goos>_<goarch>`). The runner does not
+	// currently auto-download any of these — the agent ships inside
+	// the runner — but the field is kept so a self-update path can
+	// land in a future commit without a wire-shape change.
 	Binaries          map[string]BinaryInfo `json:"binaries"`
 	BaseURL           string                `json:"base_url"`
 	DefaultAgentImage string                `json:"default_agent_image,omitempty"`
@@ -69,11 +74,14 @@ type BootstrapPayload struct {
 	HeartbeatSec      int                   `json:"heartbeat_sec"`
 }
 
-// BinaryInfo is one entry in BootstrapPayload.Binaries. URL is
-// server-relative; the runner prepends the same base URL it uses for
-// every other call.
+// BinaryInfo is one entry in BootstrapPayload.Binaries. Mirrors the
+// server-side handler.binaryInfo. URL is server-relative; the runner
+// prepends the same base URL it uses for every other call.
 type BinaryInfo struct {
 	URL    string `json:"url"`
+	Name   string `json:"name"`
+	GOOS   string `json:"goos"`
+	GOARCH string `json:"goarch"`
 	SHA256 string `json:"sha256"`
 	Size   int64  `json:"size"`
 }
@@ -95,44 +103,6 @@ func (c *Client) Bootstrap(ctx context.Context) (*BootstrapPayload, error) {
 		return nil, err
 	}
 	return &out, nil
-}
-
-// DownloadBinary streams the named binary at relativeURL to `dst`,
-// verifies the SHA256 matches expected (if non-empty), and returns the
-// actual bytes written. Caller pre-opens dst and chmods 0755 on success
-// — splitting "stream" from "finalize" keeps the cache-write vs verify
-// steps obvious.
-func (c *Client) DownloadBinary(ctx context.Context, relativeURL, expectedSHA string, dst io.Writer) (int64, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+relativeURL, nil)
-	if err != nil {
-		return 0, err
-	}
-	if c.agentToken == "" {
-		return 0, errors.New("agent token not set")
-	}
-	req.Header.Set("Authorization", "Bearer "+c.agentToken)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return 0, fmt.Errorf("GET %s: %d %s", relativeURL, resp.StatusCode, snippet(body))
-	}
-	sum := sha256.New()
-	mw := io.MultiWriter(dst, sum)
-	n, err := io.Copy(mw, resp.Body)
-	if err != nil {
-		return n, err
-	}
-	if expectedSHA != "" {
-		got := hex.EncodeToString(sum.Sum(nil))
-		if got != expectedSHA {
-			return n, fmt.Errorf("agent binary sha mismatch: want %s got %s", expectedSHA, got)
-		}
-	}
-	return n, nil
 }
 
 // ---- heartbeat ----

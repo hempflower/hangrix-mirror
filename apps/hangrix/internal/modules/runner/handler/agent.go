@@ -90,7 +90,10 @@ func (h *AgentHandler) RegisterRoutes(r chi.Router) {
 	// artefact — possessing it without an enroll token still gets the
 	// operator nowhere.
 	r.Get("/install/runner.sh", h.serveInstallScript)
-	r.Get("/install/hangrix-runner", h.serveInstallBinary)
+	// Anonymous binary download keyed by asset name
+	// (hangrix-runner_<goos>_<goarch>). The install script picks the
+	// right asset off `uname -m`.
+	r.Get("/install/{asset}", h.serveInstallBinary)
 }
 
 // ---- middleware ----
@@ -150,10 +153,13 @@ type enrollResp struct {
 // endpoints / image defaults / agent binary doesn't have to touch the
 // runner.
 type bootstrapPayload struct {
-	// Binaries maps logical name → metadata for every artefact embedded
-	// in the server build. Today: "hangrix-agent" + "hangrix-runner".
-	// The runner reads "hangrix-agent" out and downloads it; "hangrix-
-	// runner" is there so the runner can self-update later.
+	// Binaries is the catalogue of `hangrix-runner` artefacts embedded
+	// in this server build, one per (GOOS, GOARCH). Keyed by AssetName
+	// (`hangrix-runner_<goos>_<goarch>`) so the runner can pick its
+	// own entry for a self-update by looking up its own GOOS/GOARCH.
+	//
+	// The agent binary used to ride this map; now it ships inside the
+	// runner itself, so the server no longer serves it.
 	Binaries map[string]binaryInfo `json:"binaries"`
 
 	// BaseURL is the single platform base the in-container agent
@@ -174,11 +180,14 @@ type bootstrapPayload struct {
 	HeartbeatSec int `json:"heartbeat_sec"`
 }
 
-// binaryInfo is the per-binary metadata block embedded in bootstrap and
-// /api/runner/binaries. URL is server-relative so the runner can prepend
-// whichever base it already trusts.
+// binaryInfo is the per-platform metadata block embedded in bootstrap
+// and /api/runner/binaries. URL is server-relative so the runner can
+// prepend whichever base it already trusts.
 type binaryInfo struct {
 	URL    string `json:"url"`
+	Name   string `json:"name"`
+	GOOS   string `json:"goos"`
+	GOARCH string `json:"goarch"`
 	SHA256 string `json:"sha256"`
 	Size   int64  `json:"size"`
 }
@@ -266,14 +275,21 @@ func (h *AgentHandler) publicBase(r *http.Request) string {
 }
 
 // binariesInfo snapshots the embed metadata for every payload the server
-// can serve. Missing payloads (operator forgot `make embed-binaries`)
+// can serve. Missing payloads (operator forgot `npm run embed-binaries`)
 // simply don't appear in the map — the runner's enroll path turns that
 // into an actionable error.
+//
+// Keys are AssetNames (`hangrix-runner_linux_amd64`, …) so the runner
+// can do a single `binaries[my_asset_name]` lookup keyed by its own
+// runtime GOOS/GOARCH.
 func (h *AgentHandler) binariesInfo() map[string]binaryInfo {
 	out := map[string]binaryInfo{}
 	for _, b := range binaries.All() {
-		out[b.Name] = binaryInfo{
-			URL:    "/api/runner/binaries/" + b.Name,
+		out[b.AssetName] = binaryInfo{
+			URL:    "/api/runner/binaries/" + b.AssetName,
+			Name:   b.Name,
+			GOOS:   b.GOOS,
+			GOARCH: b.GOARCH,
 			SHA256: b.SHA256,
 			Size:   b.Size,
 		}
@@ -285,20 +301,19 @@ func (h *AgentHandler) listBinaries(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"binaries": h.binariesInfo()})
 }
 
-// serveBinary streams the embedded named binary. /api/runner/binaries/
-// {hangrix-agent|hangrix-runner} — the same endpoint serves whichever
-// build artefact the runner asks for, both gated by the same Bearer
-// agent token.
+// serveBinary streams an embedded runner binary. Path param `name` is
+// the AssetName (`hangrix-runner_<goos>_<goarch>`); the same endpoint
+// answers for every variant the build embedded.
 func (h *AgentHandler) serveBinary(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	info, err := binaries.Get(name)
+	info, err := binaries.GetByAssetName(name)
 	if err != nil {
 		httpx.WriteError(w, http.StatusNotFound, "binary not embedded")
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("X-Hangrix-SHA256", info.SHA256)
-	http.ServeContent(w, r, info.Name, time.Time{}, bytes.NewReader(info.Bytes))
+	http.ServeContent(w, r, info.AssetName, time.Time{}, bytes.NewReader(info.Bytes))
 }
 
 // ---- heartbeat ----

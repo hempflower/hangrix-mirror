@@ -1,11 +1,15 @@
 // Package store persists the runner's long-term identity + bootstrap
-// snapshot locally — runner_id + agent_token + endpoints + agent-binary
-// cache metadata. One state.json file under the configured state dir.
+// snapshot locally — runner_id + agent_token + endpoints. One
+// state.json file under the configured state dir.
 //
 // The agent token is the runner's long-term credential. It is stored
 // plaintext on disk because the runner needs to send it on every poll;
 // guard the file with 0600 perms. Treat the state directory the same
 // way you would treat ~/.kube/config.
+//
+// The agent binary used to ride in here too via a Binaries map +
+// content-addressed cache; that's gone now — the runner extracts an
+// embedded `hangrix-agent` to <state-dir>/agent/ at serve-time.
 package store
 
 import (
@@ -18,19 +22,11 @@ import (
 
 // State is the durable snapshot the runner writes after enrollment and
 // re-writes on each `serve` startup after refreshing the bootstrap.
-//
-// Binaries holds metadata for every artefact the platform advertised in
-// the bootstrap reply. Each entry's LocalPath points at a cached file
-// inside <state-dir>/agent-binaries/<sha256>; the cache is content-
-// addressed so a binary swap on the platform is a transparent re-
-// download with no rename surgery.
 type State struct {
 	Server     string `json:"server"`
 	RunnerID   int64  `json:"runner_id"`
 	RunnerName string `json:"runner_name"`
 	AgentToken string `json:"agent_token"`
-
-	Binaries map[string]BinaryEntry `json:"binaries"`
 
 	BaseURL string `json:"base_url"`
 
@@ -39,35 +35,12 @@ type State struct {
 	HeartbeatSec      int    `json:"heartbeat_sec"`
 }
 
-// BinaryEntry is one row of State.Binaries — the metadata the platform
-// advertised plus the local cache path the runner downloaded into.
-type BinaryEntry struct {
-	URL       string `json:"url"`
-	SHA256    string `json:"sha256"`
-	Size      int64  `json:"size"`
-	LocalPath string `json:"local_path"`
-}
-
 // ErrNotEnrolled is returned by Load when no state file exists. Used by
 // the `serve` subcommand to print a clear "you must enroll first" hint
 // rather than a generic "open file: not found".
 var ErrNotEnrolled = errors.New("runner not enrolled (state.json missing)")
 
 func filePath(dir string) string { return filepath.Join(dir, "state.json") }
-
-// AgentBinariesDir is the content-addressed cache of agent binaries under
-// the state directory. One file per sha256: deletes are safe at any
-// quiescent moment.
-func AgentBinariesDir(stateDir string) string {
-	return filepath.Join(stateDir, "agent-binaries")
-}
-
-// AgentBinaryPathFor returns the canonical on-disk path for a binary
-// keyed by its sha256. Used by both writer (download) and reader
-// (verify-on-load).
-func AgentBinaryPathFor(stateDir, sha string) string {
-	return filepath.Join(AgentBinariesDir(stateDir), sha)
-}
 
 // WorkspacesDir is the per-session host workdir root. Each session
 // materialises a "session-<id>/" subdirectory; cleanup happens after

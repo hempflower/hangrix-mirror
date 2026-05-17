@@ -1,0 +1,69 @@
+# CI: build + test every push and every pull request.
+#
+# Scope: validates the Go workspace (all three binaries compile, all
+# tests pass) and that the web app generates a static bundle that
+# hangrix can embed. We deliberately do NOT run vue-tsc here — there
+# are two pre-existing TS errors in FileDiffList.vue and
+# [owner]/[name]/index.vue that block the whole pipeline if treated
+# as errors; that's a known follow-up.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Cancel in-flight runs when a newer push lands on the same ref.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install JS deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Go test
+        # `./...` from the workspace root doesn't expand across go.work
+        # members — list each module's tree explicitly.
+        run: |
+          go test ./apps/hangrix/... \
+                  ./apps/hangrix-agent/... \
+                  ./apps/hangrix-runner/... \
+                  ./pkg/common/... \
+                  ./pkg/cryptobox/... \
+                  ./pkg/ioc/...
+
+      - name: Generate web bundle
+        # Produces apps/web/.output/public — what copy-web-dist.mjs
+        # picks up before hangrix's go build. Catches Vue / Nuxt
+        # compile errors that vue-tsc would also catch (minus the two
+        # pre-existing ignored ones).
+        run: pnpm --filter web run generate
+
+      - name: Build hangrix (with embeds)
+        # Exercises the full embed pipeline: web dist + agent +
+        # runner binaries, then go build of the server. Output is
+        # discarded — we only care that it compiles end-to-end.
+        run: pnpm --filter hangrix run build

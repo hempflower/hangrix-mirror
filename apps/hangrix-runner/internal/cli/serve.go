@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/hangrix/hangrix/apps/hangrix-runner/internal/agentbin"
 	"github.com/hangrix/hangrix/apps/hangrix-runner/internal/client"
 	"github.com/hangrix/hangrix/apps/hangrix-runner/internal/config"
 	"github.com/hangrix/hangrix/apps/hangrix-runner/internal/loop"
@@ -16,8 +18,9 @@ import (
 )
 
 // Serve reads state.json, re-fetches the bootstrap so the runner picks
-// up server-side config changes since enroll, then runs the loop. The
-// only flag accepted is --state-dir; everything else comes off state.
+// up server-side config changes since enroll, extracts the embedded
+// agent to disk, then runs the loop. The only flag accepted is
+// --state-dir; everything else comes off state.
 func Serve(ctx context.Context, cfg *config.Config) error {
 	state, err := store.Load(cfg.StateDir)
 	if err != nil {
@@ -26,22 +29,23 @@ func Serve(ctx context.Context, cfg *config.Config) error {
 
 	cli := client.New(state.Server).WithAgentToken(state.AgentToken)
 
-	// Refresh bootstrap so endpoint / image / binary sha changes
+	// Refresh bootstrap so endpoint / image / cadence changes
 	// propagate without re-enrolling.
 	boot, err := cli.Bootstrap(ctx)
 	if err != nil {
 		return fmt.Errorf("refresh bootstrap: %w", err)
 	}
-	if err := applyBootstrap(ctx, cli, cfg.StateDir, state, boot); err != nil {
-		return fmt.Errorf("apply bootstrap: %w", err)
-	}
+	applyBootstrap(state, boot)
 	if err := store.Save(cfg.StateDir, state); err != nil {
 		return fmt.Errorf("save state: %w", err)
 	}
 
-	agent, ok := state.Binaries[agentBinaryName]
-	if !ok || agent.LocalPath == "" {
-		return fmt.Errorf("agent binary not cached (try `hangrix-runner enroll` again)")
+	// Extract the agent binary we shipped with into a stable path.
+	// agentbin.Extract is idempotent — fast path is "file already
+	// there, sha matches, no disk write".
+	agentPath, err := agentbin.Extract(filepath.Join(cfg.StateDir, "agent"))
+	if err != nil {
+		return fmt.Errorf("extract embedded agent: %w", err)
 	}
 
 	orch := orchestrator.NewDocker(cfg.DockerBin)
@@ -53,7 +57,7 @@ func Serve(ctx context.Context, cfg *config.Config) error {
 	l := &loop.Loop{
 		Client:          cli,
 		Orchestrator:    orch,
-		AgentBinaryPath: agent.LocalPath,
+		AgentBinaryPath: agentPath,
 		WorkspaceRoot:   state.LocalWorkspaceDir(cfg.StateDir),
 		BaseURL:         state.BaseURL,
 		HeartbeatEvery:  hb,
