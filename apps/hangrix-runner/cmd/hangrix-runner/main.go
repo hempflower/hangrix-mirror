@@ -61,18 +61,20 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   hangrix-runner enroll --server URL --token hgxe_...
-  hangrix-runner serve  [--state-dir DIR] [--docker BIN] [--auto-update]
+  hangrix-runner serve  [--state-dir DIR] [--docker BIN] [--auto-update] [--parallelism N]
   hangrix-runner update [--state-dir DIR] [--force]
 
 flags:
   --state-dir DIR   persistent state (default ~/.hangrix)
   --docker BIN      docker CLI path (default 'docker')
   --auto-update     serve: self-update + exit before serving when a new binary is available
+  --parallelism N   serve: max concurrent sessions to drive (default 16)
   --force           update: redownload even when local SHA matches
 
 env:
   HANGRIX_RUNNER_STATE_DIR    overrides --state-dir
   HANGRIX_RUNNER_SERVER       overrides --server (enroll only)
   HANGRIX_RUNNER_DOCKER_BIN   overrides --docker
-  HANGRIX_RUNNER_AUTO_UPDATE  enables --auto-update on serve (1/true/yes/on)`)
+  HANGRIX_RUNNER_AUTO_UPDATE  enables --auto-update on serve (1/true/yes/on)
+  HANGRIX_RUNNER_PARALLELISM  overrides --parallelism (positive integer)`)
 }

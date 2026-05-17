@@ -2,7 +2,7 @@
 // three subcommands and intentionally few flags:
 //
 //	hangrix-runner enroll --server URL --token hgxe_...
-//	hangrix-runner serve  [--state-dir DIR] [--auto-update]
+//	hangrix-runner serve  [--state-dir DIR] [--auto-update] [--parallelism N]
 //	hangrix-runner update [--state-dir DIR] [--force]
 //
 // Everything the runner needs at run-time (server URL, in-container LLM
@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -48,6 +49,16 @@ type Config struct {
 	// every runner the moment they next restart.
 	AutoUpdate bool
 
+	// serve-only: maximum number of concurrent sessions this runner is
+	// willing to drive. Defaults to 16 — enough headroom that a single
+	// runner doesn't bottleneck multi-role parallel work in an issue
+	// without operator tuning. Each unit of parallelism runs an
+	// independent task poller + session driver; the DB claim is
+	// FOR UPDATE SKIP LOCKED so the workers never race for the same
+	// row. Operators with constrained hosts should lower this — every
+	// in-flight session keeps a docker container + repo clone resident.
+	Parallelism int
+
 	// update-only: redownload + reinstall even when the on-disk binary
 	// already matches the server's advertised SHA. Useful for recovering
 	// from a corrupted local binary or rolling out a build that reuses a
@@ -61,10 +72,11 @@ func Parse(args []string) (sub string, cfg *Config, err error) {
 	}
 	sub = args[0]
 	cfg = &Config{
-		StateDir:   envOr("HANGRIX_RUNNER_STATE_DIR", defaultHangrixRoot()),
-		Server:     envOr("HANGRIX_RUNNER_SERVER", ""),
-		DockerBin:  envOr("HANGRIX_RUNNER_DOCKER_BIN", "docker"),
-		AutoUpdate: envTruthy("HANGRIX_RUNNER_AUTO_UPDATE"),
+		StateDir:    envOr("HANGRIX_RUNNER_STATE_DIR", defaultHangrixRoot()),
+		Server:      envOr("HANGRIX_RUNNER_SERVER", ""),
+		DockerBin:   envOr("HANGRIX_RUNNER_DOCKER_BIN", "docker"),
+		AutoUpdate:  envTruthy("HANGRIX_RUNNER_AUTO_UPDATE"),
+		Parallelism: envInt("HANGRIX_RUNNER_PARALLELISM", 16),
 	}
 	fs := flag.NewFlagSet(sub, flag.ContinueOnError)
 	fs.StringVar(&cfg.StateDir, "state-dir", cfg.StateDir, "persistent state directory")
@@ -75,6 +87,7 @@ func Parse(args []string) (sub string, cfg *Config, err error) {
 	case "serve":
 		fs.StringVar(&cfg.DockerBin, "docker", cfg.DockerBin, "docker CLI binary")
 		fs.BoolVar(&cfg.AutoUpdate, "auto-update", cfg.AutoUpdate, "self-update + exit before serving when a new binary is available")
+		fs.IntVar(&cfg.Parallelism, "parallelism", cfg.Parallelism, "max concurrent sessions to drive (default 16)")
 	case "update":
 		fs.BoolVar(&cfg.Force, "force", false, "redownload even when local SHA matches")
 	}
@@ -126,4 +139,19 @@ func envTruthy(k string) bool {
 		return true
 	}
 	return false
+}
+
+// envInt reads an integer-valued env var; unset / empty / unparseable
+// values fall back to def. Non-positive values also fall back so an
+// operator can't accidentally configure "0 workers" via env.
+func envInt(k string, def int) int {
+	raw := strings.TrimSpace(os.Getenv(k))
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
 }

@@ -78,6 +78,7 @@ func Serve(ctx context.Context, cfg *config.Config) error {
 		WorkspaceRoot:   state.LocalWorkspaceDir(cfg.StateDir),
 		BaseURL:         state.BaseURL,
 		HeartbeatEvery:  hb,
+		Parallelism:     cfg.Parallelism,
 	}
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
