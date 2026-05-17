@@ -91,15 +91,15 @@ func cloneRepo(ctx context.Context, spec cloneSpec) (string, error) {
 		return "", fmt.Errorf("clone: ensure parent of %s: %w", spec.Dest, err)
 	}
 
-	// Use -c on the clone so http.extraHeader lands in the cloned
-	// repo's config (and applies to the clone request itself). Without
-	// the per-clone -c the header would only apply to the system git
-	// config, which we won't pollute on shared runner hosts.
+	// `git clone --config` writes the http.extraHeader entry into the
+	// new repo's .git/config *before* the remote fetch, so the same
+	// value covers both the initial clone and subsequent fetch/push
+	// from inside the container. We deliberately do NOT also pass
+	// `-c http.extraHeader=...`: git treats http.extraHeader as a
+	// multi-valued config, so combining `-c` and `--config` with the
+	// same value sends two Authorization headers on the wire — Caddy
+	// / nginx reject duplicate Authorization with HTTP 400.
 	cloneArgs := []string{
-		"-c", "http.extraHeader=" + spec.authHeader(),
-		// Persist the same header on the new repo so subsequent
-		// git operations from inside the container (fetch, push)
-		// authenticate the same way.
 		"clone",
 		"--config", "http.extraHeader=" + spec.authHeader(),
 		"--branch", branchOrDefault(spec.BaseBranch, "main"),
