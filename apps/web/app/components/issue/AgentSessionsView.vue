@@ -10,8 +10,8 @@
 // session is still in a live state. Hidden tab (visibilitychange) and
 // inactive tab (`active` prop false) both pause the poller.
 
-import { computed, onUnmounted, ref, watch } from 'vue'
-import { AlertTriangle, Bot, Cog, FileText, Hammer, Megaphone, Sparkles, Square } from 'lucide-vue-next'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { AlertTriangle, ArrowDownToLine, Bot, Cog, FileText, Hammer, Megaphone, Play, RotateCcw, Sparkles, Square, Trash2 } from 'lucide-vue-next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -266,6 +266,120 @@ function messageIcon(kind: string) {
       return Bot
   }
 }
+
+// ---- log container scroll / auto-scroll ----
+
+const logContainer = ref<HTMLElement | null>(null)
+// Auto-scroll sticks the log view to the bottom on each new message. The
+// user opts out by scrolling up: the scroll handler flips this to false
+// when the viewport drifts away from the bottom, and back to true when
+// the user scrolls back to the bottom. A floating "scroll to bottom"
+// button re-engages it explicitly.
+const autoScroll = ref(true)
+
+function isAtBottom(el: HTMLElement, fudge = 24): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= fudge
+}
+
+function onLogScroll() {
+  const el = logContainer.value
+  if (!el) return
+  autoScroll.value = isAtBottom(el)
+}
+
+function scrollToBottom(smooth = true) {
+  const el = logContainer.value
+  if (!el) return
+  el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
+}
+
+// React to message stream growth: when a new frame lands and the user
+// hasn't scrolled away, glue to the bottom. We watch `messages.length`
+// + `selectedId` so a session switch also lands at the bottom of the
+// new log instead of inheriting the previous scroll position.
+watch(
+  () => [selectedId.value, messages.value.length] as [number | null, number],
+  async (_curr, prev) => {
+    await nextTick()
+    const prevSid = prev ? prev[0] : null
+    if (prevSid !== selectedId.value) {
+      // Selection changed — always jump to the bottom of the new log
+      // and re-arm auto-scroll.
+      autoScroll.value = true
+      scrollToBottom(false)
+      return
+    }
+    if (autoScroll.value) scrollToBottom(true)
+  },
+  { flush: 'post' },
+)
+
+// ---- session control actions (stop / resume / delete) ----
+
+const stopBusy = ref<Set<number>>(new Set())
+const resumeBusy = ref<Set<number>>(new Set())
+const deleteBusy = ref<Set<number>>(new Set())
+
+function busyIn(set: Set<number>, id: number): boolean {
+  return set.has(id)
+}
+function setBusy(set: Set<number>, id: number, on: boolean) {
+  if (on) set.add(id)
+  else set.delete(id)
+  // trigger reactivity
+  if (set === stopBusy.value) stopBusy.value = new Set(set)
+  if (set === resumeBusy.value) resumeBusy.value = new Set(set)
+  if (set === deleteBusy.value) deleteBusy.value = new Set(set)
+}
+
+async function stopSession(s: AgentSession) {
+  if (!confirm(t('agentSessions.actions.stopConfirm'))) return
+  setBusy(stopBusy.value, s.session_id, true)
+  try {
+    await $fetch(`${baseUrl.value}/${s.session_id}/stop`, {
+      method: 'POST',
+      body: { reason: 'stopped by user' },
+    })
+    await refresh()
+  } catch (e: unknown) {
+    const msg = (e as { data?: { error?: string } })?.data?.error ?? t('agentSessions.actions.stopFailed')
+    error.value = String(msg)
+  } finally {
+    setBusy(stopBusy.value, s.session_id, false)
+  }
+}
+
+async function resumeSession(s: AgentSession) {
+  setBusy(resumeBusy.value, s.session_id, true)
+  try {
+    await $fetch(`${baseUrl.value}/${s.session_id}/resume`, { method: 'POST' })
+    await refresh()
+  } catch (e: unknown) {
+    const msg = (e as { data?: { error?: string } })?.data?.error ?? t('agentSessions.actions.resumeFailed')
+    error.value = String(msg)
+  } finally {
+    setBusy(resumeBusy.value, s.session_id, false)
+  }
+}
+
+async function deleteSession(s: AgentSession) {
+  if (!confirm(t('agentSessions.actions.deleteConfirm'))) return
+  setBusy(deleteBusy.value, s.session_id, true)
+  try {
+    await $fetch(`${baseUrl.value}/${s.session_id}`, { method: 'DELETE' })
+    // If the deleted session was selected, clear it; refresh repopulates.
+    if (selectedId.value === s.session_id) {
+      selectedId.value = null
+      messages.value = []
+    }
+    await refresh()
+  } catch (e: unknown) {
+    const msg = (e as { data?: { error?: string } })?.data?.error ?? t('agentSessions.actions.deleteFailed')
+    error.value = String(msg)
+  } finally {
+    setBusy(deleteBusy.value, s.session_id, false)
+  }
+}
 </script>
 
 <template>
@@ -338,9 +452,70 @@ function messageIcon(kind: string) {
                 {{ t('agentSessions.spawnedBy') }}: {{ causeLabel(selected) }}
               </p>
             </div>
-            <Badge :variant="statusVariant(selected.status)">
-              {{ selected.status }}
-            </Badge>
+            <div class="flex items-center gap-2">
+              <Badge :variant="statusVariant(selected.status)">
+                {{ selected.status }}
+              </Badge>
+              <!-- Stop: visible while the container could still be running. -->
+              <Button
+                v-if="isLive(selected.status)"
+                variant="outline"
+                size="sm"
+                class="h-7 px-2 text-xs"
+                :disabled="busyIn(stopBusy, selected.session_id)"
+                @click="stopSession(selected)"
+              >
+                <Square class="size-3.5" />
+                {{ busyIn(stopBusy, selected.session_id) ? t('agentSessions.actions.stopping') : t('agentSessions.actions.stop') }}
+              </Button>
+              <!-- Resume + Delete: visible when the session is failed. -->
+              <template v-if="selected.status === 'failed'">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="h-7 px-2 text-xs"
+                  :disabled="busyIn(resumeBusy, selected.session_id)"
+                  @click="resumeSession(selected)"
+                >
+                  <Play class="size-3.5" />
+                  {{ busyIn(resumeBusy, selected.session_id) ? t('agentSessions.actions.resuming') : t('agentSessions.actions.resume') }}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                  :disabled="busyIn(deleteBusy, selected.session_id)"
+                  @click="deleteSession(selected)"
+                >
+                  <Trash2 class="size-3.5" />
+                  {{ busyIn(deleteBusy, selected.session_id) ? t('agentSessions.actions.deleting') : t('agentSessions.actions.delete') }}
+                </Button>
+              </template>
+              <!-- Delete is also allowed on idle / succeeded / cancelled — anything not live. -->
+              <Button
+                v-else-if="!isLive(selected.status) && selected.status !== 'archived' && selected.status !== 'failed'"
+                variant="ghost"
+                size="sm"
+                class="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                :disabled="busyIn(deleteBusy, selected.session_id)"
+                @click="deleteSession(selected)"
+              >
+                <Trash2 class="size-3.5" />
+                {{ busyIn(deleteBusy, selected.session_id) ? t('agentSessions.actions.deleting') : t('agentSessions.actions.delete') }}
+              </Button>
+              <!-- Resume is also offered on idle / succeeded so the user can re-trigger without a new comment. -->
+              <Button
+                v-if="selected.status === 'idle' || selected.status === 'succeeded' || selected.status === 'cancelled'"
+                variant="outline"
+                size="sm"
+                class="h-7 px-2 text-xs"
+                :disabled="busyIn(resumeBusy, selected.session_id)"
+                @click="resumeSession(selected)"
+              >
+                <RotateCcw class="size-3.5" />
+                {{ busyIn(resumeBusy, selected.session_id) ? t('agentSessions.actions.resuming') : t('agentSessions.actions.resume') }}
+              </Button>
+            </div>
           </header>
 
           <dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
@@ -387,55 +562,80 @@ function messageIcon(kind: string) {
             </div>
           </div>
 
-          <!-- Message log -->
+          <!-- Message log. The list itself is the scroll viewport so a
+               long stream never pushes the rest of the issue page out of
+               view; the relative wrapper anchors the floating
+               "scroll to bottom" affordance. -->
           <div>
-            <h4 class="mb-2 text-xs font-semibold uppercase text-muted-foreground">
-              {{ t('agentSessions.messages') }}
-            </h4>
+            <div class="mb-2 flex items-center justify-between">
+              <h4 class="text-xs font-semibold uppercase text-muted-foreground">
+                {{ t('agentSessions.messages') }}
+              </h4>
+              <span
+                v-if="autoScroll && isLive(selected.status)"
+                class="text-[10px] text-muted-foreground"
+              >{{ t('agentSessions.actions.autoScroll') }}</span>
+            </div>
             <p v-if="messages.length === 0" class="text-xs text-muted-foreground">
               {{ t('agentSessions.messagesEmpty') }}
             </p>
-            <ol v-else class="space-y-2 text-sm">
-              <li
-                v-for="m in messages"
-                :key="m.id"
-                class="rounded border bg-muted/20 px-3 py-2"
+            <div v-else class="relative">
+              <ol
+                ref="logContainer"
+                class="max-h-112 space-y-2 overflow-y-auto rounded border bg-background/40 p-2 text-sm"
+                @scroll.passive="onLogScroll"
               >
-                <div class="flex items-center gap-2 text-xs text-muted-foreground">
-                  <component :is="messageIcon(m.kind)" class="size-3.5 shrink-0" />
-                  <span class="font-mono">{{ offsetFrom(selected.created_at, m.created_at) }}</span>
-                  <span class="font-medium text-foreground">{{ m.kind }}</span>
-                  <span v-if="m.tool_name" class="font-mono">{{ m.tool_name }}</span>
-                  <span v-else-if="m.event" class="font-mono">{{ m.event }}</span>
-                  <span v-else-if="m.role" class="font-mono">{{ m.role }}</span>
-                  <Button
-                    v-if="m.payload"
-                    variant="ghost"
-                    size="sm"
-                    class="ml-auto h-6 px-2 text-xs"
-                    @click="toggleExpand(m.seq)"
-                  >{{ isExpanded(m.seq) ? t('agentSessions.collapse') : t('agentSessions.expand') }}</Button>
-                </div>
-                <!-- assistant / message content rendered as text -->
-                <p v-if="m.content" class="mt-1 whitespace-pre-wrap break-words">{{ m.content }}</p>
-                <!-- tool_call: show args + result as two panes when expanded -->
-                <div v-if="isExpanded(m.seq) && m.kind === 'tool_call'" class="mt-2 space-y-2">
-                  <div v-if="payloadField(m, 'args')">
-                    <p class="text-[10px] uppercase text-muted-foreground">args</p>
-                    <pre class="mt-0.5 overflow-x-auto rounded bg-muted/40 p-2 text-xs">{{ payloadField(m, 'args') }}</pre>
+                <li
+                  v-for="m in messages"
+                  :key="m.id"
+                  class="rounded border bg-muted/20 px-3 py-2"
+                >
+                  <div class="flex items-center gap-2 text-xs text-muted-foreground">
+                    <component :is="messageIcon(m.kind)" class="size-3.5 shrink-0" />
+                    <span class="font-mono">{{ offsetFrom(selected.created_at, m.created_at) }}</span>
+                    <span class="font-medium text-foreground">{{ m.kind }}</span>
+                    <span v-if="m.tool_name" class="font-mono">{{ m.tool_name }}</span>
+                    <span v-else-if="m.event" class="font-mono">{{ m.event }}</span>
+                    <span v-else-if="m.role" class="font-mono">{{ m.role }}</span>
+                    <Button
+                      v-if="m.payload"
+                      variant="ghost"
+                      size="sm"
+                      class="ml-auto h-6 px-2 text-xs"
+                      @click="toggleExpand(m.seq)"
+                    >{{ isExpanded(m.seq) ? t('agentSessions.collapse') : t('agentSessions.expand') }}</Button>
                   </div>
-                  <div v-if="payloadField(m, 'result')">
-                    <p class="text-[10px] uppercase text-muted-foreground">result</p>
-                    <pre class="mt-0.5 overflow-x-auto rounded bg-muted/40 p-2 text-xs">{{ payloadField(m, 'result') }}</pre>
+                  <!-- assistant / message content rendered as text -->
+                  <p v-if="m.content" class="mt-1 whitespace-pre-wrap wrap-break-word">{{ m.content }}</p>
+                  <!-- tool_call: show args + result as two panes when expanded -->
+                  <div v-if="isExpanded(m.seq) && m.kind === 'tool_call'" class="mt-2 space-y-2">
+                    <div v-if="payloadField(m, 'args')">
+                      <p class="text-[10px] uppercase text-muted-foreground">args</p>
+                      <pre class="mt-0.5 overflow-x-auto rounded bg-muted/40 p-2 text-xs">{{ payloadField(m, 'args') }}</pre>
+                    </div>
+                    <div v-if="payloadField(m, 'result')">
+                      <p class="text-[10px] uppercase text-muted-foreground">result</p>
+                      <pre class="mt-0.5 overflow-x-auto rounded bg-muted/40 p-2 text-xs">{{ payloadField(m, 'result') }}</pre>
+                    </div>
                   </div>
-                </div>
-                <!-- event / status / log / system: just show the payload raw -->
-                <pre
-                  v-else-if="isExpanded(m.seq) && m.payload"
-                  class="mt-2 overflow-x-auto rounded bg-muted/40 p-2 text-xs"
-                >{{ payloadString(m) }}</pre>
-              </li>
-            </ol>
+                  <!-- event / status / log / system: just show the payload raw -->
+                  <pre
+                    v-else-if="isExpanded(m.seq) && m.payload"
+                    class="mt-2 overflow-x-auto rounded bg-muted/40 p-2 text-xs"
+                  >{{ payloadString(m) }}</pre>
+                </li>
+              </ol>
+              <Button
+                v-if="!autoScroll"
+                variant="secondary"
+                size="sm"
+                class="absolute bottom-3 right-3 h-7 gap-1 px-2 text-xs shadow"
+                @click="autoScroll = true; scrollToBottom(true)"
+              >
+                <ArrowDownToLine class="size-3.5" />
+                {{ t('agentSessions.actions.scrollToBottom') }}
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>

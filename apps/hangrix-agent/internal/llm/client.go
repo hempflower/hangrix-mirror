@@ -155,20 +155,33 @@ func New(endpoint, token string) *Client {
 // returns immediately because retrying a malformed request just wastes
 // quota. 429 is retried with the same backoff because the proxy may
 // surface upstream rate-limit signals that way.
+//
+// Attempts are intentionally generous: a flaky upstream / proxy
+// hiccup should never kill an in-flight session. The total wall-time
+// ceiling is bounded by the per-call 5-minute context plus the agent's
+// outer context — if either fires we bail with ctx.Err().
 func (c *Client) Create(ctx context.Context, req *CreateRequest) (*CreateResponse, error) {
 	body, err := buildRequestBody(req)
 	if err != nil {
 		return nil, fmt.Errorf("llm: build request: %w", err)
 	}
 
-	const maxAttempts = 4
+	const (
+		maxAttempts  = 10
+		maxBackoffMS = 30000 // 30s cap so one retry chain doesn't stall a turn for hours
+	)
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
-			// 0.5s, 1s, 2s — capped, no jitter (single client per session
-			// means concurrent retries from one Hangrix node aren't a
-			// thundering-herd concern; jitter is for fleets, not a loop).
-			delay := time.Duration(math.Pow(2, float64(attempt-1))*500) * time.Millisecond
+			// Exponential backoff capped at 30s. No jitter — there's
+			// only one client per session, so the thundering-herd
+			// argument that motivates jitter on fleet retries does
+			// not apply here.
+			backoffMS := math.Pow(2, float64(attempt-1)) * 500
+			if backoffMS > maxBackoffMS {
+				backoffMS = maxBackoffMS
+			}
+			delay := time.Duration(backoffMS) * time.Millisecond
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()

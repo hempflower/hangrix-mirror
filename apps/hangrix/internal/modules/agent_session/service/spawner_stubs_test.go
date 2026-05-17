@@ -324,6 +324,36 @@ func (r *stubRunnerRepo) MarkSessionRunning(context.Context, int64) error {
 func (r *stubRunnerRepo) MarkSessionTerminal(context.Context, int64, runnerdomain.SessionStatus, *int32, string) error {
 	panic("MarkSessionTerminal not stubbed")
 }
+func (r *stubRunnerRepo) MarkSessionIdle(context.Context, int64, *int32) error {
+	panic("MarkSessionIdle not stubbed")
+}
+func (r *stubRunnerRepo) ResumeSession(_ context.Context, id int64, tok runnerdomain.NewSessionToken) error {
+	for _, s := range r.sessions {
+		if s.ID == id {
+			s.Status = runnerdomain.SessionStatusPending
+			s.SessionTokenPrefix = tok.Prefix
+			s.SessionTokenHash = tok.Hash
+			s.SessionTokenSealed = tok.Sealed
+			s.RunnerID = nil
+			s.ClaimedAt = nil
+			s.StartedAt = nil
+			s.EndedAt = nil
+			s.ExitCode = nil
+			s.ErrorMessage = ""
+			return nil
+		}
+	}
+	return runnerdomain.ErrSessionStateInvalid
+}
+func (r *stubRunnerRepo) DeleteSession(_ context.Context, id int64) error {
+	for i, s := range r.sessions {
+		if s.ID == id {
+			r.sessions = append(r.sessions[:i], r.sessions[i+1:]...)
+			return nil
+		}
+	}
+	return runnerdomain.ErrSessionNotFound
+}
 func (r *stubRunnerRepo) ListMessages(context.Context, int64) ([]*runnerdomain.Message, error) {
 	panic("ListMessages not stubbed")
 }

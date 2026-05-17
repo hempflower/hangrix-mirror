@@ -506,6 +506,61 @@ func (r *PostgresRepo) MarkSessionTerminal(ctx context.Context, id int64, status
 	return nil
 }
 
+// MarkSessionIdle flips a claimed/running session to 'idle' without
+// touching session_token_sealed. See domain.Repo for the contract: the
+// sealed plaintext must survive the container exit so a rewake re-uses
+// the same identity.
+func (r *PostgresRepo) MarkSessionIdle(ctx context.Context, id int64, exitCode *int32) error {
+	var ec pgtype.Int4
+	if exitCode != nil {
+		ec = pgtype.Int4{Int32: *exitCode, Valid: true}
+	}
+	n, err := r.q.MarkSessionIdle(ctx, runnerdb.MarkSessionIdleParams{
+		ExitCode: ec,
+		ID:       id,
+	})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrSessionStateInvalid
+	}
+	return nil
+}
+
+// ResumeSession installs a freshly minted session token on an
+// idle/failed/succeeded row and flips it back to 'pending'. Returns
+// ErrSessionStateInvalid for archived (or already-pending) rows so the
+// caller can surface a 409.
+func (r *PostgresRepo) ResumeSession(ctx context.Context, id int64, tok domain.NewSessionToken) error {
+	n, err := r.q.ResumeSession(ctx, runnerdb.ResumeSessionParams{
+		SessionTokenPrefix: tok.Prefix,
+		SessionTokenHash:   tok.Hash,
+		SessionTokenSealed: pgtype.Text{String: tok.Sealed, Valid: tok.Sealed != ""},
+		ID:                 id,
+	})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrSessionStateInvalid
+	}
+	return nil
+}
+
+// DeleteSession hard-removes the row. ON DELETE CASCADE wipes the
+// message log + inputs queue too.
+func (r *PostgresRepo) DeleteSession(ctx context.Context, id int64) error {
+	n, err := r.q.DeleteSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrSessionNotFound
+	}
+	return nil
+}
+
 // ---- messages ----
 
 // AppendMessage assigns the next seq in (session_id) and inserts the row.

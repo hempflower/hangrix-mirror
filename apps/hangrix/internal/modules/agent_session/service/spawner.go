@@ -129,17 +129,24 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 	//   archivedRoles   — role had a previous session that's now
 	//                     archived. Spec says archive is terminal,
 	//                     so the role is silenced for this issue.
-	//   liveByRole      — role has a non-terminal session
-	//                     (pending/claimed/running). The trigger
-	//                     event becomes an input frame on this row.
+	//   existingByRole  — role has a non-archived session row. Used
+	//                     in two ways: (a) live (pending/claimed/
+	//                     running) → just enqueue the new event; (b)
+	//                     idle / failed / succeeded → rewake the row
+	//                     and enqueue. Per-role-in-issue reuse is the
+	//                     point — we never spawn a fresh row alongside
+	//                     an existing one.
 	//   alreadyForCause — (role, cause_kind, cause_id) tuple was
-	//                     already processed. Re-firing returns no-op.
+	//                     already processed by a LIVE session. Re-
+	//                     firing the same cause onto a live row is a
+	//                     no-op; on a non-live row we still rewake so
+	//                     the user gets a retry.
 	existing, err := s.runner.ListSessionsByIssue(ctx, in.RepoID, in.IssueNumber)
 	if err != nil {
 		return nil, fmt.Errorf("spawner: list existing sessions: %w", err)
 	}
 	archivedRoles := map[string]struct{}{}
-	liveByRole := map[string]*runnerdomain.AgentSession{}
+	existingByRole := map[string]*runnerdomain.AgentSession{}
 	alreadyForCause := map[string]struct{}{}
 	for _, e := range existing {
 		if e.RoleKey == "" {
@@ -149,13 +156,11 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 			archivedRoles[e.RoleKey] = struct{}{}
 			continue
 		}
-		// Only LIVE (pending/claimed/running) rows make a (role,
-		// cause) tuple "already processed". Terminal-but-not-archived
-		// rows (succeeded/failed/cancelled/idle) describe a previous
-		// container — re-firing the same cause spawns a fresh row so
-		// retries / multi-turn scenarios work.
+		// Most-recent row wins — ListSessionsByIssue returns rows in
+		// spawn order, so a later overwrite keeps the freshest live
+		// or rewakeable row as the canonical one for the role.
+		existingByRole[e.RoleKey] = e
 		if isLiveStatus(e.Status) {
-			liveByRole[e.RoleKey] = e
 			alreadyForCause[causeKey(e.RoleKey, e.CauseKind, e.CauseID)] = struct{}{}
 		}
 	}
@@ -185,16 +190,29 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 			continue
 		}
 
-		if live, hasLive := liveByRole[roleKey]; hasLive {
-			// Append the event onto the running session's inputs queue
-			// instead of creating a new row. The agent picks it up via
-			// its long-poll /inputs stream — no fresh container spin-up.
-			enq, err := s.enqueueOntoLive(ctx, in, live)
+		if existing, hasExisting := existingByRole[roleKey]; hasExisting {
+			if isLiveStatus(existing.Status) {
+				// Live row — agent is alive or about to be claimed.
+				// Append the event onto its inputs queue; the agent
+				// picks it up via its long-poll /inputs stream — no
+				// fresh container spin-up.
+				enq, err := s.enqueueOntoLive(ctx, in, existing)
+				if err != nil {
+					s.recordSpawnError(ctx, in, roleKey, err)
+					continue
+				}
+				out = append(out, enq)
+				continue
+			}
+			// Non-live, non-archived (idle / failed / succeeded /
+			// cancelled). Rewake the row so the next runner poll
+			// picks it up, and seed the new turn with the cause.
+			rew, err := s.rewakeRole(ctx, in, existing)
 			if err != nil {
 				s.recordSpawnError(ctx, in, roleKey, err)
 				continue
 			}
-			out = append(out, enq)
+			out = append(out, rew)
 			continue
 		}
 
@@ -234,6 +252,55 @@ func (s *Spawner) LoadHostConfig(ctx context.Context, repoID int64) (*agentsconf
 		return nil, fmt.Errorf("spawner: resolve host fs path: %w", err)
 	}
 	return s.loadHostConfig(ctx, hostFs, hostRepo.DefaultBranch)
+}
+
+// rewakeRole flips a non-live, non-archived session row back to
+// 'pending' (re-minting its session token) and enqueues a fresh
+// history + cause frame so the agent can resume. The same session row
+// is reused — per-issue per-role continuity is the spec's intent.
+//
+// History on rewake is seeded as empty for simplicity; the next agent
+// container sees the cause event and acts on it. Faithful turn-by-turn
+// replay of the prior message log is an M9 follow-up.
+func (s *Spawner) rewakeRole(ctx context.Context, in domain.TriggerInput, existing *runnerdomain.AgentSession) (domain.SpawnedSession, error) {
+	plaintext, prefix, hashed, err := service.MintSessionToken()
+	if err != nil {
+		return domain.SpawnedSession{}, fmt.Errorf("mint session token: %w", err)
+	}
+	sealed, err := s.box.Encrypt(plaintext)
+	if err != nil {
+		return domain.SpawnedSession{}, fmt.Errorf("seal session token: %w", err)
+	}
+	if err := s.runner.ResumeSession(ctx, existing.ID, runnerdomain.NewSessionToken{
+		Prefix: prefix,
+		Hash:   string(hashed),
+		Sealed: sealed,
+	}); err != nil {
+		return domain.SpawnedSession{}, fmt.Errorf("resume session: %w", err)
+	}
+	history := []byte(`{"kind":"history","messages":[]}`)
+	if _, err := s.runner.EnqueueInput(ctx, existing.ID, history); err != nil {
+		return domain.SpawnedSession{}, fmt.Errorf("enqueue history on rewake: %w", err)
+	}
+	frame, err := buildCauseFrame(in)
+	if err != nil {
+		return domain.SpawnedSession{}, fmt.Errorf("build cause frame: %w", err)
+	}
+	if _, err := s.runner.EnqueueInput(ctx, existing.ID, frame); err != nil {
+		return domain.SpawnedSession{}, fmt.Errorf("enqueue cause on rewake: %w", err)
+	}
+	_, _ = s.runner.AppendMessage(ctx, &runnerdomain.Message{
+		SessionID: existing.ID,
+		Kind:      runnerdomain.MessageKindEvent,
+		EventName: string(in.Trigger),
+		Payload:   frame,
+	})
+	return domain.SpawnedSession{
+		SessionID: existing.ID,
+		RoleKey:   existing.RoleKey,
+		RunnerID:  existing.RunnerID,
+		Action:    domain.SpawnActionRewoken,
+	}, nil
 }
 
 // enqueueOntoLive appends a cause-event input frame onto an existing

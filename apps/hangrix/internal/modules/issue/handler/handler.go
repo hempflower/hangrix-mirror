@@ -45,13 +45,14 @@ type Handler struct {
 	users      userdomain.Repo
 	resolver   orgdomain.Resolver
 	middleware authdomain.Middleware
-	// agent_session lifecycle hooks. All three are optional (nil-safe
+	// agent_session lifecycle hooks. All four are optional (nil-safe
 	// call sites) so the handler keeps working in test configurations
 	// where the module isn't loaded; in production ioc binds all of
 	// them, so the nil branches never fire.
-	spawner  agentsessiondomain.Spawner
-	archiver agentsessiondomain.Archiver
-	auditor  agentsessiondomain.Auditor
+	spawner    agentsessiondomain.Spawner
+	archiver   agentsessiondomain.Archiver
+	auditor    agentsessiondomain.Auditor
+	controller agentsessiondomain.Controller
 }
 
 type HandlerDeps struct {
@@ -62,11 +63,12 @@ type HandlerDeps struct {
 	Users      userdomain.Repo
 	Resolver   orgdomain.Resolver
 	Middleware authdomain.Middleware
-	// Spawner + Archiver + Auditor come from the agent_session module.
-	// Wired through ioc — see apps/hangrix/internal/modules/agent_session.
-	Spawner  agentsessiondomain.Spawner
-	Archiver agentsessiondomain.Archiver
-	Auditor  agentsessiondomain.Auditor
+	// Spawner + Archiver + Auditor + Controller come from the
+	// agent_session module. Wired through ioc.
+	Spawner    agentsessiondomain.Spawner
+	Archiver   agentsessiondomain.Archiver
+	Auditor    agentsessiondomain.Auditor
+	Controller agentsessiondomain.Controller
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
@@ -81,6 +83,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		spawner:    deps.Spawner,
 		archiver:   deps.Archiver,
 		auditor:    deps.Auditor,
+		controller: deps.Controller,
 	}
 }
 
@@ -108,6 +111,13 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		// public/private + caller membership).
 		r.Get("/{number}/agent-sessions", h.listAgentSessions)
 		r.Get("/{number}/agent-sessions/{sid}/messages", h.listAgentSessionMessages)
+		// Per-session controls. Stop/resume need the issue's manage
+		// permission so any repo reader can't kill another user's
+		// running agent; the existing canManage gate is the same one
+		// merge uses.
+		r.Post("/{number}/agent-sessions/{sid}/stop", h.stopAgentSession)
+		r.Post("/{number}/agent-sessions/{sid}/resume", h.resumeAgentSession)
+		r.Delete("/{number}/agent-sessions/{sid}", h.deleteAgentSession)
 	})
 }
 

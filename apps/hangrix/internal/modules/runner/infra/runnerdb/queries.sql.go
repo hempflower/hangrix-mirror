@@ -399,6 +399,22 @@ func (q *Queries) DeleteRunner(ctx context.Context, id int64) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const deleteSession = `-- name: DeleteSession :execrows
+DELETE FROM agent_sessions WHERE id = $1
+`
+
+// Hard-delete a session row. Cascades remove the message log + inputs
+// queue (FK ON DELETE CASCADE in the migration). Use for the user-
+// visible "delete agent run" affordance — once a session is failed
+// and the user doesn't want it recoverable, this clears the row.
+func (q *Queries) DeleteSession(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSession, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const disableRunner = `-- name: DisableRunner :execrows
 UPDATE runners
 SET status = 'disabled',
@@ -914,6 +930,34 @@ func (q *Queries) MarkInputsConsumed(ctx context.Context, ids []int64) error {
 	return err
 }
 
+const markSessionIdle = `-- name: MarkSessionIdle :execrows
+UPDATE agent_sessions
+SET status    = 'idle',
+    exit_code = $1
+WHERE id = $2
+  AND status IN ('claimed', 'running')
+`
+
+type MarkSessionIdleParams struct {
+	ExitCode pgtype.Int4
+	ID       int64
+}
+
+// Flip a running session to idle: one turn finished but the parent issue
+// is still live, so the row should stay reusable for the next trigger.
+// Unlike MarkSessionTerminal this DOES NOT NULL session_token_sealed —
+// the runner re-uses the same session identity when the row is rewoken,
+// so the sealed plaintext must survive across container exits. ended_at
+// is intentionally left NULL because the session as a logical unit
+// isn't done; only the most recent container is.
+func (q *Queries) MarkSessionIdle(ctx context.Context, arg MarkSessionIdleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markSessionIdle, arg.ExitCode, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const markSessionRunning = `-- name: MarkSessionRunning :execrows
 UPDATE agent_sessions
 SET status = 'running', started_at = COALESCE(started_at, NOW())
@@ -998,6 +1042,51 @@ func (q *Queries) RedeemEnrollmentUpdate(ctx context.Context, arg RedeemEnrollme
 		arg.ID,
 	)
 	return err
+}
+
+const resumeSession = `-- name: ResumeSession :execrows
+UPDATE agent_sessions
+SET status               = 'pending',
+    session_token_prefix = $1,
+    session_token_hash   = $2,
+    session_token_sealed = $3,
+    runner_id            = NULL,
+    claimed_at           = NULL,
+    started_at           = NULL,
+    ended_at             = NULL,
+    exit_code            = NULL,
+    error_message        = ''
+WHERE id = $4
+  AND status IN ('idle', 'failed', 'succeeded', 'cancelled')
+`
+
+type ResumeSessionParams struct {
+	SessionTokenPrefix string
+	SessionTokenHash   string
+	SessionTokenSealed pgtype.Text
+	ID                 int64
+}
+
+// User-initiated resume: flip an idle / failed / succeeded row back to
+// 'pending' so the next runner poll picks it up. Re-mints the session
+// token (the previous sealed plaintext was NULL'd on terminate for
+// failed/succeeded). For idle rows the sealed token survives so we
+// pass through the existing value via the caller's sealed arg.
+//
+// archived rows are not resumable — the parent issue archived them and
+// a new issue is required to start fresh. cancelled is treated as
+// failed for legacy data.
+func (q *Queries) ResumeSession(ctx context.Context, arg ResumeSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, resumeSession,
+		arg.SessionTokenPrefix,
+		arg.SessionTokenHash,
+		arg.SessionTokenSealed,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateRunnerHeartbeat = `-- name: UpdateRunnerHeartbeat :execrows

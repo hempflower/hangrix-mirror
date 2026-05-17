@@ -21,7 +21,9 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
+	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
+	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
 
 // publicAgentSession is the DTO returned by the sessions list endpoint.
@@ -149,4 +151,121 @@ func (h *Handler) listAgentSessionMessages(w http.ResponseWriter, r *http.Reques
 		})
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// resolveSession is the per-(repo, issue, sid) authorisation +
+// existence check shared by stop/resume/delete. Returns the validated
+// session id and 'ok' — false means an error response has already
+// been written.
+func (h *Handler) resolveSession(w http.ResponseWriter, r *http.Request, requireManage bool) (int64, bool) {
+	rc, ok := h.resolveRepo(w, r)
+	if !ok {
+		return 0, false
+	}
+	iss, ok := h.loadIssue(w, r, rc.repo.ID)
+	if !ok {
+		return 0, false
+	}
+	if requireManage {
+		caller, _ := authdomain.UserFromRequest(r)
+		if !h.canManage(r, caller, rc.repo) && caller.ID != iss.AuthorID {
+			httpx.WriteError(w, http.StatusForbidden, "only the repo owner or issue author can manage agent sessions")
+			return 0, false
+		}
+	}
+	sid, err := strconv.ParseInt(chi.URLParam(r, "sid"), 10, 64)
+	if err != nil || sid <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid session id")
+		return 0, false
+	}
+	if h.auditor == nil {
+		httpx.WriteError(w, http.StatusNotFound, "agent session not found")
+		return 0, false
+	}
+	sess, err := h.auditor.GetSession(r.Context(), sid)
+	if err != nil {
+		if errors.Is(err, agentsessiondomain.ErrSessionNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "agent session not found")
+			return 0, false
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return 0, false
+	}
+	if sess.RepoID != rc.repo.ID || sess.Issue != int32(iss.Number) {
+		httpx.WriteError(w, http.StatusNotFound, "agent session not found")
+		return 0, false
+	}
+	return sid, true
+}
+
+type stopAgentSessionReq struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+func (h *Handler) stopAgentSession(w http.ResponseWriter, r *http.Request) {
+	sid, ok := h.resolveSession(w, r, true)
+	if !ok {
+		return
+	}
+	if h.controller == nil {
+		httpx.WriteError(w, http.StatusServiceUnavailable, "agent session controls unavailable")
+		return
+	}
+	var req stopAgentSessionReq
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := h.controller.Stop(r.Context(), sid, req.Reason); err != nil {
+		if errors.Is(err, runnerdomain.ErrSessionNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "agent session not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) resumeAgentSession(w http.ResponseWriter, r *http.Request) {
+	sid, ok := h.resolveSession(w, r, true)
+	if !ok {
+		return
+	}
+	if h.controller == nil {
+		httpx.WriteError(w, http.StatusServiceUnavailable, "agent session controls unavailable")
+		return
+	}
+	if err := h.controller.Resume(r.Context(), sid); err != nil {
+		switch {
+		case errors.Is(err, runnerdomain.ErrSessionNotFound):
+			httpx.WriteError(w, http.StatusNotFound, "agent session not found")
+		case errors.Is(err, agentsessiondomain.ErrNotResumable):
+			httpx.WriteError(w, http.StatusConflict, "session is not in a resumable state")
+		default:
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) deleteAgentSession(w http.ResponseWriter, r *http.Request) {
+	sid, ok := h.resolveSession(w, r, true)
+	if !ok {
+		return
+	}
+	if h.controller == nil {
+		httpx.WriteError(w, http.StatusServiceUnavailable, "agent session controls unavailable")
+		return
+	}
+	if err := h.controller.Delete(r.Context(), sid); err != nil {
+		switch {
+		case errors.Is(err, runnerdomain.ErrSessionNotFound):
+			httpx.WriteError(w, http.StatusNotFound, "agent session not found")
+		case errors.Is(err, agentsessiondomain.ErrSessionLive):
+			httpx.WriteError(w, http.StatusConflict, "session is still live; stop it first")
+		default:
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

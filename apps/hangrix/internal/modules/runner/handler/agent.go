@@ -450,13 +450,23 @@ func (h *AgentHandler) terminate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := domain.SessionStatus(strings.TrimSpace(req.Status))
-	if !status.Terminal() {
-		httpx.WriteError(w, http.StatusBadRequest, "status must be terminal")
+	// `idle` is the runner's "container exited cleanly but the session
+	// stays reusable" signal — routes to MarkSessionIdle which preserves
+	// the sealed token so the next trigger can rewake the row. Every
+	// other accepted status is genuinely terminal.
+	var err error
+	switch {
+	case status == domain.SessionStatusIdle:
+		err = h.repo.MarkSessionIdle(r.Context(), id, req.ExitCode)
+	case status.Terminal():
+		err = h.repo.MarkSessionTerminal(r.Context(), id, status, req.ExitCode, req.Message)
+	default:
+		httpx.WriteError(w, http.StatusBadRequest, "status must be terminal or idle")
 		return
 	}
-	if err := h.repo.MarkSessionTerminal(r.Context(), id, status, req.ExitCode, req.Message); err != nil {
+	if err != nil {
 		if errors.Is(err, domain.ErrSessionStateInvalid) {
-			httpx.WriteError(w, http.StatusConflict, "session already terminal")
+			httpx.WriteError(w, http.StatusConflict, "session not in a state that accepts this transition")
 			return
 		}
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())

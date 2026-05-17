@@ -26,6 +26,7 @@ func Module() *ioc.Module {
 	m.Provide(service.NewSpawner).ToInterface(new(domain.Spawner))
 	m.Provide(service.NewArchiver).ToInterface(new(domain.Archiver))
 	m.Provide(service.NewAuditor).ToInterface(new(domain.Auditor))
+	m.Provide(service.NewController).ToInterface(new(domain.Controller))
 
 	m.Provide(handler.NewAdminHandler).ToInterface(new(server.RouteProvider))
 	return m

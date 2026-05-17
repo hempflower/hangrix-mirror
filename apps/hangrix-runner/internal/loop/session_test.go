@@ -144,7 +144,11 @@ func TestSessionDriverEndToEnd(t *testing.T) {
 		}
 	}
 
-	if terminateBody["status"] != "succeeded" {
-		t.Errorf("terminate status=%v, want succeeded", terminateBody["status"])
+	// Clean exit maps to 'idle', not 'succeeded': the per-issue per-
+	// role session row stays reusable for the next trigger. Failed-
+	// exit handling still routes to 'failed' (covered separately by
+	// the agent-loop tests).
+	if terminateBody["status"] != "idle" {
+		t.Errorf("terminate status=%v, want idle", terminateBody["status"])
 	}
 }

@@ -102,7 +102,15 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 	wg.Wait()
 
 	exitCode = int32(ec)
-	status := client.TerminateRequest{Status: "succeeded", ExitCode: &exitCode}
+	// Status mapping:
+	//   * clean exit (ec=0, no waitErr) → idle. The container processed
+	//     one event and exited; the session row stays reusable so the
+	//     next trigger rewakes it without losing identity. We never
+	//     emit "succeeded" — per-issue per-role sessions are long-lived
+	//     conceptually, even though each container is short.
+	//   * non-zero exit OR waitErr → failed. The user / spawner can
+	//     resume from the UI.
+	status := client.TerminateRequest{Status: "idle", ExitCode: &exitCode}
 	if waitErr != nil || ec != 0 {
 		status.Status = "failed"
 		if waitErr != nil {

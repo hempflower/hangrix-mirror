@@ -681,6 +681,21 @@
     },
     "failureTitle": "会话异常退出",
     "failureNoDetail": "没有错误详情。查看下方消息日志中 agent 最后输出的几帧来定位原因。",
+    "actions": {
+      "stop": "停止",
+      "stopping": "停止中…",
+      "stopConfirm": "确认停止该 agent？运行中的容器会被请求关闭，会话将被标记为 failed。",
+      "resume": "恢复",
+      "resuming": "恢复中…",
+      "delete": "删除",
+      "deleting": "删除中…",
+      "deleteConfirm": "确认删除该会话？消息日志会一并清空且无法恢复。",
+      "scrollToBottom": "滚动到底部",
+      "autoScroll": "自动滚动",
+      "stopFailed": "停止会话失败",
+      "resumeFailed": "恢复会话失败",
+      "deleteFailed": "删除会话失败"
+    },
     "cause": {
       "issueOpened": "issue.opened",
       "commentMentioned": "提及 · 评论 #{id}",

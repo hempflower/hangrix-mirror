@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/ipc"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/llm"
@@ -27,9 +28,10 @@ type Loop struct {
 	system   string
 
 	// maxToolRounds caps how many LLM⇄tool round-trips we allow within
-	// one inbound event. The cap is a fail-safe against an LLM that
-	// churns indefinitely (e.g. calls a misnamed tool over and over).
-	// Hit the cap → emit a log + done, let the runner decide what to do.
+	// one inbound event. The cap exists only as a runaway-loop fail-safe;
+	// in practice an agent should never approach it. Lifted to a very
+	// large number so legitimate long sessions (refactors that touch
+	// many files, multi-step debugging) don't get cut off mid-stream.
 	maxToolRounds int
 }
 
@@ -48,7 +50,7 @@ func NewLoop(
 		model:         model,
 		registry:      registry,
 		system:        systemPrompt,
-		maxToolRounds: 16,
+		maxToolRounds: 999999,
 	}
 }
 
@@ -126,7 +128,11 @@ func (l *Loop) handleEvent(ctx context.Context, cctx *Context, frame *ipc.Inboun
 	eventMsg, err := renderEventMessage(frame.Event, frame.Payload)
 	if err != nil {
 		_ = l.out.Log("error", fmt.Sprintf("render event: %s", err))
-		return nil
+		_ = l.out.Done(turnID)
+		// Render failure means the inbound frame was malformed; that's
+		// a platform-side bug, not a transient issue worth retrying.
+		// Bubble up so the runner records the session as failed.
+		return fmt.Errorf("render event: %w", err)
 	}
 	cctx.AppendUser(eventMsg)
 
@@ -140,9 +146,15 @@ func (l *Loop) handleEvent(ctx context.Context, cctx *Context, frame *ipc.Inboun
 		}
 		resp, err := l.llm.Create(ctx, req)
 		if err != nil {
+			// llm.Client already retries on transport/5xx/429 with
+			// exponential backoff; an error here is the upstream's
+			// last word. Surface it on stdout (visible in the audit
+			// log) AND on stderr (caught by runner's exit-code
+			// path) so the session ends 'failed', not 'succeeded'.
 			_ = l.out.Log("error", fmt.Sprintf("llm: %s", err))
 			_ = l.out.Done(turnID)
-			return nil
+			fmt.Fprintf(os.Stderr, "llm call failed after retries: %s\n", err)
+			return fmt.Errorf("llm call failed: %w", err)
 		}
 		// Preserve `reasoning` blocks if the upstream emitted any. Some
 		// providers (DeepSeek-Reasoner, OpenAI o-series) reject the next

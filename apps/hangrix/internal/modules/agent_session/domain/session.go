@@ -212,6 +212,41 @@ type Archiver interface {
 	OnIssueClosed(ctx context.Context, repoID int64, issueNumber int32) (int64, error)
 }
 
+// Controller exposes the per-session user-driven lifecycle actions —
+// Stop (cancel a running container), Resume (rewake a failed/idle row
+// so the runner picks it up again), Delete (remove the row entirely).
+// The issue handler exposes these on the public agent-sessions route;
+// admin tooling can layer onto the same interface later.
+type Controller interface {
+	// Stop signals the agent to shut down and marks the session
+	// 'failed'. Enqueues a control:shutdown frame onto the inputs
+	// queue so a running container exits cleanly when it next polls;
+	// the failed status is what the UI surfaces and what unblocks the
+	// resume button. Returns ErrSessionNotFound for unknown ids and
+	// nil if the session was already terminal (idempotent).
+	Stop(ctx context.Context, sessionID int64, reason string) error
+
+	// Resume flips an idle / failed / succeeded row back to 'pending'
+	// and re-mints its session token. Returns ErrSessionNotFound for
+	// unknown ids and ErrNotResumable when the row is archived /
+	// already pending.
+	Resume(ctx context.Context, sessionID int64) error
+
+	// Delete hard-removes the session row (and cascades the message
+	// log + inputs queue). Refuses live sessions — the user must Stop
+	// first so the running container can't keep emitting messages
+	// onto a row that no longer exists.
+	Delete(ctx context.Context, sessionID int64) error
+}
+
+// ErrNotResumable is returned by Controller.Resume when a session row
+// cannot be flipped back to pending (archived, or already live).
+var ErrNotResumable = errors.New("session not resumable")
+
+// ErrSessionLive is returned by Controller.Delete when the caller tries
+// to remove a session that's still pending/claimed/running. Stop first.
+var ErrSessionLive = errors.New("session is still live; stop it first")
+
 // AuditSession is one row of the cross-session query view. Contains the
 // snapshot pin (`repo_sha`) so a consumer can re-checkout exactly the
 // host state that produced any commit the session made.

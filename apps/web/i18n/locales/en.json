@@ -681,6 +681,21 @@
     },
     "failureTitle": "Session ended with an error",
     "failureNoDetail": "No error detail captured. Check the message log below for the agent's last frames.",
+    "actions": {
+      "stop": "Stop",
+      "stopping": "Stopping…",
+      "stopConfirm": "Stop this agent? The running container will be asked to shut down and the session will be marked failed.",
+      "resume": "Resume",
+      "resuming": "Resuming…",
+      "delete": "Delete",
+      "deleting": "Deleting…",
+      "deleteConfirm": "Delete this session? Its message log will be removed and cannot be recovered.",
+      "scrollToBottom": "Scroll to bottom",
+      "autoScroll": "Auto-scroll",
+      "stopFailed": "Failed to stop session",
+      "resumeFailed": "Failed to resume session",
+      "deleteFailed": "Failed to delete session"
+    },
     "cause": {
       "issueOpened": "issue.opened",
       "commentMentioned": "mention · comment #{id}",

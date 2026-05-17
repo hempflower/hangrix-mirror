@@ -376,6 +376,16 @@ type NewEnrollToken struct {
 	Hash   string
 }
 
+// NewSessionToken is the pre-minted session token Repo.ResumeSession
+// installs on a rewoken row. Service mints (plaintext, prefix, hash,
+// sealed) using cryptobox; infra only stores. The plaintext does not
+// appear here — the runner gets it later via ClaimNextSession.
+type NewSessionToken struct {
+	Prefix string
+	Hash   string
+	Sealed string
+}
+
 // HistoryFrame is what BuildHistoryFrame returns — the seed `kind:history`
 // payload the runner must feed into the agent's stdin as the first frame.
 // JSON shape matches ipc.Inbound{Kind:"history", Messages: [...]}.
@@ -463,6 +473,23 @@ type Repo interface {
 	ClaimNextSession(ctx context.Context, runnerID int64) (*AgentSession, error)
 	MarkSessionRunning(ctx context.Context, id int64) error
 	MarkSessionTerminal(ctx context.Context, id int64, status SessionStatus, exitCode *int32, errMsg string) error
+	// MarkSessionIdle flips a claimed/running session to 'idle'. Unlike
+	// MarkSessionTerminal it leaves session_token_sealed intact so the
+	// row is re-claimable when the next trigger fires (rewake path).
+	// Used by the runner on clean container exit when the parent issue
+	// is still open.
+	MarkSessionIdle(ctx context.Context, id int64, exitCode *int32) error
+	// ResumeSession flips an idle / failed / succeeded row back to
+	// 'pending' so a runner re-claims it. Re-mints the session token
+	// because the prior plaintext was NULL'd at terminate time.
+	// Refuses archived rows — the parent issue is the only thing that
+	// can ever unstick an archived session, and "unsticking" means
+	// "open a new issue".
+	ResumeSession(ctx context.Context, id int64, newToken NewSessionToken) error
+	// DeleteSession hard-deletes a session row + cascading message log
+	// + inputs queue. The user-visible "trash" affordance: removes a
+	// failed session the user is sure they don't need to inspect.
+	DeleteSession(ctx context.Context, id int64) error
 	// ArchiveSessionsByIssue flips every non-archived session on the
 	// (repo, issue) tuple to 'archived'. Driven by issue.closed /
 	// issue.merged — there is no per-session manual archive surface.
