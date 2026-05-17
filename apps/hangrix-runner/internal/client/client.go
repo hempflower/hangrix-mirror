@@ -210,6 +210,41 @@ func (c *Client) PollInputs(ctx context.Context, sessionID int64) (*InputsRespon
 	return &out, nil
 }
 
+// ---- binary downloads ----
+
+// DownloadBinary GETs a server-relative path (typically the URL field of
+// a BootstrapPayload.Binaries entry) with the agent token attached, and
+// returns the full body plus the server's advertised SHA256 from the
+// X-Hangrix-SHA256 header. The header is empty when the upstream doesn't
+// expose one; callers should always verify the body's own digest against
+// the bootstrap-declared SHA before installing.
+func (c *Client) DownloadBinary(ctx context.Context, path string) ([]byte, string, error) {
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	if c.agentToken == "" {
+		return nil, "", errors.New("agent token not set")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.agentToken)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("read %s: %w", path, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", fmt.Errorf("GET %s: %d %s", path, resp.StatusCode, snippet(body))
+	}
+	return body, resp.Header.Get("X-Hangrix-SHA256"), nil
+}
+
 // ---- transport helpers ----
 
 func (c *Client) do(ctx context.Context, method, path string, in, out any, auth bool) error {

@@ -40,6 +40,23 @@ func Serve(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("save state: %w", err)
 	}
 
+	// Auto-update path: if the server's embedded runner build differs
+	// from ours, swap it in and exit cleanly so the supervisor restarts
+	// onto the new bytes. We share the bootstrap we just fetched, so
+	// there's no extra round trip on the steady-state "no update" path.
+	// Failures are logged but non-fatal — a broken update endpoint
+	// shouldn't keep a healthy runner from serving.
+	if cfg.AutoUpdate {
+		res, err := runUpdate(ctx, cli, boot, false)
+		if err != nil {
+			log.Printf("auto-update: %v (continuing with current binary)", err)
+		} else if res.updated {
+			log.Printf("auto-update: installed new binary at %s (%s → %s); exiting for supervisor restart",
+				res.path, short(res.oldSHA), short(res.newSHA))
+			return nil
+		}
+	}
+
 	// Extract the agent binary we shipped with into a stable path.
 	// agentbin.Extract is idempotent — fast path is "file already
 	// there, sha matches, no disk write".
