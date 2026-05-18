@@ -8,16 +8,17 @@
 #
 # Required edits before opening your first issue:
 #   1. container.image — pick a runtime that has the tooling your
-#      agent needs. The default `ubuntu:24.04` is a clean slate;
-#      agents will need to apt-install or similar to use anything
-#      beyond `git`.
+#      agent needs. The default
+#      `mcr.microsoft.com/devcontainers/base:ubuntu` ships with
+#      git, curl, common build tools, and a non-root user; agents
+#      will still need to apt-install language-specific toolchains.
 #   2. llm.model — must match a model registered on the LLM
 #      provider the platform admin has configured.
 
 version: 1
 
 container:
-  image: ubuntu:24.04
+  image: mcr.microsoft.com/devcontainers/base:ubuntu
 
 llm:
   model: deepseek-v4-pro  # <-- change to a model your provider serves
