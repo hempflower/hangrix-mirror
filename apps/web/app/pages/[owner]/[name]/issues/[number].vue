@@ -332,7 +332,11 @@ const timelineItems = computed<TimelineItem[]>(() => {
 })
 
 function eventLabel(e: any): string {
-  const name = e.actor_username || '—'
+  // Agent-authored events carry agent_role instead of actor_username
+  // (e.g. an agent push surfaces with actor_id=NULL + agent_role=<role>).
+  // Render them with the same "@agent-<role>" form the review_vote card
+  // uses so the whole timeline shows one consistent agent identity.
+  const name = e.agent_role ? `@agent-${e.agent_role}` : (e.actor_username || '—')
   switch (e.kind) {
     case 'commit_pushed': {
       const n = e.payload?.commits?.length ?? 0

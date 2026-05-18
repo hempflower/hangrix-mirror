@@ -34,7 +34,7 @@ func (o *PushObserver) PreReceive(ctx context.Context, repo *repodomain.Repo, fs
 // branch tip. Repos with many open issues see an O(open_issues) walk per
 // push — fine for M4 scale; we can add a "branches updated" filter once
 // receive-pack instrumentation gives us that data.
-func (o *PushObserver) PostReceive(ctx context.Context, repo *repodomain.Repo, fsPath string) error {
+func (o *PushObserver) PostReceive(ctx context.Context, repo *repodomain.Repo, fsPath string, pusher repodomain.Pusher) error {
 	numbers, err := o.h.issues.ListOpenIssueNumbers(ctx, repo.ID)
 	if err != nil {
 		return err
@@ -44,7 +44,7 @@ func (o *PushObserver) PostReceive(ctx context.Context, repo *repodomain.Repo, f
 		if err != nil {
 			continue
 		}
-		if err := o.h.SyncIssueBranch(ctx, repo, fsPath, iss, 0); err != nil {
+		if err := o.h.SyncIssueBranch(ctx, repo, fsPath, iss, pusher.UserID, pusher.AgentRole); err != nil {
 			// Best-effort per-issue: keep going so one bad branch doesn't
 			// stall the rest.
 			continue

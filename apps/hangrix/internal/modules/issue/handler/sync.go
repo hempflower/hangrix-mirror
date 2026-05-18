@@ -14,12 +14,18 @@ import (
 
 // SyncIssueBranch reconciles an issue's recorded HeadSHA with the actual
 // on-disk branch tip. If the branch advanced, a commit_pushed event is
-// appended with the new commits. actorID may be 0 for syncs not tied to a
-// user (the M5 agent will pass its own actor).
+// appended with the new commits.
+//
+// Attribution: exactly one of actorID / agentRole identifies the pusher.
+// actorID > 0 attributes the event to a human user; agentRole != ""
+// attributes it to a host yaml role (matches how the same agent's comments
+// and review_vote events are stored, so the timeline renders one
+// consistent identity across event kinds). Both zero is allowed for
+// background syncs not tied to anyone — the timeline will show a dash.
 //
 // Exported so the receive-pack hook chain (see RefreshAfterPush) can reuse
 // the same logic without exposing the underlying stores.
-func (h *Handler) SyncIssueBranch(ctx context.Context, repo *repodomain.Repo, fsPath string, iss *domain.Issue, actorID int64) error {
+func (h *Handler) SyncIssueBranch(ctx context.Context, repo *repodomain.Repo, fsPath string, iss *domain.Issue, actorID int64, agentRole string) error {
 	headSHA, err := h.git.ResolveCommit(fsPath, iss.BranchName)
 	if err != nil {
 		// Branch doesn't exist on disk yet — treat as no-op. The store row
@@ -50,19 +56,24 @@ func (h *Handler) SyncIssueBranch(ctx context.Context, repo *repodomain.Repo, fs
 			Commits: newCommits,
 		}
 		raw, _ := json.Marshal(payload)
-		if _, err := h.issues.CreateEvent(ctx, iss.ID, domain.EventCommitPushed, raw, actorID); err != nil {
-			return err
+		if agentRole != "" {
+			if _, err := h.issues.CreateAgentEvent(ctx, iss.ID, domain.EventCommitPushed, raw, agentRole); err != nil {
+				return err
+			}
+		} else {
+			if _, err := h.issues.CreateEvent(ctx, iss.ID, domain.EventCommitPushed, raw, actorID); err != nil {
+				return err
+			}
 		}
 		// Fan a commit.pushed trigger out to any subscribing roles
 		// (typically reviewer / maintainer). Best-effort — a session-
 		// spawn hiccup must not break the head-sha update or the
 		// timeline event we just wrote.
 		//
-		// When the push observer invokes us with actorID=0 (no human
-		// pushed; usually an agent acting via session token), fall
-		// back to the issue's author so the new session row has a
-		// valid created_by — agent_sessions.created_by FKs users(id)
-		// and rejects 0.
+		// Spawned sessions must reference a real users(id) for created_by
+		// (agent_sessions.created_by FKs users(id) and rejects 0). When no
+		// human pushed (agent-driven or background sync), fall back to the
+		// issue's author.
 		spawnActor := actorID
 		if spawnActor == 0 {
 			spawnActor = iss.AuthorID

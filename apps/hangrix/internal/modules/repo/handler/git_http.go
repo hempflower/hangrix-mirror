@@ -90,7 +90,7 @@ func (h *Handler) advertiseRefs(w http.ResponseWriter, r *http.Request, service 
 	var fsPath string
 	var ok bool
 	if write {
-		_, fsPath, ok = h.authorizeGitWrite(w, r)
+		_, fsPath, _, ok = h.authorizeGitWrite(w, r)
 	} else {
 		_, fsPath, ok = h.authorizeGitRead(w, r)
 	}
@@ -123,7 +123,7 @@ func (h *Handler) gitUploadPack(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
-	repo, fsPath, ok := h.authorizeGitWrite(w, r)
+	repo, fsPath, caller, ok := h.authorizeGitWrite(w, r)
 	if !ok {
 		return
 	}
@@ -157,9 +157,33 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 	// doesn't immediately cancel the observer DB writes.
 	postCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	pusher := pusherFromCaller(caller)
 	for _, obs := range h.observers {
-		_ = obs.PostReceive(postCtx, repo, fsPath)
+		_ = obs.PostReceive(postCtx, repo, fsPath, pusher)
 	}
+}
+
+// pusherFromCaller maps the resolved write caller to a domain.Pusher.
+// Agent sessions surface their snapshot RoleKey (the same value used when
+// the agent posts comments / review_vote, so the timeline shows one
+// consistent "@agent-<role>" identity); everything else surfaces the
+// user id. A session row with an empty RoleKey would render as an
+// anonymous push — better to fall back to the session creator than to
+// show a dash.
+func pusherFromCaller(c *gitCaller) domain.Pusher {
+	if c == nil {
+		return domain.Pusher{}
+	}
+	if c.authMethod == "session" && c.session != nil {
+		if c.session.RoleKey != "" {
+			return domain.Pusher{AgentRole: c.session.RoleKey}
+		}
+		return domain.Pusher{UserID: c.session.CreatedBy}
+	}
+	if c.user != nil {
+		return domain.Pusher{UserID: c.user.ID}
+	}
+	return domain.Pusher{}
 }
 
 // runStatelessRPC streams the request body into `git <sub> --stateless-rpc`
@@ -217,35 +241,37 @@ func (h *Handler) authorizeGitRead(w http.ResponseWriter, r *http.Request) (*dom
 }
 
 // authorizeGitWrite — always requires authentication. Owner or admin only.
-// PATs must carry repo:write scope.
-func (h *Handler) authorizeGitWrite(w http.ResponseWriter, r *http.Request) (*domain.Repo, string, bool) {
+// PATs must carry repo:write scope. Returns the resolved caller so the
+// receive-pack handler can attribute commit_pushed events to the right
+// identity (human user vs. agent session).
+func (h *Handler) authorizeGitWrite(w http.ResponseWriter, r *http.Request) (*domain.Repo, string, *gitCaller, bool) {
 	owner := chi.URLParam(r, "owner")
 	namegit := chi.URLParam(r, "namegit")
 	repoName := strings.TrimSuffix(namegit, ".git")
 	if !usernameRe.MatchString(owner) || !repoNameRe.MatchString(repoName) {
 		http.NotFound(w, r)
-		return nil, "", false
+		return nil, "", nil, false
 	}
 
 	repo, fsPath, ok := h.loadGitRepo(w, r, owner, repoName)
 	if !ok {
-		return nil, "", false
+		return nil, "", nil, false
 	}
 
 	caller, ok := h.identifyGitCaller(r)
 	if !ok {
 		challengeBasicAuth(w)
-		return nil, "", false
+		return nil, "", nil, false
 	}
 	if !h.canAccessRepo(r.Context(), caller, repo, true) {
 		http.Error(w, "forbidden", http.StatusForbidden)
-		return nil, "", false
+		return nil, "", nil, false
 	}
 	if !caller.hasWriteScope() {
 		http.Error(w, "token lacks repo:write scope", http.StatusForbidden)
-		return nil, "", false
+		return nil, "", nil, false
 	}
-	return repo, fsPath, true
+	return repo, fsPath, caller, true
 }
 
 func (h *Handler) loadGitRepo(w http.ResponseWriter, r *http.Request, owner, repoName string) (*domain.Repo, string, bool) {

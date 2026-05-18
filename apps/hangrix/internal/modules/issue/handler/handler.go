@@ -904,7 +904,7 @@ func (h *Handler) sync(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.SyncIssueBranch(r.Context(), rc.repo, rc.fsPath, iss, 0); err != nil {
+	if err := h.SyncIssueBranch(r.Context(), rc.repo, rc.fsPath, iss, 0, ""); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
