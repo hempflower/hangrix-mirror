@@ -41,20 +41,43 @@ type volumeWire struct {
 }
 
 type llmWire struct {
-	Model       string  `yaml:"model"`
-	MaxTokens   int     `yaml:"max_tokens"`
-	Temperature float64 `yaml:"temperature"`
-	TopP        float64 `yaml:"top_p"`
+	Model            string  `yaml:"model"`
+	MaxOutputTokens  int     `yaml:"max_output_tokens"`
+	MaxContextTokens int     `yaml:"max_context_tokens"`
+	ReasoningEffort  string  `yaml:"reasoning_effort"`
+	Temperature      float64 `yaml:"temperature"`
+	TopP             float64 `yaml:"top_p"`
 }
 
 type roleWire struct {
-	Triggers   []string   `yaml:"triggers"`
+	// Triggers is a yaml.Node holding the per-trigger filter mapping.
+	// The wire shape rejects unknown filter keys per trigger; doing
+	// that with a typed struct requires switching on the trigger name
+	// at decode-time, which yaml.v3 doesn't support natively. Keeping
+	// the raw node here lets buildRole walk the mapping by hand.
+	Triggers   yaml.Node  `yaml:"triggers"`
 	Can        []string   `yaml:"can"`
 	Not        []string   `yaml:"not"`
 	Scope      *scopeWire `yaml:"scope"`
 	Prompt     string     `yaml:"prompt"`
 	PromptFile string     `yaml:"prompt_file"`
 	LLM        *llmWire   `yaml:"llm"`
+}
+
+// commentFilterWire is the strict-decode shape for the per-comment
+// trigger filter block. Unknown keys (typos like `from_user:` for
+// `from_users:`) are rejected by KnownFields(true).
+type commentFilterWire struct {
+	MentionedOnly bool     `yaml:"mentioned_only"`
+	FromRoles     []string `yaml:"from_roles"`
+	FromUsers     []string `yaml:"from_users"`
+}
+
+// pushFilterWire is the strict-decode shape for the per-push trigger
+// filter block.
+type pushFilterWire struct {
+	Paths       []string `yaml:"paths"`
+	PathsIgnore []string `yaml:"paths_ignore"`
 }
 
 type scopeWire struct {
@@ -197,8 +220,14 @@ func buildLLM(w *llmWire, ctx string) (*LLMConfig, error) {
 	if w.Model == "" {
 		return nil, fmt.Errorf("%w: %s.model empty", ErrInvalidModel, ctx)
 	}
-	if w.MaxTokens < 0 {
-		return nil, fmt.Errorf("%w: %s.max_tokens=%d (must be >= 0)", ErrInvalidLLMParam, ctx, w.MaxTokens)
+	if w.MaxOutputTokens < 0 {
+		return nil, fmt.Errorf("%w: %s.max_output_tokens=%d (must be >= 0)", ErrInvalidLLMParam, ctx, w.MaxOutputTokens)
+	}
+	if w.MaxContextTokens < 0 {
+		return nil, fmt.Errorf("%w: %s.max_context_tokens=%d (must be >= 0)", ErrInvalidLLMParam, ctx, w.MaxContextTokens)
+	}
+	if !IsValidReasoningEffort(w.ReasoningEffort) {
+		return nil, fmt.Errorf("%w: %s.reasoning_effort=%q (want one of %v)", ErrInvalidLLMParam, ctx, w.ReasoningEffort, ValidReasoningEfforts)
 	}
 	if w.Temperature < 0 || w.Temperature > 2 {
 		return nil, fmt.Errorf("%w: %s.temperature=%v (must be in [0,2])", ErrInvalidLLMParam, ctx, w.Temperature)
@@ -207,10 +236,12 @@ func buildLLM(w *llmWire, ctx string) (*LLMConfig, error) {
 		return nil, fmt.Errorf("%w: %s.top_p=%v (must be in [0,1])", ErrInvalidLLMParam, ctx, w.TopP)
 	}
 	return &LLMConfig{
-		Model:       w.Model,
-		MaxTokens:   w.MaxTokens,
-		Temperature: w.Temperature,
-		TopP:        w.TopP,
+		Model:            w.Model,
+		MaxOutputTokens:  w.MaxOutputTokens,
+		MaxContextTokens: w.MaxContextTokens,
+		ReasoningEffort:  w.ReasoningEffort,
+		Temperature:      w.Temperature,
+		TopP:             w.TopP,
 	}, nil
 }
 
@@ -221,13 +252,9 @@ func buildLLM(w *llmWire, ctx string) (*LLMConfig, error) {
 // Every role MUST supply exactly one of `prompt:` / `prompt_file:` —
 // host yaml is the single source of truth for role prompts (M7c).
 func buildRole(key string, w *roleWire) (*Role, error) {
-	if len(w.Triggers) == 0 {
-		return nil, fmt.Errorf("roles.%s.triggers: %w", key, ErrEmptyTriggers)
-	}
-	for i, t := range w.Triggers {
-		if !IsValidTrigger(t) {
-			return nil, fmt.Errorf("roles.%s.triggers[%d]=%q: %w", key, i, t, ErrUnknownTrigger)
-		}
+	triggers, err := buildTriggers(key, &w.Triggers)
+	if err != nil {
+		return nil, err
 	}
 
 	if w.Prompt != "" && w.PromptFile != "" {
@@ -264,7 +291,7 @@ func buildRole(key string, w *roleWire) (*Role, error) {
 	}
 
 	return &Role{
-		Triggers:   w.Triggers,
+		Triggers:   triggers,
 		Can:        w.Can,
 		Not:        w.Not,
 		Scope:      scope,
@@ -272,6 +299,127 @@ func buildRole(key string, w *roleWire) (*Role, error) {
 		PromptFile: w.PromptFile,
 		LLM:        roleLLM,
 	}, nil
+}
+
+// buildTriggers decodes the `triggers:` mapping under one role. The
+// wire shape is a yaml map keyed by trigger name; each value is either
+// null (no filter, equivalent to `{}`) or an event-specific filter
+// block strictly-decoded into the matching wire struct.
+//
+// Validation rules:
+//   - Map must be non-empty (a role with no triggers is a misconfig).
+//   - Keys must be recognised Trigger constants.
+//   - Filter keys are event-scoped: only `issue.comment` accepts
+//     mentioned_only / from_roles / from_users; only `commit.pushed`
+//     accepts paths / paths_ignore; the rest must be empty maps.
+//   - Duplicate trigger keys (`issue.comment` declared twice) are
+//     rejected; yaml.v3's default keeps the last value silently.
+func buildTriggers(key string, node *yaml.Node) (map[Trigger]*TriggerSpec, error) {
+	// `triggers:` omitted entirely → node is the zero value
+	// (Kind == 0). Treat the same as an empty map: missing required.
+	if node == nil || node.Kind == 0 {
+		return nil, fmt.Errorf("roles.%s.triggers: %w", key, ErrEmptyTriggers)
+	}
+	if node.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("roles.%s.triggers: %w (must be a mapping of event-name → filter)", key, ErrInvalidTriggerSpec)
+	}
+	if len(node.Content) == 0 {
+		return nil, fmt.Errorf("roles.%s.triggers: %w", key, ErrEmptyTriggers)
+	}
+
+	out := make(map[Trigger]*TriggerSpec, len(node.Content)/2)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		kn := node.Content[i]
+		vn := node.Content[i+1]
+		name := kn.Value
+		if !IsValidTrigger(name) {
+			return nil, fmt.Errorf("roles.%s.triggers.%s: %w", key, name, ErrUnknownTrigger)
+		}
+		t := Trigger(name)
+		if _, dup := out[t]; dup {
+			return nil, fmt.Errorf("roles.%s.triggers.%s: duplicate trigger key", key, name)
+		}
+		spec, err := buildTriggerSpec(key, t, vn)
+		if err != nil {
+			return nil, err
+		}
+		out[t] = spec
+	}
+	return out, nil
+}
+
+// buildTriggerSpec validates the per-event filter block for one
+// trigger entry. A null / empty mapping yields the zero TriggerSpec.
+// Otherwise the parser strict-decodes into the appropriate filter wire
+// (rejecting unknown keys) and dispatches based on the event name.
+func buildTriggerSpec(roleKey string, t Trigger, value *yaml.Node) (*TriggerSpec, error) {
+	// Empty block: `event-name:` (null scalar) or `event-name: {}`
+	// (empty mapping) both decode to "no filters". Treat them
+	// identically — a yaml author can use whichever reads better.
+	emptyBlock := value == nil || value.Kind == 0 ||
+		(value.Kind == yaml.ScalarNode && value.Tag == "!!null") ||
+		(value.Kind == yaml.MappingNode && len(value.Content) == 0)
+
+	switch t {
+	case TriggerIssueComment:
+		if emptyBlock {
+			return &TriggerSpec{Comment: &CommentFilter{}}, nil
+		}
+		if value.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("roles.%s.triggers.%s: %w (filter must be a mapping)", roleKey, t, ErrInvalidTriggerSpec)
+		}
+		var cw commentFilterWire
+		if err := decodeKnown(value, &cw); err != nil {
+			return nil, fmt.Errorf("roles.%s.triggers.%s: %w: %s", roleKey, t, ErrInvalidTriggerSpec, err.Error())
+		}
+		return &TriggerSpec{Comment: &CommentFilter{
+			MentionedOnly: cw.MentionedOnly,
+			FromRoles:     cw.FromRoles,
+			FromUsers:     cw.FromUsers,
+		}}, nil
+
+	case TriggerCommitPushed:
+		if emptyBlock {
+			return &TriggerSpec{Push: &PushFilter{}}, nil
+		}
+		if value.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("roles.%s.triggers.%s: %w (filter must be a mapping)", roleKey, t, ErrInvalidTriggerSpec)
+		}
+		var pw pushFilterWire
+		if err := decodeKnown(value, &pw); err != nil {
+			return nil, fmt.Errorf("roles.%s.triggers.%s: %w: %s", roleKey, t, ErrInvalidTriggerSpec, err.Error())
+		}
+		return &TriggerSpec{Push: &PushFilter{
+			Paths:       pw.Paths,
+			PathsIgnore: pw.PathsIgnore,
+		}}, nil
+
+	default:
+		// Filter-less triggers: issue.opened / issue.closed /
+		// review_vote.posted / ci.status_changed. They accept only an
+		// empty body; any key is a misconfiguration.
+		if !emptyBlock {
+			return nil, fmt.Errorf("roles.%s.triggers.%s: %w (event takes no filters)", roleKey, t, ErrInvalidTriggerSpec)
+		}
+		return &TriggerSpec{}, nil
+	}
+}
+
+// decodeKnown re-encodes a yaml.Node and re-decodes it with
+// KnownFields(true) so unknown keys inside the trigger filter block
+// surface as errors. yaml.v3's Node.Decode does not honour
+// KnownFields on the outer decoder, so we round-trip through Marshal.
+func decodeKnown(n *yaml.Node, into any) error {
+	buf, err := yaml.Marshal(n)
+	if err != nil {
+		return err
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(buf))
+	dec.KnownFields(true)
+	if err := dec.Decode(into); err != nil {
+		return fmt.Errorf("%w: %s", ErrUnknownField, err.Error())
+	}
+	return nil
 }
 
 // isValidRoleKey matches `^[a-z][a-z0-9-]{0,38}$`. Same shape as the

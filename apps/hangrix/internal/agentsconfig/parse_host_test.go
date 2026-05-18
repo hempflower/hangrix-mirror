@@ -25,13 +25,18 @@ llm:
 
 roles:
   dispatcher:
-    triggers: [issue.opened, issue.comment.any]
+    triggers:
+      issue.opened: {}
+      issue.comment: {}
     can: [issue_read, issue_comment, roster_list]
     prompt: |
       You are the dispatcher.
 
   backend:
-    triggers: [issue.comment.mentioned]
+    triggers:
+      issue.comment:
+        mentioned_only: true
+        from_users: [alice, bob]
     scope: { paths: ["apps/api/**", "internal/**"] }
     can:
       - issue_read
@@ -43,12 +48,20 @@ roles:
       Always git pull --rebase before push.
 
   reviewer:
-    triggers: [commit.pushed, issue.comment.mentioned]
+    triggers:
+      commit.pushed:
+        paths: ["apps/api/**", "internal/**"]
+        paths_ignore: ["**/*.md"]
+      issue.comment:
+        mentioned_only: true
+        from_roles: [dispatcher]
     can: [issue_read, issue_diff, issue_comment]
     prompt_file: .hangrix/prompts/reviewer.md
     llm:
       model: claude-opus-4-7
-      max_tokens: 8000
+      max_output_tokens: 8000
+      max_context_tokens: 200000
+      reasoning_effort: high
       temperature: 0.2
       top_p: 0.9
 `
@@ -95,6 +108,21 @@ func TestParseHostConfig_Happy(t *testing.T) {
 	if len(disp.Triggers) != 2 {
 		t.Fatalf("dispatcher triggers: %+v", disp.Triggers)
 	}
+	if _, ok := disp.Triggers[TriggerIssueOpened]; !ok {
+		t.Fatalf("dispatcher missing issue.opened trigger")
+	}
+	if cs := disp.Triggers[TriggerIssueComment]; cs == nil || cs.Comment == nil || cs.Comment.MentionedOnly {
+		t.Fatalf("dispatcher issue.comment should be no-filter: %+v", cs)
+	}
+
+	be := cfg.Roles["backend"]
+	beCmt := be.Triggers[TriggerIssueComment]
+	if beCmt == nil || beCmt.Comment == nil || !beCmt.Comment.MentionedOnly {
+		t.Fatalf("backend issue.comment: expected mentioned_only=true, got %+v", beCmt)
+	}
+	if want := []string{"alice", "bob"}; len(beCmt.Comment.FromUsers) != 2 || beCmt.Comment.FromUsers[0] != want[0] {
+		t.Fatalf("backend from_users: %+v", beCmt.Comment.FromUsers)
+	}
 
 	rev := cfg.Roles["reviewer"]
 	if rev.PromptFile != ".hangrix/prompts/reviewer.md" {
@@ -103,8 +131,33 @@ func TestParseHostConfig_Happy(t *testing.T) {
 	if rev.LLM == nil || rev.LLM.Model != "claude-opus-4-7" {
 		t.Fatalf("reviewer llm: %+v", rev.LLM)
 	}
+	if rev.LLM.MaxOutputTokens != 8000 {
+		t.Fatalf("reviewer llm max_output_tokens: %d", rev.LLM.MaxOutputTokens)
+	}
+	if rev.LLM.MaxContextTokens != 200000 {
+		t.Fatalf("reviewer llm max_context_tokens: %d", rev.LLM.MaxContextTokens)
+	}
+	if rev.LLM.ReasoningEffort != "high" {
+		t.Fatalf("reviewer llm reasoning_effort: %q", rev.LLM.ReasoningEffort)
+	}
+	revPush := rev.Triggers[TriggerCommitPushed]
+	if revPush == nil || revPush.Push == nil {
+		t.Fatalf("reviewer commit.pushed missing")
+	}
+	if len(revPush.Push.Paths) != 2 || revPush.Push.Paths[0] != "apps/api/**" {
+		t.Fatalf("reviewer commit.pushed.paths: %+v", revPush.Push.Paths)
+	}
+	if len(revPush.Push.PathsIgnore) != 1 || revPush.Push.PathsIgnore[0] != "**/*.md" {
+		t.Fatalf("reviewer commit.pushed.paths_ignore: %+v", revPush.Push.PathsIgnore)
+	}
+	revCmt := rev.Triggers[TriggerIssueComment]
+	if revCmt == nil || revCmt.Comment == nil || !revCmt.Comment.MentionedOnly {
+		t.Fatalf("reviewer issue.comment.mentioned_only: %+v", revCmt)
+	}
+	if len(revCmt.Comment.FromRoles) != 1 || revCmt.Comment.FromRoles[0] != "dispatcher" {
+		t.Fatalf("reviewer issue.comment.from_roles: %+v", revCmt.Comment.FromRoles)
+	}
 
-	be := cfg.Roles["backend"]
 	if len(be.Scope.Paths) != 2 || be.Scope.Paths[0] != "apps/api/**" {
 		t.Fatalf("backend scope: %+v", be.Scope)
 	}
@@ -122,7 +175,8 @@ container:
     args: { GO_VERSION: "1.26" }
 roles:
   only:
-    triggers: [issue.opened]
+    triggers:
+      issue.opened: {}
     prompt: hi
 `
 	cfg, err := ParseHostConfig([]byte(body))
@@ -150,7 +204,7 @@ func TestParseHostConfig_Errors(t *testing.T) {
 			body: `
 version: 2
 container: { image: x }
-roles: { r: { triggers: [issue.opened], prompt: hi } }
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrInvalidVersion,
 		},
@@ -158,7 +212,7 @@ roles: { r: { triggers: [issue.opened], prompt: hi } }
 			name: "missing-container",
 			body: `
 version: 1
-roles: { r: { triggers: [issue.opened], prompt: hi } }
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrContainerSourceConflict,
 		},
@@ -170,7 +224,7 @@ container:
   image: x
   build:
     dockerfile: D
-roles: { r: { triggers: [issue.opened], prompt: hi } }
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrContainerSourceConflict,
 		},
@@ -179,7 +233,7 @@ roles: { r: { triggers: [issue.opened], prompt: hi } }
 			body: `
 version: 1
 container: { env: { FOO: bar } }
-roles: { r: { triggers: [issue.opened], prompt: hi } }
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrContainerSourceConflict,
 		},
@@ -190,7 +244,7 @@ version: 1
 container:
   image: x
   env: { node_env: 1 }
-roles: { r: { triggers: [issue.opened], prompt: hi } }
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrInvalidEnvKey,
 		},
@@ -201,7 +255,7 @@ version: 1
 container:
   image: x
   secrets: [github_token]
-roles: { r: { triggers: [issue.opened], prompt: hi } }
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrInvalidSecretName,
 		},
@@ -213,7 +267,7 @@ container:
   image: x
   volumes:
     - { name: cache, mount: caches/foo }
-roles: { r: { triggers: [issue.opened], prompt: hi } }
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrInvalidVolumeMount,
 		},
@@ -225,7 +279,7 @@ container:
   image: x
   volumes:
     - { name: cache, mount: /caches/../../etc }
-roles: { r: { triggers: [issue.opened], prompt: hi } }
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrInvalidVolumeMount,
 		},
@@ -237,7 +291,7 @@ container:
   image: x
   volumes:
     - { name: "", mount: /caches/x }
-roles: { r: { triggers: [issue.opened], prompt: hi } }
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrInvalidVolumeMount,
 		},
@@ -264,27 +318,87 @@ roles: { Backend: { triggers: [issue.opened], prompt: hi } }
 			body: `
 version: 1
 container: { image: x }
-roles: { r: { triggers: [issue.opened] } }
+roles: { r: { triggers: { issue.opened: {} } } }
 `,
 			target: ErrPromptMissing,
 		},
 		{
-			name: "empty-triggers",
+			name: "empty-triggers-map",
 			body: `
 version: 1
 container: { image: x }
-roles: { r: { triggers: [], prompt: hi } }
+roles: { r: { triggers: {}, prompt: hi } }
 `,
 			target: ErrEmptyTriggers,
+		},
+		{
+			name: "missing-triggers",
+			body: `
+version: 1
+container: { image: x }
+roles: { r: { prompt: hi } }
+`,
+			target: ErrEmptyTriggers,
+		},
+		{
+			name: "triggers-not-mapping",
+			body: `
+version: 1
+container: { image: x }
+roles: { r: { triggers: [issue.opened], prompt: hi } }
+`,
+			target: ErrInvalidTriggerSpec,
 		},
 		{
 			name: "unknown-trigger",
 			body: `
 version: 1
 container: { image: x }
-roles: { r: { triggers: [issue.weird], prompt: hi } }
+roles: { r: { triggers: { issue.weird: {} }, prompt: hi } }
 `,
 			target: ErrUnknownTrigger,
+		},
+		{
+			name: "filterless-trigger-with-filter",
+			body: `
+version: 1
+container: { image: x }
+roles:
+  r:
+    triggers:
+      issue.opened:
+        paths: ["x/**"]
+    prompt: hi
+`,
+			target: ErrInvalidTriggerSpec,
+		},
+		{
+			name: "comment-trigger-unknown-key",
+			body: `
+version: 1
+container: { image: x }
+roles:
+  r:
+    triggers:
+      issue.comment:
+        mention_only: true
+    prompt: hi
+`,
+			target: ErrInvalidTriggerSpec,
+		},
+		{
+			name: "push-trigger-unknown-key",
+			body: `
+version: 1
+container: { image: x }
+roles:
+  r:
+    triggers:
+      commit.pushed:
+        paths-include: ["apps/**"]
+    prompt: hi
+`,
+			target: ErrInvalidTriggerSpec,
 		},
 		{
 			name: "prompt-and-prompt-file",
@@ -293,7 +407,8 @@ version: 1
 container: { image: x }
 roles:
   r:
-    triggers: [issue.opened]
+    triggers:
+      issue.opened: {}
     prompt: hi
     prompt_file: .hangrix/prompts/r.md
 `,
@@ -306,7 +421,8 @@ version: 1
 container: { image: x }
 roles:
   r:
-    triggers: [issue.opened]
+    triggers:
+      issue.opened: {}
     prompt_file: prompts/r.md
 `,
 			target: ErrInvalidPromptFilePath,
@@ -318,7 +434,8 @@ version: 1
 container: { image: x }
 roles:
   r:
-    triggers: [issue.opened]
+    triggers:
+      issue.opened: {}
     prompt_file: .hangrix/prompts/../../etc/x
 `,
 			target: ErrInvalidPromptFilePath,
@@ -331,7 +448,7 @@ container: { image: x }
 llm:
   model: m
   temperature: 5
-roles: { r: { triggers: [issue.opened], prompt: hi } }
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrInvalidLLMParam,
 		},
@@ -343,19 +460,43 @@ container: { image: x }
 llm:
   model: m
   top_p: 2
-roles: { r: { triggers: [issue.opened], prompt: hi } }
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrInvalidLLMParam,
 		},
 		{
-			name: "bad-llm-maxtokens",
+			name: "bad-llm-max-output-tokens",
 			body: `
 version: 1
 container: { image: x }
 llm:
   model: m
-  max_tokens: -1
-roles: { r: { triggers: [issue.opened], prompt: hi } }
+  max_output_tokens: -1
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
+`,
+			target: ErrInvalidLLMParam,
+		},
+		{
+			name: "bad-llm-max-context-tokens",
+			body: `
+version: 1
+container: { image: x }
+llm:
+  model: m
+  max_context_tokens: -1
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
+`,
+			target: ErrInvalidLLMParam,
+		},
+		{
+			name: "bad-llm-reasoning-effort",
+			body: `
+version: 1
+container: { image: x }
+llm:
+  model: m
+  reasoning_effort: ultra
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrInvalidLLMParam,
 		},
@@ -364,8 +505,8 @@ roles: { r: { triggers: [issue.opened], prompt: hi } }
 			body: `
 version: 1
 container: { image: x }
-llm: { max_tokens: 100 }
-roles: { r: { triggers: [issue.opened], prompt: hi } }
+llm: { max_output_tokens: 100 }
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrInvalidModel,
 		},
@@ -376,9 +517,10 @@ version: 1
 container: { image: x }
 roles:
   r:
-    triggers: [issue.opened]
+    triggers:
+      issue.opened: {}
     prompt: hi
-    llm: { max_tokens: 100 }
+    llm: { max_output_tokens: 100 }
 `,
 			target: ErrInvalidModel,
 		},
@@ -388,7 +530,7 @@ roles:
 version: 1
 container: { image: x }
 weird: 1
-roles: { r: { triggers: [issue.opened], prompt: hi } }
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrUnknownField,
 		},
@@ -399,7 +541,8 @@ version: 1
 container: { image: x }
 roles:
   r:
-    triggers: [issue.opened]
+    triggers:
+      issue.opened: {}
     prompt: hi
     weird: 1
 `,
@@ -407,7 +550,7 @@ roles:
 		},
 		{
 			name: "duplicate-role-key",
-			body: "version: 1\ncontainer: { image: x }\nroles:\n  r:\n    triggers: [issue.opened]\n    prompt: hi\n  r:\n    triggers: [issue.opened]\n    prompt: hi\n",
+			body: "version: 1\ncontainer: { image: x }\nroles:\n  r:\n    triggers: { issue.opened: {} }\n    prompt: hi\n  r:\n    triggers: { issue.opened: {} }\n    prompt: hi\n",
 			target: ErrDuplicateRoleKey,
 		},
 	}

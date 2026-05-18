@@ -1,6 +1,6 @@
 # Host 仓库 agents.yml schema
 
-[← ROADMAP](../ROADMAP.md)
+[← ROADMAP](../ROADMAP.md) · [JSON Schema](./agents.schema.json)
 
 每个 host 仓库通过根目录的 `.hangrix/agents.yml` 声明 team 行为 —— 哪些 role、各自的 prompt、触发条件、`can:` 工具白名单、容器环境、LLM 选型。**所有 agent 配置都在 host 仓库内部**：role 的提示词写成 inline `prompt:` 或 `.hangrix/prompts/<role>.md` 文件；版本固定 = host 仓库的 commit sha；没有第二个仓库或 lock 文件需要追踪。
 
@@ -48,15 +48,22 @@ container:                        # host 声明的容器环境
 
 llm:                              # team 默认 LLM（可选；省略走 admin 配的 platform default）
   model: claude-sonnet-4-6        # 路由由 provider.allowed_models 反查决定
+  reasoning_effort: medium        # 思考强度：minimal | low | medium | high；省略走上游默认
+  max_context_tokens: 200000      # 最大上下文 token（agent 端 prompt+历史的上限）；0 = 不约束
+  max_output_tokens: 8000         # 最大输出 token（单次调用 completion 上限）；0 = 上游默认
 
 roles:
   dispatcher:
-    triggers: [issue.opened, issue.comment.any]
+    triggers:                     # 路由器：每条新评论 + 新 issue 都听
+      issue.opened: {}
+      issue.comment: {}
     can: [issue_read, issue_comment, roster_list]
     prompt_file: .hangrix/prompts/dispatcher.md
 
   backend:
-    triggers: [issue.comment.mentioned]
+    triggers:
+      issue.comment:
+        mentioned_only: true      # 只在被 @agent-backend 时唤醒
     scope: { paths: ["apps/api/**", "internal/**"] }
     can:
       - issue_read
@@ -74,14 +81,26 @@ roles:
       Cross-module imports MUST go through pkg/ioc DI.
 
   reviewer:
-    triggers: [commit.pushed, issue.comment.mentioned]
+    triggers:
+      commit.pushed:
+        paths: ["apps/api/**", "internal/**"]
+        paths_ignore: ["**/*.md", "**/testdata/**"]
+      issue.comment:
+        mentioned_only: true
     can: [issue_read, issue_diff, issue_comment, issue_review_vote, read, glob, grep]
     prompt_file: .hangrix/prompts/reviewer.md
     llm:                          # per-role 覆盖：reviewer 要更强推理
       model: claude-opus-4-7
+      reasoning_effort: high      # 评审多想一下
+      max_output_tokens: 16000
 
   maintainer:
-    triggers: [review_vote.posted, ci.status_changed, commit.pushed, issue.comment.mentioned]
+    triggers:
+      review_vote.posted: {}
+      ci.status_changed: {}
+      commit.pushed: {}
+      issue.comment:
+        mentioned_only: true
     can: [issue_read, issue_diff, issue_comment, issue_checks, issue_merge]
     prompt: |
       Merge policy: ≥1 reviewer approval for apps/api/**, all required CI checks green,
@@ -92,12 +111,29 @@ roles:
 
 ### 字段语义
 
-- **`triggers:`** —— 事件订阅。Dispatcher 通常订 `issue.opened` + `issue.comment.any` 当路由器；其它 role 订 `issue.comment.mentioned` 等被 @ 唤醒。强制列具体事件，没有 wildcard。
+- **`triggers:`** —— 事件订阅。**Map 形式**（GitHub Actions 风格）：key 是事件名，value 是该事件的过滤参数（空 mapping `{}` 表示「无过滤」）。没有 wildcard，未识别的 key 直接报错。可用事件：
+  - `issue.opened` / `issue.closed` —— 无参数。
+  - `issue.comment` —— 单一事件覆盖原 `comment.any` / `comment.mentioned` 两路。过滤参数：
+    - `mentioned_only: true` —— 仅当本 role 被 `@agent-<key>` 提及时唤醒。
+    - `from_roles: [<role-key>, ...]` —— 仅响应来自这些 agent role 的评论（用于 agent 间手势接力）。
+    - `from_users: [<username>, ...]` —— 仅响应来自指定人类账号的评论。
+    - 三者 AND 组合；全部省略时每条评论都唤醒。
+  - `commit.pushed` —— 过滤参数：
+    - `paths: [<glob>, ...]` —— 改动至少有一个文件命中任一 glob 时才唤醒。空 = 不限制。`*` 不跨 `/`，`**` 跨。
+    - `paths_ignore: [<glob>, ...]` —— 改动里至少有一个文件**未被任何 ignore 模式覆盖**才唤醒（一次推送如果全部改动都在 ignore 列表里就不唤醒）。空 = 不限制。
+    - 两个 list 都设置时取 AND。
+  - `review_vote.posted` / `ci.status_changed` —— 无参数。
 - **`can:`** —— 平台工具白名单。没在 `can:` 里的工具 `tools/list` 看不到、`tools/call` 返 `isError`。
 - **`not:`** —— 平台工具黑名单。仅在 `can:` 留空时生效，语义是「除列出的工具外其它都可用」。`can:` 和 `not:` 同时给值时**白名单优先**，`not:` 被忽略；两者都为空则 fail-closed（无任何工具）。
 - **`scope.paths:`** —— 软约束（写进 role 的初始 prompt 让 dispatcher 知道分派给谁），不在 pre-receive 强制。
 - **`prompt:` 或 `prompt_file:`** —— role 的提示词。二选一（schema mutually exclusive）；`prompt_file:` 必须以 `.hangrix/prompts/` 开头，文件随仓库一起进 git。**没有 host addendum 的概念了** —— 直接写 role 自己的完整 prompt 即可。
-- **`llm:`** —— team 级 + per-role 两层；role 级覆盖 team 级，team 级覆盖 platform default。字段 `model`（必须命中某 provider 的 `allowed_models`）+ 可选 `max_tokens` / `temperature` / `top_p`。Spawn session 时把 resolved model 缓存到 session 元数据，runner 注入 env 时直接读。
+- **`llm:`** —— team 级 + per-role 两层；role 级覆盖 team 级，team 级覆盖 platform default。字段：
+  - `model` —— 必须命中某 provider 的 `allowed_models`。
+  - `reasoning_effort` —— 思考强度，枚举 `minimal | low | medium | high`，省略走上游默认。`openai-compat` 透传，`anthropic` 翻成 `thinking.budget_tokens`（minimal/low → 1024、medium → 4096、high → 16384，同时 drop temperature、bump max_output_tokens 防 400）。
+  - `max_context_tokens` —— Agent 打包 prompt+对话历史时的上限（>= 0，0 = 不约束）。LLM proxy 不强制；由 agent runtime 在送进上游前裁剪。
+  - `max_output_tokens` —— 单次 completion 的输出预算（>= 0，0 = 上游默认）。Anthropic 必填 `max_tokens` 由 adapter 兜底到 4096。
+  - `temperature` / `top_p` —— 采样旋钮，分别落在 `[0, 2]` / `[0, 1]` 内。
+  Spawn session 时按 role > team > platform default 三层合并 resolved 视图缓存到 session 元数据，runner 注入 env 时直接读。
 - **Runner 默认注入：** 给每个 role 容器注入一张统一的 session token（[agent-identity.md](agent-identity.md)），LLM endpoint + model 也是默认注入。
 
 ### Schema 强约束
@@ -113,7 +149,7 @@ roles:
 ## Mention 协议
 
 - 语法：`@agent-<role-key>`（如 `@agent-backend`）。`agent-` 前缀预留未来人类 `@<username>` 不撞名。
-- 评论入库时 tokenize body 匹配 `@agent-([a-z0-9-]+)`，跳过 markdown 代码块与引用块。匹配到的 role key 去 base 分支的 `.hangrix/agents.yml` 查；只要 role 存在且订阅了 `issue.comment.mentioned` 触发器就投递事件，没有额外的 actor-class 网关 —— 任何能写评论的人（读权限已经在评论入口校验）都可以唤醒任何 role。
+- 评论入库时 tokenize body 匹配 `@agent-([a-z0-9-]+)`，跳过 markdown 代码块与引用块。匹配到的 role key 列表跟随 `issue.comment` 事件一起进 spawner；spawner 对每个订阅 `issue.comment` 的 role 计算它的 CommentFilter（`mentioned_only` 用本 role 是否在 mention 列表里来判定），命中即唤醒。没有额外的 actor-class 网关 —— 任何能写评论的人（读权限已经在评论入口校验）都可以唤醒任何 role。
 - 同评论 @ 多个 role 投递 N 个独立事件（同 comment_id），各 role 串自己的流。
 - 人类直接 `@agent-backend please fix X` 跟 dispatcher 发同样评论效果完全一致 —— 「评论 + mention」是人、dispatcher、其它 agent 三方共用的同一协议，没有第二种唤醒方式。
 

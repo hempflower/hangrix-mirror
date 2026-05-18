@@ -1,0 +1,283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hangrix.dev/schemas/agents.schema.json",
+  "title": "Hangrix host repo agents.yml",
+  "description": "Schema for .hangrix/agents.yml. Mirrors the strict-decode contract enforced by internal/agentsconfig: unknown keys, duplicate role keys, and out-of-range values are all rejected by the runtime parser.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "container", "roles"],
+  "properties": {
+    "version": {
+      "description": "Schema version. Only 1 is currently accepted.",
+      "const": 1
+    },
+    "container": { "$ref": "#/$defs/container" },
+    "llm": { "$ref": "#/$defs/llm" },
+    "roles": {
+      "description": "Map of role-key to Role. At least one role is required.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "description": "Role keys match the mention-protocol grammar: lowercase alnum + dash, 1-39 chars, starts with a letter.",
+        "pattern": "^[a-z][a-z0-9-]{0,38}$"
+      },
+      "additionalProperties": { "$ref": "#/$defs/role" }
+    }
+  },
+  "$defs": {
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Runtime environment shared by every role. Exactly one of `image` or `build` must be set.",
+      "oneOf": [
+        {
+          "required": ["image"],
+          "not": { "required": ["build"] }
+        },
+        {
+          "required": ["build"],
+          "not": { "required": ["image"] }
+        }
+      ],
+      "properties": {
+        "image": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Fully-qualified registry pull spec, e.g. ghcr.io/acme/dev:1.2.3."
+        },
+        "build": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["dockerfile"],
+          "properties": {
+            "dockerfile": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Repo-relative path to the Dockerfile; conventionally .hangrix/agent.Dockerfile."
+            },
+            "context": {
+              "type": "string",
+              "description": "Build context root, repo-relative. Defaults to repo root when omitted."
+            },
+            "args": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "Build-arg map passed to `docker build --build-arg`. String values only."
+            }
+          }
+        },
+        "env": {
+          "type": "object",
+          "description": "Plain-text env vars injected into every role container. Keys uppercase `[A-Z_][A-Z0-9_]*`.",
+          "patternProperties": {
+            "^[A-Z_][A-Z0-9_]*$": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "secrets": {
+          "type": "array",
+          "description": "Name-only list of secrets the platform injects from the repo's secrets settings. Values never appear in this file.",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z_][A-Z0-9_]*$"
+          },
+          "uniqueItems": true
+        },
+        "volumes": {
+          "type": "array",
+          "description": "Repo-scoped named caches bind-mounted into the container.",
+          "items": { "$ref": "#/$defs/volume" }
+        }
+      }
+    },
+    "volume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "mount"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Platform-scoped identifier (e.g. pnpm-store). Runner namespaces by repo id automatically."
+        },
+        "mount": {
+          "type": "string",
+          "description": "Absolute path inside the container. `..` segments are rejected.",
+          "pattern": "^/",
+          "not": { "pattern": "(^|/)\\.\\.($|/)" }
+        }
+      }
+    },
+    "llm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model"],
+      "description": "LLM tuning block. Appears at team level (top-level llm:) and per-role; role-level overrides team, team overrides platform default. The parser refuses an empty model — an llm block with no model is a misconfiguration, not 'use defaults'.",
+      "properties": {
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Model name; must appear in some provider's allowed_models at runtime."
+        },
+        "reasoning_effort": {
+          "description": "Thinking intensity. OpenAI-compat adapters pass it through; the Anthropic adapter translates to thinking.budget_tokens (minimal/low → 1024, medium → 4096, high → 16384) and drops temperature. Empty string is equivalent to omission.",
+          "enum": ["", "minimal", "low", "medium", "high"]
+        },
+        "max_context_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Agent runtime cap on prompt + conversation-history tokens before truncation. 0 = no cap declared here."
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Per-call output budget (Anthropic max_tokens, OpenAI max_output_tokens). 0 = let the upstream apply its default."
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "OpenAI-style sampling temperature. Dropped by the Anthropic adapter when thinking is enabled."
+        },
+        "top_p": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["triggers"],
+      "description": "One agent role. Must declare at least one trigger and exactly one of `prompt` or `prompt_file`.",
+      "oneOf": [
+        {
+          "required": ["prompt"],
+          "not": { "required": ["prompt_file"] }
+        },
+        {
+          "required": ["prompt_file"],
+          "not": { "required": ["prompt"] }
+        }
+      ],
+      "properties": {
+        "triggers": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "Event subscription map (GitHub Actions style). Keys are recognised trigger constants; values are the per-event filter block (empty mapping `{}` = no filter). No wildcards.",
+          "additionalProperties": false,
+          "properties": {
+            "issue.opened": { "$ref": "#/$defs/triggerFilterless" },
+            "issue.closed": { "$ref": "#/$defs/triggerFilterless" },
+            "review_vote.posted": { "$ref": "#/$defs/triggerFilterless" },
+            "ci.status_changed": { "$ref": "#/$defs/triggerFilterless" },
+            "issue.comment": { "$ref": "#/$defs/triggerCommentFilter" },
+            "commit.pushed": { "$ref": "#/$defs/triggerPushFilter" }
+          }
+        },
+        "can": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "Platform tool whitelist. Tools not listed here are invisible via tools/list and rejected on tools/call."
+        },
+        "not": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "Platform tool blacklist; only consulted when `can` is empty. When both `can` and `not` are set, `can` wins and `not` is ignored."
+        },
+        "scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            }
+          },
+          "description": "Soft path-glob hint injected into the role's prompt; not enforced by pre-receive."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Inline system prompt. Mutually exclusive with prompt_file."
+        },
+        "prompt_file": {
+          "type": "string",
+          "description": "Repo-relative path to the prompt body. Must start with `.hangrix/prompts/` and not contain `..`.",
+          "pattern": "^\\.hangrix/prompts/",
+          "not": { "pattern": "\\.\\." }
+        },
+        "llm": { "$ref": "#/$defs/llm" }
+      }
+    },
+    "triggerFilterless": {
+      "description": "Filter block for triggers that take no parameters. Must be null or an empty mapping; any property is a misconfiguration.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "maxProperties": 0
+        }
+      ]
+    },
+    "triggerCommentFilter": {
+      "description": "Filter block for `issue.comment`. All fields default to no-filter; AND-combined when set.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mentioned_only": {
+              "type": "boolean",
+              "description": "When true, the role fires only if its own key is in the comment's @agent-<key> mention list."
+            },
+            "from_roles": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,38}$"
+              },
+              "description": "Fires only for comments posted by an agent whose role key is in this list."
+            },
+            "from_users": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 },
+              "description": "Fires only for comments posted by a human user whose platform login is in this list."
+            }
+          }
+        }
+      ]
+    },
+    "triggerPushFilter": {
+      "description": "Filter block for `commit.pushed`. AND-combined when both lists are set. Glob semantics mirror GitHub Actions / doublestar.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "paths": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 },
+              "description": "Include globs. Push wakes the role only if at least one changed file matches at least one pattern."
+            },
+            "paths_ignore": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 },
+              "description": "Ignore globs. Push wakes the role only if at least one changed file is NOT covered by these patterns (every-file-ignored push is skipped)."
+            }
+          }
+        }
+      ]
+    }
+  }
+}

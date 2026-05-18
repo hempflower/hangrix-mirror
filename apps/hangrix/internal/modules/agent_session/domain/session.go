@@ -98,11 +98,23 @@ type TriggerInput struct {
 	ActorID int64
 
 	// RoleKey, when non-empty, restricts the trigger fan-out to a
-	// single role. Used by the mention path so `@agent-backend` only
-	// wakes the backend role — not every role whose triggers include
-	// issue.comment.mentioned. Empty = match all roles whose triggers
-	// list the event.
+	// single role. Reserved for callers that want to wake exactly one
+	// role (admin smoke tools, retry flows). The normal comment / push
+	// paths leave it empty and let each role's TriggerSpec filter
+	// decide whether to fire.
 	RoleKey string
+
+	// Comment is the author + mention context for Trigger ==
+	// issue.comment. nil for any other trigger. Populated by the
+	// issue handler so the spawner can evaluate per-role
+	// CommentFilter (mentioned_only / from_roles / from_users).
+	Comment *CommentContext
+
+	// ChangedPaths is the list of files affected by a push, used by
+	// the spawner to evaluate per-role PushFilter (paths /
+	// paths_ignore) for Trigger == commit.pushed. nil / empty for
+	// other triggers.
+	ChangedPaths []string
 
 	// Payload, when non-empty, is merged into the agent's input event
 	// frame as `payload:`. Callers use this to attach trigger-specific
@@ -110,6 +122,28 @@ type TriggerInput struct {
 	// the agent needs to act on the event. Must be valid JSON object
 	// bytes (empty `{}` accepted); the spawner re-marshals to embed.
 	Payload []byte
+}
+
+// CommentContext is the author + mention context the issue handler
+// attaches when firing TriggerIssueComment. The spawner consults it to
+// evaluate each subscribed role's CommentFilter — the mention path,
+// the from-role gate, and the from-user gate all read from here.
+type CommentContext struct {
+	// AuthorRoleKey is the role key of the agent that posted the
+	// comment, when the commenter is an agent. Empty when the
+	// commenter is a human user. Drives the from_roles filter.
+	AuthorRoleKey string
+
+	// AuthorUser is the platform username of the commenter when the
+	// commenter is a human user. Empty for agent-authored comments.
+	// Drives the from_users filter.
+	AuthorUser string
+
+	// Mentions is the deduplicated list of `@agent-<role-key>` matches
+	// parsed from the comment body, with the `agent-` prefix stripped.
+	// Drives the mentioned_only filter — a role with mentioned_only =
+	// true fires only when its own key is in this list.
+	Mentions []string
 }
 
 // SpawnedSession is the trimmed view Spawner returns. Full row + history

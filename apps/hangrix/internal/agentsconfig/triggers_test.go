@@ -11,8 +11,7 @@ func TestIsValidTrigger(t *testing.T) {
 	valid := []string{
 		"issue.opened",
 		"issue.closed",
-		"issue.comment.any",
-		"issue.comment.mentioned",
+		"issue.comment",
 		"commit.pushed",
 		"review_vote.posted",
 		"ci.status_changed",
@@ -28,7 +27,8 @@ func TestIsValidTrigger(t *testing.T) {
 		"issue",
 		"Issue.Opened",
 		"unknown.event",
-		"issue.comment", // not the full path
+		"issue.comment.any",       // removed — replaced by issue.comment + filter
+		"issue.comment.mentioned", // removed — replaced by mentioned_only filter
 	}
 	for _, s := range invalid {
 		if IsValidTrigger(s) {

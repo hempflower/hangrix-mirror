@@ -93,9 +93,23 @@ type LLMConfig struct {
 	// llm_provider module.
 	Model string
 
-	// MaxTokens caps the response budget. 0 means "let the provider
-	// default apply"; negative is rejected by the parser.
-	MaxTokens int
+	// MaxOutputTokens caps the per-call output budget (Anthropic
+	// `max_tokens`, OpenAI `max_output_tokens`). 0 means "let the
+	// upstream apply its default"; negative is rejected by the parser.
+	MaxOutputTokens int
+
+	// MaxContextTokens caps the prompt+history window the agent will
+	// pack before truncation. 0 means "no cap declared here — the
+	// agent / proxy applies its own ceiling". Negative is rejected.
+	// The agent runtime enforces this; the LLM proxy does not.
+	MaxContextTokens int
+
+	// ReasoningEffort mirrors OpenAI's `reasoning.effort` enum and
+	// drives Anthropic `thinking.budget_tokens` translation in the
+	// proxy. Allowed values: "" (unset, upstream default) /
+	// "minimal" / "low" / "medium" / "high". Adapters without a
+	// native reasoning knob ignore the field.
+	ReasoningEffort string
 
 	// Temperature must be in [0.0, 2.0]. The zero value is a
 	// legitimate setting (deterministic decoding) and indistinguishable
@@ -106,4 +120,24 @@ type LLMConfig struct {
 
 	// TopP must be in [0.0, 1.0]. Same zero-value caveat as Temperature.
 	TopP float64
+}
+
+// ValidReasoningEfforts is the closed set of values accepted on
+// `llm.reasoning_effort`. The empty string is the unset sentinel and is
+// also accepted by the parser; it is not listed here because the
+// validator treats "" as "field omitted".
+var ValidReasoningEfforts = []string{"minimal", "low", "medium", "high"}
+
+// IsValidReasoningEffort reports whether s is "" (unset) or one of the
+// canonical OpenAI reasoning.effort values.
+func IsValidReasoningEffort(s string) bool {
+	if s == "" {
+		return true
+	}
+	for _, v := range ValidReasoningEfforts {
+		if s == v {
+			return true
+		}
+	}
+	return false
 }

@@ -19,7 +19,8 @@ llm:
   model: claude-sonnet-4-6
 roles:
   backend:
-    triggers: [issue.opened]
+    triggers:
+      issue.opened: {}
     can: [issue_read]
     prompt_file: .hangrix/prompts/backend.md
 `
@@ -62,7 +63,8 @@ container:
 roles:
   backend:
     prompt: hi
-    triggers: [issue.opened]
+    triggers:
+      issue.opened: {}
     can: [issue_read]
 `
 	h := newTestSpawner(t, []byte(yaml), nil)
@@ -95,7 +97,8 @@ llm:
 roles:
   backend:
     prompt: hi
-    triggers: [issue.opened]
+    triggers:
+      issue.opened: {}
     can: [issue_read]
     llm:
       model: claude-opus-4-7
@@ -152,15 +155,18 @@ llm:
 roles:
   backend:
     prompt: hi
-    triggers: [issue.opened]
+    triggers:
+      issue.opened: {}
     can: [issue_read]
   dispatcher:
     prompt: hi
-    triggers: [issue.opened]
+    triggers:
+      issue.opened: {}
     can: [issue_read]
   reviewer:
     prompt: hi
-    triggers: [issue.opened]
+    triggers:
+      issue.opened: {}
     can: [issue_read]
 `
 	h := newTestSpawner(t, []byte(yaml), nil)

@@ -200,8 +200,12 @@ func (r *stubRunnerRepo) ListSessionsByIssue(_ context.Context, repoID int64, is
 	return out, nil
 }
 
-func (r *stubRunnerRepo) ListRecentSessions(_ context.Context, _ runnerdomain.SessionFilter, _ int) ([]*runnerdomain.AgentSession, error) {
+func (r *stubRunnerRepo) ListRecentSessions(_ context.Context, _ runnerdomain.SessionFilter, _ runnerdomain.SessionPage) ([]*runnerdomain.AgentSession, error) {
 	return r.sessions, nil
+}
+
+func (r *stubRunnerRepo) CountRecentSessions(_ context.Context, _ runnerdomain.SessionFilter) (int64, error) {
+	return int64(len(r.sessions)), nil
 }
 
 func (r *stubRunnerRepo) DeleteRunner(_ context.Context, _ int64) error { return nil }

@@ -20,6 +20,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -119,6 +120,13 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Post("/{number}/agent-sessions/{sid}/resume", h.resumeAgentSession)
 		r.Delete("/{number}/agent-sessions/{sid}", h.deleteAgentSession)
 	})
+	// Mention-suggestion list: the comment editor reads this once per
+	// issue page load to populate the `@` autocomplete dropdown with
+	// every agent role declared in the repo's host yaml. Returning the
+	// full list (rather than a query-filtered prefix endpoint) keeps the
+	// dropdown filterable client-side without a roundtrip per keystroke.
+	r.With(h.middleware.RequireAuth).
+		Get("/api/repos/{owner}/{name}/mention-suggestions", h.mentionSuggestions)
 }
 
 // --- DTOs ---
@@ -737,21 +745,16 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusCreated, toPublicComment(c))
 }
 
-// fireCommentTriggers is the comment → agent fan-out. Per
-// docs/agent-config.md §"Mention 协议", the comment becomes:
+// fireCommentTriggers is the comment → agent fan-out. The platform fires
+// one `issue.comment` event per comment; each subscribed role's
+// TriggerSpec.CommentFilter decides whether to wake (mentioned_only /
+// from_roles / from_users). Mention parsing happens once here and the
+// list rides on TriggerInput.Comment so the spawner can evaluate
+// mentioned_only without re-reading the body.
 //
-//  1. one `issue.comment.any` trigger, fanned to every role whose
-//     triggers list it (typically just the dispatcher). RoleKey is
-//     empty so the spawner walks all subscribers.
-//  2. one `issue.comment.mentioned` trigger per `@agent-<role-key>`
-//     parsed from the body, scoped to the matched role by RoleKey.
-//     Any authenticated commenter (read access has already been
-//     enforced upstream by resolveRepo) can wake any role declared
-//     in the host yaml — there is no per-role actor gate.
-//
-// Mentions that don't resolve to a role declared in the host yaml are
-// silently dropped — UI chip rendering will eventually surface them
-// as "untriggered" once we persist the events.
+// Any authenticated commenter (read access already enforced upstream
+// by resolveRepo) can wake any role declared in the host yaml — there
+// is no per-role actor gate.
 func (h *Handler) fireCommentTriggers(r *http.Request, rc *repoCtx, iss *domain.Issue, c *domain.Comment) {
 	if h.spawner == nil {
 		return
@@ -777,45 +780,28 @@ func (h *Handler) fireCommentTriggers(r *http.Request, rc *repoCtx, iss *domain.
 	})
 	causeID := strconv.FormatInt(c.ID, 10)
 
-	// (1) issue.comment.any — dispatcher-style fan-out. No RoleKey so
-	// every role subscribing to comment.any participates.
+	// Resolve the commenter's identity into a (role_key, user_name)
+	// pair so per-role from_roles / from_users filters can match.
+	// Comments authored by an agent carry role_key in c.AuthorRoleKey;
+	// human comments leave it empty and we use the platform username.
+	commentCtx := &agentsessiondomain.CommentContext{
+		AuthorRoleKey: c.AgentRole,
+		Mentions:      agentsconfig.ParseMentions(c.Body),
+	}
+	if c.AgentRole == "" {
+		commentCtx.AuthorUser = c.AuthorName
+	}
+
 	_, _ = h.spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
-		Trigger:     agentsconfig.TriggerIssueCommentAny,
+		Trigger:     agentsconfig.TriggerIssueComment,
 		CauseKind:   agentsessiondomain.CauseKindCommentMentioned,
 		CauseID:     causeID,
 		RepoID:      rc.repo.ID,
 		IssueNumber: int32(iss.Number),
 		ActorID:     caller.ID,
+		Comment:     commentCtx,
 		Payload:     payloadBytes,
 	})
-
-	// (2) issue.comment.mentioned — per matched @agent-<role-key>.
-	mentions := agentsconfig.ParseMentions(c.Body)
-	if len(mentions) == 0 {
-		return
-	}
-	cfg, err := h.spawner.LoadHostConfig(ctx, rc.repo.ID)
-	if err != nil || cfg == nil {
-		// Either a parse failure (sentinel) or no host yaml. Either
-		// way, the mention has nowhere to land. Silently drop —
-		// operator repairs the host yaml then re-pings.
-		return
-	}
-	for _, roleKey := range mentions {
-		if _, ok := cfg.Roles[roleKey]; !ok {
-			continue
-		}
-		_, _ = h.spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
-			Trigger:     agentsconfig.TriggerIssueCommentMentioned,
-			CauseKind:   agentsessiondomain.CauseKindCommentMentioned,
-			CauseID:     causeID,
-			RepoID:      rc.repo.ID,
-			IssueNumber: int32(iss.Number),
-			ActorID:     caller.ID,
-			RoleKey:     roleKey,
-			Payload:     payloadBytes,
-		})
-	}
 }
 
 type mergeReq struct {
@@ -928,6 +914,42 @@ func (h *Handler) sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, toPublic(refreshed))
+}
+
+// mentionSuggestions feeds the comment editor's `@` autocomplete. Returns the
+// list of agent role keys declared in `.hangrix/agents.yml` so the editor can
+// surface valid `@agent-<role>` mentions. The list is sorted alphabetically so
+// repeated calls produce a stable order. Missing / unparseable host yaml is
+// not an error here — the dropdown just shows an empty list (a repo without
+// agents legitimately has no `@agent-` targets).
+type mentionAgent struct {
+	RoleKey string `json:"role_key"`
+}
+
+type mentionSuggestionsResp struct {
+	Agents []mentionAgent `json:"agents"`
+}
+
+func (h *Handler) mentionSuggestions(w http.ResponseWriter, r *http.Request) {
+	rc, ok := h.resolveRepo(w, r)
+	if !ok {
+		return
+	}
+	out := mentionSuggestionsResp{Agents: []mentionAgent{}}
+	if h.spawner != nil {
+		cfg, err := h.spawner.LoadHostConfig(r.Context(), rc.repo.ID)
+		if err == nil && cfg != nil {
+			keys := make([]string, 0, len(cfg.Roles))
+			for k := range cfg.Roles {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				out.Agents = append(out.Agents, mentionAgent{RoleKey: k})
+			}
+		}
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
 // --- utilities ---

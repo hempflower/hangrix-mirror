@@ -67,7 +67,7 @@ func (h *Handler) SyncIssueBranch(ctx context.Context, repo *repodomain.Repo, fs
 		if spawnActor == 0 {
 			spawnActor = iss.AuthorID
 		}
-		h.fireCommitPushed(ctx, repo, iss, headSHA, raw, spawnActor)
+		h.fireCommitPushed(ctx, repo, fsPath, iss, oldRef, headSHA, raw, spawnActor)
 	}
 	return nil
 }
@@ -77,19 +77,58 @@ func (h *Handler) SyncIssueBranch(ctx context.Context, repo *repodomain.Repo, fs
 // pushes don't dedupe against earlier ones). Payload carries the
 // commit list so the agent can read the changes without an issue_diff
 // roundtrip — the data is already on the platform side.
-func (h *Handler) fireCommitPushed(ctx context.Context, repo *repodomain.Repo, iss *domain.Issue, headSHA string, commitsJSON []byte, actorID int64) {
+//
+// ChangedPaths is the union of file paths affected between oldRef and
+// headSHA — collected once here so the spawner can match each
+// subscribed role's commit.pushed paths / paths_ignore filter without
+// re-shelling out to git per role.
+func (h *Handler) fireCommitPushed(ctx context.Context, repo *repodomain.Repo, fsPath string, iss *domain.Issue, oldRef, headSHA string, commitsJSON []byte, actorID int64) {
 	if h.spawner == nil {
 		return
 	}
 	_, _ = h.spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
-		Trigger:     agentsconfig.TriggerCommitPushed,
-		CauseKind:   agentsessiondomain.CauseKindCommitPushed,
-		CauseID:     headSHA,
-		RepoID:      repo.ID,
-		IssueNumber: int32(iss.Number),
-		ActorID:     actorID,
-		Payload:     commitsJSON,
+		Trigger:      agentsconfig.TriggerCommitPushed,
+		CauseKind:    agentsessiondomain.CauseKindCommitPushed,
+		CauseID:      headSHA,
+		RepoID:       repo.ID,
+		IssueNumber:  int32(iss.Number),
+		ActorID:      actorID,
+		ChangedPaths: collectChangedPaths(h.git, fsPath, oldRef, headSHA),
+		Payload:      commitsJSON,
 	})
+}
+
+// collectChangedPaths returns the deduplicated list of file paths
+// (post-rename new paths; deletions surface their old path) that
+// changed in the from..to range. Errors yield an empty list — a path
+// filter that can't enumerate files falls back to "no match", which
+// is the correct conservative behaviour (a role with paths set won't
+// wake on a push we can't characterise).
+func collectChangedPaths(g gitdomain.Git, fsPath, from, to string) []string {
+	if from == "" || to == "" || from == to {
+		return nil
+	}
+	diffs, err := g.DiffRefs(fsPath, from, to)
+	if err != nil || len(diffs) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(diffs))
+	out := make([]string, 0, len(diffs))
+	for _, d := range diffs {
+		p := d.NewPath
+		if p == "" {
+			p = d.OldPath
+		}
+		if p == "" {
+			continue
+		}
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
 }
 
 // collectNewCommits walks the new branch tip until it hits a commit that's

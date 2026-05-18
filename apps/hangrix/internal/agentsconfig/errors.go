@@ -26,6 +26,11 @@ var (
 	// requires every role to subscribe to at least one event.
 	ErrEmptyTriggers = errors.New("role must declare at least one trigger")
 
+	// ErrInvalidTriggerSpec fires when the per-trigger filter block is
+	// the wrong shape (not a mapping, unknown filter key, or filters
+	// applied to an event that does not accept them).
+	ErrInvalidTriggerSpec = errors.New("invalid trigger filter spec")
+
 	// ErrPromptMutuallyExclusive fires when a role sets both `prompt`
 	// and `prompt_file`. They must be at most one.
 	ErrPromptMutuallyExclusive = errors.New("prompt and prompt_file are mutually exclusive")
@@ -68,8 +73,9 @@ var (
 	// ErrInvalidModel fires when llm.model is empty.
 	ErrInvalidModel = errors.New("llm.model is required when llm is present")
 
-	// ErrInvalidLLMParam fires for out-of-range temperature / top_p
-	// or non-positive max_tokens.
+	// ErrInvalidLLMParam fires for out-of-range temperature / top_p,
+	// negative max_output_tokens / max_context_tokens, or a
+	// reasoning_effort outside the allowed enum.
 	ErrInvalidLLMParam = errors.New("invalid llm parameter")
 
 	// ErrDuplicateRoleKey fires when a role key appears twice in the

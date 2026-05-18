@@ -162,24 +162,13 @@ func strconvAtoi64(raw any) (int64, bool) {
 	return 0, false
 }
 
-// requireMentionTrigger is used by the issue_comment tool to fire a
-// follow-on mention path. Strictly: the comment we just inserted may
-// itself contain `@agent-<role>` tokens and we want those roles to
-// wake. We re-use the spawner's mention pipeline rather than
-// duplicating the logic.
+// fanCommentMentions is used by the issue_comment tool to fire a
+// follow-on `issue.comment` trigger. The comment we just inserted may
+// itself contain `@agent-<role>` tokens; per-role CommentFilter (e.g.
+// mentioned_only) lives on the host yaml, so we just hand the spawner
+// the full CommentContext and let it route.
 func (r *Registry) fanCommentMentions(ctx context.Context, sess *runnerdomain.AgentSession, scope *sessionScope, c *issuedomain.Comment) {
 	if r.deps.Spawner == nil {
-		return
-	}
-	mentions := agentsconfig.ParseMentions(c.Body)
-	if len(mentions) == 0 {
-		// Still fire comment.any so a dispatcher-style listener sees it.
-		r.fireCommentAny(ctx, sess, scope, c)
-		return
-	}
-	cfg, err := r.deps.Spawner.LoadHostConfig(ctx, scope.repo.ID)
-	if err != nil || cfg == nil {
-		r.fireCommentAny(ctx, sess, scope, c)
 		return
 	}
 	payload, _ := json.Marshal(map[string]any{
@@ -191,49 +180,21 @@ func (r *Registry) fanCommentMentions(ctx context.Context, sess *runnerdomain.Ag
 		"file_path":    c.FilePath,
 		"line":         c.Line,
 	})
-	// comment.any first so subscribers see the comment even if no
-	// mention matches.
-	r.fireCommentAnyPayload(ctx, sess, scope, c, payload)
-	for _, roleKey := range mentions {
-		if _, ok := cfg.Roles[roleKey]; !ok {
-			continue
-		}
-		// Mention routing is open: any commenter (human or agent) can
-		// wake any role declared in the host yaml. The host yaml's
-		// `can:` for `issue_comment` already governs who is allowed
-		// to author the originating comment.
-		_, _ = r.deps.Spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
-			Trigger:     agentsconfig.TriggerIssueCommentMentioned,
-			CauseKind:   agentsessiondomain.CauseKindCommentMentioned,
-			CauseID:     strconv.FormatInt(c.ID, 10),
-			RepoID:      scope.repo.ID,
-			IssueNumber: *sess.IssueNumber,
-			ActorID:     sess.CreatedBy,
-			RoleKey:     roleKey,
-			Payload:     payload,
-		})
+	commentCtx := &agentsessiondomain.CommentContext{
+		AuthorRoleKey: c.AgentRole,
+		Mentions:      agentsconfig.ParseMentions(c.Body),
 	}
-}
-
-func (r *Registry) fireCommentAny(ctx context.Context, sess *runnerdomain.AgentSession, scope *sessionScope, c *issuedomain.Comment) {
-	payload, _ := json.Marshal(map[string]any{
-		"comment_id":   c.ID,
-		"comment_body": c.Body,
-		"agent_role":   c.AgentRole,
-		"author_id":    c.AuthorID,
-		"author_name":  c.AuthorName,
-	})
-	r.fireCommentAnyPayload(ctx, sess, scope, c, payload)
-}
-
-func (r *Registry) fireCommentAnyPayload(ctx context.Context, sess *runnerdomain.AgentSession, scope *sessionScope, c *issuedomain.Comment, payload []byte) {
+	if c.AgentRole == "" {
+		commentCtx.AuthorUser = c.AuthorName
+	}
 	_, _ = r.deps.Spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
-		Trigger:     agentsconfig.TriggerIssueCommentAny,
+		Trigger:     agentsconfig.TriggerIssueComment,
 		CauseKind:   agentsessiondomain.CauseKindCommentMentioned,
 		CauseID:     strconv.FormatInt(c.ID, 10),
 		RepoID:      scope.repo.ID,
 		IssueNumber: *sess.IssueNumber,
 		ActorID:     sess.CreatedBy,
+		Comment:     commentCtx,
 		Payload:     payload,
 	})
 }

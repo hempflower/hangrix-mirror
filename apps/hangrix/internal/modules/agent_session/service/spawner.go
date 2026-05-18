@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/bmatcuk/doublestar/v4"
+
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
@@ -177,7 +179,7 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 			continue
 		}
 		role := hostCfg.Roles[roleKey]
-		if !triggerMatches(role.Triggers, in.Trigger) {
+		if !triggerMatches(role.Triggers, in.Trigger, roleKey, in) {
 			continue
 		}
 		if _, dead := archivedRoles[roleKey]; dead {
@@ -578,9 +580,141 @@ func (s *Spawner) recordSpawnError(ctx context.Context, in domain.TriggerInput, 
 		roleKey, in.Trigger, in.RepoID, in.IssueNumber, in.CauseID, err)
 }
 
-func triggerMatches(triggers []string, want agentsconfig.Trigger) bool {
-	for _, t := range triggers {
-		if t == string(want) {
+// triggerMatches decides whether a role's TriggerSpec map should wake
+// for the incoming event. Two gates apply:
+//
+//  1. Subscription: the role must declare an entry for `want` in its
+//     triggers map; absence means the role doesn't care about this
+//     event regardless of payload.
+//  2. Filter: when the entry carries a filter block (Comment / Push),
+//     the corresponding TriggerInput context must satisfy every set
+//     filter field (AND). Filter fields default to "no filter" — a
+//     role with `issue.comment: {}` wakes on every comment.
+//
+// The roleKey is needed to evaluate mentioned_only (which checks the
+// role's own key against the comment's mentions list).
+func triggerMatches(triggers map[agentsconfig.Trigger]*agentsconfig.TriggerSpec, want agentsconfig.Trigger, roleKey string, in domain.TriggerInput) bool {
+	spec, ok := triggers[want]
+	if !ok {
+		return false
+	}
+	if spec == nil {
+		return true
+	}
+	if spec.Comment != nil {
+		return evalCommentFilter(spec.Comment, roleKey, in.Comment)
+	}
+	if spec.Push != nil {
+		return evalPushFilter(spec.Push, in.ChangedPaths)
+	}
+	return true
+}
+
+// evalCommentFilter returns true when the comment context satisfies
+// every set field on f. Defensive against nil ctx: if the issue
+// handler somehow fires issue.comment without a context, only the
+// no-filter case fires (matches the pre-refactor "comment.any"
+// behaviour for a role with `issue.comment: {}`).
+func evalCommentFilter(f *agentsconfig.CommentFilter, roleKey string, ctx *domain.CommentContext) bool {
+	noFilter := !f.MentionedOnly && len(f.FromRoles) == 0 && len(f.FromUsers) == 0
+	if ctx == nil {
+		return noFilter
+	}
+	if f.MentionedOnly {
+		mentioned := false
+		for _, m := range ctx.Mentions {
+			if m == roleKey {
+				mentioned = true
+				break
+			}
+		}
+		if !mentioned {
+			return false
+		}
+	}
+	if len(f.FromRoles) > 0 {
+		if ctx.AuthorRoleKey == "" {
+			return false
+		}
+		if !containsString(f.FromRoles, ctx.AuthorRoleKey) {
+			return false
+		}
+	}
+	if len(f.FromUsers) > 0 {
+		if ctx.AuthorUser == "" {
+			return false
+		}
+		if !containsString(f.FromUsers, ctx.AuthorUser) {
+			return false
+		}
+	}
+	return true
+}
+
+// evalPushFilter returns true when the changed-path list satisfies
+// the include / ignore globs. Semantics mirror GitHub Actions:
+//
+//   - Paths (include): at least one changed file must match at least
+//     one pattern. Empty Paths = no include gate.
+//   - PathsIgnore: at least one changed file must NOT match every
+//     ignore pattern (a push where every changed file is ignored is
+//     skipped). Empty PathsIgnore = no ignore gate.
+//
+// An empty filter (both Paths and PathsIgnore unset) accepts every
+// push. An empty ChangedPaths list accepts only the no-filter case —
+// without files we cannot prove any path matches.
+func evalPushFilter(f *agentsconfig.PushFilter, changed []string) bool {
+	noFilter := len(f.Paths) == 0 && len(f.PathsIgnore) == 0
+	if noFilter {
+		return true
+	}
+	if len(changed) == 0 {
+		return false
+	}
+	if len(f.Paths) > 0 {
+		anyMatch := false
+		for _, p := range changed {
+			if anyGlobMatches(f.Paths, p) {
+				anyMatch = true
+				break
+			}
+		}
+		if !anyMatch {
+			return false
+		}
+	}
+	if len(f.PathsIgnore) > 0 {
+		anyKept := false
+		for _, p := range changed {
+			if !anyGlobMatches(f.PathsIgnore, p) {
+				anyKept = true
+				break
+			}
+		}
+		if !anyKept {
+			return false
+		}
+	}
+	return true
+}
+
+// anyGlobMatches reports whether path matches at least one pattern.
+// Uses doublestar for `**` support; on malformed patterns the host
+// yaml validator should have caught the issue, but we treat parse
+// errors here as "no match" rather than panicking the spawn loop.
+func anyGlobMatches(patterns []string, path string) bool {
+	for _, pat := range patterns {
+		ok, err := doublestar.PathMatch(pat, path)
+		if err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
 			return true
 		}
 	}
@@ -616,25 +750,32 @@ func issueBranchName(n int32) string {
 // open-ended (a JSON object) so it can extend without a migration.
 func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, addendum, model string) ([]byte, error) {
 	type rs struct {
-		Triggers     []string        `json:"triggers"`
-		Can          []string        `json:"can"`
-		Not          []string        `json:"not,omitempty"`
-		ScopePaths   []string        `json:"scope_paths,omitempty"`
-		HostAddendum string          `json:"host_addendum,omitempty"`
-		Model        string          `json:"model"`
-		LLMMaxTokens int             `json:"llm_max_tokens,omitempty"`
-		Container    map[string]any  `json:"container"`
+		Triggers            map[string]any `json:"triggers"`
+		Can                 []string       `json:"can"`
+		Not                 []string       `json:"not,omitempty"`
+		ScopePaths          []string       `json:"scope_paths,omitempty"`
+		HostAddendum        string         `json:"host_addendum,omitempty"`
+		Model               string         `json:"model"`
+		LLMMaxOutputTokens  int            `json:"llm_max_output_tokens,omitempty"`
+		LLMMaxContextTokens int            `json:"llm_max_context_tokens,omitempty"`
+		LLMReasoningEffort  string         `json:"llm_reasoning_effort,omitempty"`
+		Container           map[string]any `json:"container"`
 	}
 	snap := rs{
-		Triggers:     append([]string(nil), role.Triggers...),
+		Triggers:     serializeTriggers(role.Triggers),
 		Can:          append([]string(nil), role.Can...),
 		Not:          append([]string(nil), role.Not...),
 		ScopePaths:   append([]string(nil), role.Scope.Paths...),
 		HostAddendum: addendum,
 		Model:        model,
 	}
-	if role.LLM != nil {
-		snap.LLMMaxTokens = role.LLM.MaxTokens
+	// Resolved LLM block: role.LLM > host.LLM. Snapshot the effective
+	// values rather than just the role-level override so an audit can
+	// read the file standalone without re-running the inheritance.
+	if effective := resolveLLM(role, host); effective != nil {
+		snap.LLMMaxOutputTokens = effective.MaxOutputTokens
+		snap.LLMMaxContextTokens = effective.MaxContextTokens
+		snap.LLMReasoningEffort = effective.ReasoningEffort
 	}
 	snap.Container = map[string]any{
 		"image": host.Container.Image,
@@ -643,6 +784,55 @@ func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, a
 		snap.Container["secrets"] = host.Container.Secrets
 	}
 	return json.Marshal(snap)
+}
+
+// serializeTriggers turns a role's Triggers map into an audit-stable
+// JSON shape: `{ "<event>": <filter-or-empty-object> }`. The filter
+// object echoes the per-event filter fields so an audit row can
+// reconstruct the wakeup criteria without re-parsing host yaml.
+func serializeTriggers(triggers map[agentsconfig.Trigger]*agentsconfig.TriggerSpec) map[string]any {
+	out := make(map[string]any, len(triggers))
+	for t, spec := range triggers {
+		out[string(t)] = serializeTriggerSpec(spec)
+	}
+	return out
+}
+
+func serializeTriggerSpec(spec *agentsconfig.TriggerSpec) map[string]any {
+	body := map[string]any{}
+	if spec == nil {
+		return body
+	}
+	if spec.Comment != nil {
+		if spec.Comment.MentionedOnly {
+			body["mentioned_only"] = true
+		}
+		if len(spec.Comment.FromRoles) > 0 {
+			body["from_roles"] = spec.Comment.FromRoles
+		}
+		if len(spec.Comment.FromUsers) > 0 {
+			body["from_users"] = spec.Comment.FromUsers
+		}
+	}
+	if spec.Push != nil {
+		if len(spec.Push.Paths) > 0 {
+			body["paths"] = spec.Push.Paths
+		}
+		if len(spec.Push.PathsIgnore) > 0 {
+			body["paths_ignore"] = spec.Push.PathsIgnore
+		}
+	}
+	return body
+}
+
+// resolveLLM returns the effective LLM block for a role: per-role
+// override wins, host default fills in. Returns nil only when both are
+// nil (model resolution would already have failed earlier in spawnRole).
+func resolveLLM(role *agentsconfig.Role, host *agentsconfig.HostConfig) *agentsconfig.LLMConfig {
+	if role.LLM != nil {
+		return role.LLM
+	}
+	return host.LLM
 }
 
 // buildCauseFrame is the JSON the runner writes to agent stdin to tell

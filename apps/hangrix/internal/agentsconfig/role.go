@@ -5,11 +5,17 @@ package agentsconfig
 // HostConfig.Roles rather than here so a Role can be passed around
 // without dragging the key along.
 type Role struct {
-	// Triggers is the event subscription. Non-empty and every entry
-	// is a recognised Trigger constant — the parser rejects unknown
-	// names rather than ignoring them, so a typo can't silently
-	// disable the role.
-	Triggers []string
+	// Triggers is the role's event subscription map. Keys are
+	// recognised Trigger constants; values carry the per-event filter
+	// block (paths for commit.pushed, mentioned_only / from_roles /
+	// from_users for issue.comment). Triggers without a relevant
+	// filter use the zero TriggerSpec (`event-name: {}` in yaml).
+	//
+	// The map is guaranteed non-empty by the parser; a role with no
+	// triggers is a misconfiguration. Map order is irrelevant —
+	// dispatchers iterate by event name during fan-out, not by
+	// declaration order.
+	Triggers map[Trigger]*TriggerSpec
 
 	// Can is the platform tool ACL whitelist for this role. Service
 	// layers higher up (the runner / dispatcher) consult this before

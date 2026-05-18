@@ -32,7 +32,8 @@ llm:
 roles:
   backend:
     prompt: hi
-    triggers: [issue.opened]
+    triggers:
+      issue.opened: {}
     can: [issue_read, issue_comment]
 `
 
@@ -47,19 +48,21 @@ llm:
 roles:
   dispatcher:
     prompt: hi
-    triggers: [issue.opened]
+    triggers:
+      issue.opened: {}
     can: [issue_read, issue_comment, roster_list]
   reviewer:
     prompt: hi
-    triggers: [commit.pushed]
+    triggers:
+      commit.pushed: {}
     can: [issue_read, issue_diff]
 `
 
 // hostYAMLMentions exercises the M7b mention path: two roles each
-// subscribe to issue.comment.mentioned with different agent repos.
-// A spawn fired with TriggerIssueCommentMentioned + RoleKey="backend"
-// should wake backend only — frontend stays cold even though it also
-// subscribes to the trigger.
+// subscribe to issue.comment with mentioned_only=true. A spawn fired
+// with TriggerIssueComment + RoleKey="backend" should wake backend
+// only — frontend stays cold even though it also subscribes to the
+// trigger.
 const hostYAMLMentions = `version: 1
 container:
   image: ghcr.io/acme/dev:1.2.3
@@ -68,11 +71,15 @@ llm:
 roles:
   backend:
     prompt: hi
-    triggers: [issue.comment.mentioned]
+    triggers:
+      issue.comment:
+        mentioned_only: true
     can: [issue_read, issue_comment]
   frontend:
     prompt: hi
-    triggers: [issue.comment.mentioned]
+    triggers:
+      issue.comment:
+        mentioned_only: true
     can: [issue_read, issue_comment]
 `
 
@@ -398,7 +405,8 @@ func TestArchiverFlipsActiveSessions(t *testing.T) {
 func TestOnTriggerRoleKeyScopesToOneRole(t *testing.T) {
 	h := newTestSpawner(t, []byte(hostYAMLMentions), nil)
 	got, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
-		Trigger:     agentsconfig.TriggerIssueCommentMentioned,
+		Trigger:     agentsconfig.TriggerIssueComment,
+		Comment:     &domain.CommentContext{Mentions: []string{"backend"}},
 		CauseKind:   domain.CauseKindCommentMentioned,
 		CauseID:     "42",
 		RepoID:      1,
@@ -430,7 +438,8 @@ func TestOnTriggerRoleKeyScopesToOneRole(t *testing.T) {
 func TestOnTriggerEnqueueOntoLiveSession(t *testing.T) {
 	h := newTestSpawner(t, []byte(hostYAMLMentions), nil)
 	first, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
-		Trigger:     agentsconfig.TriggerIssueCommentMentioned,
+		Trigger:     agentsconfig.TriggerIssueComment,
+		Comment:     &domain.CommentContext{Mentions: []string{"backend"}},
 		CauseKind:   domain.CauseKindCommentMentioned,
 		CauseID:     "100",
 		RepoID:      1,
@@ -448,7 +457,8 @@ func TestOnTriggerEnqueueOntoLiveSession(t *testing.T) {
 	// Second mention with a new comment id. The existing session row
 	// is still pending (M6c never transitioned it terminal here).
 	second, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
-		Trigger:     agentsconfig.TriggerIssueCommentMentioned,
+		Trigger:     agentsconfig.TriggerIssueComment,
+		Comment:     &domain.CommentContext{Mentions: []string{"backend"}},
 		CauseKind:   domain.CauseKindCommentMentioned,
 		CauseID:     "101",
 		RepoID:      1,
