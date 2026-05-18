@@ -128,16 +128,14 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 
 	// Index existing sessions for the (repo, issue):
 	//
-	//   archivedRoles   — role had a previous session that's now
-	//                     archived. Spec says archive is terminal,
-	//                     so the role is silenced for this issue.
-	//   existingByRole  — role has a non-archived session row. Used
-	//                     in two ways: (a) live (pending/claimed/
-	//                     running) → just enqueue the new event; (b)
-	//                     idle / failed / succeeded → rewake the row
-	//                     and enqueue. Per-role-in-issue reuse is the
-	//                     point — we never spawn a fresh row alongside
-	//                     an existing one.
+	//   existingByRole  — role's most-recent session row (any status,
+	//                     including archived). Used to branch the
+	//                     wake-up: live (pending/claimed/running) →
+	//                     enqueue onto its inputs; idle/failed/
+	//                     succeeded/cancelled → rewake the row; archived
+	//                     → spawn a fresh row that replaces the archived
+	//                     predecessor (the archived row stays on disk
+	//                     for audit).
 	//   alreadyForCause — (role, cause_kind, cause_id) tuple was
 	//                     already processed by a LIVE session. Re-
 	//                     firing the same cause onto a live row is a
@@ -147,20 +145,15 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 	if err != nil {
 		return nil, fmt.Errorf("spawner: list existing sessions: %w", err)
 	}
-	archivedRoles := map[string]struct{}{}
 	existingByRole := map[string]*runnerdomain.AgentSession{}
 	alreadyForCause := map[string]struct{}{}
 	for _, e := range existing {
 		if e.RoleKey == "" {
 			continue
 		}
-		if e.Status == runnerdomain.SessionStatusArchived {
-			archivedRoles[e.RoleKey] = struct{}{}
-			continue
-		}
 		// Most-recent row wins — ListSessionsByIssue returns rows in
-		// spawn order, so a later overwrite keeps the freshest live
-		// or rewakeable row as the canonical one for the role.
+		// spawn order, so a later overwrite keeps the freshest row as
+		// the canonical one for the role.
 		existingByRole[e.RoleKey] = e
 		if isLiveStatus(e.Status) {
 			alreadyForCause[causeKey(e.RoleKey, e.CauseKind, e.CauseID)] = struct{}{}
@@ -182,9 +175,6 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 		if !triggerMatches(role.Triggers, in.Trigger, roleKey, in) {
 			continue
 		}
-		if _, dead := archivedRoles[roleKey]; dead {
-			continue
-		}
 		// Idempotency: exact (role, cause_kind, cause_id) was already
 		// processed. The TestOnTriggerIdempotent suite relies on this
 		// for the issue.opened path where cause_id is "".
@@ -192,7 +182,7 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 			continue
 		}
 
-		if existing, hasExisting := existingByRole[roleKey]; hasExisting {
+		if existing, hasExisting := existingByRole[roleKey]; hasExisting && existing.Status != runnerdomain.SessionStatusArchived {
 			if isLiveStatus(existing.Status) {
 				// Live row — agent is alive or about to be claimed.
 				// Append the event onto its inputs queue; the agent

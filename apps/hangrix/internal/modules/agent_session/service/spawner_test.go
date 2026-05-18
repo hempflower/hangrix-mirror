@@ -398,6 +398,71 @@ func TestArchiverFlipsActiveSessions(t *testing.T) {
 	}
 }
 
+// TestOnTriggerArchivedRoleSpawnsReplacement covers the post-archive
+// re-trigger path: once a role's session on an issue is archived
+// (issue.closed/merged or operator-driven Delete on a containered row),
+// the next matching trigger spawns a fresh row instead of being
+// silenced. The archived row is left in place for audit; the new row
+// becomes the canonical session for the (issue, role).
+func TestOnTriggerArchivedRoleSpawnsReplacement(t *testing.T) {
+	h := newTestSpawner(t, []byte(hostYAMLMentions), nil)
+	in := domain.TriggerInput{
+		Trigger:     agentsconfig.TriggerIssueComment,
+		Comment:     &domain.CommentContext{Mentions: []string{"backend"}},
+		CauseKind:   domain.CauseKindCommentMentioned,
+		CauseID:     "100",
+		RepoID:      1,
+		IssueNumber: 7,
+		ActorID:     1,
+		RoleKey:     "backend",
+	}
+	first, err := h.spawner.OnTrigger(context.Background(), in)
+	if err != nil {
+		t.Fatalf("first OnTrigger err: %v", err)
+	}
+	if len(first) != 1 || first[0].Action != domain.SpawnActionSpawned {
+		t.Fatalf("first call = %+v, want one spawned", first)
+	}
+
+	// Flip the row to archived — same terminal state Delete (on a
+	// containered row) and OnIssueClosed produce.
+	if _, err := NewArchiver(&ArchiverDeps{Runner: h.runner}).OnIssueClosed(context.Background(), 1, 7); err != nil {
+		t.Fatalf("archive err: %v", err)
+	}
+	if h.runner.sessions[0].Status != runnerdomain.SessionStatusArchived {
+		t.Fatalf("precondition: first row not archived (status=%q)", h.runner.sessions[0].Status)
+	}
+
+	// Same role, fresh mention — a new comment id so the (cause)
+	// idempotency gate doesn't fire.
+	in.CauseID = "101"
+	second, err := h.spawner.OnTrigger(context.Background(), in)
+	if err != nil {
+		t.Fatalf("second OnTrigger err: %v", err)
+	}
+	if len(second) != 1 {
+		t.Fatalf("second call = %d sessions, want 1 (archive should not silence the role)", len(second))
+	}
+	if second[0].Action != domain.SpawnActionSpawned {
+		t.Fatalf("second action = %q, want spawned (a fresh row, not rewake of the archived predecessor)", second[0].Action)
+	}
+	if len(h.runner.sessions) != 2 {
+		t.Fatalf("stored rows = %d, want 2 (archived + replacement)", len(h.runner.sessions))
+	}
+	if h.runner.sessions[0].Status != runnerdomain.SessionStatusArchived {
+		t.Fatalf("archived row mutated: status=%q", h.runner.sessions[0].Status)
+	}
+	if h.runner.sessions[1].Status != runnerdomain.SessionStatusPending {
+		t.Fatalf("replacement row status = %q, want pending", h.runner.sessions[1].Status)
+	}
+	if h.runner.sessions[1].RoleKey != "backend" {
+		t.Fatalf("replacement role_key = %q, want backend", h.runner.sessions[1].RoleKey)
+	}
+	if h.runner.sessions[1].CauseID != "101" {
+		t.Fatalf("replacement cause_id = %q, want 101", h.runner.sessions[1].CauseID)
+	}
+}
+
 // TestOnTriggerRoleKeyScopesToOneRole verifies M7b's per-mention
 // scoping: a comment-mentioned trigger with RoleKey="backend" wakes
 // backend only, even though frontend also subscribes to the same

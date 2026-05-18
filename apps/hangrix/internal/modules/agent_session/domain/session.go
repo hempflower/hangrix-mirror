@@ -210,9 +210,10 @@ type Spawner interface {
 	//     exists for the role → append the event onto its inputs
 	//     queue. The agent (or the runner that will claim it) sees
 	//     the event on its next stdin read.
-	//   - Else if the role's most recent session is archived → skip
-	//     the role. Issue is dead for it (parent issue is the only
-	//     thing that can archive).
+	//   - Else if the role's most recent session is archived → spawn
+	//     a fresh row that replaces the archived predecessor. The
+	//     archived row stays on disk for audit; the new row is the
+	//     canonical session for the (issue, role) going forward.
 	//   - Else → spawn a fresh row (row + history seed path).
 	//
 	// Returns one SpawnedSession per role that was either spawned or
