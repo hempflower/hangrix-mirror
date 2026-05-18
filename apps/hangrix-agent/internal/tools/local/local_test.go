@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/local"
 )
@@ -96,6 +97,62 @@ func TestBashForeground(t *testing.T) {
 	}
 	if fields.TimedOut {
 		t.Errorf("timed_out should be false")
+	}
+}
+
+// TestBashForegroundKillsBackgroundedGrandchild pins two things:
+//   - The call returns promptly even when the script backgrounds a
+//     long-running grandchild (`./srv &`). Without WaitDelay, exec would
+//     hang on the inherited stdout/stderr pipe FDs until the timeout.
+//   - The grandchild is actually killed, not just abandoned. We verify
+//     by giving the grandchild a delayed `touch <marker>` and asserting
+//     the marker never appears. If Setpgid + group-kill regressed, the
+//     orphaned grandchild would survive and write the marker.
+func TestBashForegroundKillsBackgroundedGrandchild(t *testing.T) {
+	t.Parallel()
+	tools := byName(local.All())
+	bash := tools["bash"]
+
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker")
+
+	start := time.Now()
+	resRaw, err := bash.Call(context.Background(), mustJSON(map[string]any{
+		// Grandchild sleeps 5s before touching the marker. The bash leader
+		// exits immediately after `echo ready`, so Call should return ~2s
+		// later (WaitDelay) and SIGKILL the group on the way out. If the
+		// group-kill works, the grandchild dies before the 5s sleep ends
+		// and the marker is never created.
+		"command":         "( sleep 5 && touch " + marker + " ) &\necho ready",
+		"timeout_seconds": 20,
+	}))
+	if err != nil {
+		t.Fatalf("bash: %v", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed > 10*time.Second {
+		t.Fatalf("bash hung waiting for backgrounded grandchild: took %v (want < 10s)", elapsed)
+	}
+	out := mustReJSON(resRaw)
+	var fields struct {
+		Stdout   string `json:"stdout"`
+		TimedOut bool   `json:"timed_out"`
+	}
+	if err := json.Unmarshal(out, &fields); err != nil {
+		t.Fatalf("re-decode: %v (%s)", err, out)
+	}
+	if !strings.Contains(fields.Stdout, "ready") {
+		t.Errorf("stdout should contain 'ready'; got %q", fields.Stdout)
+	}
+	if fields.TimedOut {
+		t.Errorf("should not have timed out (WaitDelay should fire first)")
+	}
+
+	// Sleep past the grandchild's 5s timer; if it survived, the marker
+	// shows up here.
+	time.Sleep(6 * time.Second)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatalf("grandchild survived group-kill: marker %q exists", marker)
 	}
 }
 

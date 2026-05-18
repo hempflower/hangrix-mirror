@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -119,8 +120,29 @@ func (b *bashTool) runForeground(ctx context.Context, a bashArgs) (*bashResult, 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	// Because Stdout/Stderr are *bytes.Buffer (not *os.File), exec wires up
+	// internal pipes and Wait blocks until they EOF. If the LLM's script
+	// backgrounds something (`./srv &`), the grandchild inherits those pipe
+	// FDs and Wait hangs even after bash itself exits — looks like the tool
+	// is "stuck" until the timeout. WaitDelay caps that drain window so we
+	// return promptly with whatever output bash actually produced.
+	cmd.WaitDelay = 2 * time.Second
+	// Put bash + everything it spawns in its own process group so we can
+	// signal the whole group as a unit. Without this, `./srv &` becomes an
+	// orphan reparented to init when the agent process exits and lingers
+	// inside the container.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		// On context cancel/timeout, take down the group, not just bash.
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 
 	err := cmd.Run()
+	// Even on the happy path, sweep the group: a successful `./srv &; exit 0`
+	// leaves the grandchild alive and holding inherited FDs.
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	res := &bashResult{
 		Stdout: stdout.String(),
 		Stderr: stderr.String(),
@@ -164,6 +186,14 @@ func (b *bashTool) spawnBackground(a bashArgs) *bashResult {
 	}
 	cmd.Stdout = job.stdout
 	cmd.Stderr = job.stderr
+	// See runForeground: without WaitDelay, a script that spawns its own
+	// background process keeps job.done=false forever because the
+	// grandchild holds the inherited stdout/stderr pipe FDs.
+	cmd.WaitDelay = 2 * time.Second
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 
 	if err := cmd.Start(); err != nil {
 		job.exitCode = -1
@@ -172,6 +202,10 @@ func (b *bashTool) spawnBackground(a bashArgs) *bashResult {
 	} else {
 		go func() {
 			err := cmd.Wait()
+			// Sweep the group on completion so grandchildren don't outlive
+			// the polled job. Safe to send to a finished group — kill
+			// returns ESRCH and we ignore it.
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			job.mu.Lock()
 			defer job.mu.Unlock()
 			if cctx.Err() == context.DeadlineExceeded {
