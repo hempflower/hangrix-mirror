@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os/signal"
@@ -16,6 +17,12 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix-runner/internal/orchestrator"
 	"github.com/hangrix/hangrix/apps/hangrix-runner/internal/store"
 )
+
+// autoUpdateInterval is how often `serve --auto-update` re-checks the
+// server's embedded runner build while serving. One minute is the
+// trade-off: fast enough to roll out a fix across a fleet within a
+// release window, slow enough that we're not hammering /bootstrap.
+const autoUpdateInterval = time.Minute
 
 // Serve reads state.json, re-fetches the bootstrap so the runner picks
 // up server-side config changes since enroll, extracts the embedded
@@ -84,6 +91,52 @@ func Serve(ctx context.Context, cfg *config.Config) error {
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
+	// Periodic auto-update: while the loop runs, re-check the server's
+	// embedded build every autoUpdateInterval. On a successful install
+	// we cancel the serve context so the loop drains and Serve returns
+	// nil — the operator's supervisor then restarts onto the new bytes.
+	if cfg.AutoUpdate {
+		go autoUpdateLoop(ctx, cli, cancel)
+	}
+
 	log.Printf("runner %d (%q) serving against %s", state.RunnerID, state.RunnerName, state.Server)
 	return l.Run(ctx)
+}
+
+// autoUpdateLoop polls /bootstrap on a fixed cadence and runs the same
+// SHA-compare → download → verify → swap pipeline as the startup check.
+// Bootstrap is refetched each tick so a server-side build promoted after
+// the runner started is picked up without an enroll cycle. Errors are
+// logged and the loop keeps ticking — a transient platform outage must
+// not knock the runner offline.
+func autoUpdateLoop(ctx context.Context, cli *client.Client, onUpdate func()) {
+	tick := time.NewTicker(autoUpdateInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		boot, err := cli.Bootstrap(ctx)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				log.Printf("auto-update: refresh bootstrap: %v", err)
+			}
+			continue
+		}
+		res, err := runUpdate(ctx, cli, boot, false)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				log.Printf("auto-update: %v (continuing with current binary)", err)
+			}
+			continue
+		}
+		if res.updated {
+			log.Printf("auto-update: installed new binary at %s (%s → %s); shutting down for supervisor restart",
+				res.path, short(res.oldSHA), short(res.newSHA))
+			onUpdate()
+			return
+		}
+	}
 }

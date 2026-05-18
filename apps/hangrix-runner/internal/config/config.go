@@ -14,8 +14,9 @@
 // state to compare the server's embedded `hangrix-runner_<goos>_<goarch>`
 // artefact against the binary on disk and self-replace when they drift.
 // `serve --auto-update` (or HANGRIX_RUNNER_AUTO_UPDATE=1) folds that
-// check into the startup path: if a new build is available, replace the
-// binary on disk and exit 0 so the supervisor restarts onto it.
+// check into the startup path AND re-runs it once a minute while
+// serving: if a new build is available, replace the binary on disk and
+// exit 0 so the supervisor restarts onto it.
 package config
 
 import (
@@ -42,11 +43,12 @@ type Config struct {
 	DockerBin string
 
 	// serve-only: when true, the runner checks the server's embedded
-	// build at startup and self-replaces if it differs from the binary
-	// on disk. On a successful replace, serve exits cleanly (rc=0) so
-	// the operator's supervisor restarts onto the new bytes. Defaults
-	// off: an opt-in flag keeps a broken upstream build from bricking
-	// every runner the moment they next restart.
+	// build at startup and again every minute while serving, and self-
+	// replaces if it differs from the binary on disk. On a successful
+	// replace, serve exits cleanly (rc=0) so the operator's supervisor
+	// restarts onto the new bytes. Defaults off: an opt-in flag keeps a
+	// broken upstream build from bricking every runner the moment they
+	// next restart.
 	AutoUpdate bool
 
 	// serve-only: maximum number of concurrent sessions this runner is
@@ -86,7 +88,7 @@ func Parse(args []string) (sub string, cfg *Config, err error) {
 		fs.StringVar(&cfg.EnrollToken, "token", cfg.EnrollToken, "enrollment token (hgxe_...)")
 	case "serve":
 		fs.StringVar(&cfg.DockerBin, "docker", cfg.DockerBin, "docker CLI binary")
-		fs.BoolVar(&cfg.AutoUpdate, "auto-update", cfg.AutoUpdate, "self-update + exit before serving when a new binary is available")
+		fs.BoolVar(&cfg.AutoUpdate, "auto-update", cfg.AutoUpdate, "self-update + exit on startup and every minute while serving when a new binary is available")
 		fs.IntVar(&cfg.Parallelism, "parallelism", cfg.Parallelism, "max concurrent sessions to drive (default 16)")
 	case "update":
 		fs.BoolVar(&cfg.Force, "force", false, "redownload even when local SHA matches")

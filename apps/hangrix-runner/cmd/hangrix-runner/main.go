@@ -67,7 +67,7 @@ func usage() {
 flags:
   --state-dir DIR   persistent state (default ~/.hangrix)
   --docker BIN      docker CLI path (default 'docker')
-  --auto-update     serve: self-update + exit before serving when a new binary is available
+  --auto-update     serve: self-update + exit on startup and every minute while serving when a new binary is available
   --parallelism N   serve: max concurrent sessions to drive (default 16)
   --force           update: redownload even when local SHA matches
 
