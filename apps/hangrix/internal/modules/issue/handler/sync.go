@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
@@ -97,7 +98,7 @@ func (h *Handler) fireCommitPushed(ctx context.Context, repo *repodomain.Repo, f
 	if h.spawner == nil {
 		return
 	}
-	_, _ = h.spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
+	if _, err := h.spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
 		Trigger:      agentsconfig.TriggerCommitPushed,
 		CauseKind:    agentsessiondomain.CauseKindCommitPushed,
 		CauseID:      headSHA,
@@ -106,7 +107,13 @@ func (h *Handler) fireCommitPushed(ctx context.Context, repo *repodomain.Repo, f
 		ActorID:      actorID,
 		ChangedPaths: collectChangedPaths(h.git, fsPath, oldRef, headSHA),
 		Payload:      commitsJSON,
-	})
+	}); err != nil {
+		// Same rationale as fireIssueOpened: don't drop a whole-config
+		// failure (typically a malformed `.hangrix/agents.yml`) on the
+		// floor — surface it so the operator can correlate against the
+		// push that just landed.
+		log.Printf("issue: fireCommitPushed repo=%d issue=%d head=%s: %v", repo.ID, iss.Number, headSHA, err)
+	}
 }
 
 // collectChangedPaths returns the deduplicated list of file paths

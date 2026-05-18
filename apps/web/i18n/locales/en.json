@@ -580,7 +580,8 @@
       "submit": "Comment",
       "submitting": "Sending…",
       "failed": "Comment failed",
-      "title": "Add a comment"
+      "title": "Add a comment",
+      "hostYamlError": ".hangrix/agents.yml is invalid — @-mentions won't autocomplete and triggers (issue.opened / issue.comment / commit.pushed) won't wake any agent until this is fixed"
     },
     "opened": "opened this issue",
     "commented": "commented",

@@ -65,20 +65,31 @@ const commentBody = ref('')
 const commentBusy = ref(false)
 const commentError = ref<string | null>(null)
 
-// Mention suggestions for the comment editor's `@` autocomplete. Loaded
-// once per page from the repo's host yaml; an empty list (no agents
-// declared) just means the dropdown stays closed.
+// Mention suggestions for the comment editor's `@` autocomplete. The
+// list comes from the host yaml at the default-branch tip, which can
+// change mid-page (a merge that touches `.hangrix/agents.yml` adds /
+// removes roles), so we refresh it from the same poll that refreshes
+// the issue body and right after a merge — otherwise newly-added
+// roles wouldn't show up in the dropdown until the user reloads.
 interface MentionAgent { role_key: string }
 const mentionAgents = ref<MentionAgent[]>([])
+// hostYamlError surfaces a parse error in `.hangrix/agents.yml` at the
+// default-branch tip. When set, the dropdown is empty AND `issue.opened`
+// / `issue.comment` triggers also no-op server-side — without this
+// signal the operator has no clue why agents stopped responding after a
+// merge that touched the file.
+const hostYamlError = ref<string | null>(null)
 async function loadMentionAgents() {
   try {
-    const res = await $fetch<{ agents: MentionAgent[] }>(
+    const res = await $fetch<{ agents: MentionAgent[], host_yaml_error?: string }>(
       `/api/repos/${owner.value}/${name.value}/mention-suggestions`,
       { credentials: 'include' },
     )
     mentionAgents.value = res.agents ?? []
+    hostYamlError.value = res.host_yaml_error ? res.host_yaml_error : null
   } catch {
     mentionAgents.value = []
+    hostYamlError.value = null
   }
 }
 
@@ -279,7 +290,7 @@ async function merge() {
     )
     issue.value = res.issue
     actionInfo.value = t('issue.mergeOk', { base: res.issue.base_branch, mode: res.mode })
-    await Promise.all([loadTimeline(), loadDiff()])
+    await Promise.all([loadTimeline(), loadDiff(), loadMentionAgents()])
   } catch (e: any) {
     actionError.value = e?.data?.error ?? t('issue.mergeFailed')
   } finally {
@@ -474,7 +485,7 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 async function refreshLive() {
   if (!issue.value) return
-  await Promise.all([loadIssue(), loadTimeline(), loadDiff(), loadCommits(), loadChildren()])
+  await Promise.all([loadIssue(), loadTimeline(), loadDiff(), loadCommits(), loadChildren(), loadMentionAgents()])
 }
 
 function startRefreshTimer() {
@@ -692,6 +703,9 @@ onUnmounted(stopRefreshTimer)
                     <span class="text-muted-foreground">{{ t('issue.commentForm.title') }}</span>
                   </div>
                   <div class="space-y-2 px-3 py-3">
+                    <p v-if="hostYamlError" class="text-sm text-destructive">
+                      {{ t('issue.commentForm.hostYamlError') }}: {{ hostYamlError }}
+                    </p>
                     <MentionTextarea
                       v-model="commentBody"
                       :suggestions="mentionAgents"

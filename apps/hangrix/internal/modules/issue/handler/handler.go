@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
+	"log"
 	"net/http"
 	"regexp"
 	"sort"
@@ -407,18 +408,28 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 // fireIssueOpened dispatches the spawn event. Nil-safe so test
 // configurations without the agent_session module still work; production
 // ioc binding always populates spawner.
+//
+// Whole-config spawn errors (typically a malformed `.hangrix/agents.yml`
+// at the default-branch tip — e.g. an agent rewrote the file on an
+// issue branch and the merged version no longer parses) used to be
+// dropped silently here, which surfaced as "I opened an issue but no
+// agent woke up" with zero feedback. Log them so an operator can
+// correlate against the issue create. Per-role failures are already
+// logged inside the spawner.
 func (h *Handler) fireIssueOpened(ctx context.Context, repoID, issueNumber, actorID int64) {
 	if h.spawner == nil {
 		return
 	}
-	_, _ = h.spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
+	if _, err := h.spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
 		CauseKind:   agentsessiondomain.CauseKindIssueOpened,
 		CauseID:     "",
 		RepoID:      repoID,
 		IssueNumber: int32(issueNumber),
 		ActorID:     actorID,
-	})
+	}); err != nil {
+		log.Printf("issue: fireIssueOpened repo=%d issue=%d: %v", repoID, issueNumber, err)
+	}
 }
 
 // fireIssueClosed flips every live session on the issue to archived.
@@ -792,7 +803,7 @@ func (h *Handler) fireCommentTriggers(r *http.Request, rc *repoCtx, iss *domain.
 		commentCtx.AuthorUser = c.AuthorName
 	}
 
-	_, _ = h.spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
+	if _, err := h.spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueComment,
 		CauseKind:   agentsessiondomain.CauseKindCommentMentioned,
 		CauseID:     causeID,
@@ -801,7 +812,13 @@ func (h *Handler) fireCommentTriggers(r *http.Request, rc *repoCtx, iss *domain.
 		ActorID:     caller.ID,
 		Comment:     commentCtx,
 		Payload:     payloadBytes,
-	})
+	}); err != nil {
+		// Same rationale as fireIssueOpened: surface whole-config
+		// failures (broken agents.yml at the default-branch tip) so the
+		// operator can find them in the log without grepping the
+		// agent_session module.
+		log.Printf("issue: fireCommentTriggers repo=%d issue=%d comment=%d: %v", rc.repo.ID, iss.Number, c.ID, err)
+	}
 }
 
 type mergeReq struct {
@@ -928,6 +945,13 @@ type mentionAgent struct {
 
 type mentionSuggestionsResp struct {
 	Agents []mentionAgent `json:"agents"`
+	// HostYAMLError is non-empty when `.hangrix/agents.yml` at the
+	// default-branch tip fails to parse. Without this field a broken
+	// host yaml manifested only as "the dropdown is empty + new issues
+	// don't wake any agent", with no clue about why. The UI surfaces
+	// this string near the comment editor so the operator knows to
+	// push a fix instead of assuming the platform is misbehaving.
+	HostYAMLError string `json:"host_yaml_error,omitempty"`
 }
 
 func (h *Handler) mentionSuggestions(w http.ResponseWriter, r *http.Request) {
@@ -938,7 +962,11 @@ func (h *Handler) mentionSuggestions(w http.ResponseWriter, r *http.Request) {
 	out := mentionSuggestionsResp{Agents: []mentionAgent{}}
 	if h.spawner != nil {
 		cfg, err := h.spawner.LoadHostConfig(r.Context(), rc.repo.ID)
-		if err == nil && cfg != nil {
+		switch {
+		case err != nil:
+			out.HostYAMLError = err.Error()
+			log.Printf("issue: mentionSuggestions repo=%d host yaml broken: %v", rc.repo.ID, err)
+		case cfg != nil:
 			keys := make([]string, 0, len(cfg.Roles))
 			for k := range cfg.Roles {
 				keys = append(keys, k)
