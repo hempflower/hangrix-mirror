@@ -64,17 +64,17 @@ roles:
 
       Team-evolution pass (do this every scaffolding pass):
 
-      3. The team you create MUST include these four structural roles,
+      3. The team you create MUST include these three structural roles,
          regardless of project type. Together they form the lifecycle
          "route → design → build → test → review → merge". Role keys
          match `[a-z][a-z0-9-]*` and read well in `@agent-<key>`
          mentions.
 
          **Trigger discipline.** `triggers:` is a map of event-name →
-         filter block (GitHub Actions style). Only `dispatcher`
+         filter block (GitHub Actions style). Only `maintainer`
          subscribes to `issue.opened`. Every other role — including
          `product-designer`, workers, and module reviewers — is
-         reached via the dispatcher's `@agent-<role>` mention; their
+         reached via the maintainer's `@agent-<role>` mention; their
          `issue.comment` entry MUST set `mentioned_only: true` so they
          wake on direct @-mention only, not on every comment. Module
          reviewers narrow `commit.pushed` with `paths:` so they only
@@ -82,39 +82,72 @@ roles:
 
          **Always include:**
 
-         - `dispatcher` — `triggers: { issue.opened: {},
-           issue.comment: {} }`. Reads every new issue and every
-           top-level comment, then posts exactly one
-           `@agent-<role>` mention to route the work to whoever
-           should pick it up next (typically
-           `@agent-product-designer` first for a fresh issue, then
-           handing off to workers once a spec exists). Writes no
-           code itself. can: `[issue_read, issue_comment,
-           roster_list]`.
+         - `maintainer` — `triggers: { issue.opened: {},
+           issue.comment: {}, review_vote.posted: {} }`. The
+           project's owner-on-call. Has four jobs:
+
+           (a) **Routing.** Reads every new issue and every
+               top-level comment, then posts exactly one
+               `@agent-<role>` mention to route the work to whoever
+               should pick it up next (typically
+               `@agent-product-designer` first for a fresh issue,
+               then handing off to workers once a spec exists).
+
+           (b) **Non-technical changes.** Owns everything that
+               isn't feature code — repo structure, `.hangrix/`
+               configuration, CI files, READMEs, dependency
+               manifests, the agent team itself. When the owner
+               asks to reshape the project or its config, the
+               maintainer does it directly with `read`, `write`,
+               `edit`, `glob`, `grep`, and `bash`. Feature code
+               still routes to workers.
+
+           (c) **Agent hire/fire.** Before every merge, look at
+               what the project has grown into and decide whether
+               the current `agents.yml` roster still fits. Add
+               missing module pairs, retire roles that no longer
+               have work, rename roles whose scope drifted. Commit
+               the updated `agents.yml` (and matching
+               `.hangrix/prompts/<role-key>.md` files) on the
+               same branch as the merge. Use `roster_list` to
+               check who currently exists before editing.
+
+           (d) **Merge gate.** Tally every module-reviewer vote;
+               merge only when the issue is approved across the
+               board AND CI is green (`issue_checks`). Immediately
+               before calling `issue_merge`, post one final
+               `issue_comment` summarising the decision
+               (e.g. `LGTM — merging` with a one-line rationale).
+               After the merge the agent session is archived and
+               no further comments / tool calls are possible, so
+               the LGTM comment is your only chance to record
+               approval on the timeline. Then call `issue_merge`
+               and `issue_close`.
+
+           can: `[issue_read, issue_diff, issue_comment,
+           issue_review_vote, issue_checks, issue_merge,
+           issue_close, roster_list, read, write, edit, glob,
+           grep, bash]`.
 
          - `product-designer` — `triggers: { issue.comment: {
-           mentioned_only: true } }`. Wakes when the dispatcher
+           mentioned_only: true } }`. Wakes when the maintainer
            mentions it. Turns the owner's brief into a concrete,
            buildable spec — endpoints, data shapes, UX flows,
            acceptance criteria — and posts it as one or more
            `issue_comment`s. Stops once the spec is on the
-           timeline; the dispatcher routes from there. can:
+           timeline; the maintainer routes from there. can:
            `[issue_read, issue_diff, issue_comment]`.
 
          - `tester` — `triggers: { commit.pushed: {}, issue.comment:
            { mentioned_only: true } }`. On every push, either writes /
            updates tests for the new code or runs the existing suite
-           with `bash`. Posts the outcome as an `issue_comment` and
-           casts an `issue_review_vote` (approve when green,
-           request_changes when red). can: `[issue_read, issue_diff,
-           issue_comment, issue_review_vote, read, write, edit, glob,
-           grep, bash]`.
-
-         - `maintainer` — `triggers: { review_vote.posted: {} }`.
-           Tallies every module-reviewer vote AND the tester's vote;
-           merges only when the issue is approved across the board.
-           can: `[issue_read, issue_diff, issue_comment,
-           issue_checks, issue_merge, issue_close]`.
+           with `bash`. Posts a single `issue_comment` reporting what
+           ran and what failed — concrete file/line references when
+           the suite is red so the relevant worker can fix it. The
+           tester does NOT cast review votes; it surfaces problems
+           and the maintainer + module reviewers decide whether to
+           block the merge. can: `[issue_read, issue_diff,
+           issue_comment, read, write, edit, glob, grep, bash]`.
 
          **Plus, per module: one worker + one module reviewer.**
          Identify the modules in the project you just scaffolded
@@ -154,7 +187,7 @@ roles:
 
          You may add other roles when the brief calls for them
          (e.g. `oncall` for production-maintenance repos), but the
-         four structural roles above AND at least one
+         three structural roles above AND at least one
          worker/module-reviewer pair are required.
 
          Each module reviewer's prompt MUST narrow its scope to
