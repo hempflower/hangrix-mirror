@@ -29,6 +29,10 @@ export interface IssueComment {
   issue_id: number
   author_id: number
   author_username: string
+  // agent_role is set on agent-authored comments. Empty for human comments.
+  // The frontend uses it to render `@agent-<role>` plus a bot avatar in the
+  // timeline so agent-emitted comments aren't shown with a blank author.
+  agent_role?: string
   body: string
   file_path: string
   line: number
@@ -41,6 +45,7 @@ export type IssueEventKind =
   | 'branch_merged'
   | 'state_changed'
   | 'title_changed'
+  | 'review_vote'
 
 export interface IssueEvent {
   id: number
@@ -49,7 +54,17 @@ export interface IssueEvent {
   payload: Record<string, any>
   actor_id: number
   actor_username: string
+  // agent_role is set on agent-authored events (e.g. review_vote posted by
+  // the reviewer role). Empty for human / system events.
+  agent_role?: string
   created_at: string
+}
+
+export type ReviewVoteValue = 'approve' | 'request_changes' | 'abstain'
+
+export interface ReviewVotePayload {
+  value: ReviewVoteValue
+  reason?: string
 }
 
 export interface IssueTimeline {

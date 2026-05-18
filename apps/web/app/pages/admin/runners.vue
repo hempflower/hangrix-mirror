@@ -77,10 +77,15 @@ function formatDate(s?: string | null) {
   try { return new Date(s).toLocaleString() } catch { return s }
 }
 
-function statusVariant(s: string) {
-  if (s === 'active') return 'secondary'
-  if (s === 'disabled') return 'destructive'
+function statusVariant(r: Runner) {
+  if (r.status === 'active') return r.online ? 'secondary' : 'destructive'
+  if (r.status === 'disabled') return 'destructive'
   return 'outline'
+}
+
+function statusLabel(r: Runner) {
+  if (r.status === 'active' && !r.online) return t('admin.runners.offline')
+  return r.status
 }
 
 async function load() {
@@ -206,7 +211,7 @@ onMounted(load)
             <TableRow v-for="r in runners" :key="r.id">
               <TableCell class="font-medium">{{ r.name }}</TableCell>
               <TableCell><Badge variant="outline">{{ r.visibility }}</Badge></TableCell>
-              <TableCell><Badge :variant="statusVariant(r.status)">{{ r.status }}</Badge></TableCell>
+              <TableCell><Badge :variant="statusVariant(r)">{{ statusLabel(r) }}</Badge></TableCell>
               <TableCell>
                 <Badge v-if="r.enroll_token_used" variant="secondary">{{ t('admin.runners.enrolled') }}</Badge>
                 <Badge v-else variant="outline">{{ t('admin.runners.notEnrolled') }}</Badge>

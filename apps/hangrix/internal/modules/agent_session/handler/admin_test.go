@@ -39,8 +39,8 @@ func (s *stubAuditor) ListMessages(_ context.Context, _ int64) ([]domain.Session
 	return nil, nil
 }
 
-func (s *stubAuditor) ListRecent(_ context.Context, _ domain.RecentFilter) ([]domain.AuditSession, error) {
-	return s.rows, s.err
+func (s *stubAuditor) ListRecent(_ context.Context, _ domain.RecentFilter) ([]domain.AuditSession, int64, error) {
+	return s.rows, int64(len(s.rows)), s.err
 }
 
 // noopMiddleware satisfies authdomain.Middleware without any actual

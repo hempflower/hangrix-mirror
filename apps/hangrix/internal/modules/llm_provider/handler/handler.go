@@ -69,6 +69,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Get("/providers", h.listProviders)
 		r.Get("/providers/{name}", h.getProvider)
 		r.Patch("/providers/{name}", h.patchProvider)
+		r.Post("/providers/{name}/disabled", h.setProviderDisabled)
 		r.Delete("/providers/{name}", h.deleteProvider)
 
 		r.Get("/usage", h.listUsage)
@@ -87,6 +88,7 @@ type publicProvider struct {
 	BaseURL       string    `json:"base_url"`
 	HasAPIKey     bool      `json:"has_api_key"`
 	AllowedModels []string  `json:"allowed_models"`
+	Disabled      bool      `json:"disabled"`
 	CreatedBy     int64     `json:"created_by"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
@@ -100,6 +102,7 @@ func toPublicProvider(p *domain.Provider) publicProvider {
 		BaseURL:       p.BaseURL,
 		HasAPIKey:     p.ApiKey != "",
 		AllowedModels: sliceOrEmpty(p.AllowedModels),
+		Disabled:      p.Disabled,
 		CreatedBy:     p.CreatedBy,
 		CreatedAt:     p.CreatedAt,
 		UpdatedAt:     p.UpdatedAt,
@@ -193,6 +196,7 @@ type patchProviderReq struct {
 	BaseURL       *string  `json:"base_url,omitempty"`
 	APIKey        *string  `json:"api_key,omitempty"`
 	AllowedModels []string `json:"allowed_models,omitempty"`
+	Disabled      *bool    `json:"disabled,omitempty"`
 }
 
 // patchProvider applies a partial update. Name and type are intentionally
@@ -221,8 +225,40 @@ func (h *Handler) patchProvider(w http.ResponseWriter, r *http.Request) {
 	if req.AllowedModels != nil {
 		updated.AllowedModels = sliceOrEmpty(req.AllowedModels)
 	}
+	if req.Disabled != nil {
+		updated.Disabled = *req.Disabled
+	}
 
 	out, err := h.repo.UpdateProvider(r.Context(), &updated)
+	if err != nil {
+		if errors.Is(err, domain.ErrProviderNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "provider not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, toPublicProvider(out))
+}
+
+type setDisabledReq struct {
+	Disabled bool `json:"disabled"`
+}
+
+// setProviderDisabled is the one-shot enable/disable toggle. Separate from
+// patchProvider so the admin UI can flip a switch without round-tripping
+// base_url / allowed_models (which would race a concurrent edit).
+func (h *Handler) setProviderDisabled(w http.ResponseWriter, r *http.Request) {
+	existing, ok := h.loadProviderByName(w, r)
+	if !ok {
+		return
+	}
+	var req setDisabledReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	out, err := h.repo.SetProviderDisabled(r.Context(), existing.ID, req.Disabled)
 	if err != nil {
 		if errors.Is(err, domain.ErrProviderNotFound) {
 			httpx.WriteError(w, http.StatusNotFound, "provider not found")
@@ -282,6 +318,15 @@ func (h *Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
+	offset := 0
+	if raw := q.Get("offset"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid offset")
+			return
+		}
+		offset = n
+	}
 
 	var providerID *int64
 	if name := strings.TrimSpace(q.Get("provider")); name != "" {
@@ -311,7 +356,12 @@ func (h *Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 		since = &t
 	}
 
-	rows, err := h.usage.ListUsage(r.Context(), providerID, since, limit)
+	rows, err := h.usage.ListUsage(r.Context(), providerID, since, offset, limit)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	total, err := h.usage.CountUsage(r.Context(), providerID, since)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -334,7 +384,7 @@ func (h *Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:        u.CreatedAt,
 		})
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
 }
 
 // ---- helpers ----

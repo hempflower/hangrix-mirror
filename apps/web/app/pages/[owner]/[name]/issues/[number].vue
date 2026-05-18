@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   Bot,
   CircleDot,
+  CircleSlash,
   CornerDownRight,
   Diff as DiffIcon,
   GitBranch,
@@ -10,7 +11,10 @@ import {
   GitMerge,
   Lock,
   MessageSquare,
+  MinusCircle,
   Plus,
+  ThumbsDown,
+  ThumbsUp,
 } from 'lucide-vue-next'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import AgentSessionsView from '@/components/issue/AgentSessionsView.vue'
@@ -18,10 +22,10 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Textarea } from '@/components/ui/textarea'
 import FileDiffList from '@/components/repo/FileDiffList.vue'
 import MarkdownBody from '@/components/MarkdownBody.vue'
-import type { Issue, IssueState, IssueTimeline, IssueMergeResp } from '~/types/issue'
+import MentionTextarea from '@/components/issue/MentionTextarea.vue'
+import type { Issue, IssueState, IssueTimeline, IssueMergeResp, ReviewVotePayload, ReviewVoteValue } from '~/types/issue'
 import type { Commit, FileDiff } from '~/types/repo'
 import { relativeTime } from '~/utils/time'
 
@@ -60,6 +64,23 @@ const children = ref<Issue[]>([])
 const commentBody = ref('')
 const commentBusy = ref(false)
 const commentError = ref<string | null>(null)
+
+// Mention suggestions for the comment editor's `@` autocomplete. Loaded
+// once per page from the repo's host yaml; an empty list (no agents
+// declared) just means the dropdown stays closed.
+interface MentionAgent { role_key: string }
+const mentionAgents = ref<MentionAgent[]>([])
+async function loadMentionAgents() {
+  try {
+    const res = await $fetch<{ agents: MentionAgent[] }>(
+      `/api/repos/${owner.value}/${name.value}/mention-suggestions`,
+      { credentials: 'include' },
+    )
+    mentionAgents.value = res.agents ?? []
+  } catch {
+    mentionAgents.value = []
+  }
+}
 
 const stateBusy = ref(false)
 const mergeBusy = ref(false)
@@ -341,6 +362,85 @@ function eventLabel(e: any): string {
   }
 }
 
+// Review state derivation. Each review_vote event is one reviewer (an agent
+// role today, possibly a human later) recording approve / request_changes /
+// abstain. A reviewer can vote multiple times — the most recent vote wins
+// for the "current status" rollup; the timeline still shows the full history.
+interface ReviewerVote {
+  reviewer: string        // agent_role (or actor_username fallback)
+  isAgent: boolean
+  value: ReviewVoteValue
+  reason: string
+  at: string
+}
+const latestVotes = computed<ReviewerVote[]>(() => {
+  const byReviewer = new Map<string, ReviewerVote>()
+  for (const e of timeline.value?.events ?? []) {
+    if (e.kind !== 'review_vote') continue
+    const payload = (e.payload ?? {}) as ReviewVotePayload
+    if (!payload.value) continue
+    const isAgent = Boolean(e.agent_role)
+    const reviewer = e.agent_role || e.actor_username || '—'
+    byReviewer.set(reviewer, {
+      reviewer,
+      isAgent,
+      value: payload.value,
+      reason: payload.reason ?? '',
+      at: e.created_at,
+    })
+  }
+  return Array.from(byReviewer.values()).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+})
+
+const reviewSummary = computed(() => {
+  const counts = { approve: 0, request_changes: 0, abstain: 0 }
+  for (const v of latestVotes.value) counts[v.value]++
+  return counts
+})
+
+// Aggregate verdict mirrors the simplest "can we merge?" mental model:
+// any outstanding request_changes blocks, otherwise at least one approve
+// is a green light, otherwise we're still pending. Abstains never block
+// and never grant approval — they sit out.
+type ReviewVerdict = 'approved' | 'changes_requested' | 'pending'
+const reviewVerdict = computed<ReviewVerdict>(() => {
+  if (reviewSummary.value.request_changes > 0) return 'changes_requested'
+  if (reviewSummary.value.approve > 0) return 'approved'
+  return 'pending'
+})
+
+function voteValueClass(v: ReviewVoteValue) {
+  switch (v) {
+    case 'approve': return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+    case 'request_changes': return 'bg-red-500/15 text-red-700 dark:text-red-300'
+    case 'abstain': return 'bg-slate-500/15 text-slate-700 dark:text-slate-300'
+  }
+}
+function voteValueIcon(v: ReviewVoteValue) {
+  switch (v) {
+    case 'approve': return ThumbsUp
+    case 'request_changes': return ThumbsDown
+    case 'abstain': return MinusCircle
+  }
+}
+function verdictClass(v: ReviewVerdict) {
+  switch (v) {
+    case 'approved': return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+    case 'changes_requested': return 'bg-red-500/15 text-red-700 dark:text-red-300'
+    case 'pending': return 'bg-slate-500/15 text-slate-700 dark:text-slate-300'
+  }
+}
+function verdictIcon(v: ReviewVerdict) {
+  switch (v) {
+    case 'approved': return ThumbsUp
+    case 'changes_requested': return ThumbsDown
+    case 'pending': return CircleSlash
+  }
+}
+function reviewerLabel(v: ReviewerVote) {
+  return v.isAgent ? `@agent-${v.reviewer}` : v.reviewer
+}
+
 const cloneUrl = computed(() => {
   if (!repo.value) return ''
   const origin = import.meta.client ? window.location.origin : ''
@@ -392,7 +492,14 @@ onMounted(async () => {
   await loadRepo()
   await loadIssue()
   if (issue.value) {
-    await Promise.all([loadTimeline(), loadDiff(), loadCommits(), loadParent(), loadChildren()])
+    await Promise.all([
+      loadTimeline(),
+      loadDiff(),
+      loadCommits(),
+      loadParent(),
+      loadChildren(),
+      loadMentionAgents(),
+    ])
   }
   startRefreshTimer()
 })
@@ -473,16 +580,22 @@ onUnmounted(stopRefreshTimer)
 
               <template v-for="it in timelineItems" :key="it.key">
                 <!-- Comments render as full cards with a header strip — the
-                     same layout GitHub uses on issue threads. -->
+                     same layout GitHub uses on issue threads. Agent-authored
+                     comments carry agent_role instead of an author_username
+                     (the row has no user-table FK), so we render `@agent-<role>`
+                     with a Bot avatar — mirroring the review_vote chrome. -->
                 <Card v-if="it.kind === 'comment'" class="gap-0 py-0">
                   <CardContent class="p-0">
                     <div class="flex items-center gap-2 border-b bg-muted/40 px-3 py-2 text-xs">
                       <Avatar class="size-6 shrink-0">
                         <AvatarFallback class="bg-primary/10 text-[10px] text-primary">
-                          {{ initialOf(it.data.author_username) }}
+                          <Bot v-if="it.data.agent_role" class="size-3" />
+                          <template v-else>{{ initialOf(it.data.author_username) }}</template>
                         </AvatarFallback>
                       </Avatar>
-                      <span class="font-medium text-foreground">{{ it.data.author_username }}</span>
+                      <span class="font-medium text-foreground">
+                        {{ it.data.agent_role ? `@agent-${it.data.agent_role}` : (it.data.author_username || '—') }}
+                      </span>
                       <span class="text-muted-foreground">{{ t('issue.commented') }}</span>
                       <span class="text-muted-foreground" :title="formatDate(it.data.created_at)">
                         {{ rel(it.data.created_at) }}
@@ -490,6 +603,43 @@ onUnmounted(stopRefreshTimer)
                     </div>
                     <div class="px-4 py-3 text-sm">
                       <MarkdownBody :source="it.data.body" />
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <!-- review_vote events get the same card chrome as comments
+                     because the reason body is often substantive (the agent
+                     explaining why) — burying it in a one-line event strip
+                     would hide the audit trail humans need to trust the vote. -->
+                <Card
+                  v-else-if="it.kind === 'event' && it.data.kind === 'review_vote'"
+                  class="gap-0 py-0"
+                >
+                  <CardContent class="p-0">
+                    <div class="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-3 py-2 text-xs">
+                      <Avatar class="size-6 shrink-0">
+                        <AvatarFallback class="bg-primary/10 text-[10px] text-primary">
+                          <Bot v-if="it.data.agent_role" class="size-3" />
+                          <template v-else>{{ initialOf(it.data.actor_username) }}</template>
+                        </AvatarFallback>
+                      </Avatar>
+                      <span class="font-medium text-foreground">
+                        {{ it.data.agent_role ? `@agent-${it.data.agent_role}` : (it.data.actor_username || '—') }}
+                      </span>
+                      <Badge
+                        :class="voteValueClass(it.data.payload?.value)"
+                        variant="secondary"
+                      >
+                        <component :is="voteValueIcon(it.data.payload?.value)" class="mr-1 size-3" />
+                        {{ t(`issue.review.vote.${it.data.payload?.value}`) }}
+                      </Badge>
+                      <span class="text-muted-foreground" :title="formatDate(it.data.created_at)">
+                        · {{ rel(it.data.created_at) }}
+                      </span>
+                    </div>
+                    <div class="px-4 py-3 text-sm">
+                      <MarkdownBody v-if="it.data.payload?.reason" :source="it.data.payload.reason" />
+                      <p v-else class="text-muted-foreground">{{ t('issue.review.noReason') }}</p>
                     </div>
                   </CardContent>
                 </Card>
@@ -538,8 +688,9 @@ onUnmounted(stopRefreshTimer)
                     <span class="text-muted-foreground">{{ t('issue.commentForm.title') }}</span>
                   </div>
                   <div class="space-y-2 px-3 py-3">
-                    <Textarea
+                    <MentionTextarea
                       v-model="commentBody"
+                      :suggestions="mentionAgents"
                       rows="8"
                       class="min-h-44 resize-y text-sm leading-relaxed"
                       :placeholder="t('issue.commentForm.placeholder')"
@@ -677,6 +828,65 @@ onUnmounted(stopRefreshTimer)
               <Badge :class="stateBadgeClass(parent.state)" variant="secondary">
                 {{ t(`issue.state.${parent.state}`) }}
               </Badge>
+            </CardContent>
+          </Card>
+
+          <!-- Reviews: at-a-glance "where does this stand?" pane. The verdict
+               chip is the headline (changes_requested blocks merge, approve
+               unblocks, pending = no one has weighed in yet). The roster
+               below shows the *latest* vote per reviewer — earlier votes by
+               the same reviewer are superseded but still visible in the
+               timeline for audit. -->
+          <Card class="gap-0 py-0">
+            <CardContent class="space-y-3 p-4">
+              <div class="flex items-center justify-between gap-2">
+                <p class="flex items-center gap-1 text-xs text-muted-foreground">
+                  <ThumbsUp class="size-3" />
+                  {{ t('issue.review.title') }}
+                </p>
+                <Badge :class="verdictClass(reviewVerdict)" variant="secondary">
+                  <component :is="verdictIcon(reviewVerdict)" class="mr-1 size-3" />
+                  {{ t(`issue.review.verdict.${reviewVerdict}`) }}
+                </Badge>
+              </div>
+
+              <div
+                v-if="latestVotes.length > 0"
+                class="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground"
+              >
+                <span v-if="reviewSummary.approve > 0" class="flex items-center gap-1">
+                  <ThumbsUp class="size-3 text-emerald-600 dark:text-emerald-400" />
+                  {{ t('issue.review.summary.approve', { n: reviewSummary.approve }) }}
+                </span>
+                <span v-if="reviewSummary.request_changes > 0" class="flex items-center gap-1">
+                  <ThumbsDown class="size-3 text-red-600 dark:text-red-400" />
+                  {{ t('issue.review.summary.requestChanges', { n: reviewSummary.request_changes }) }}
+                </span>
+                <span v-if="reviewSummary.abstain > 0" class="flex items-center gap-1">
+                  <MinusCircle class="size-3 text-slate-500" />
+                  {{ t('issue.review.summary.abstain', { n: reviewSummary.abstain }) }}
+                </span>
+              </div>
+
+              <p v-if="latestVotes.length === 0" class="text-xs text-muted-foreground">
+                {{ t('issue.review.empty') }}
+              </p>
+              <ul v-else class="space-y-1.5">
+                <li
+                  v-for="v in latestVotes"
+                  :key="v.reviewer"
+                  class="flex items-center gap-2 text-xs"
+                >
+                  <Bot v-if="v.isAgent" class="size-3 shrink-0 text-muted-foreground" />
+                  <span class="min-w-0 flex-1 truncate font-medium text-foreground" :title="reviewerLabel(v)">
+                    {{ reviewerLabel(v) }}
+                  </span>
+                  <Badge :class="voteValueClass(v.value)" variant="secondary" class="shrink-0">
+                    <component :is="voteValueIcon(v.value)" class="mr-1 size-3" />
+                    {{ t(`issue.review.vote.${v.value}`) }}
+                  </Badge>
+                </li>
+              </ul>
             </CardContent>
           </Card>
 

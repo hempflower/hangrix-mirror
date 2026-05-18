@@ -111,6 +111,7 @@ func (r *PostgresRepo) UpdateProvider(ctx context.Context, p *domain.Provider) (
 		BaseUrl:         p.BaseURL,
 		ApiKeyEncrypted: sealedArg,
 		AllowedModels:   p.AllowedModels,
+		Disabled:        p.Disabled,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -153,6 +154,24 @@ func (r *PostgresRepo) ListProviders(ctx context.Context) ([]*domain.Provider, e
 		out = append(out, providerFromRow(row))
 	}
 	return out, nil
+}
+
+// SetProviderDisabled flips the disabled flag without touching the rest of
+// the row. Returns the updated provider (sealed key still opaque). The
+// admin handler uses this as a one-call toggle so it doesn't have to read
+// the row, mutate, and write it back.
+func (r *PostgresRepo) SetProviderDisabled(ctx context.Context, id int64, disabled bool) (*domain.Provider, error) {
+	row, err := r.q.SetProviderDisabled(ctx, llmproviderdb.SetProviderDisabledParams{
+		ID:       id,
+		Disabled: disabled,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrProviderNotFound
+		}
+		return nil, err
+	}
+	return providerFromRow(row), nil
 }
 
 func (r *PostgresRepo) DeleteProvider(ctx context.Context, id int64) error {
@@ -208,21 +227,15 @@ func (r *PostgresRepo) RecordUsage(ctx context.Context, u *domain.UsageRecord) e
 }
 
 // ListUsage is a read helper outside the Repo interface — the admin handler
-// renders it; the proxy never calls it. since/limit are clamped by the caller.
-func (r *PostgresRepo) ListUsage(ctx context.Context, providerID *int64, since *time.Time, limit int) ([]*UsageRow, error) {
-	var (
-		provArg  pgtype.Int8
-		sinceArg pgtype.Timestamptz
-	)
-	if providerID != nil {
-		provArg = pgtype.Int8{Int64: *providerID, Valid: true}
-	}
-	if since != nil {
-		sinceArg = pgtype.Timestamptz{Time: *since, Valid: true}
-	}
+// renders it; the proxy never calls it. since/limit/offset are clamped by
+// the caller; offset paginates a window over the same filter set, and
+// CountUsage exposes the matching total so the UI can render a page count.
+func (r *PostgresRepo) ListUsage(ctx context.Context, providerID *int64, since *time.Time, offset, limit int) ([]*UsageRow, error) {
+	provArg, sinceArg := usageFilterArgs(providerID, since)
 	rows, err := r.q.ListUsage(ctx, llmproviderdb.ListUsageParams{
 		ProviderID: provArg,
 		Since:      sinceArg,
+		Off:        int32(offset),
 		Lim:        int32(limit),
 	})
 	if err != nil {
@@ -251,6 +264,30 @@ func (r *PostgresRepo) ListUsage(ctx context.Context, providerID *int64, since *
 		out = append(out, ur)
 	}
 	return out, nil
+}
+
+// CountUsage returns the row count matching the same filter set as
+// ListUsage — the admin page pairs the two to drive its pager.
+func (r *PostgresRepo) CountUsage(ctx context.Context, providerID *int64, since *time.Time) (int64, error) {
+	provArg, sinceArg := usageFilterArgs(providerID, since)
+	return r.q.CountUsage(ctx, llmproviderdb.CountUsageParams{
+		ProviderID: provArg,
+		Since:      sinceArg,
+	})
+}
+
+func usageFilterArgs(providerID *int64, since *time.Time) (pgtype.Int8, pgtype.Timestamptz) {
+	var (
+		provArg  pgtype.Int8
+		sinceArg pgtype.Timestamptz
+	)
+	if providerID != nil {
+		provArg = pgtype.Int8{Int64: *providerID, Valid: true}
+	}
+	if since != nil {
+		sinceArg = pgtype.Timestamptz{Time: *since, Valid: true}
+	}
+	return provArg, sinceArg
 }
 
 // UsageRow is the read-side projection returned by ListUsage. It mirrors
@@ -282,6 +319,7 @@ func providerFromRow(r llmproviderdb.LlmProvider) *domain.Provider {
 		BaseURL:       r.BaseUrl,
 		ApiKey:        r.ApiKeyEncrypted,
 		AllowedModels: r.AllowedModels,
+		Disabled:      r.Disabled,
 		CreatedBy:     r.CreatedBy,
 		CreatedAt:     r.CreatedAt.Time,
 		UpdatedAt:     r.UpdatedAt.Time,

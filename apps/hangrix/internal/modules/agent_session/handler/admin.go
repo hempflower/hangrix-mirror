@@ -85,7 +85,15 @@ func (h *AdminHandler) listRecent(w http.ResponseWriter, r *http.Request) {
 		}
 		opts.Limit = n
 	}
-	rows, err := h.auditor.ListRecent(r.Context(), opts)
+	if v := strings.TrimSpace(q.Get("offset")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid offset")
+			return
+		}
+		opts.Offset = n
+	}
+	rows, total, err := h.auditor.ListRecent(r.Context(), opts)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -94,7 +102,7 @@ func (h *AdminHandler) listRecent(w http.ResponseWriter, r *http.Request) {
 	for _, r := range rows {
 		items = append(items, toPublicAuditSession(r))
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
 }
 
 type publicAuditSession struct {

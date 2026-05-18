@@ -327,13 +327,16 @@ type SessionMessage struct {
 
 // RecentFilter is the optional-filter bag for Auditor.ListRecent. Each
 // pointer field is nil-means-no-constraint. Limit <= 0 falls back to a
-// server-side default.
+// server-side default; Offset < 0 is treated as 0. Limit/Offset window the
+// result; the matching unbounded total comes back alongside the page so the
+// admin UI can render a pager.
 type RecentFilter struct {
 	RoleKey *string
 	Status  *string
 	RepoID  *int64
 	Since   *time.Time
 	Limit   int
+	Offset  int
 }
 
 // Auditor exposes the agent-session audit view. Mounted under the issue
@@ -346,10 +349,11 @@ type Auditor interface {
 	// audit view is append-only.
 	ListByIssue(ctx context.Context, repoID int64, issueNumber int32) ([]AuditSession, error)
 
-	// ListRecent returns the most-recent sessions across the platform
-	// (newest first), filtered by optional role / status / repo /
-	// since. Powers the admin global audit view.
-	ListRecent(ctx context.Context, opts RecentFilter) ([]AuditSession, error)
+	// ListRecent returns one page of the most-recent sessions across the
+	// platform (newest first), filtered by optional role / status / repo /
+	// since, alongside the unbounded total matching the same filter set so
+	// callers can render a pager. Powers the admin global audit view.
+	ListRecent(ctx context.Context, opts RecentFilter) (rows []AuditSession, total int64, err error)
 
 	// GetSession returns one session by id. Caller is responsible for
 	// any (repo, issue) scoping — the method does not enforce it on

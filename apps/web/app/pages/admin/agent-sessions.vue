@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Pagination } from '@/components/ui/pagination'
 import {
   Select,
   SelectContent,
@@ -28,6 +29,7 @@ setBreadcrumbs(() => [
 ])
 
 const rows = ref<AdminAgentSession[]>([])
+const total = ref(0)
 const loading = ref(false)
 const error = ref<string | null>(null)
 
@@ -36,7 +38,8 @@ const filterRole = ref<string>('')
 const filterStatus = ref<string>(ANY_STATUS)
 const filterRepoID = ref<string>('')
 const filterSince = ref<string>('')
-const filterLimit = ref<number>(100)
+const pageSize = ref<number>(50)
+const offset = ref<number>(0)
 
 const STATUSES = ['pending', 'claimed', 'running', 'idle', 'succeeded', 'failed', 'cancelled', 'archived'] as const
 
@@ -61,13 +64,18 @@ function duration(start: string, end?: string | null) {
   return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`
 }
 
+// Summary cards count rows on the visible page; the platform-wide total is
+// surfaced by the pager beneath the table.
 const liveCount = computed(() => rows.value.filter(r => ['pending', 'claimed', 'running', 'idle'].includes(r.status)).length)
 const failedCount = computed(() => rows.value.filter(r => r.status === 'failed').length)
 
 async function load() {
   loading.value = true
   error.value = null
-  const params: Record<string, string> = { limit: String(filterLimit.value) }
+  const params: Record<string, string> = {
+    limit: String(pageSize.value),
+    offset: String(offset.value),
+  }
   if (filterRole.value) params.role_key = filterRole.value
   if (filterStatus.value && filterStatus.value !== ANY_STATUS) params.status = filterStatus.value
   if (filterRepoID.value) params.repo_id = filterRepoID.value
@@ -81,11 +89,22 @@ async function load() {
       params,
     })
     rows.value = res.items ?? []
+    total.value = res.total ?? 0
   } catch (e: any) {
     error.value = e?.data?.error ?? t('admin.agentSessions.loadFailed')
   } finally {
     loading.value = false
   }
+}
+
+function applyFilters() {
+  offset.value = 0
+  load()
+}
+
+function onOffsetChange(v: number) {
+  offset.value = v
+  load()
 }
 
 onMounted(load)
@@ -102,7 +121,7 @@ onMounted(load)
       <Card>
         <CardHeader class="pb-2">
           <CardDescription>{{ t('admin.agentSessions.summary.total') }}</CardDescription>
-          <CardTitle class="text-3xl tabular-nums">{{ rows.length }}</CardTitle>
+          <CardTitle class="text-3xl tabular-nums">{{ total }}</CardTitle>
         </CardHeader>
       </Card>
       <Card>
@@ -125,7 +144,7 @@ onMounted(load)
         <CardDescription>{{ t('admin.agentSessions.cardDescription') }}</CardDescription>
       </CardHeader>
       <CardContent class="space-y-4">
-        <div class="grid gap-3 sm:grid-cols-5">
+        <div class="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <div>
             <Label class="text-xs">{{ t('admin.agentSessions.filters.role') }}</Label>
             <Input v-model="filterRole" placeholder="backend" />
@@ -150,8 +169,12 @@ onMounted(load)
             <Label class="text-xs">{{ t('admin.agentSessions.filters.since') }}</Label>
             <Input v-model="filterSince" type="datetime-local" />
           </div>
+          <div>
+            <Label class="text-xs">{{ t('common.pagination.pageSize') }}</Label>
+            <Input v-model.number="pageSize" type="number" min="1" max="500" />
+          </div>
           <div class="flex items-end">
-            <Button class="w-full" @click="load">
+            <Button class="w-full" @click="applyFilters">
               <Search class="size-4" />
               {{ t('admin.agentSessions.applyFilters') }}
             </Button>
@@ -218,6 +241,14 @@ onMounted(load)
           {{ t('admin.agentSessions.openHint') }}
           <ExternalLink class="inline size-3" />
         </p>
+
+        <Pagination
+          v-if="total > 0"
+          :total="total"
+          :offset="offset"
+          :limit="pageSize"
+          @update:offset="onOffsetChange"
+        />
       </CardContent>
     </Card>
   </div>

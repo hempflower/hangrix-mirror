@@ -98,6 +98,12 @@ type publicRunner struct {
 	OwnerUserID       *int64      `json:"owner_user_id,omitempty"`
 	Visibility        string      `json:"visibility"`
 	Status            string      `json:"status"`
+	// Online is a derived liveness flag: true when Status=='active' AND
+	// the last heartbeat is within domain.HeartbeatStaleThreshold of the
+	// server clock at response time. The UI uses this to surface "offline"
+	// for an admin-active runner that has stopped beating, since Status
+	// itself only changes on explicit admin action.
+	Online            bool        `json:"online"`
 	Capabilities      interface{} `json:"capabilities"`
 	LastHeartbeatAt   *time.Time  `json:"last_heartbeat_at,omitempty"`
 	EnrollTokenPrefix string      `json:"enroll_token_prefix"`
@@ -120,6 +126,7 @@ func toPublicRunner(r *domain.Runner) publicRunner {
 		OwnerUserID:       r.OwnerUserID,
 		Visibility:        string(r.Visibility),
 		Status:            string(r.Status),
+		Online:            r.Online(time.Now()),
 		Capabilities:      caps,
 		LastHeartbeatAt:   r.LastHeartbeatAt,
 		EnrollTokenPrefix: r.EnrollTokenPrefix,

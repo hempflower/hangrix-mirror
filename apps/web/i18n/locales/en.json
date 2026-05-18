@@ -103,7 +103,14 @@
     "search": "Search",
     "close": "Close",
     "confirm": "Confirm",
-    "back": "Back"
+    "back": "Back",
+    "pagination": {
+      "prev": "Previous",
+      "next": "Next",
+      "page": "Page {page} of {total}",
+      "summary": "{from}–{to} of {total}",
+      "pageSize": "Per page"
+    }
   },
   "role": {
     "admin": "admin",
@@ -180,9 +187,16 @@
       "emptyHint": "Without at least one provider, no agent can call an LLM.",
       "apiKeySet": "configured",
       "apiKeyMissing": "missing",
+      "enabled": "enabled",
+      "disabled": "disabled",
+      "enable": "Enable",
+      "disable": "Disable",
+      "disableConfirm": "Disable provider \"{name}\"? Any model that resolves only to this provider will start returning 404 from the proxy until re-enabled.",
+      "toggleFailed": "Toggle failed",
       "cols": {
         "name": "Name",
         "type": "Type",
+        "status": "Status",
         "baseUrl": "Base URL",
         "apiKey": "API key",
         "models": "Allowed models"
@@ -217,6 +231,7 @@
       "enrolled": "enrolled",
       "notEnrolled": "pending enroll",
       "neverHeartbeat": "never",
+      "offline": "offline",
       "remove": "Remove",
       "removeConfirm": "Permanently remove runner \"{name}\"? Historical sessions stay but lose their runner pointer. This cannot be undone.",
       "removeFailed": "Remove failed",
@@ -596,7 +611,27 @@
     "subIssueOf": "Sub-issue of",
     "subIssues": "Sub-issues",
     "newSubIssue": "New sub-issue",
-    "noSubIssues": "No sub-issues yet."
+    "noSubIssues": "No sub-issues yet.",
+    "review": {
+      "title": "Reviews",
+      "empty": "No reviews yet.",
+      "noReason": "No rationale provided.",
+      "vote": {
+        "approve": "Approved",
+        "request_changes": "Changes requested",
+        "abstain": "Abstained"
+      },
+      "verdict": {
+        "approved": "Approved",
+        "changes_requested": "Changes requested",
+        "pending": "Pending review"
+      },
+      "summary": {
+        "approve": "{n} approved",
+        "requestChanges": "{n} requested changes",
+        "abstain": "{n} abstained"
+      }
+    }
   },
   "pat": {
     "title": "Personal Access Tokens",

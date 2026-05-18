@@ -135,7 +135,17 @@ WHERE (sqlc.narg('role_key')::TEXT   IS NULL OR role_key   = sqlc.narg('role_key
   AND (sqlc.narg('repo_id')::BIGINT  IS NULL OR repo_id    = sqlc.narg('repo_id')::BIGINT)
   AND (sqlc.narg('since')::TIMESTAMPTZ IS NULL OR created_at >= sqlc.narg('since')::TIMESTAMPTZ)
 ORDER BY id DESC
-LIMIT sqlc.arg('lim');
+LIMIT sqlc.arg('lim')
+OFFSET sqlc.arg('off');
+
+-- name: CountRecentSessions :one
+-- Counterpart to ListRecentSessions: mirrors the same WHERE clause so the
+-- admin agent-sessions page can render a total alongside the paged window.
+SELECT COUNT(*)::BIGINT FROM agent_sessions
+WHERE (sqlc.narg('role_key')::TEXT   IS NULL OR role_key   = sqlc.narg('role_key')::TEXT)
+  AND (sqlc.narg('status')::TEXT     IS NULL OR status     = sqlc.narg('status')::TEXT)
+  AND (sqlc.narg('repo_id')::BIGINT  IS NULL OR repo_id    = sqlc.narg('repo_id')::BIGINT)
+  AND (sqlc.narg('since')::TIMESTAMPTZ IS NULL OR created_at >= sqlc.narg('since')::TIMESTAMPTZ);
 
 -- name: ArchiveSessionsByIssue :execrows
 -- Flip every non-archived session on this (repo, issue) to archived.

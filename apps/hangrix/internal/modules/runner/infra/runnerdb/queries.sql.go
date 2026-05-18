@@ -213,6 +213,35 @@ func (q *Queries) ClaimSessionUpdate(ctx context.Context, arg ClaimSessionUpdate
 	return err
 }
 
+const countRecentSessions = `-- name: CountRecentSessions :one
+SELECT COUNT(*)::BIGINT FROM agent_sessions
+WHERE ($1::TEXT   IS NULL OR role_key   = $1::TEXT)
+  AND ($2::TEXT     IS NULL OR status     = $2::TEXT)
+  AND ($3::BIGINT  IS NULL OR repo_id    = $3::BIGINT)
+  AND ($4::TIMESTAMPTZ IS NULL OR created_at >= $4::TIMESTAMPTZ)
+`
+
+type CountRecentSessionsParams struct {
+	RoleKey pgtype.Text
+	Status  pgtype.Text
+	RepoID  pgtype.Int8
+	Since   pgtype.Timestamptz
+}
+
+// Counterpart to ListRecentSessions: mirrors the same WHERE clause so the
+// admin agent-sessions page can render a total alongside the paged window.
+func (q *Queries) CountRecentSessions(ctx context.Context, arg CountRecentSessionsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countRecentSessions,
+		arg.RoleKey,
+		arg.Status,
+		arg.RepoID,
+		arg.Since,
+	)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createRunner = `-- name: CreateRunner :one
 
 INSERT INTO runners (
@@ -675,7 +704,8 @@ WHERE ($1::TEXT   IS NULL OR role_key   = $1::TEXT)
   AND ($3::BIGINT  IS NULL OR repo_id    = $3::BIGINT)
   AND ($4::TIMESTAMPTZ IS NULL OR created_at >= $4::TIMESTAMPTZ)
 ORDER BY id DESC
-LIMIT $5
+LIMIT $6
+OFFSET $5
 `
 
 type ListRecentSessionsParams struct {
@@ -683,6 +713,7 @@ type ListRecentSessionsParams struct {
 	Status  pgtype.Text
 	RepoID  pgtype.Int8
 	Since   pgtype.Timestamptz
+	Off     int32
 	Lim     int32
 }
 
@@ -696,6 +727,7 @@ func (q *Queries) ListRecentSessions(ctx context.Context, arg ListRecentSessions
 		arg.Status,
 		arg.RepoID,
 		arg.Since,
+		arg.Off,
 		arg.Lim,
 	)
 	if err != nil {

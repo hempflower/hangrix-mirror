@@ -85,6 +85,29 @@ type Runner struct {
 	UpdatedAt           time.Time
 }
 
+// HeartbeatStaleThreshold is how long the platform waits after a
+// runner's last_heartbeat_at before declaring it offline for liveness
+// purposes. The runner heartbeats every 20s (loop.HeartbeatEvery); 60s
+// covers ~3 missed ticks plus network jitter without flapping on a
+// single missed beat. It does NOT affect Status — that stays admin-
+// driven (active/disabled/pending). Used only to derive the runtime
+// liveness flag surfaced to operators.
+const HeartbeatStaleThreshold = 60 * time.Second
+
+// Online reports whether the runner has heartbeated recently enough to
+// be considered live. A disabled or never-enrolled runner is never
+// online regardless of past beats; an active runner is online iff its
+// last beat is within HeartbeatStaleThreshold of `now`.
+func (r *Runner) Online(now time.Time) bool {
+	if r.Status != StatusActive {
+		return false
+	}
+	if r.LastHeartbeatAt == nil {
+		return false
+	}
+	return now.Sub(*r.LastHeartbeatAt) <= HeartbeatStaleThreshold
+}
+
 // AgentTokenActive reports whether the runner currently holds a usable
 // long-term token. False means: never redeemed, or revoked, or runner
 // disabled. The runner-facing HTTP layer rejects any non-active runner
@@ -228,6 +251,15 @@ type SessionFilter struct {
 	Status  *string
 	RepoID  *int64
 	Since   *time.Time
+}
+
+// SessionPage carries offset/limit for ListRecentSessions paging. Kept
+// separate from SessionFilter so the WHERE-side knobs and the windowing
+// knobs don't fight in callers that only need one. limit <= 0 falls back
+// to a server-side default; offset < 0 is treated as 0.
+type SessionPage struct {
+	Offset int
+	Limit  int
 }
 
 // MessageKind is the discriminator on agent_session_messages.kind. The set
@@ -466,10 +498,15 @@ type Repo interface {
 	// to (a) skip duplicate spawns on a role that already has a session
 	// for an issue and (b) drive the audit query view.
 	ListSessionsByIssue(ctx context.Context, repoID int64, issueNumber int32) ([]*AgentSession, error)
-	// ListRecentSessions returns the most-recent agent_sessions across
-	// the platform, newest first, with optional filters. Powers the
-	// global admin audit view (/api/admin/agent-sessions).
-	ListRecentSessions(ctx context.Context, filter SessionFilter, limit int) ([]*AgentSession, error)
+	// ListRecentSessions returns one page of the most-recent agent_sessions
+	// across the platform, newest first, with optional filters. Powers the
+	// global admin audit view (/api/admin/agent-sessions). Caller pairs this
+	// with CountRecentSessions to drive the pager.
+	ListRecentSessions(ctx context.Context, filter SessionFilter, page SessionPage) ([]*AgentSession, error)
+	// CountRecentSessions returns the total rows matching the same filter
+	// set as ListRecentSessions (windowing knobs ignored). Cheap COUNT(*)
+	// on a partial index; safe to issue per page-load.
+	CountRecentSessions(ctx context.Context, filter SessionFilter) (int64, error)
 	ClaimNextSession(ctx context.Context, runnerID int64) (*AgentSession, error)
 	MarkSessionRunning(ctx context.Context, id int64) error
 	MarkSessionTerminal(ctx context.Context, id int64, status SessionStatus, exitCode *int32, errMsg string) error

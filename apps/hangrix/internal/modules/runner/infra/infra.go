@@ -388,26 +388,20 @@ func (r *PostgresRepo) ListSessionsByIssue(ctx context.Context, repoID int64, is
 	return out, nil
 }
 
-// ListRecentSessions returns the most-recent agent_sessions across the
-// platform with optional filters. Powers the admin global audit view —
-// when all filters are nil it's a "show me the last N sessions" feed.
-func (r *PostgresRepo) ListRecentSessions(ctx context.Context, filter domain.SessionFilter, limit int) ([]*domain.AgentSession, error) {
+// ListRecentSessions returns one page of agent_sessions across the platform
+// with optional filters. Powers the admin global audit view — when all
+// filters are nil it's a "show me the last N sessions" feed.
+func (r *PostgresRepo) ListRecentSessions(ctx context.Context, filter domain.SessionFilter, page domain.SessionPage) ([]*domain.AgentSession, error) {
+	limit := page.Limit
 	if limit <= 0 {
 		limit = 100
 	}
-	params := runnerdb.ListRecentSessionsParams{Lim: int32(limit)}
-	if filter.RoleKey != nil {
-		params.RoleKey = pgtype.Text{String: *filter.RoleKey, Valid: true}
+	offset := page.Offset
+	if offset < 0 {
+		offset = 0
 	}
-	if filter.Status != nil {
-		params.Status = pgtype.Text{String: *filter.Status, Valid: true}
-	}
-	if filter.RepoID != nil {
-		params.RepoID = pgtype.Int8{Int64: *filter.RepoID, Valid: true}
-	}
-	if filter.Since != nil {
-		params.Since = pgtype.Timestamptz{Time: *filter.Since, Valid: true}
-	}
+	params := runnerdb.ListRecentSessionsParams{Lim: int32(limit), Off: int32(offset)}
+	applyRecentSessionFilter(&params.RoleKey, &params.Status, &params.RepoID, &params.Since, filter)
 	rows, err := r.q.ListRecentSessions(ctx, params)
 	if err != nil {
 		return nil, err
@@ -417,6 +411,30 @@ func (r *PostgresRepo) ListRecentSessions(ctx context.Context, filter domain.Ses
 		out = append(out, sessionFromRow(row))
 	}
 	return out, nil
+}
+
+// CountRecentSessions counts rows matching the same filter set as
+// ListRecentSessions. Windowing knobs are intentionally ignored — the page
+// component needs the unbounded total.
+func (r *PostgresRepo) CountRecentSessions(ctx context.Context, filter domain.SessionFilter) (int64, error) {
+	var params runnerdb.CountRecentSessionsParams
+	applyRecentSessionFilter(&params.RoleKey, &params.Status, &params.RepoID, &params.Since, filter)
+	return r.q.CountRecentSessions(ctx, params)
+}
+
+func applyRecentSessionFilter(roleKey, status *pgtype.Text, repoID *pgtype.Int8, since *pgtype.Timestamptz, filter domain.SessionFilter) {
+	if filter.RoleKey != nil {
+		*roleKey = pgtype.Text{String: *filter.RoleKey, Valid: true}
+	}
+	if filter.Status != nil {
+		*status = pgtype.Text{String: *filter.Status, Valid: true}
+	}
+	if filter.RepoID != nil {
+		*repoID = pgtype.Int8{Int64: *filter.RepoID, Valid: true}
+	}
+	if filter.Since != nil {
+		*since = pgtype.Timestamptz{Time: *filter.Since, Valid: true}
+	}
 }
 
 // ArchiveSessionsByIssue flips every non-archived session for the (repo,

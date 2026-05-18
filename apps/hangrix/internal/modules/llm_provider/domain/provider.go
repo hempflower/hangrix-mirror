@@ -66,9 +66,13 @@ type Provider struct {
 	BaseURL       string
 	ApiKey        string // sealed blob; opaque to everyone except cryptobox
 	AllowedModels []string
-	CreatedBy     int64
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// Disabled flips the row out of routing without deleting it.
+	// FindProviderByModel skips disabled rows, so the proxy returns
+	// ErrNoModelMatch as if the provider didn't exist.
+	Disabled  bool
+	CreatedBy int64
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // UsageRecord is one row in the llm_usage_log table, written by the proxy
@@ -110,6 +114,7 @@ type Repo interface {
 	GetProviderByID(ctx context.Context, id int64) (*Provider, error)
 	ListProviders(ctx context.Context) ([]*Provider, error)
 	UpdateProvider(ctx context.Context, p *Provider) (*Provider, error)
+	SetProviderDisabled(ctx context.Context, id int64, disabled bool) (*Provider, error)
 	DeleteProvider(ctx context.Context, id int64) error
 
 	// FindProviderByModel returns the lowest-id provider whose

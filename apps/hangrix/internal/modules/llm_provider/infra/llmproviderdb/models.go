@@ -18,6 +18,7 @@ type LlmProvider struct {
 	CreatedBy       int64
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
+	Disabled        bool
 }
 
 type LlmUsageLog struct {

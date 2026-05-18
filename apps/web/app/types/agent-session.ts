@@ -17,4 +17,5 @@ export interface AdminAgentSession {
 
 export interface AdminAgentSessionListResp {
   items: AdminAgentSession[]
+  total: number
 }

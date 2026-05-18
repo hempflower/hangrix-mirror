@@ -11,6 +11,27 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countUsage = `-- name: CountUsage :one
+SELECT COUNT(*)::BIGINT
+FROM llm_usage_log u
+WHERE ($1::BIGINT IS NULL OR u.provider_id = $1)
+  AND ($2::TIMESTAMPTZ IS NULL OR u.created_at >= $2)
+`
+
+type CountUsageParams struct {
+	ProviderID pgtype.Int8
+	Since      pgtype.Timestamptz
+}
+
+// Mirrors ListUsage's WHERE clause so the admin usage page can render the
+// total row count alongside the paged window.
+func (q *Queries) CountUsage(ctx context.Context, arg CountUsageParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countUsage, arg.ProviderID, arg.Since)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createProvider = `-- name: CreateProvider :one
 INSERT INTO llm_providers (
     name, type, base_url, api_key_encrypted, allowed_models, created_by
@@ -22,7 +43,7 @@ INSERT INTO llm_providers (
     $5,
     $6
 )
-RETURNING id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at
+RETURNING id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled
 `
 
 type CreateProviderParams struct {
@@ -54,6 +75,7 @@ func (q *Queries) CreateProvider(ctx context.Context, arg CreateProviderParams) 
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Disabled,
 	)
 	return i, err
 }
@@ -71,15 +93,18 @@ func (q *Queries) DeleteProvider(ctx context.Context, id int64) (int64, error) {
 }
 
 const findProviderByModel = `-- name: FindProviderByModel :one
-SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at FROM llm_providers
+SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled FROM llm_providers
 WHERE $1::TEXT = ANY(allowed_models)
+  AND NOT disabled
 ORDER BY id ASC
 LIMIT 1
 `
 
 // Lowest-id provider whose allowed_models contains :model wins. Explicit
 // ::TEXT cast tells sqlc that the parameter is a single string, not an
-// array — without it the inferred type matches the column type.
+// array — without it the inferred type matches the column type. Disabled
+// providers are filtered out so the proxy responds 404 instead of routing
+// to an upstream the operator has paused.
 func (q *Queries) FindProviderByModel(ctx context.Context, model string) (LlmProvider, error) {
 	row := q.db.QueryRow(ctx, findProviderByModel, model)
 	var i LlmProvider
@@ -93,12 +118,13 @@ func (q *Queries) FindProviderByModel(ctx context.Context, model string) (LlmPro
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Disabled,
 	)
 	return i, err
 }
 
 const getProviderByID = `-- name: GetProviderByID :one
-SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at FROM llm_providers WHERE id = $1
+SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled FROM llm_providers WHERE id = $1
 `
 
 func (q *Queries) GetProviderByID(ctx context.Context, id int64) (LlmProvider, error) {
@@ -114,12 +140,13 @@ func (q *Queries) GetProviderByID(ctx context.Context, id int64) (LlmProvider, e
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Disabled,
 	)
 	return i, err
 }
 
 const getProviderByName = `-- name: GetProviderByName :one
-SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at FROM llm_providers WHERE name = $1
+SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled FROM llm_providers WHERE name = $1
 `
 
 func (q *Queries) GetProviderByName(ctx context.Context, name string) (LlmProvider, error) {
@@ -135,12 +162,13 @@ func (q *Queries) GetProviderByName(ctx context.Context, name string) (LlmProvid
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Disabled,
 	)
 	return i, err
 }
 
 const listProviders = `-- name: ListProviders :many
-SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at FROM llm_providers ORDER BY name ASC
+SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled FROM llm_providers ORDER BY name ASC
 `
 
 func (q *Queries) ListProviders(ctx context.Context) ([]LlmProvider, error) {
@@ -162,6 +190,7 @@ func (q *Queries) ListProviders(ctx context.Context) ([]LlmProvider, error) {
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Disabled,
 		); err != nil {
 			return nil, err
 		}
@@ -180,12 +209,14 @@ JOIN llm_providers p ON p.id = u.provider_id
 WHERE ($1::BIGINT IS NULL OR u.provider_id = $1)
   AND ($2::TIMESTAMPTZ IS NULL OR u.created_at >= $2)
 ORDER BY u.created_at DESC
-LIMIT $3
+LIMIT $4
+OFFSET $3
 `
 
 type ListUsageParams struct {
 	ProviderID pgtype.Int8
 	Since      pgtype.Timestamptz
+	Off        int32
 	Lim        int32
 }
 
@@ -206,7 +237,12 @@ type ListUsageRow struct {
 }
 
 func (q *Queries) ListUsage(ctx context.Context, arg ListUsageParams) ([]ListUsageRow, error) {
-	rows, err := q.db.Query(ctx, listUsage, arg.ProviderID, arg.Since, arg.Lim)
+	rows, err := q.db.Query(ctx, listUsage,
+		arg.ProviderID,
+		arg.Since,
+		arg.Off,
+		arg.Lim,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -287,20 +323,56 @@ func (q *Queries) RecordUsage(ctx context.Context, arg RecordUsageParams) error 
 	return err
 }
 
+const setProviderDisabled = `-- name: SetProviderDisabled :one
+UPDATE llm_providers SET
+    disabled   = $1,
+    updated_at = NOW()
+WHERE id = $2
+RETURNING id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled
+`
+
+type SetProviderDisabledParams struct {
+	Disabled bool
+	ID       int64
+}
+
+// Dedicated flip so the admin UI can toggle enable/disable without having
+// to round-trip the full UpdateProvider payload (and without risking a
+// stale base_url / allowed_models clobber).
+func (q *Queries) SetProviderDisabled(ctx context.Context, arg SetProviderDisabledParams) (LlmProvider, error) {
+	row := q.db.QueryRow(ctx, setProviderDisabled, arg.Disabled, arg.ID)
+	var i LlmProvider
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Type,
+		&i.BaseUrl,
+		&i.ApiKeyEncrypted,
+		&i.AllowedModels,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Disabled,
+	)
+	return i, err
+}
+
 const updateProvider = `-- name: UpdateProvider :one
 UPDATE llm_providers SET
     base_url          = $1,
     api_key_encrypted = COALESCE($2, api_key_encrypted),
     allowed_models    = $3,
+    disabled          = $4,
     updated_at        = NOW()
-WHERE id = $4
-RETURNING id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at
+WHERE id = $5
+RETURNING id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled
 `
 
 type UpdateProviderParams struct {
 	BaseUrl         string
 	ApiKeyEncrypted pgtype.Text
 	AllowedModels   []string
+	Disabled        bool
 	ID              int64
 }
 
@@ -311,6 +383,7 @@ func (q *Queries) UpdateProvider(ctx context.Context, arg UpdateProviderParams) 
 		arg.BaseUrl,
 		arg.ApiKeyEncrypted,
 		arg.AllowedModels,
+		arg.Disabled,
 		arg.ID,
 	)
 	var i LlmProvider
@@ -324,6 +397,7 @@ func (q *Queries) UpdateProvider(ctx context.Context, arg UpdateProviderParams) 
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Disabled,
 	)
 	return i, err
 }

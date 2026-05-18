@@ -16,4 +16,5 @@ export interface LLMUsage {
 
 export interface LLMUsageListResp {
   items: LLMUsage[]
+  total: number
 }

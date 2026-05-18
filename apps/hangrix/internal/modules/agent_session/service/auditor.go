@@ -67,18 +67,26 @@ func (a *Auditor) ListByIssue(ctx context.Context, repoID int64, issueNumber int
 	return out, nil
 }
 
-// ListRecent satisfies domain.Auditor. Returns the most-recent
-// sessions across the platform, newest first, with optional filters.
-// Powers the admin global audit view.
-func (a *Auditor) ListRecent(ctx context.Context, opts domain.RecentFilter) ([]domain.AuditSession, error) {
-	rows, err := a.runner.ListRecentSessions(ctx, runnerdomain.SessionFilter{
+// ListRecent satisfies domain.Auditor. Returns one page of the most-recent
+// sessions across the platform alongside the unbounded total matching the
+// same filter set. Powers the admin global audit view.
+func (a *Auditor) ListRecent(ctx context.Context, opts domain.RecentFilter) ([]domain.AuditSession, int64, error) {
+	filter := runnerdomain.SessionFilter{
 		RoleKey: opts.RoleKey,
 		Status:  opts.Status,
 		RepoID:  opts.RepoID,
 		Since:   opts.Since,
-	}, opts.Limit)
+	}
+	rows, err := a.runner.ListRecentSessions(ctx, filter, runnerdomain.SessionPage{
+		Offset: opts.Offset,
+		Limit:  opts.Limit,
+	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	total, err := a.runner.CountRecentSessions(ctx, filter)
+	if err != nil {
+		return nil, 0, err
 	}
 	out := make([]domain.AuditSession, 0, len(rows))
 	for _, r := range rows {
@@ -111,7 +119,7 @@ func (a *Auditor) ListRecent(ctx context.Context, opts domain.RecentFilter) ([]d
 			EndedAt:      r.EndedAt,
 		})
 	}
-	return out, nil
+	return out, total, nil
 }
 
 // GetSession returns one session converted to the AuditSession DTO.

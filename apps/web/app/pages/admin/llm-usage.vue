@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Pagination } from '@/components/ui/pagination'
 import {
   Select,
   SelectContent,
@@ -29,6 +30,7 @@ setBreadcrumbs(() => [
 ])
 
 const rows = ref<LLMUsage[]>([])
+const total = ref(0)
 const providers = ref<LLMProvider[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -36,10 +38,13 @@ const error = ref<string | null>(null)
 const ANY_PROVIDER = '__any__'
 const filterProvider = ref<string>(ANY_PROVIDER)
 const filterSince = ref<string>('')
-const filterLimit = ref<number>(100)
+const pageSize = ref<number>(50)
+const offset = ref<number>(0)
 
+// Aggregate cards reflect the visible page — total_calls comes from the
+// server-side count so it stays accurate even when only one page is loaded.
 const totalTokens = computed(() => rows.value.reduce((a, r) => a + r.total_tokens, 0))
-const totalCalls = computed(() => rows.value.length)
+const totalCalls = computed(() => total.value)
 const errorCalls = computed(() => rows.value.filter(r => r.status_code >= 400 || !!r.error_message).length)
 const avgLatency = computed(() => {
   if (rows.value.length === 0) return 0
@@ -68,7 +73,10 @@ async function loadProviders() {
 async function load() {
   loading.value = true
   error.value = null
-  const params: Record<string, string> = { limit: String(filterLimit.value) }
+  const params: Record<string, string> = {
+    limit: String(pageSize.value),
+    offset: String(offset.value),
+  }
   if (filterProvider.value && filterProvider.value !== ANY_PROVIDER) params.provider = filterProvider.value
   if (filterSince.value) {
     const d = new Date(filterSince.value)
@@ -80,11 +88,24 @@ async function load() {
       params,
     })
     rows.value = res.items ?? []
+    total.value = res.total ?? 0
   } catch (e: any) {
     error.value = e?.data?.error ?? t('admin.usage.loadFailed')
   } finally {
     loading.value = false
   }
+}
+
+// Re-filtering resets pagination — page 3 of "all" rarely lines up with
+// page 3 of the new filter set.
+function applyFilters() {
+  offset.value = 0
+  load()
+}
+
+function onOffsetChange(v: number) {
+  offset.value = v
+  load()
 }
 
 onMounted(async () => {
@@ -165,11 +186,11 @@ onMounted(async () => {
             <Input v-model="filterSince" type="datetime-local" />
           </div>
           <div>
-            <Label class="text-xs">{{ t('admin.usage.filters.limit') }}</Label>
-            <Input v-model.number="filterLimit" type="number" min="1" max="500" />
+            <Label class="text-xs">{{ t('common.pagination.pageSize') }}</Label>
+            <Input v-model.number="pageSize" type="number" min="1" max="500" />
           </div>
           <div class="flex items-end">
-            <Button class="w-full" @click="load">{{ t('admin.usage.applyFilters') }}</Button>
+            <Button class="w-full" @click="applyFilters">{{ t('admin.usage.applyFilters') }}</Button>
           </div>
         </div>
 
@@ -214,6 +235,14 @@ onMounted(async () => {
         <p v-else-if="rows.length === 0" class="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
           {{ t('admin.usage.empty') }}
         </p>
+
+        <Pagination
+          v-if="total > 0"
+          :total="total"
+          :offset="offset"
+          :limit="pageSize"
+          @update:offset="onOffsetChange"
+        />
       </CardContent>
     </Card>
   </div>

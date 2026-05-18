@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { toTypedSchema } from '@vee-validate/zod'
 import * as z from 'zod'
-import { AlertTriangle, Pencil, Plus, Trash2, KeyRound } from 'lucide-vue-next'
+import { AlertTriangle, Pencil, Plus, Power, PowerOff, Trash2, KeyRound } from 'lucide-vue-next'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -151,6 +151,24 @@ async function onDelete(p: LLMProvider) {
   }
 }
 
+async function onToggleDisabled(p: LLMProvider) {
+  const willDisable = !p.disabled
+  if (willDisable) {
+    // eslint-disable-next-line no-alert
+    if (!window.confirm(t('admin.llm.disableConfirm', { name: p.name }))) return
+  }
+  try {
+    await $fetch(`/api/admin/llm/providers/${p.name}/disabled`, {
+      method: 'POST',
+      credentials: 'include',
+      body: { disabled: willDisable },
+    })
+    await load()
+  } catch (e: any) {
+    error.value = e?.data?.error ?? t('admin.llm.toggleFailed')
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -190,6 +208,7 @@ onMounted(load)
             <TableRow>
               <TableHead>{{ t('admin.llm.cols.name') }}</TableHead>
               <TableHead>{{ t('admin.llm.cols.type') }}</TableHead>
+              <TableHead>{{ t('admin.llm.cols.status') }}</TableHead>
               <TableHead>{{ t('admin.llm.cols.baseUrl') }}</TableHead>
               <TableHead>{{ t('admin.llm.cols.apiKey') }}</TableHead>
               <TableHead>{{ t('admin.llm.cols.models') }}</TableHead>
@@ -197,9 +216,13 @@ onMounted(load)
             </TableRow>
           </TableHeader>
           <TableBody>
-            <TableRow v-for="p in providers" :key="p.id">
+            <TableRow v-for="p in providers" :key="p.id" :class="p.disabled ? 'opacity-60' : ''">
               <TableCell class="font-medium">{{ p.name }}</TableCell>
               <TableCell><Badge variant="outline">{{ p.type }}</Badge></TableCell>
+              <TableCell>
+                <Badge v-if="p.disabled" variant="destructive">{{ t('admin.llm.disabled') }}</Badge>
+                <Badge v-else variant="secondary">{{ t('admin.llm.enabled') }}</Badge>
+              </TableCell>
               <TableCell class="font-mono text-xs text-muted-foreground">{{ p.base_url }}</TableCell>
               <TableCell>
                 <Badge v-if="p.has_api_key" variant="secondary">{{ t('admin.llm.apiKeySet') }}</Badge>
@@ -211,6 +234,11 @@ onMounted(load)
                 </div>
               </TableCell>
               <TableCell class="space-x-2 text-right">
+                <Button size="sm" variant="outline" @click="onToggleDisabled(p)">
+                  <Power v-if="p.disabled" class="size-3" />
+                  <PowerOff v-else class="size-3" />
+                  {{ p.disabled ? t('admin.llm.enable') : t('admin.llm.disable') }}
+                </Button>
                 <Button size="sm" variant="outline" @click="editing = p">
                   <Pencil class="size-3" />
                   {{ t('common.edit') }}

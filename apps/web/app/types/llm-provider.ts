@@ -7,6 +7,7 @@ export interface LLMProvider {
   base_url: string
   has_api_key: boolean
   allowed_models: string[]
+  disabled: boolean
   created_by: number
   created_at: string
   updated_at: string
@@ -28,4 +29,9 @@ export interface LLMProviderPatchReq {
   base_url?: string
   api_key?: string
   allowed_models?: string[]
+  disabled?: boolean
+}
+
+export interface LLMProviderSetDisabledReq {
+  disabled: boolean
 }

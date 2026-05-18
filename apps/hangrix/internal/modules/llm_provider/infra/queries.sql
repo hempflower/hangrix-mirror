@@ -18,7 +18,18 @@ UPDATE llm_providers SET
     base_url          = sqlc.arg('base_url'),
     api_key_encrypted = COALESCE(sqlc.narg('api_key_encrypted'), api_key_encrypted),
     allowed_models    = sqlc.arg('allowed_models'),
+    disabled          = sqlc.arg('disabled'),
     updated_at        = NOW()
+WHERE id = sqlc.arg('id')
+RETURNING *;
+
+-- name: SetProviderDisabled :one
+-- Dedicated flip so the admin UI can toggle enable/disable without having
+-- to round-trip the full UpdateProvider payload (and without risking a
+-- stale base_url / allowed_models clobber).
+UPDATE llm_providers SET
+    disabled   = sqlc.arg('disabled'),
+    updated_at = NOW()
 WHERE id = sqlc.arg('id')
 RETURNING *;
 
@@ -37,9 +48,12 @@ DELETE FROM llm_providers WHERE id = sqlc.arg('id');
 -- name: FindProviderByModel :one
 -- Lowest-id provider whose allowed_models contains :model wins. Explicit
 -- ::TEXT cast tells sqlc that the parameter is a single string, not an
--- array — without it the inferred type matches the column type.
+-- array — without it the inferred type matches the column type. Disabled
+-- providers are filtered out so the proxy responds 404 instead of routing
+-- to an upstream the operator has paused.
 SELECT * FROM llm_providers
 WHERE sqlc.arg('model')::TEXT = ANY(allowed_models)
+  AND NOT disabled
 ORDER BY id ASC
 LIMIT 1;
 
@@ -68,4 +82,13 @@ JOIN llm_providers p ON p.id = u.provider_id
 WHERE (sqlc.narg('provider_id')::BIGINT IS NULL OR u.provider_id = sqlc.narg('provider_id'))
   AND (sqlc.narg('since')::TIMESTAMPTZ IS NULL OR u.created_at >= sqlc.narg('since'))
 ORDER BY u.created_at DESC
-LIMIT sqlc.arg('lim');
+LIMIT sqlc.arg('lim')
+OFFSET sqlc.arg('off');
+
+-- name: CountUsage :one
+-- Mirrors ListUsage's WHERE clause so the admin usage page can render the
+-- total row count alongside the paged window.
+SELECT COUNT(*)::BIGINT
+FROM llm_usage_log u
+WHERE (sqlc.narg('provider_id')::BIGINT IS NULL OR u.provider_id = sqlc.narg('provider_id'))
+  AND (sqlc.narg('since')::TIMESTAMPTZ IS NULL OR u.created_at >= sqlc.narg('since'));
