@@ -191,7 +191,11 @@ func (s SessionStatus) Terminal() bool {
 //     the validator to authenticate inbound requests.
 //   - SessionTokenSealed: the cryptobox-sealed plaintext, decryptable only
 //     by the platform. The runner fetches it at task-claim time so it can
-//     inject HANGRIX_SESSION_TOKEN into the agent's env.
+//     inject HANGRIX_SESSION_TOKEN into the agent's env. Preserved across
+//     idle and terminal (failed / succeeded / cancelled) so a rewake can
+//     re-export the same identity (keeps the prior container's .git/config
+//     http.extraHeader valid). NULL'd only when the row is archived —
+//     issue closed or user-deleted — i.e. genuinely never coming back.
 //   - SessionTokenRevokedAt: set when the session terminates so a leaked
 //     token from a dead session can't be replayed.
 type AgentSession struct {
@@ -534,19 +538,29 @@ type Repo interface {
 	CountRecentSessions(ctx context.Context, filter SessionFilter) (int64, error)
 	ClaimNextSession(ctx context.Context, runnerID int64) (*AgentSession, error)
 	MarkSessionRunning(ctx context.Context, id int64) error
+	// MarkSessionTerminal flips a claimed/running session into a terminal
+	// state (failed / succeeded / cancelled). session_token_sealed is
+	// intentionally preserved so a rewake can re-export the same
+	// HANGRIX_SESSION_TOKEN and keep the previous container's
+	// .git/config http.extraHeader valid — see the query comment for
+	// the full rationale. Inbound auth using the token is still blocked
+	// while the row is terminal because SessionTokenActive() checks
+	// Status.Terminal().
 	MarkSessionTerminal(ctx context.Context, id int64, status SessionStatus, exitCode *int32, errMsg string) error
-	// MarkSessionIdle flips a claimed/running session to 'idle'. Unlike
-	// MarkSessionTerminal it leaves session_token_sealed intact so the
-	// row is re-claimable when the next trigger fires (rewake path).
-	// Used by the runner on clean container exit when the parent issue
-	// is still open.
+	// MarkSessionIdle flips a claimed/running session to 'idle'. Same
+	// sealed-preservation contract as MarkSessionTerminal; differs only
+	// in that the row is also still considered "logically alive" and
+	// SessionTokenActive returns true. Used by the runner on clean
+	// container exit when the parent issue is still open.
 	MarkSessionIdle(ctx context.Context, id int64, exitCode *int32) error
-	// ResumeSession flips an idle / failed / succeeded row back to
-	// 'pending' so a runner re-claims it. Re-mints the session token
-	// because the prior plaintext was NULL'd at terminate time.
-	// Refuses archived rows — the parent issue is the only thing that
-	// can ever unstick an archived session, and "unsticking" means
-	// "open a new issue".
+	// ResumeSession flips an idle / failed / succeeded / cancelled row
+	// back to 'pending' so a runner re-claims it. The caller chooses
+	// the token to install: rewake-from-modern-row passes through the
+	// existing prefix/hash/sealed unchanged (token identity preserved
+	// across triggers); rewake-from-legacy-NULL'd-sealed mints a fresh
+	// token. Refuses archived rows — the parent issue is the only
+	// thing that can ever unstick an archived session, and "unsticking"
+	// means "open a new issue".
 	ResumeSession(ctx context.Context, id int64, newToken NewSessionToken) error
 	// DeleteSession hard-deletes a session row + cascading message log
 	// + inputs queue. The user-visible "trash" affordance: removes a

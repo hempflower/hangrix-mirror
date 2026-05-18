@@ -257,27 +257,36 @@ func (s *Spawner) LoadHostConfig(ctx context.Context, repoID int64) (*agentsconf
 }
 
 // rewakeRole flips a non-live, non-archived session row back to
-// 'pending' (re-minting its session token) and enqueues a fresh
-// history + cause frame so the agent can resume. The same session row
-// is reused — per-issue per-role continuity is the spec's intent.
+// 'pending' and enqueues a fresh history + cause frame so the agent
+// can resume. The same session row is reused — per-issue per-role
+// continuity is the spec's intent.
+//
+// Token policy: the session row identity (HANGRIX_SESSION_TOKEN) is
+// preserved across rewake whenever the DB still has the sealed
+// plaintext. Both MarkSessionIdle and MarkSessionTerminal now leave
+// sealed intact, so the common path reads prefix / hash / sealed off
+// the existing row and passes them through. Keeping the token stable
+// is what lets the previous container's `git clone` (with the token
+// baked into `.git/config` http.extraHeader) keep authenticating
+// across rewake; rotating it on every rewake — the previous
+// behaviour — caused `git push` to 401 after the first idle cycle.
+//
+// Legacy rows whose sealed was NULL'd by the old terminate path
+// (rows that died before this change rolled out) fall back to a
+// fresh mint: we have no plaintext to recover, so a new identity is
+// the only option. Those rows still work but the cloned .git/config
+// will need to be re-created before push works again — acceptable
+// for the migration window since no new rows enter that branch.
 //
 // History on rewake is seeded as empty for simplicity; the next agent
 // container sees the cause event and acts on it. Faithful turn-by-turn
 // replay of the prior message log is an M9 follow-up.
 func (s *Spawner) rewakeRole(ctx context.Context, in domain.TriggerInput, existing *runnerdomain.AgentSession) (domain.SpawnedSession, error) {
-	plaintext, prefix, hashed, err := service.MintSessionToken()
+	tok, err := s.resumeToken(existing)
 	if err != nil {
-		return domain.SpawnedSession{}, fmt.Errorf("mint session token: %w", err)
+		return domain.SpawnedSession{}, err
 	}
-	sealed, err := s.box.Encrypt(plaintext)
-	if err != nil {
-		return domain.SpawnedSession{}, fmt.Errorf("seal session token: %w", err)
-	}
-	if err := s.runner.ResumeSession(ctx, existing.ID, runnerdomain.NewSessionToken{
-		Prefix: prefix,
-		Hash:   string(hashed),
-		Sealed: sealed,
-	}); err != nil {
+	if err := s.runner.ResumeSession(ctx, existing.ID, tok); err != nil {
 		return domain.SpawnedSession{}, fmt.Errorf("resume session: %w", err)
 	}
 	history := []byte(`{"kind":"history","messages":[]}`)
@@ -302,6 +311,37 @@ func (s *Spawner) rewakeRole(ctx context.Context, in domain.TriggerInput, existi
 		RoleKey:   existing.RoleKey,
 		RunnerID:  existing.RunnerID,
 		Action:    domain.SpawnActionRewoken,
+	}, nil
+}
+
+// resumeToken picks the token to install on a rewoken row. When the
+// existing row still has its sealed plaintext (every fresh row plus
+// any row that went through MarkSessionIdle / MarkSessionTerminal
+// since the sealed-preservation change) we pass that identity through
+// unchanged so the previous container's `.git/config` stays valid.
+// Only legacy rows whose sealed was NULL'd under the old terminate
+// behaviour fall through to minting a new token — accepted for the
+// migration window, never reachable for newly-created sessions.
+func (s *Spawner) resumeToken(existing *runnerdomain.AgentSession) (runnerdomain.NewSessionToken, error) {
+	if existing.SessionTokenSealed != "" {
+		return runnerdomain.NewSessionToken{
+			Prefix: existing.SessionTokenPrefix,
+			Hash:   existing.SessionTokenHash,
+			Sealed: existing.SessionTokenSealed,
+		}, nil
+	}
+	plaintext, prefix, hashed, err := service.MintSessionToken()
+	if err != nil {
+		return runnerdomain.NewSessionToken{}, fmt.Errorf("mint session token: %w", err)
+	}
+	sealed, err := s.box.Encrypt(plaintext)
+	if err != nil {
+		return runnerdomain.NewSessionToken{}, fmt.Errorf("seal session token: %w", err)
+	}
+	return runnerdomain.NewSessionToken{
+		Prefix: prefix,
+		Hash:   string(hashed),
+		Sealed: sealed,
 	}, nil
 }
 

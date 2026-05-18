@@ -196,8 +196,21 @@ SET status = 'running', started_at = COALESCE(started_at, NOW())
 WHERE id = sqlc.arg('id') AND status IN ('claimed', 'running');
 
 -- name: MarkSessionTerminal :execrows
--- session_token_sealed is NULL'd at terminate time so a leaked DB
--- snapshot of a dead session no longer carries the bearer plaintext.
+-- session_token_sealed is intentionally preserved here. `failed` /
+-- `succeeded` / `cancelled` describe the most recent container's exit,
+-- not the logical session — a new trigger (user comment, push, etc.)
+-- can still rewake the row via ResumeSession, and rewake-from-terminal
+-- needs the sealed plaintext to (a) hand the same HANGRIX_SESSION_TOKEN
+-- to the next container and (b) keep the http.extraHeader baked into
+-- the previous clone's .git/config valid so `git push` still
+-- authenticates. The status guard plus SessionTokenActive() already
+-- block the token from being used for inbound auth while the row is
+-- terminal — keeping sealed gives the platform the option to re-export
+-- the same identity on rewake without revoking the working tree.
+-- The only paths that genuinely retire a session forever are
+-- ArchiveSessions*; those still NULL sealed (issue closed / user
+-- deleted), which is the real "DB snapshot of a dead session
+-- shouldn't carry bearer plaintext" backstop.
 --
 -- The NOT IN guard MUST list every terminal state — otherwise a late
 -- runner terminate (e.g. container exited just as issue.closed fired)
@@ -206,11 +219,10 @@ WHERE id = sqlc.arg('id') AND status IN ('claimed', 'running');
 -- `archived` was added in migration 00002; we updated this guard at
 -- the same time the agent_session module landed.
 UPDATE agent_sessions
-SET status               = sqlc.arg('status'),
-    ended_at             = NOW(),
-    exit_code            = sqlc.narg('exit_code'),
-    error_message        = sqlc.arg('error_message'),
-    session_token_sealed = NULL
+SET status        = sqlc.arg('status'),
+    ended_at      = NOW(),
+    exit_code     = sqlc.narg('exit_code'),
+    error_message = sqlc.arg('error_message')
 WHERE id = sqlc.arg('id')
   AND status NOT IN ('succeeded', 'failed', 'cancelled', 'archived');
 
@@ -229,15 +241,21 @@ WHERE id = sqlc.arg('id')
   AND status IN ('claimed', 'running');
 
 -- name: ResumeSession :execrows
--- User-initiated resume: flip an idle / failed / succeeded row back to
--- 'pending' so the next runner poll picks it up. Re-mints the session
--- token (the previous sealed plaintext was NULL'd on terminate for
--- failed/succeeded). For idle rows the sealed token survives so we
--- pass through the existing value via the caller's sealed arg.
+-- Flip an idle / failed / succeeded / cancelled row back to 'pending'
+-- so the next runner poll picks it up, installing whatever token the
+-- caller chose. As of the sealed-preservation change, MarkSessionIdle
+-- AND MarkSessionTerminal both leave session_token_sealed intact, so
+-- the common path is for the caller to read the existing prefix /
+-- hash / sealed off the row and pass them through unchanged — the
+-- same HANGRIX_SESSION_TOKEN identity continues across rewake, which
+-- is what keeps the previous container's clone (.git/config
+-- http.extraHeader) usable. Legacy rows whose sealed was already
+-- NULL'd by the old terminate behaviour fall back to a freshly minted
+-- token; that path still works but the cloned .git/config will
+-- 401 on push until the container is re-created.
 --
 -- archived rows are not resumable — the parent issue archived them and
--- a new issue is required to start fresh. cancelled is treated as
--- failed for legacy data.
+-- a new issue is required to start fresh.
 UPDATE agent_sessions
 SET status               = 'pending',
     session_token_prefix = sqlc.arg('session_token_prefix'),

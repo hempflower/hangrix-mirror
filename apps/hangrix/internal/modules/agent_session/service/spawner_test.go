@@ -484,6 +484,157 @@ func TestOnTriggerEnqueueOntoLiveSession(t *testing.T) {
 	}
 }
 
+// TestOnTriggerRewakePreservesIdleToken asserts that a re-trigger
+// against an idle row keeps the same session token (prefix / hash /
+// sealed) instead of rotating it. The runner reuses the previous
+// container on rewake and the agent's `.git/config` has the original
+// token baked into http.extraHeader at clone time — rotating the
+// token mid-session would silently break `git push`.
+func TestOnTriggerRewakePreservesIdleToken(t *testing.T) {
+	h := newTestSpawner(t, []byte(hostYAML), nil)
+	first, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
+		Trigger:     agentsconfig.TriggerIssueOpened,
+		CauseKind:   domain.CauseKindIssueOpened,
+		CauseID:     "1",
+		RepoID:      1,
+		IssueNumber: 7,
+		ActorID:     1,
+	})
+	if err != nil {
+		t.Fatalf("first OnTrigger err: %v", err)
+	}
+	if len(first) != 1 || first[0].Action != domain.SpawnActionSpawned {
+		t.Fatalf("first call = %+v, want one spawned", first)
+	}
+	original := h.runner.sessions[0]
+	wantPrefix, wantHash, wantSealed := original.SessionTokenPrefix, original.SessionTokenHash, original.SessionTokenSealed
+
+	// Simulate the runner reporting clean exit (MarkSessionIdle would
+	// flip status without touching the token).
+	original.Status = runnerdomain.SessionStatusIdle
+
+	second, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
+		Trigger:     agentsconfig.TriggerIssueOpened,
+		CauseKind:   domain.CauseKindIssueOpened,
+		CauseID:     "2",
+		RepoID:      1,
+		IssueNumber: 7,
+		ActorID:     1,
+	})
+	if err != nil {
+		t.Fatalf("second OnTrigger err: %v", err)
+	}
+	if len(second) != 1 || second[0].Action != domain.SpawnActionRewoken {
+		t.Fatalf("second call = %+v, want one rewoken", second)
+	}
+	got := h.runner.sessions[0]
+	if got.SessionTokenPrefix != wantPrefix {
+		t.Errorf("rewake rotated prefix: got %q, want %q", got.SessionTokenPrefix, wantPrefix)
+	}
+	if got.SessionTokenHash != wantHash {
+		t.Errorf("rewake rotated hash: got %q, want %q", got.SessionTokenHash, wantHash)
+	}
+	if got.SessionTokenSealed != wantSealed {
+		t.Errorf("rewake rotated sealed: got %q, want %q", got.SessionTokenSealed, wantSealed)
+	}
+	if got.Status != runnerdomain.SessionStatusPending {
+		t.Errorf("rewake left status = %q, want pending", got.Status)
+	}
+}
+
+// TestOnTriggerRewakeFromFailedPreservesToken covers the same
+// preservation contract for rows that ended in `failed`. Since the
+// sealed-preservation change, MarkSessionTerminal no longer NULLs
+// sealed, so a subsequent rewake should reuse the same identity —
+// same rationale as idle (the previous clone's .git/config stays
+// valid).
+func TestOnTriggerRewakeFromFailedPreservesToken(t *testing.T) {
+	h := newTestSpawner(t, []byte(hostYAML), nil)
+	if _, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
+		Trigger:     agentsconfig.TriggerIssueOpened,
+		CauseKind:   domain.CauseKindIssueOpened,
+		CauseID:     "1",
+		RepoID:      1,
+		IssueNumber: 7,
+		ActorID:     1,
+	}); err != nil {
+		t.Fatalf("first OnTrigger err: %v", err)
+	}
+	original := h.runner.sessions[0]
+	wantPrefix, wantHash, wantSealed := original.SessionTokenPrefix, original.SessionTokenHash, original.SessionTokenSealed
+
+	// Simulate runner terminate with a non-zero exit code. Modern
+	// MarkSessionTerminal preserves sealed.
+	original.Status = runnerdomain.SessionStatusFailed
+
+	second, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
+		Trigger:     agentsconfig.TriggerIssueOpened,
+		CauseKind:   domain.CauseKindIssueOpened,
+		CauseID:     "2",
+		RepoID:      1,
+		IssueNumber: 7,
+		ActorID:     1,
+	})
+	if err != nil {
+		t.Fatalf("second OnTrigger err: %v", err)
+	}
+	if len(second) != 1 || second[0].Action != domain.SpawnActionRewoken {
+		t.Fatalf("second call = %+v, want one rewoken", second)
+	}
+	got := h.runner.sessions[0]
+	if got.SessionTokenPrefix != wantPrefix || got.SessionTokenHash != wantHash || got.SessionTokenSealed != wantSealed {
+		t.Errorf("rewake-from-failed rotated token: prefix %q→%q hash %q→%q sealed %q→%q",
+			wantPrefix, got.SessionTokenPrefix, wantHash, got.SessionTokenHash, wantSealed, got.SessionTokenSealed)
+	}
+}
+
+// TestOnTriggerRewakeLegacyNullSealedMintsFresh exercises the
+// backward-compat fallback: a row that lost its sealed under the old
+// terminate behaviour (sealed == "") must get a freshly minted token,
+// because there's no plaintext to recover. The cloned `.git/config`
+// on disk is stale either way for such rows — minting is the only
+// option.
+func TestOnTriggerRewakeLegacyNullSealedMintsFresh(t *testing.T) {
+	h := newTestSpawner(t, []byte(hostYAML), nil)
+	if _, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
+		Trigger:     agentsconfig.TriggerIssueOpened,
+		CauseKind:   domain.CauseKindIssueOpened,
+		CauseID:     "1",
+		RepoID:      1,
+		IssueNumber: 7,
+		ActorID:     1,
+	}); err != nil {
+		t.Fatalf("first OnTrigger err: %v", err)
+	}
+	original := h.runner.sessions[0]
+	priorPrefix, priorHash := original.SessionTokenPrefix, original.SessionTokenHash
+
+	// Simulate a row that died before the sealed-preservation change.
+	original.Status = runnerdomain.SessionStatusFailed
+	original.SessionTokenSealed = ""
+
+	if _, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
+		Trigger:     agentsconfig.TriggerIssueOpened,
+		CauseKind:   domain.CauseKindIssueOpened,
+		CauseID:     "2",
+		RepoID:      1,
+		IssueNumber: 7,
+		ActorID:     1,
+	}); err != nil {
+		t.Fatalf("second OnTrigger err: %v", err)
+	}
+	got := h.runner.sessions[0]
+	if got.SessionTokenPrefix == priorPrefix {
+		t.Errorf("legacy NULL-sealed rewake reused prefix %q, want a fresh mint", priorPrefix)
+	}
+	if got.SessionTokenHash == priorHash {
+		t.Errorf("legacy NULL-sealed rewake reused hash, want a fresh mint")
+	}
+	if got.SessionTokenSealed == "" {
+		t.Errorf("legacy NULL-sealed rewake left sealed empty, want freshly encrypted plaintext")
+	}
+}
+
 // TestOnTriggerPayloadMergedIntoCauseFrame asserts the M7b Payload
 // field is layered onto the input frame's payload object — the agent
 // sees comment_body etc. directly on its stdin without a tool call.
