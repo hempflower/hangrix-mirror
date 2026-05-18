@@ -57,6 +57,27 @@ type Loop struct {
 	// container teardown will reap whatever is left; this just keeps
 	// the exit path from wedging on a pathological child.
 	shutdownGrace time.Duration
+
+	// compactTokenThreshold is the input-token usage above which the
+	// loop injects a synthetic system reminder telling the LLM to call
+	// compact_session at the next safe boundary. 0 disables the nudge —
+	// the LLM still decides on its own when compact_session is right.
+	compactTokenThreshold int
+
+	// lastInputTokens is the most recent CreateResponse.Usage.InputTokens.
+	// We sample it after every LLM call so the compact-threshold check
+	// runs against the actual prompt size we just paid for, not an
+	// estimate. Reset to 0 each time compact_session lands so a single
+	// crossing doesn't fire the nudge twice.
+	lastInputTokens int
+
+	// compactNudged guards against repeatedly injecting the same
+	// "compact your session now" reminder turn after turn while the
+	// LLM is still mid-task and hasn't reached a point where it can
+	// safely call compact_session. We arm it once when the threshold
+	// is first crossed and disarm it after the next compact_session
+	// invocation OR a hard reset of the context window.
+	compactNudged bool
 }
 
 func NewLoop(
@@ -67,17 +88,19 @@ func NewLoop(
 	registry *tools.Registry,
 	systemPrompt string,
 	bash local.BashLifecycle,
+	compactTokenThreshold int,
 ) *Loop {
 	return &Loop{
-		in:            in,
-		out:           out,
-		llm:           llmClient,
-		model:         model,
-		registry:      registry,
-		system:        systemPrompt,
-		bash:          bash,
-		maxToolRounds: 999999,
-		shutdownGrace: 5 * time.Second,
+		in:                    in,
+		out:                   out,
+		llm:                   llmClient,
+		model:                 model,
+		registry:              registry,
+		system:                systemPrompt,
+		bash:                  bash,
+		maxToolRounds:         999999,
+		shutdownGrace:         5 * time.Second,
+		compactTokenThreshold: compactTokenThreshold,
 	}
 }
 
@@ -301,6 +324,16 @@ func (l *Loop) driveOneTurnWithID(
 		// frames defer to the outer loop.
 		l.drainPending(cctx, inbox, pendingFrames)
 
+		// Threshold-based compact nudge. Fires once per crossing —
+		// armed when the last LLM call's input-token count went above
+		// the configured threshold, disarmed by an actual
+		// compact_session call. The nudge is a synthetic user-role
+		// reminder; the LLM is still free to finish its current
+		// sub-step before calling the tool. We deliberately do NOT
+		// force a compact here — interrupting a mid-task LLM with a
+		// hard cutover wastes whatever decisions it was carrying.
+		l.maybeNudgeCompact(cctx)
+
 		// Snapshot the message count so we can detect whether a new
 		// event or notification was folded in while the LLM was busy.
 		// If it was and the LLM returns no tool calls, we need to give
@@ -385,6 +418,7 @@ func (l *Loop) driveOneTurnWithID(
 			cctx.AppendAssistant(resp.Content, resp.ToolCalls)
 		}
 		_ = l.out.Message("assistant", resp.Content, toIPCToolCalls(resp.ToolCalls))
+		l.lastInputTokens = resp.Usage.InputTokens
 
 		if len(resp.ToolCalls) == 0 {
 			// New user-side input arrived during the call (folded event
@@ -397,13 +431,39 @@ func (l *Loop) driveOneTurnWithID(
 			return nil
 		}
 
+		// pendingSummary defers the AppendSummary call until every tool
+		// result in this round has been placed. Snapshot anchors on the
+		// most recent KindSummary entry, so placing the summary marker
+		// LAST in the round guarantees the next LLM window never starts
+		// with an orphan tool message — even if the LLM (against the
+		// tool's instruction) batched compact_session with another call.
+		var pendingSummary string
 		for _, call := range resp.ToolCalls {
 			_ = l.out.Status("tool")
 			args := json.RawMessage(call.Arguments)
-			result := l.registry.Call(ctx, call.Name, args)
+			var result tools.CallResult
+			if call.Name == local.CompactSessionToolName {
+				summary, sresult := dispatchCompactSession(args)
+				result = sresult
+				if summary != "" {
+					pendingSummary = summary
+				}
+			} else {
+				result = l.registry.Call(ctx, call.Name, args)
+			}
 			toolContent := toolPayload(result)
 			cctx.AppendToolResult(call.ID, toolContent)
 			_ = l.out.ToolCall(call.ID, call.Name, args, json.RawMessage(toolContent))
+		}
+		if pendingSummary != "" {
+			cctx.AppendSummary(pendingSummary)
+			// Disarm the compact-threshold nudge — the LLM just did
+			// the thing we were asking for. lastInputTokens stays as
+			// the pre-compact reading; the next LLM round will
+			// overwrite it with the post-compact (much smaller) prompt
+			// size and the nudge can re-arm naturally if growth resumes.
+			l.compactNudged = false
+			_ = l.out.Log("info", "compact_session: session memory compacted")
 		}
 	}
 
@@ -575,12 +635,71 @@ func historyToMessages(items []ipc.HistoryItem) []llm.Message {
 				msg.ToolCalls[i] = llm.ToolCall{ID: c.ID, Name: c.Name, Arguments: c.Arguments}
 			}
 		}
-		// History items tagged kind="event" carry the raw event payload
-		// as content; the LLM has already seen this shape, so just
-		// forward it as-is.
+		// Round-trip the summary marker so that on a runner re-attach
+		// (second history frame) Snapshot still anchors on the latest
+		// compact point. Event-kind items keep their raw payload as
+		// content; we leave Kind empty for them because the LLM has
+		// already seen that shape and the window logic does not care.
+		if it.Kind == llm.KindSummary {
+			msg.Kind = llm.KindSummary
+		}
 		out = append(out, msg)
 	}
 	return out
+}
+
+// maybeNudgeCompact injects a one-shot reminder telling the LLM to call
+// compact_session at its next safe boundary, once the input-token
+// usage of the previous turn crossed CompactTokenThreshold. The
+// reminder is appended as a user-role message so it lands in the
+// LLM's view on the upcoming round; we don't try to truncate, summarise
+// for the LLM, or stop the in-flight task — the model is the only thing
+// that knows when a clean cutover point is reached.
+//
+// Re-arms after the LLM actually compacts (cleared in the
+// pendingSummary branch of the dispatch loop). Disabled when
+// compactTokenThreshold is zero.
+func (l *Loop) maybeNudgeCompact(cctx *Context) {
+	if l.compactTokenThreshold <= 0 || l.compactNudged {
+		return
+	}
+	if l.lastInputTokens < l.compactTokenThreshold {
+		return
+	}
+	cctx.AppendUser(fmt.Sprintf(
+		"<system_reminder>Context usage has reached %d input tokens (threshold %d). When you can stop at a clean step — typically after a tool result settles and before starting the next sub-task — call the compact_session tool with a thorough summary so subsequent turns can keep working without hitting the upstream's context window. Continue the current step if you're mid-flight; do NOT abandon work to compact immediately.</system_reminder>",
+		l.lastInputTokens, l.compactTokenThreshold,
+	))
+	l.compactNudged = true
+}
+
+// dispatchCompactSession is the loop-side handler for the compact_session
+// tool call. The tool itself is schema-only; we parse the args here and
+// surface the trimmed summary back to the caller, which is responsible
+// for placing the AppendSummary marker after every tool result in the
+// round has been emitted (see the pendingSummary commentary).
+//
+// Bad-args paths are converted into IsError CallResults rather than Go
+// errors because the LLM is the audience: a structured tool result lets
+// it self-correct (rewrite a non-empty summary, retry) on the next round
+// without us having to thread a separate error channel through the loop.
+func dispatchCompactSession(args json.RawMessage) (string, tools.CallResult) {
+	summary, err := local.ParseCompactSessionArgs(args)
+	if err != nil {
+		errBody, _ := json.Marshal(map[string]any{"error": err.Error()})
+		return "", tools.CallResult{
+			Source:     tools.SourceLocal,
+			ResultJSON: errBody,
+			IsError:    true,
+			ErrMsg:     err.Error(),
+		}
+	}
+	okBody, _ := json.Marshal(map[string]any{
+		"ok":        true,
+		"compacted": true,
+		"note":      "Prior conversation has been replaced with your summary. Subsequent turns will see {system prompt} + this summary + anything new — proceed with the task using only what your summary preserved.",
+	})
+	return summary, tools.CallResult{Source: tools.SourceLocal, ResultJSON: okBody}
 }
 
 func newTurnID() string {

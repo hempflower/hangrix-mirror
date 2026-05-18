@@ -127,6 +127,12 @@ func Build() Bundle {
 			// feed it stdin).
 			newBashInputTool(bash),
 			newWebFetchTool(),
+			// compact_session is a schema-only stub — the runtime loop
+			// intercepts the call by name and applies its effect to the
+			// in-memory Context. Registering it here makes the
+			// descriptor flow through the standard catalogue/allowlist
+			// path so role configs can opt out symmetrically.
+			NewCompactSessionTool(),
 		},
 		Bash: bash,
 	}

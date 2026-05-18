@@ -7,25 +7,28 @@ package runtime
 import "github.com/hangrix/hangrix/apps/hangrix-agent/internal/llm"
 
 // Context is the rolling message list the runtime hands to the LLM each
-// turn. Append* methods are the only mutators so the trim policy lives
-// in one place. Goroutine-unsafe — the loop is single-threaded by
+// turn. Append* methods are the only mutators so the windowing policy
+// lives in one place. Goroutine-unsafe — the loop is single-threaded by
 // design; if multiple turns ever overlap we'll need to re-think the
 // audit ordering before we re-think this lock.
+//
+// Windowing: the full message slice is the audit-grade in-memory record
+// and grows unbounded; Snapshot — what we hand to the LLM — instead
+// returns the slice from the most recent KindSummary entry onward. The
+// compact_session tool is what appends those summary markers; until one
+// has been written we just send the whole history. This replaces the
+// older tail-window trim that could orphan a `tool` message from its
+// matching `assistant(tool_calls=…)` mid-window and trip upstream's
+// "tool message without preceding tool_calls" validator.
 type Context struct {
 	systemPrompt string
 	messages     []llm.Message
-
-	// trimMaxMessages caps the number of messages sent to the LLM. Older
-	// messages are dropped (not summarised — that's an M9 job). Set to 0
-	// to disable.
-	trimMaxMessages int
 }
 
 func NewContext(systemPrompt string, history []llm.Message) *Context {
 	return &Context{
-		systemPrompt:    systemPrompt,
-		messages:        append([]llm.Message{}, history...),
-		trimMaxMessages: 60,
+		systemPrompt: systemPrompt,
+		messages:     append([]llm.Message{}, history...),
 	}
 }
 
@@ -36,22 +39,20 @@ func (c *Context) SystemPrompt() string { return c.systemPrompt }
 // which case the LLM needs another pass before the turn can finish.
 func (c *Context) Len() int { return len(c.messages) }
 
-// Snapshot returns a copy of the messages currently visible to the LLM,
-// after applying the window trim. Callers must not mutate.
+// Snapshot returns a copy of the messages currently visible to the LLM.
+// The slice starts at the most recent KindSummary entry — older history
+// stays on the Context for audit but is no longer sent. When there is no
+// summary marker the whole history is returned. Callers must not mutate.
 func (c *Context) Snapshot() []llm.Message {
-	if c.trimMaxMessages <= 0 || len(c.messages) <= c.trimMaxMessages {
-		out := make([]llm.Message, len(c.messages))
-		copy(out, c.messages)
-		return out
+	start := 0
+	for i := len(c.messages) - 1; i >= 0; i-- {
+		if c.messages[i].Kind == llm.KindSummary {
+			start = i
+			break
+		}
 	}
-	// Tail-window trim: keep the last N messages. Simple and predictable;
-	// summary-based trimming is in M9. The first message in a new context
-	// is often a triggering event — losing it can be expensive — but the
-	// LLM also has the system prompt and the immediately-preceding tool
-	// turn, so we accept the cost in v1.
-	tail := c.messages[len(c.messages)-c.trimMaxMessages:]
-	out := make([]llm.Message, len(tail))
-	copy(out, tail)
+	out := make([]llm.Message, len(c.messages)-start)
+	copy(out, c.messages[start:])
 	return out
 }
 
@@ -88,5 +89,18 @@ func (c *Context) AppendToolResult(callID, content string) {
 		Role:       "tool",
 		ToolCallID: callID,
 		Content:    content,
+	})
+}
+
+// AppendSummary records a compact-session checkpoint. Snapshot anchors
+// on the most recent one, so on the next LLM call only the summary +
+// anything appended after it is sent. Older messages stay in the slice
+// for audit. The caller (Loop) places this AFTER all tool results in a
+// round so the new window can never start with an orphan tool message.
+func (c *Context) AppendSummary(content string) {
+	c.messages = append(c.messages, llm.Message{
+		Role:    "user",
+		Kind:    llm.KindSummary,
+		Content: content,
 	})
 }

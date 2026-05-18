@@ -57,14 +57,26 @@ import (
 // They are set ONLY on assistant messages; downstream providers reject the
 // next turn if a reasoning block was elided, so the agent rounds-trip them
 // verbatim. Roles other than "assistant" leave these empty.
+//
+// Kind is an agent-side sub-tag orthogonal to Role. Today the only non-empty
+// value is KindSummary, which marks a compacted-session checkpoint placed by
+// the compact_session tool. The runtime's Snapshot uses Kind to find the
+// most recent summary and anchor the LLM-facing window there — preserving
+// the full history for audit while keeping the working set small.
 type Message struct {
 	Role               string     // "system" | "user" | "assistant" | "tool"
+	Kind               string     // optional sub-tag, e.g. KindSummary
 	Content            string     // plain-text body
 	Reasoning          string     // assistant: chain-of-thought summary
 	ReasoningSignature string     // assistant: opaque verification token (encrypted_content)
 	ToolCalls          []ToolCall // populated on assistant messages with function calls
 	ToolCallID         string     // populated on tool messages, joins back to ToolCall.ID
 }
+
+// KindSummary marks a Message as a compacted-session checkpoint. Snapshot
+// returns the slice starting at the latest KindSummary entry; older history
+// stays in the underlying slice for audit but is no longer sent to the LLM.
+const KindSummary = "summary"
 
 // ToolCall mirrors the OpenAI function_call shape. Arguments stays as a
 // raw JSON string because that is what upstream serialises and what the
@@ -259,6 +271,19 @@ func buildRequestBody(req *CreateRequest) ([]byte, error) {
 func ToInputItems(msgs []Message) []map[string]any {
 	out := make([]map[string]any, 0, len(msgs))
 	for _, m := range msgs {
+		// Kind=summary is a special agent-side marker, not a wire role.
+		// Serialise it as a user-role text block wrapped in a clearly-
+		// labelled tag so the LLM treats it as authoritative context
+		// from a prior compacted segment of this same session.
+		if m.Kind == KindSummary {
+			text := "<previous_session_summary>\n" + m.Content + "\n</previous_session_summary>"
+			out = append(out, map[string]any{
+				"type":    "message",
+				"role":    "user",
+				"content": []map[string]any{{"type": "input_text", "text": text}},
+			})
+			continue
+		}
 		switch m.Role {
 		case "user", "system", "developer":
 			// "system" historically belongs in `instructions` but we accept

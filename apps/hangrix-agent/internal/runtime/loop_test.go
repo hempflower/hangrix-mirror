@@ -153,6 +153,7 @@ func TestLoopSmoke(t *testing.T) {
 		registry,
 		"system prompt for test",
 		bundle.Bash,
+		0,
 	)
 
 	loopErr := make(chan error, 1)
@@ -235,6 +236,203 @@ func TestLoopSmoke(t *testing.T) {
 	}
 	if got := llmCallCount.Load(); got != 2 {
 		t.Errorf("expected 2 LLM calls (one with tools, one final), got %d", got)
+	}
+}
+
+// TestLoopCompactSession verifies the compact_session interception:
+// after the LLM calls compact_session(summary=...), the next LLM call's
+// request body must NOT contain any pre-compact noise — only the system
+// instructions, the summary block, and whatever was appended after.
+// This is the regression test for the "messages with role 'tool' must
+// be a response to a preceding message with 'tool_calls'" upstream 400
+// that the old tail-window trim could trip on.
+func TestLoopCompactSession(t *testing.T) {
+	t.Parallel()
+
+	var (
+		llmCallCount    atomic.Int32
+		secondCallBody  atomic.Value // []byte
+	)
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		callN := llmCallCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch callN {
+		case 1:
+			// First turn: take a noisy "tool call" to seed pre-compact
+			// history, so the next turn's window can plausibly include
+			// orphan tool messages if the compact is wired wrong.
+			resp := map[string]any{
+				"id": "resp_1",
+				"output": []map[string]any{
+					{
+						"type":      "function_call",
+						"call_id":   "tc_noise",
+						"name":      "glob",
+						"arguments": `{"pattern":"*.go"}`,
+					},
+				},
+				"usage": map[string]any{"input_tokens": 12, "output_tokens": 4, "total_tokens": 16},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case 2:
+			// Second turn: LLM decides to compact. The summary it
+			// writes is the only memory the third turn will get.
+			resp := map[string]any{
+				"id": "resp_2",
+				"output": []map[string]any{
+					{
+						"type":      "function_call",
+						"call_id":   "tc_compact",
+						"name":      "compact_session",
+						"arguments": `{"summary":"investigated repo. nothing actionable. next: handle a fresh event."}`,
+					},
+				},
+				"usage": map[string]any{"input_tokens": 40, "output_tokens": 6, "total_tokens": 46},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case 3:
+			// Third turn: this is the call we're really testing. The
+			// request body MUST NOT contain "tc_noise" or "function_call"
+			// for `glob` — those messages were pre-compact and must have
+			// been dropped from the LLM-facing window. Capture the body
+			// for assertions below.
+			secondCallBody.Store(body)
+			resp := map[string]any{
+				"id": "resp_3",
+				"output": []map[string]any{
+					{
+						"type": "message",
+						"role": "assistant",
+						"content": []map[string]any{
+							{"type": "output_text", "text": "all clear"},
+						},
+					},
+				},
+				"usage": map[string]any{"input_tokens": 8, "output_tokens": 3, "total_tokens": 11},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			http.Error(w, "unexpected extra LLM call", http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(llmServer.Close)
+
+	llmClient := llm.New(llmServer.URL, "test-token")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bundle := local.Build()
+	registry := tools.Build(bundle.Tools, nil, nil)
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdoutR.Close()
+
+	loop := runtime.NewLoop(
+		ipc.NewReader(stdinR),
+		ipc.NewWriter(stdoutW),
+		llmClient,
+		"gpt-4o-mini",
+		registry,
+		"system prompt for test",
+		bundle.Bash,
+		0,
+	)
+
+	loopErr := make(chan error, 1)
+	go func() {
+		loopErr <- loop.Run(ctx)
+		stdoutW.Close()
+	}()
+
+	go func() {
+		_, _ = stdinW.Write([]byte(`{"kind":"history","messages":[]}` + "\n"))
+		_, _ = stdinW.Write([]byte(`{"kind":"event","event":"issue.comment.mentioned","payload":{"body":"@bot look around"}}` + "\n"))
+		time.Sleep(500 * time.Millisecond)
+		_, _ = stdinW.Write([]byte(`{"kind":"control","op":"shutdown"}` + "\n"))
+		stdinW.Close()
+	}()
+
+	frames, err := drainFrames(stdoutR)
+	if err != nil {
+		t.Fatalf("drain frames: %v", err)
+	}
+	if err := <-loopErr; err != nil {
+		t.Fatalf("loop returned error: %v", err)
+	}
+	if got := llmCallCount.Load(); got != 3 {
+		t.Fatalf("expected 3 LLM calls (noise + compact + final), got %d", got)
+	}
+
+	// The third LLM call body is the regression target.
+	rawBody, _ := secondCallBody.Load().([]byte)
+	if len(rawBody) == 0 {
+		t.Fatal("did not capture third LLM call body")
+	}
+	body := string(rawBody)
+	// tc_noise is unique to the pre-compact tool call_id, so its
+	// presence in the post-compact body is the unambiguous signal that
+	// older history leaked through the summary anchor.
+	if strings.Contains(body, "tc_noise") {
+		t.Errorf("post-compact LLM body still contains pre-compact tool call id `tc_noise`:\n%s", body)
+	}
+	// The compact_session call itself is pre-compact noise once the
+	// summary is in place — its call_id must also be dropped from
+	// `input`. (It still appears in `tools` as a registered function;
+	// that's expected.)
+	if strings.Contains(body, "tc_compact") {
+		t.Errorf("post-compact LLM body still contains compact_session call id `tc_compact`:\n%s", body)
+	}
+	if !strings.Contains(body, "previous_session_summary") {
+		t.Errorf("post-compact LLM body missing summary wrapper:\n%s", body)
+	}
+	if !strings.Contains(body, "handle a fresh event") {
+		t.Errorf("post-compact LLM body missing the summary text the LLM wrote:\n%s", body)
+	}
+	// Structural check: input array should be the summary alone. We
+	// parse the body and walk `input` so the assertion is robust to
+	// JSON field ordering.
+	var parsed struct {
+		Input []map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(rawBody, &parsed); err != nil {
+		t.Fatalf("decode post-compact body: %v", err)
+	}
+	if len(parsed.Input) != 1 {
+		t.Errorf("post-compact input has %d items, want 1 (just the summary); items=%+v", len(parsed.Input), parsed.Input)
+	}
+	for _, item := range parsed.Input {
+		itemType, _ := item["type"].(string)
+		if itemType == "function_call" || itemType == "function_call_output" {
+			// Any function_call or function_call_output in the post-
+			// compact window would be an orphan w.r.t. the now-truncated
+			// history — exactly the shape that triggered the original
+			// upstream 400.
+			callID, _ := item["call_id"].(string)
+			t.Errorf("post-compact input leaked %s (call_id=%s); window should contain only the summary", itemType, callID)
+		}
+	}
+
+	// The compact_session tool_call frame must still have been emitted
+	// outbound so the runner/platform can persist it — losing the
+	// summary on the audit trail would defeat round-trip on session
+	// re-attach.
+	var sawCompactFrame bool
+	for _, f := range frames {
+		if f.Kind == "tool_call" && f.Name == "compact_session" {
+			sawCompactFrame = true
+			if !strings.Contains(string(f.Args), "handle a fresh event") {
+				t.Errorf("compact_session tool_call args missing the summary text: %s", f.Args)
+			}
+		}
+	}
+	if !sawCompactFrame {
+		t.Error("expected an outbound tool_call frame for compact_session")
 	}
 }
 

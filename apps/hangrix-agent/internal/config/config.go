@@ -11,6 +11,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -35,6 +36,15 @@ type Config struct {
 	BaseBranch       string
 	HostAddendumPath string
 	ToolCatalog      string
+
+	// CompactTokenThreshold is the input-token usage above which the
+	// runtime nudges the LLM (via a synthetic system reminder injected
+	// at the next turn boundary) to call compact_session. 0 disables the
+	// nudge — the LLM still decides on its own when to compact. Set via
+	// HANGRIX_COMPACT_TOKEN_THRESHOLD; default 80000 leaves headroom on
+	// 128k-window models and is conservative enough for ~64k providers
+	// (DeepSeek) when operators want to keep it on.
+	CompactTokenThreshold int
 }
 
 // LLMEndpoint returns the URL the agent POSTs `/responses` against.
@@ -71,8 +81,9 @@ func NewConfig() *Config {
 		IssueNumber:      os.Getenv("HANGRIX_ISSUE_NUMBER"),
 		WorkingBranch:    os.Getenv("HANGRIX_WORKING_BRANCH"),
 		BaseBranch:       os.Getenv("HANGRIX_BASE_BRANCH"),
-		HostAddendumPath: os.Getenv("HANGRIX_HOST_ADDENDUM"),
-		ToolCatalog:      os.Getenv("HANGRIX_TOOL_CATALOG"),
+		HostAddendumPath:      os.Getenv("HANGRIX_HOST_ADDENDUM"),
+		ToolCatalog:           os.Getenv("HANGRIX_TOOL_CATALOG"),
+		CompactTokenThreshold: parseCompactThreshold(os.Getenv("HANGRIX_COMPACT_TOKEN_THRESHOLD")),
 	}
 
 	var missing []string
@@ -89,4 +100,23 @@ func NewConfig() *Config {
 		panic(fmt.Errorf("config: missing required env: %s", strings.Join(missing, ", ")))
 	}
 	return cfg
+}
+
+// parseCompactThreshold reads HANGRIX_COMPACT_TOKEN_THRESHOLD. Empty or
+// unparseable → default 80000 (rough 60% of a 128k window, conservative
+// enough to also trigger on 64k providers). A negative value disables
+// the nudge entirely so operators can opt out without removing the env.
+func parseCompactThreshold(raw string) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 80000
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 80000
+	}
+	if n < 0 {
+		return 0
+	}
+	return n
 }

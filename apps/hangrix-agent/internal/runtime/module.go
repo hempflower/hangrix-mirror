@@ -37,6 +37,7 @@ func NewProvider(deps *Deps) *Loop {
 		deps.Registry,
 		deps.Assembled.Prompt,
 		deps.Bash,
+		deps.Cfg.CompactTokenThreshold,
 	)
 }
 

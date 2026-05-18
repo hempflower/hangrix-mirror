@@ -79,6 +79,7 @@ func TestLoopEmitsIdleAfterEvent(t *testing.T) {
 		registry,
 		"system prompt for test",
 		bundle.Bash,
+		0,
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -183,6 +184,7 @@ func TestLoopProcessesMultipleEvents(t *testing.T) {
 		registry,
 		"system prompt",
 		bundle.Bash,
+		0,
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -277,6 +279,7 @@ func TestLoopShutdownInvokesBashCleanup(t *testing.T) {
 		registry,
 		"system prompt",
 		fake,
+		0,
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -393,6 +396,7 @@ func TestLoopNotificationDuringEvent(t *testing.T) {
 		registry,
 		"system prompt",
 		fake,
+		0,
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -502,6 +506,7 @@ func TestLoopEventDuringTurnFoldsIn(t *testing.T) {
 		registry,
 		"system prompt",
 		fake,
+		0,
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -609,6 +614,7 @@ func TestLoopNotificationDrivesIdleTurn(t *testing.T) {
 		registry,
 		"system prompt",
 		fake,
+		0,
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
