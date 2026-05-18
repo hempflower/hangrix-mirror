@@ -1,11 +1,19 @@
 // Package ipc implements the JSON-Lines protocol the agent speaks with its
 // runner over stdin/stdout. The runner writes one JSON object per line on
 // the agent's stdin (history replay, events, control); the agent writes one
-// JSON object per line on stdout (status, message, tool_call, log, done).
+// JSON object per line on stdout (status, message, tool_call, log, done,
+// idle).
 //
 // The protocol is intentionally line-oriented and one-direction-per-fd so
 // that under docker the runner can attach plain pipes — no length framing,
 // no multiplexing, no stdin/stdout interleaving rules to memorise.
+//
+// Lifecycle note. The agent is long-lived: it processes events one after
+// another over the lifetime of a single container, and emits an `idle`
+// frame after each event finishes. The runner uses that as the signal
+// that this container can either receive the next queued event or be
+// retired via a `control:shutdown` inbound when its idle-timeout elapses.
+// `done` still bounds individual events; `idle` bounds the container.
 package ipc
 
 import (
@@ -85,6 +93,13 @@ type Outbound struct {
 
 	// done
 	TurnID string `json:"turn_id,omitempty"`
+
+	// idle (emitted after each event so the runner knows the container
+	// is reusable for the next queued event). RunningJobs is the count
+	// of background bash tasks still alive when idle is emitted, so the
+	// runner can pick a more generous timeout (don't retire a container
+	// that's babysitting a `go test` that hasn't returned yet).
+	RunningJobs int `json:"running_jobs,omitempty"`
 }
 
 // Reader scans inbound frames off a buffered stdin. bufio.Scanner is fine
@@ -182,4 +197,13 @@ func (w *Writer) ToolCall(id, name string, args, result json.RawMessage) error {
 
 func (w *Writer) Done(turnID string) error {
 	return w.Write(&Outbound{Kind: "done", TurnID: turnID})
+}
+
+// Idle is emitted by the runtime after each event finishes — it signals
+// to the runner that this container is reusable for the next queued
+// event. runningJobs reports how many background bash tasks are still
+// alive (a hint for the runner's idle-timeout policy; 0 means truly
+// idle, retire whenever).
+func (w *Writer) Idle(runningJobs int) error {
+	return w.Write(&Outbound{Kind: "idle", RunningJobs: runningJobs})
 }

@@ -68,21 +68,76 @@ func (r *ReadTracker) WasRead(path string) bool {
 	return ok
 }
 
-// All returns the canonical local tool catalogue. Order matches the spec
-// table in ROADMAP.md so the registry-emitted catalogue is deterministic
-// and the tool-allowlist filter behaves predictably.
-func All() []Tool {
+// BashLifecycle is the public surface the runtime uses to observe and
+// shut down background bash tasks. It's separate from the Tool interface
+// because these are operations the *agent runtime* drives — not things
+// the LLM invokes through a tool call. Exposed as an interface so tests
+// can substitute a no-op implementation when they don't care about
+// background tasks.
+type BashLifecycle interface {
+	// NotificationCh streams one user-role text snippet per completed
+	// background task. The runtime drains it at every "wait point"
+	// (idle, between LLM rounds) and appends the messages into the
+	// conversation so the LLM doesn't have to poll to learn a task
+	// finished.
+	NotificationCh() <-chan string
+	// HasRunningJobs reports the count of still-alive background jobs.
+	// Used to populate the `running_jobs` hint on the agent's `idle`
+	// outbound frame.
+	HasRunningJobs() int
+	// Cleanup signals every alive job and waits, bounded by the
+	// supplied context, for them to reap. Called on agent shutdown.
+	Cleanup(ctx context.Context)
+}
+
+// Bundle is the result of Build: every Tool the agent registers plus
+// the BashLifecycle handle the runtime hooks into. Returning them
+// together (instead of having callers fish the bash tool out of the
+// Tool slice and downcast) keeps the wiring honest — the runtime gets
+// exactly the verbs it needs, nothing more.
+type Bundle struct {
+	Tools []Tool
+	Bash  BashLifecycle
+}
+
+// Build is the canonical constructor: one ReadTracker shared across
+// read/edit, one bashTool shared between `bash` and `bash_input` (so
+// they see the same background-job map). Callers that need both halves
+// (production wiring via ioc) use Build; callers that only need the
+// Tool slice (tests, the research sub-agent catalogue) use All, which
+// is a thin wrapper.
+//
+// Order matches the spec table in ROADMAP.md so the registry-emitted
+// catalogue is deterministic and the tool-allowlist filter behaves
+// predictably.
+func Build() Bundle {
 	tracker := NewReadTracker()
 	bash := newBashTool()
-	return []Tool{
-		newReadTool(tracker),
-		newWriteTool(),
-		newEditTool(tracker),
-		newGlobTool(),
-		newGrepTool(),
-		bash,
-		newWebFetchTool(),
+	return Bundle{
+		Tools: []Tool{
+			newReadTool(tracker),
+			newWriteTool(),
+			newEditTool(tracker),
+			newGlobTool(),
+			newGrepTool(),
+			bash,
+			// bash_input sits right next to bash on purpose: they share
+			// the background-job map, and the LLM almost always reaches
+			// for them as a pair (start a long-running command, then
+			// feed it stdin).
+			newBashInputTool(bash),
+			newWebFetchTool(),
+		},
+		Bash: bash,
 	}
+}
+
+// All returns just the Tool slice from Build. Retained for callers
+// that don't need the BashLifecycle handle (notably: tests, and the
+// `research` sub-agent's whitelisted child catalogue, neither of which
+// wants to manage background jobs).
+func All() []Tool {
+	return Build().Tools
 }
 
 // decodeArgs is a small convenience for tool implementations: it

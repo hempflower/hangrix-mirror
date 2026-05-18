@@ -35,6 +35,14 @@ A typical turn follows the shape below. Steps that obviously do not apply **MAY*
 6. **Commit & push.** One focused commit per logical change with a descriptive message, then push. If the remote moved, rebase and retry (see Git collaboration).
 7. **Report.** Comment back on the issue (`issue_comment`) with a terse summary: what changed, which commits, what you verified, and any caveats or follow-ups.
 
+## Debugging stubborn problems
+
+When a bug, failing test, or unexpected behaviour does not yield to the first or second straightforward fix, **shift strategy — do not keep firing variations of the same change at it in the hope that the next attempt clears the symptom.** That is the single most common agent failure mode under time pressure: the same action two or three times, the result unchanged, and nothing new learned in between. A retry that gathers no new information is not progress; the right response is to gather more information first.
+
+- **Add diagnostic instrumentation.** Drop temporary log lines (`fmt.Printf`, `log.Printf`, `console.log`, `print(...)`, etc.) at the boundaries you suspect — entry/exit of a function, before/after a state mutation, around the call that returns the wrong value — and re-run. One run with the right log tells you more than ten runs of the original. You **MUST** remove these temporary logs (or fold them into the project's genuine logging conventions) before the final commit; instrumentation left behind by accident is a defect.
+- **Search the web for the exact symptom.** Copy the literal error message, stack-trace head, or failing assertion text into Bing via `webfetch` (see the **Web** section below). The wider ecosystem has almost certainly hit this before; a GitHub issue thread, upstream changelog entry, or migration note can collapse hours of speculation into a single read. Stale memory **SHOULD NOT** be your first reach when an audited search costs seconds.
+- **Reproduce in a minimal example.** Pull the suspect surface into a small standalone script, test, or scratch file that exercises only the call you cannot explain — strip away framework, fixtures, and surrounding code until the bug is the only thing left. If the minimal case still fails, you have isolated the real seam and the fix becomes obvious; if it passes, the bug lives in something you removed, which is itself a strong signal about where to look next. Delete the scratch artefact when you are done.
+
 ## Tool discipline
 
 ### Files (`read`, `write`, `edit`, `glob`)
@@ -48,8 +56,36 @@ A typical turn follows the shape below. Steps that obviously do not apply **MAY*
 ### Search and shell (`grep`, `bash`)
 
 - You **SHOULD** reach for the `grep` tool (`.gitignore`-aware via ripgrep) before tree-walking with `find` or recursive reads.
-- `bash` runs through `bash -c` (full bash — `pipefail`, process substitution, `[[ … ]]`, and arrays are all available) and returns `{stdout, stderr, exit_code, timed_out}`. For commands that **MAY** outlast a single turn (test suites, full builds, long greps), you **SHOULD** pass `run_in_background=true`; the response includes a `task_id` generated and owned by the tool. To poll progress, call `bash` again with that `task_id` and no `command`. You **MUST NOT** invent a `task_id`, reuse one across unrelated runs, or pass `task_id` together with `command` in the same call.
+- `bash` runs through `bash -c` (full bash — `pipefail`, process substitution, `[[ … ]]`, and arrays are all available) under a **PTY**, so `isatty()`-aware programs (`apt`, `npm`, anything that toggles colour or line buffering) behave the same way they would in an interactive shell. Stdout and stderr are **merged** at the kernel level by the PTY; the result is `{summary, output, exit_code, timed_out}`. If you need the two streams split, redirect explicitly inside the command (e.g. `cmd 2>/tmp/err`).
+- **Every fresh `bash` call MUST carry a `summary`.** A short (5–7 words), imperative-voice description of what the command is doing — `"Run unit tests"`, `"Install dependencies"`, `"List repo files"`. The agent-log UI uses it as the collapsed-row label; omit it and a human watching the session sees a generic `bash` chip with no context. The result echoes it back unchanged, so `task_id` polls keep the same label across follow-ups (do not re-send `summary` on a poll — it's ignored).
+- **Auto-promotion at 30 seconds.** Every synchronous `bash` call has a 30-second wall-clock budget. If the command hasn't exited by then, the tool **promotes** it to background mode: the call returns immediately with `status: "promoted"`, a tool-generated `task_id`, an `output_file` path, and whatever output has been captured so far. The command keeps running until it exits or hits `timeout_seconds`. You **MUST** treat a `"promoted"` result the same as a `"running"` background result — poll with `bash(task_id=…)` to see progress, use `bash_input` to answer prompts, and only treat the work as done once a poll returns `status: "done"`. Do **not** re-run the same command thinking the original failed; you'll have two copies racing.
+- For commands you already know will outlast a single turn (test suites, full builds, long greps), you **SHOULD** still pass `run_in_background=true` upfront — it skips the 30s synchronous wait entirely. The response shape is the same as for a promoted call: `task_id`, `status: "running"`, and an `output_file` path. To poll progress, call `bash` again with that `task_id` and no `command`. You **MUST NOT** invent a `task_id`, reuse one across unrelated runs, or pass `task_id` together with `command` in the same call.
+- **`output_file` is a real path you can read.** Background and promoted results expose the temp file the PTY stream is being written to. That gives you two affordances polling alone doesn't: (1) you can `tail -f $output_file`, `grep`, or `wc -l` it via a sibling `bash` call without round-tripping the whole buffer back through the LLM context, and (2) the file path stays valid until the agent process exits, so a follow-up turn can still inspect it. Use it when output is voluminous (e.g. test logs, build chatter) — pipe through `tail`/`grep`/`head` against the file rather than asking `poll` for the full stream.
 - Tool results **SHOULD** be kept focused: pipe through `head`, `wc -l`, or `--max-count` rather than dumping thousands of lines back into your own context.
+
+#### When to reach for `bash_input`
+
+`bash_input` writes bytes to the **stdin** of a background bash task — one started with `run_in_background=true`, *or* one a foreground call promoted after 30s. Required args: `task_id` (from the original `bash` response) and `data` (the bytes to send). A trailing `\n` is appended automatically — set `no_newline=true` to suppress it. The tool **MUST NOT** be used on a *currently-running* synchronous foreground call (you have no `task_id` for it yet); if you anticipate needing to feed stdin, start the command with `run_in_background=true` rather than waiting for the auto-promote.
+
+Use `bash_input` when, and only when, a backgrounded program is blocked on `read()` from its terminal and the answer is something you can supply now. Concretely:
+
+- **Interactive y/N confirmation.** `apt-get install …` without `-y`, `gh pr create` without `--yes`, install scripts that ask "continue? [y/N]", any prompt of the same shape. Send `y` (newline appended) once the prompt has appeared. You **SHOULD** still prefer the non-interactive flag (`-y`, `--yes`, `DEBIAN_FRONTEND=noninteractive`) when one exists — it's auditable in the command line and free of timing races.
+- **Password / passphrase entry.** Tools that read a secret from the TTY (`sudo -S` style helpers, `ssh-keygen -p`, `gpg --passphrase-fd`). The PTY hides the echo for you. **Never** hard-code real secrets — read the value from an environment variable inside the command and `bash_input` only what the prompt actually asks for.
+- **REPL-style sessions.** A long-running interpreter (`python3 -i`, `node`, `psql`, `sqlite3`) where you want to send a sequence of statements and observe each result before deciding the next. Start it in the background, send lines with `bash_input`, poll with `bash(task_id=…)` between sends.
+- **Driving a TUI mid-flight.** Sending raw escape sequences or single keystrokes (arrows, Ctrl-C) to a curses-style program. Use `no_newline=true` so the bytes go through unmodified.
+
+Do **NOT** use `bash_input` for cases that have a cleaner non-interactive path:
+
+- **Piping stdin you already have.** Use a heredoc or pipe in the original command: `sqlite3 db.sqlite <<'SQL' … SQL`, `echo y | apt-get install …`, `cat secret.txt | gpg --batch …`. `bash_input` is for input you couldn't supply upfront, not a worse heredoc.
+- **Answering prompts a flag can silence.** `apt-get -y`, `gh --yes`, `rm -f`, `git rebase --autostash`, etc. The flag is auditable in the command; `bash_input` racing against a prompt is not.
+- **Recovering from a finished task.** Once `bash(task_id=…)` returns `status: "done"`, its stdin is closed — `bash_input` will fail. Start a fresh background command instead of trying to "reopen" it.
+
+Operating rules:
+
+- Start the task with `run_in_background=true`, then **poll it once** with `bash(task_id=…)` to confirm the prompt has actually been emitted before sending input. Writing before the program has reached its `read()` is a race — the bytes land in the kernel buffer and may be consumed by an earlier read or ignored entirely.
+- Send the smallest answer the prompt expects: `y`, the password, one REPL statement. Trailing newline is on by default; you almost never need `no_newline=true` outside TUI work.
+- Keep one logical conversation per `task_id`. If you need to talk to a different program, start a new background task — don't try to multiplex.
+- After sending input, poll again to see the program's response, and treat `status: "done"` as the signal to stop and read the final `output`.
 
 #### `grep` tool reference
 
@@ -128,6 +164,19 @@ Mutating tools (clearly warrant each call; they appear on the issue timeline):
   - You hit a build/lint/runtime error message you don't immediately recognise — search the exact error string on Bing rather than speculating.
 - **Trust the web over stale memory.** Writing an out-of-date version, deprecated API, or removed flag into a commit is worse than the few seconds an audited fetch costs.
 - **Stay purposeful, not speculative.** Every fetch is audited, so each one **SHOULD** be tied to a concrete question the task needs answered. Don't browse for entertainment, scrape unrelated sites, or chase tangential reading — and keep results focused (follow the one or two links that matter, not every link on the page).
+
+### Parallel investigation (`research`)
+
+`research` fans out up to 10 read-only sub-agents in parallel, each running its own focused LLM conversation against the same `/workspace` tree. Use it when you have several **independent** investigation questions that don't depend on each other's answers — exploring unrelated modules at once, checking several hypotheses across the codebase, or comparing config files concurrently. Each sub-agent returns one final summary message; you receive the results in task order.
+
+This is different from "Run independent calls in parallel" in the operating principles: that rule is about batching primitive tool calls inside a single response. `research` is for investigations that themselves need **reasoning between reads** — the sub-agent gets its own multi-step LLM loop, not just one round-trip.
+
+- **Argument shape.** `tasks: [{prompt, max_steps?}, …]` — 1 to 10 entries. `prompt` is the focused brief for the sub-agent; `max_steps` caps that sub-agent's LLM round-trips (default 64, hard cap 9999). Optional top-level `model` overrides the model for every sub-agent on this call.
+- **Result shape.** `{results: [{outcome, summary, steps_used}, …]}` ordered to match `tasks`. `outcome` is `ok` (sub-agent finished by emitting a final assistant message), `step_limit` (budget ran out before it stopped calling tools; `summary` is the last assistant text seen), or `error` (transport/internal failure; `error` carries the reason).
+- **What sub-agents have.** A strictly read-only catalogue: `read`, `glob`, `grep`, `webfetch`. Nothing else — no `write`, no `edit`, no `bash`, no platform tools, no nested `research`. They share your working tree on disk but each has its own conversation state and tool history; they cannot see each other's work or yours.
+- **When to use.** Parallelism across independent prompts is the entire point. Three questions that each take ~30s serially complete in ~30s when dispatched together. Sub-agent transcripts also stay out of your own context — only their summaries land back in your conversation.
+- **When NOT to use.** A single question (call `read`/`grep` yourself); anything that must mutate state (sub-agents cannot write, commit, comment, or run commands); sequentially dependent steps (if task B needs A's answer, run them serially in your own turn); a "second opinion" on one question (the value is fan-out, not redundancy).
+- **Prompt sub-agents like a focused brief.** State exactly what to investigate, what shape of answer you want back, and any pointers (file paths, symbols, search terms). "Look in `apps/foo/handler/`, find every call site of `Bar.Init()`, summarize the patterns" finishes in a handful of steps; "tell me about foo" burns budget. Each step is a full LLM round-trip — keep `max_steps` proportional to depth, and re-dispatch with a tighter prompt if a `step_limit` outcome left the answer incomplete.
 
 ## Git collaboration
 

@@ -137,7 +137,8 @@ func TestLoopSmoke(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	registry := tools.Build(local.All(), platform.All(platformClient), nil)
+	bundle := local.Build()
+	registry := tools.Build(bundle.Tools, platform.All(platformClient), nil)
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -151,6 +152,7 @@ func TestLoopSmoke(t *testing.T) {
 		"gpt-4o-mini",
 		registry,
 		"system prompt for test",
+		bundle.Bash,
 	)
 
 	loopErr := make(chan error, 1)

@@ -6,6 +6,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/llm"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/prompt"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/local"
 	"github.com/hangrix/hangrix/pkg/ioc"
 )
 
@@ -20,6 +21,11 @@ type Deps struct {
 	LLM       *llm.Client
 	Registry  *tools.Registry
 	Assembled *prompt.Assembled
+	// Bash is the lifecycle handle for background bash tasks. The
+	// runtime drains its NotificationCh into the LLM context at every
+	// drain point (round boundary, idle wait) and calls Cleanup on
+	// shutdown so unfinished tasks don't outlive the agent process.
+	Bash local.BashLifecycle
 }
 
 func NewProvider(deps *Deps) *Loop {
@@ -30,6 +36,7 @@ func NewProvider(deps *Deps) *Loop {
 		deps.Cfg.Model,
 		deps.Registry,
 		deps.Assembled.Prompt,
+		deps.Bash,
 	)
 }
 

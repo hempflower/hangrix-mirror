@@ -22,13 +22,32 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix-runner/internal/orchestrator"
 )
 
-// SessionDriver runs one claimed session end-to-end:
+// Default idle timeouts. The agent emits an `idle` outbound frame after
+// each event, carrying a hint about how many background bash tasks are
+// still alive. The runner picks the shorter timeout when there are no
+// background jobs (cheap to retire the container; a fresh one will spin
+// up on the next event) and the longer one when there are (the
+// container is babysitting work; retiring early would orphan it).
+const (
+	defaultIdleTimeout         = 60 * time.Second
+	defaultIdleTimeoutWithJobs = 5 * time.Minute
+)
+
+// SessionDriver runs one claimed session end-to-end. With long-lived
+// containers, "one session" means "container start → events processed
+// while alive → idle timeout → control:shutdown → container exit":
 //
 //	1. Resolve host paths (workdir, addendum file).
 //	2. Start container via orchestrator.
-//	3. Forward platform → agent (poll /inputs, write to stdin).
-//	4. Forward agent → platform (read stdout lines, POST /messages).
-//	5. Wait for exit, mark terminal.
+//	3. Fan out IO goroutines:
+//	     stdin shipper:  poll /inputs → write to container stdin
+//	     stdout drain:   read container stdout, forward to /messages,
+//	                     intercept `idle` to drive retirement
+//	     stderr drain:   read container stderr → log frames
+//	     idle watcher:   on `idle` start retirement timer; on timer
+//	                     fire, write control:shutdown to stdin so the
+//	                     agent cleans up background tasks and exits.
+//	4. Wait for container exit, mark terminal.
 //
 // One driver per session; goroutines fan out internally and join before
 // Run returns.
@@ -45,6 +64,11 @@ type SessionDriver struct {
 	// can derive `/api/llm/v1/responses` and `/api/agent/tools/<name>`
 	// for itself.
 	BaseURL string
+
+	// IdleTimeout / IdleTimeoutWithJobs override the package defaults
+	// for this driver instance. Zero means "use the package default".
+	IdleTimeout         time.Duration
+	IdleTimeoutWithJobs time.Duration
 }
 
 // Run starts the container for the given task and stays in the IO loop
@@ -111,41 +135,68 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 	if err != nil {
 		return -1, d.fail(ctx, task.SessionID, fmt.Errorf("start container: %w", err))
 	}
-	// Persist the container id back to the platform. We post even when
-	// the orchestrator reused an existing id — the SetContainer call
-	// bumps container_last_used_at, which the 7-day idle reaper keys on.
-	// Failure here is logged but non-fatal: the run proceeds, and the
-	// next run will resurface the unchanged id.
 	if cid := handle.ContainerID(); cid != "" {
 		if err := d.Client.SetContainer(ctx, task.SessionID, cid); err != nil {
 			log.Printf("session %d: set container id: %v", task.SessionID, err)
 		}
 	}
 
-	// IO fan-out. Three goroutines:
-	//   * stdin shipper:  poll /inputs → write to container stdin
-	//   * stdout drain:   read container stdout → POST /messages
-	//   * stderr drain:   read container stderr → POST /messages (log kind)
-	var wg sync.WaitGroup
+	// Both shipStdin and the idle watcher write to the container's
+	// stdin pipe. Wrap it in a mutex-guarded writer so their writes
+	// can't interleave bytes in the middle of a JSON line.
+	stdin := &lockedWriter{w: handle.Stdin()}
+
+	// activitySig is non-blocking: senders use a select-default to drop
+	// when the watcher isn't ready. It only needs to flag "we observed
+	// activity since the last idle"; missing one signal just delays
+	// retirement by an idle-timeout-and-a-bit, which is harmless.
+	activitySig := make(chan struct{}, 1)
+	// idleSig carries the agent's running-jobs hint so the watcher can
+	// pick the right timeout band. Buffered to one because the agent
+	// emits exactly one idle frame between events.
+	idleSig := make(chan idleSignal, 4)
+
 	ioCtx, cancelIO := context.WithCancel(ctx)
 	defer cancelIO()
 
-	wg.Add(3)
-	go func() { defer wg.Done(); d.shipStdin(ioCtx, task.SessionID, handle.Stdin()) }()
-	go func() { defer wg.Done(); d.shipStdout(ioCtx, task.SessionID, handle.Stdout()) }()
+	// pollCtx is a child of ioCtx that the watcher can cancel
+	// independently. When the idle timer fires we want to stop pulling
+	// new events off /inputs (else we'd ship them into a container
+	// that's already on its way down and lose them from the agent's
+	// perspective). The platform's /inputs queue keeps them safe; a
+	// fresh container will pick them up.
+	pollCtx, stopPolling := context.WithCancel(ioCtx)
+
+	var wg sync.WaitGroup
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		d.shipStdin(pollCtx, task.SessionID, stdin, activitySig)
+	}()
+	go func() { defer wg.Done(); d.shipStdout(ioCtx, task.SessionID, handle.Stdout(), idleSig, activitySig) }()
 	go func() { defer wg.Done(); d.shipStderr(ioCtx, task.SessionID, handle.Stderr()) }()
+	go func() {
+		defer wg.Done()
+		d.watchIdle(ioCtx, task.SessionID, stdin, idleSig, activitySig, stopPolling)
+	}()
 
 	ec, waitErr := handle.Wait()
 	cancelIO()
 	wg.Wait()
+	// Close the stdin pipe only after every writer goroutine has joined.
+	// If shipStdin's defer closed it on poll-ctx cancel, the watcher's
+	// own write (the shutdown frame that triggers the agent's exit
+	// path) would race against an already-closed pipe and the test
+	// would deadlock waiting on handle.Wait. Centralising the close
+	// here makes the ordering invariant: writers stop first, then the
+	// pipe is closed.
+	_ = stdin.Close()
 
 	exitCode = int32(ec)
-	// Status mapping:
+	// Status mapping (unchanged from the one-shot era):
 	//   * clean exit (ec=0, no waitErr) → idle. The container processed
-	//     one event and exited; the session row stays reusable so the
-	//     next trigger rewakes it without losing identity. We never
-	//     emit "succeeded" — per-issue per-role sessions are long-lived
-	//     conceptually, even though each container is short.
+	//     events and exited cleanly; the session row stays reusable so
+	//     the next trigger rewakes it without losing identity.
 	//   * non-zero exit OR waitErr → failed. The user / spawner can
 	//     resume from the UI.
 	status := client.TerminateRequest{Status: "idle", ExitCode: &exitCode}
@@ -176,11 +227,53 @@ func (d *SessionDriver) fail(ctx context.Context, sessionID int64, e error) erro
 	return e
 }
 
+// lockedWriter serialises writes to the container's stdin. Both
+// shipStdin (forwarding events from /inputs) and the idle watcher
+// (writing control:shutdown when the retirement timer fires) take this
+// lock, so a shutdown frame can never be sliced into the middle of an
+// event frame.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.WriteCloser
+}
+
+func (lw *lockedWriter) Write(p []byte) (int, error) {
+	lw.mu.Lock()
+	defer lw.mu.Unlock()
+	return lw.w.Write(p)
+}
+
+func (lw *lockedWriter) Close() error {
+	lw.mu.Lock()
+	defer lw.mu.Unlock()
+	return lw.w.Close()
+}
+
+// idleSignal carries the agent's "I'm idle" report. RunningJobs is the
+// snapshot count of background bash tasks alive in the agent at the
+// moment idle was emitted; the watcher uses it to pick which timeout
+// band to apply.
+type idleSignal struct {
+	runningJobs int
+}
+
+// emptyPollBackoff is the floor on how often shipStdin re-polls /inputs
+// when the previous response was empty. Production servers do long-
+// polling (they hold the request open until a frame is ready or a
+// server-side timeout elapses), but defensive backoff protects us from
+// a misconfigured short-poll server starving the scheduler in a tight
+// loop — and gives the test stubs a reasonable cadence too.
+const emptyPollBackoff = 50 * time.Millisecond
+
 // shipStdin polls the platform for inbound IPC frames and writes each one
 // (terminated by '\n') to the container stdin. Exits on context cancel
-// or a write error (container exit closes the pipe).
-func (d *SessionDriver) shipStdin(ctx context.Context, sessionID int64, w io.WriteCloser) {
-	defer w.Close()
+// (which the idle watcher does once it has decided to retire the
+// container) or a write error (container exit closes the pipe).
+//
+// On every successful frame ship, we kick the activity signal so the
+// idle watcher knows the agent is busy again and cancels its retirement
+// timer.
+func (d *SessionDriver) shipStdin(ctx context.Context, sessionID int64, w io.Writer, activity chan<- struct{}) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -193,10 +286,44 @@ func (d *SessionDriver) shipStdin(ctx context.Context, sessionID int64, w io.Wri
 				return
 			}
 			log.Printf("session %d: poll inputs: %v", sessionID, err)
-			time.Sleep(time.Second)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+			continue
+		}
+		if len(resp.Frames) == 0 {
+			// No work in the queue. Back off briefly so we don't
+			// burn CPU spinning against a server that responds
+			// instantly with an empty list. The select makes the
+			// sleep cancellable so a context cancel still exits
+			// promptly.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(emptyPollBackoff):
+			}
 			continue
 		}
 		for _, frame := range resp.Frames {
+			// Flag activity FIRST, then write. Doing it the other way
+			// around opens a race: the Write blocks until the agent
+			// reads, which itself can trigger a downstream idleSig
+			// (agent processes the frame and emits its idle ack),
+			// and that idleSig can reach the watcher before the
+			// activity signal does. The watcher then starts a fresh
+			// timer and the late-arriving activity cancels it,
+			// leaving us unable to ever retire the container.
+			//
+			// Sending activity before Write means it's strictly
+			// earlier in real time than any downstream idleSig the
+			// Write could provoke, so the watcher's drainStaleActivity
+			// (after starting the timer) always catches it.
+			select {
+			case activity <- struct{}{}:
+			default:
+			}
 			if _, err := w.Write(append([]byte(frame), '\n')); err != nil {
 				return
 			}
@@ -205,9 +332,22 @@ func (d *SessionDriver) shipStdin(ctx context.Context, sessionID int64, w io.Wri
 }
 
 // shipStdout reads JSON-Lines off the container's stdout and forwards
-// each frame to the platform as an /messages append. Unknown kinds are
-// preserved verbatim — the platform validates.
-func (d *SessionDriver) shipStdout(ctx context.Context, sessionID int64, r io.Reader) {
+// each frame to the platform as an /messages append, with two
+// exceptions:
+//   - `idle` frames are intercepted and routed to the watcher rather
+//     than persisted; they're a runner-only control signal, not part
+//     of the issue timeline.
+//   - All other non-idle frames also trigger an activity signal, so
+//     the watcher can see that the agent is mid-event (writing
+//     messages, tool calls, log lines) and shouldn't be considered
+//     truly idle even if it hasn't gotten back to the idle frame yet.
+func (d *SessionDriver) shipStdout(
+	ctx context.Context,
+	sessionID int64,
+	r io.Reader,
+	idleSig chan<- idleSignal,
+	activity chan<- struct{},
+) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16<<20)
 	for scanner.Scan() {
@@ -219,6 +359,20 @@ func (d *SessionDriver) shipStdout(ctx context.Context, sessionID int64, r io.Re
 		if err := json.Unmarshal(line, &frame); err != nil {
 			d.appendLog(ctx, sessionID, "warn", "agent emitted non-JSON stdout: "+string(line))
 			continue
+		}
+		if frame.Kind == "idle" {
+			select {
+			case idleSig <- idleSignal{runningJobs: frame.RunningJobs}:
+			case <-ctx.Done():
+				return
+			}
+			continue
+		}
+		// Non-idle frame = agent is doing something. Kick activity so
+		// any pending retirement timer is cancelled.
+		select {
+		case activity <- struct{}{}:
+		default:
 		}
 		req := frame.toAppendRequest()
 		if err := d.Client.AppendMessage(ctx, sessionID, req); err != nil {
@@ -245,6 +399,117 @@ func (d *SessionDriver) shipStderr(ctx context.Context, sessionID int64, r io.Re
 	}
 }
 
+// watchIdle is the small state machine that decides when to retire the
+// container. Inputs:
+//   - idleSig: agent emitted `idle` (with a hint about background jobs)
+//   - activity: a new event was shipped to stdin, OR the agent emitted
+//     a non-idle outbound frame
+//
+// State: a single time.Timer that fires after the appropriate
+// idle-timeout once idle is observed and no activity intervenes. When
+// the timer fires we (a) stop the stdin poller so no new event gets
+// shipped into a container we're already retiring, then (b) write a
+// `control:shutdown` frame to stdin. The agent runs its cleanup and
+// exits; handle.Wait() returns in Run; the function returns.
+func (d *SessionDriver) watchIdle(
+	ctx context.Context,
+	sessionID int64,
+	stdin io.Writer,
+	idleSig <-chan idleSignal,
+	activity <-chan struct{},
+	stopPolling context.CancelFunc,
+) {
+	idleTimeout := d.IdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = defaultIdleTimeout
+	}
+	idleWithJobs := d.IdleTimeoutWithJobs
+	if idleWithJobs <= 0 {
+		idleWithJobs = defaultIdleTimeoutWithJobs
+	}
+
+	var timer *time.Timer
+	stopTimer := func() {
+		if timer != nil {
+			timer.Stop()
+			timer = nil
+		}
+	}
+	defer stopTimer()
+
+	sendShutdown := func() {
+		// Stop pulling fresh /inputs before the agent acks shutdown,
+		// otherwise an event that landed in the platform queue between
+		// "timer fired" and "agent exited" would be shipped into a
+		// dying container and lost. Once the agent exits and a new
+		// trigger fires, a fresh container picks it up.
+		stopPolling()
+		if _, err := stdin.Write([]byte(`{"kind":"control","op":"shutdown"}` + "\n")); err != nil {
+			log.Printf("session %d: send shutdown: %v", sessionID, err)
+		}
+	}
+
+	for {
+		var timerCh <-chan time.Time
+		if timer != nil {
+			timerCh = timer.C
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case sig := <-idleSig:
+			// Agent reports idle. Pick the right timeout based on the
+			// running-jobs hint. running_jobs>0 means a `bash`
+			// background task is still alive — be generous, the agent
+			// is conceptually waiting on it. running_jobs==0 means we
+			// can retire whenever.
+			d := idleTimeout
+			if sig.runningJobs > 0 {
+				d = idleWithJobs
+			}
+			stopTimer()
+			timer = time.NewTimer(d)
+			// Drain any stale activity signals queued before this
+			// idle. Without this, an activity event that flowed from
+			// shipStdin (shipping the very event the agent has now
+			// finished processing) can race with the idle frame and
+			// cancel the timer we just started — leaving us stuck
+			// waiting for a retirement signal that never fires. The
+			// idle frame is itself the agent's ack that those prior
+			// events are done, so anything in activity at this moment
+			// is by definition stale.
+		drainStaleActivity:
+			for {
+				select {
+				case <-activity:
+				default:
+					break drainStaleActivity
+				}
+			}
+		case <-activity:
+			// Agent is no longer idle: events being shipped or
+			// messages flowing out. Cancel any pending retirement.
+			stopTimer()
+		case <-timerCh:
+			sendShutdown()
+			// After sending shutdown we wait for the container to exit
+			// (handle.Wait in Run). Don't restart the timer; if the
+			// agent races and emits another idle frame, we'd send a
+			// second shutdown which is harmless but noisy. Just sit
+			// here draining signals until ctx is cancelled.
+			timer = nil
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-idleSig:
+				case <-activity:
+				}
+			}
+		}
+	}
+}
+
 func (d *SessionDriver) appendLog(ctx context.Context, sessionID int64, level, msg string) {
 	_ = d.Client.AppendMessage(ctx, sessionID, client.AppendMessageRequest{
 		Kind:  "log",
@@ -258,18 +523,19 @@ func (d *SessionDriver) appendLog(ctx context.Context, sessionID int64, level, m
 // agent package) so the runner binary doesn't transitively pull the
 // agent's third-party deps.
 type outboundFrame struct {
-	Kind       string          `json:"kind"`
-	Phase      string          `json:"phase,omitempty"`
-	Role       string          `json:"role,omitempty"`
-	Content    string          `json:"content,omitempty"`
-	ToolCalls  []toolCall      `json:"tool_calls,omitempty"`
-	Name       string          `json:"name,omitempty"`
-	Args       json.RawMessage `json:"args,omitempty"`
-	Result     json.RawMessage `json:"result,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	Level      string          `json:"level,omitempty"`
-	Msg        string          `json:"msg,omitempty"`
-	TurnID     string          `json:"turn_id,omitempty"`
+	Kind        string          `json:"kind"`
+	Phase       string          `json:"phase,omitempty"`
+	Role        string          `json:"role,omitempty"`
+	Content     string          `json:"content,omitempty"`
+	ToolCalls   []toolCall      `json:"tool_calls,omitempty"`
+	Name        string          `json:"name,omitempty"`
+	Args        json.RawMessage `json:"args,omitempty"`
+	Result      json.RawMessage `json:"result,omitempty"`
+	ToolCallID  string          `json:"tool_call_id,omitempty"`
+	Level       string          `json:"level,omitempty"`
+	Msg         string          `json:"msg,omitempty"`
+	TurnID      string          `json:"turn_id,omitempty"`
+	RunningJobs int             `json:"running_jobs,omitempty"`
 }
 
 type toolCall struct {
