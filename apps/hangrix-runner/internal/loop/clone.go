@@ -61,10 +61,20 @@ func (s cloneSpec) authHeader() string {
 
 // cloneRepo prepares the working tree at spec.Dest:
 //
-//  1. If spec.Dest already exists, wipe it. Sessions can be re-claimed
-//     after a failed turn (rewake path) and the previous container may
-//     have left half-applied changes; starting from a clean checkout
-//     keeps each container reproducible.
+//  1. If spec.Dest already exists, wipe it. cloneRepo only runs when
+//     the session has no container yet (see SessionDriver.Run); any
+//     directory left at spec.Dest is therefore the residue of a
+//     previous failed attempt — half-finished clone, half-applied
+//     turn that never produced a container_id, etc. We deliberately
+//     don't fetch-and-reset in place: the savings are small for
+//     typical issue repos and the failure modes (corrupt .git after a
+//     kill -9, leftover untracked files) are nasty to debug. Once the
+//     container exists, the workdir is owned by it and the runner
+//     must never touch this path again until the container is
+//     deleted; otherwise the in-container bind mount onto the dir
+//     inode goes stale and runc rejects the next `docker exec` with
+//     `current working directory is outside of container mount
+//     namespace root`.
 //  2. `git clone` the host repo with http.extraHeader baked into
 //     .git/config so the agent's later `git push` / `git fetch` reuse
 //     the same session-token auth without us re-injecting it.
@@ -80,10 +90,6 @@ func cloneRepo(ctx context.Context, spec cloneSpec) (string, error) {
 	if err := spec.validate(); err != nil {
 		return "", err
 	}
-	// Wipe + recreate. We deliberately don't try to fetch-and-reset
-	// in place: the savings are small for typical issue repos and
-	// the failure modes (corrupt .git after a kill -9, leftover
-	// untracked files) are nasty to debug.
 	if err := os.RemoveAll(spec.Dest); err != nil {
 		return "", fmt.Errorf("clone: clear dest %s: %w", spec.Dest, err)
 	}

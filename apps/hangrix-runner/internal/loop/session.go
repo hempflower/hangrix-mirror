@@ -92,23 +92,40 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 	// with the session token is baked into the cloned .git/config by
 	// cloneRepo. Sessions without owner/name in env (admin smoke
 	// path) skip the clone and get an empty workdir like before.
+	//
+	// We only clone on the FIRST trigger of a session (task.ContainerID
+	// empty). Subsequent triggers reuse the long-lived container — its
+	// /workspace bind mount is pinned to the same host inode created by
+	// that first clone, and removing+re-creating the dir would orphan
+	// the mount inside the container (runc then rejects `docker exec
+	// --workdir /workspace` with "current working directory is outside
+	// of container mount namespace root"). Skipping the re-clone is
+	// also the point of long-lived containers in the first place:
+	// caches, build artefacts, and in-flight edits survive across
+	// turns. The previous turn's checkout is still on disk at
+	// repoCheckout, so mountPath stays pointed at it for the fallback
+	// case where the orchestrator has to rebuild a vanished container.
 	owner := task.Env["HANGRIX_HOST_OWNER"]
 	name := task.Env["HANGRIX_HOST_NAME"]
 	mountPath := hostWorkdir
 	if owner != "" && name != "" && task.SessionToken != "" {
-		dest, err := cloneRepo(ctx, cloneSpec{
-			BaseURL:       d.BaseURL,
-			Owner:         owner,
-			Name:          name,
-			WorkingBranch: task.WorkingBranch,
-			BaseBranch:    task.BaseBranch,
-			SessionToken:  task.SessionToken,
-			Dest:          repoCheckout,
-		})
-		if err != nil {
-			return -1, d.fail(ctx, task.SessionID, fmt.Errorf("clone host repo: %w", err))
+		if task.ContainerID == "" {
+			dest, err := cloneRepo(ctx, cloneSpec{
+				BaseURL:       d.BaseURL,
+				Owner:         owner,
+				Name:          name,
+				WorkingBranch: task.WorkingBranch,
+				BaseBranch:    task.BaseBranch,
+				SessionToken:  task.SessionToken,
+				Dest:          repoCheckout,
+			})
+			if err != nil {
+				return -1, d.fail(ctx, task.SessionID, fmt.Errorf("clone host repo: %w", err))
+			}
+			mountPath = dest
+		} else {
+			mountPath = repoCheckout
 		}
-		mountPath = dest
 	}
 
 	hostAddendumPath := ""

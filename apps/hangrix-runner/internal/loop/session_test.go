@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -155,5 +157,91 @@ func TestSessionDriverEndToEnd(t *testing.T) {
 	// the agent-loop tests).
 	if terminateBody["status"] != "idle" {
 		t.Errorf("terminate status=%v, want idle", terminateBody["status"])
+	}
+}
+
+// TestSessionDriverSkipsCloneWhenReusingContainer is the regression for
+// the runc "current working directory is outside of container mount
+// namespace root" failure: when a session is re-triggered, the runner
+// must NOT re-clone the workdir, because the existing long-lived
+// container has /workspace bind-mounted to that dir's inode. Wiping +
+// re-cloning gives the dir a fresh inode and breaks the in-container
+// mount on the next `docker exec`.
+//
+// We detect "clone happened" by intercepting the platform's /git/ path
+// on the stub server: cloneRepo would HTTP-GET that path; if the gate
+// works, the path is never touched. We also assert the orchestrator
+// received HostWorkdir = repoCheckout (so a fallback container rebuild
+// would still bind-mount the right subdir).
+func TestSessionDriverSkipsCloneWhenReusingContainer(t *testing.T) {
+	t.Parallel()
+
+	var cloneHits atomic.Int32
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/git/"):
+			// cloneRepo would land here. With ContainerID set, we expect
+			// the runner to skip the clone entirely.
+			cloneHits.Add(1)
+			http.Error(w, "clone path should not be hit", http.StatusInternalServerError)
+		case r.URL.Path == "/api/runner/sessions/77/running",
+			r.URL.Path == "/api/runner/sessions/77/messages",
+			r.URL.Path == "/api/runner/sessions/77/terminate",
+			r.URL.Path == "/api/runner/sessions/77/container":
+			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/api/runner/sessions/77/inputs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"frames": []json.RawMessage{}})
+		default:
+			t.Errorf("unexpected platform call: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(platform.Close)
+
+	cli := client.New(platform.URL).WithAgentToken("hgxr_AAAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
+	fake := orchestrator.NewFake()
+
+	go func() {
+		// Brief grace so the driver wires up its IO loop before we tear
+		// the agent down. Exit closes all pipes; handle.Wait then returns.
+		time.Sleep(50 * time.Millisecond)
+		fake.Exit(0)
+	}()
+
+	wsroot := t.TempDir()
+	drv := &loop.SessionDriver{
+		Client:          cli,
+		Orchestrator:    fake,
+		AgentBinaryPath: "/dev/null",
+		WorkspaceRoot:   wsroot,
+		BaseURL:         platform.URL,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	task := &client.Task{
+		SessionID:    77,
+		AgentImage:   "alpine:latest",
+		SessionToken: "hgxs_AAAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+		ContainerID:  "existing-container-77",
+		Env: map[string]string{
+			"HANGRIX_HOST_OWNER": "alice",
+			"HANGRIX_HOST_NAME":  "myproject",
+		},
+	}
+	if _, err := drv.Run(ctx, task); err != nil {
+		t.Fatalf("driver.Run: %v", err)
+	}
+
+	if got := cloneHits.Load(); got != 0 {
+		t.Errorf("clone HTTP hits=%d, want 0 (reused container must not re-clone)", got)
+	}
+
+	wantWorkdir := filepath.Join(wsroot, "session-77", "repo")
+	if got := fake.LastTask().HostWorkdir; got != wantWorkdir {
+		t.Errorf("orchestrator HostWorkdir = %q, want %q", got, wantWorkdir)
+	}
+	if got := fake.LastTask().ContainerID; got != "existing-container-77" {
+		t.Errorf("orchestrator ContainerID = %q, want existing-container-77", got)
 	}
 }
