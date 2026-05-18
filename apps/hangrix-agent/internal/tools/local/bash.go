@@ -63,6 +63,82 @@ func SetForegroundPromoteAfterForTest(d time.Duration) (restore func()) {
 	return func() { foregroundPromoteAfter = prev }
 }
 
+// agentEnvDefaults are the env vars we want every bash subprocess to see
+// unless the parent process has already set them explicitly. The agent
+// runs unattended, so anything that opens a pager, prompts for input, or
+// pops a TUI dialog blocks forever — these defaults nudge well-behaved
+// CLIs into their non-interactive code paths while leaving the PTY alive
+// (programs that genuinely want isatty/colour still get it).
+//
+// Each entry is "KEY=VALUE". Order doesn't matter; lookups are by key.
+var agentEnvDefaults = []string{
+	// A real terminfo name. PTY makes isatty() true, but if TERM is unset
+	// or "dumb" then `less`/`vim`/`git diff` fall back to the
+	// "WARNING: terminal is not fully functional / Press RETURN" branch
+	// and hang the turn.
+	"TERM=xterm-256color",
+
+	// Kill pagers across the ecosystem. `cat` is the universal "just dump
+	// it" pager. LESS=-FRX is the belt-and-suspenders backup for anything
+	// that bypasses PAGER and invokes less directly: -F exits if the
+	// output fits one screen, -R passes ANSI through, -X skips the
+	// init/deinit sequences that can leave the PTY in a weird state.
+	"PAGER=cat",
+	"GIT_PAGER=cat",
+	"SYSTEMD_PAGER=cat",
+	"MANPAGER=cat",
+	"LESS=-FRX",
+
+	// The de-facto "I'm in CI / unattended" signal. npm, yarn, pnpm,
+	// cargo, gh, playwright, and many others switch to non-interactive
+	// modes on CI=true (no progress bars, no prompts, fail-fast on
+	// missing input).
+	"CI=true",
+
+	// apt/dpkg/debconf: never pop a TUI dialog. Without this an
+	// `apt-get install` of anything touching configs (postfix, mysql,
+	// tzdata) will sit forever on a purple ncurses screen.
+	"DEBIAN_FRONTEND=noninteractive",
+
+	// Real-time Python output instead of block-buffered, and skip the
+	// pip prompts/version chatter that pollute logs.
+	"PYTHONUNBUFFERED=1",
+	"PIP_DISABLE_PIP_VERSION_CHECK=1",
+	"PIP_NO_INPUT=1",
+
+	// Quiet npm: no funding/audit banner, no progress bar churn.
+	"NPM_CONFIG_FUND=false",
+	"NPM_CONFIG_AUDIT=false",
+	"NPM_CONFIG_PROGRESS=false",
+}
+
+// agentEnv returns the parent process environment with agentEnvDefaults
+// layered on top *only for keys not already set*. Parent env wins, so a
+// user who deliberately exports e.g. TERM=dumb in their runtime config
+// keeps that value.
+func agentEnv() []string {
+	parent := os.Environ()
+	seen := make(map[string]struct{}, len(parent))
+	for _, kv := range parent {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			seen[kv[:i]] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(parent)+len(agentEnvDefaults))
+	out = append(out, parent...)
+	for _, kv := range agentEnvDefaults {
+		i := strings.IndexByte(kv, '=')
+		if i <= 0 {
+			continue
+		}
+		if _, already := seen[kv[:i]]; already {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 type bashArgs struct {
 	Command         string `json:"command"`
 	// Summary is a short (one-line, ~7 words) human-readable description
@@ -296,6 +372,10 @@ func (b *bashTool) spawnJob(a bashArgs) *bashJob {
 	if a.WorkingDir != "" {
 		cmd.Dir = a.WorkingDir
 	}
+	// Inject agent-friendly defaults (no pagers, no TUI dialogs, real
+	// TERM, CI=true) on top of the parent env. Without this, things like
+	// `git diff` route through less and block on "Press RETURN".
+	cmd.Env = agentEnv()
 	// On context cancel/timeout, take down the whole session, not just
 	// bash. pty.Start sets Setsid, so the child is its own session leader
 	// and process-group head — `kill -PID` reaches every descendant that
