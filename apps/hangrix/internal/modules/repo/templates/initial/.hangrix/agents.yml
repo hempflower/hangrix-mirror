@@ -7,11 +7,21 @@
 # schema reference lives at docs/agent-config.md.
 #
 # Required edits before opening your first issue:
-#   1. container.image — pick a runtime that has the tooling your
-#      agent needs. The default
+#   1. container.image / container.build — pick a runtime that has
+#      the tooling your agent needs *baked in*. Anything installed
+#      with `apt install` / `npm i -g` / `pip install` inside a
+#      running session is thrown away when the session is archived
+#      and the next session starts from the image again, so the
+#      image (or a Dockerfile you build from) is the only durable
+#      place to put toolchains. The default
 #      `mcr.microsoft.com/devcontainers/base:ubuntu` ships with
-#      git, curl, common build tools, and a non-root user; agents
-#      will still need to apt-install language-specific toolchains.
+#      git, curl, common build tools, and a non-root user — fine
+#      for shell-only or docs work. For real stacks prefer either
+#      a pre-baked devcontainer image
+#      (e.g. `mcr.microsoft.com/devcontainers/go:1`,
+#      `…/typescript-node:20`, `…/python:3.12`) or write a
+#      Dockerfile under `.hangrix/` and switch to `container.build`
+#      (see docs/agent-config.md for the schema).
 #   2. llm.model — must match a model registered on the LLM
 #      provider the platform admin has configured.
 
@@ -63,9 +73,41 @@ roles:
          install`, `cargo check`, …) to confirm the scaffold is sound
          before committing.
 
+      Environment pass (do this together with scaffolding):
+
+      3. Decide on the agent container based on the stack you just
+         scaffolded, and write the decision into `container:` in the
+         new agents.yml. **Anything installed at runtime (`apt
+         install`, `npm i -g`, `pip install`, …) is discarded when
+         the session is archived** — the next session boots from
+         the image again, so toolchains MUST be baked in.
+         - If a well-maintained pre-baked image already covers the
+           stack, use `container.image:` and pin a concrete tag
+           (e.g. `mcr.microsoft.com/devcontainers/go:1`,
+           `…/typescript-node:20`, `…/python:3.12`,
+           `…/javascript-node:20`, `rust:1-bookworm`).
+           `mcr.microsoft.com/devcontainers/base:ubuntu` is fine
+           only for shell / docs / infra-yaml repos where no
+           language toolchain is required.
+         - If the stack needs a combination no single public image
+           covers (multiple runtimes, a private base, system
+           packages, a specific compiler version, headless
+           browsers, etc.), write a Dockerfile under
+           `.hangrix/agent.Dockerfile` and switch to
+           `container.build:` with `dockerfile:` +
+           `context: .`. Install every persistent dependency
+           (compilers, package managers, CLI tools, fonts,
+           system libs) in the Dockerfile — never expect agents
+           to install them on the fly.
+         Either way, after writing the spec, do a sanity check by
+         running the same install/build commands the agents will
+         later use (`go build ./...`, `npm ci`, `pip install -r …`,
+         `cargo check`) inside the current session to confirm the
+         scaffold actually works against that environment.
+
       Team-evolution pass (do this every scaffolding pass):
 
-      3. The team you create MUST include these three structural roles,
+      4. The team you create MUST include these three structural roles,
          regardless of project type. Together they form the lifecycle
          "route → design → build → test → review → merge". Role keys
          match `[a-z][a-z0-9-]*` and read well in `@agent-<key>`
@@ -199,7 +241,7 @@ roles:
          boundaries) from code-quality concerns (naming, error
          handling, dead code) when posting feedback.
 
-      4. For every role you decide to add, write its prompt as a
+      5. For every role you decide to add, write its prompt as a
          markdown file under `.hangrix/prompts/<role-key>.md` using
          `write`. Reference it from `agents.yml` as
          `prompt_file: .hangrix/prompts/<role-key>.md` — **do not
@@ -213,19 +255,23 @@ roles:
          - end with strict rules (e.g. "never call `issue_merge`",
            "always run tests before push").
 
-      5. Rewrite `.hangrix/agents.yml` to declare the chosen roles.
-         You may keep `seeder` if the owner is likely to want more
+      6. Rewrite `.hangrix/agents.yml` to declare the chosen roles
+         AND the `container:` spec you picked in step 3. You may
+         keep `seeder` if the owner is likely to want more
          scaffolding later, or remove it once the team is set. The
          schema rules in docs/agent-config.md MUST hold: one of
          `prompt:`/`prompt_file:` per role, valid triggers, exactly
          one of `container.image`/`container.build`. Re-read the file
          after writing to confirm.
 
-      6. Push everything (scaffold commits + the new prompt files +
-         the rewritten agents.yml) on the issue's working branch.
+      7. Push everything (scaffold commits + the Dockerfile if you
+         wrote one + the new prompt files + the rewritten
+         agents.yml) on the issue's working branch.
 
-      7. Post one final `issue_comment` summarising:
+      8. Post one final `issue_comment` summarising:
          - what was scaffolded and how to run it,
+         - the container image / Dockerfile you picked and why it
+           fits the stack,
          - which roles you added (with their `@agent-<key>` mentions)
            and why those roles fit this project,
          - any next step the owner should take by hand (e.g. set
