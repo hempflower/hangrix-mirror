@@ -31,6 +31,11 @@ func NewContext(systemPrompt string, history []llm.Message) *Context {
 
 func (c *Context) SystemPrompt() string { return c.systemPrompt }
 
+// Len reports how many messages are currently held. Used by the loop to
+// detect whether a new user-side message was folded in mid-round, in
+// which case the LLM needs another pass before the turn can finish.
+func (c *Context) Len() int { return len(c.messages) }
+
 // Snapshot returns a copy of the messages currently visible to the LLM,
 // after applying the window trim. Callers must not mutate.
 func (c *Context) Snapshot() []llm.Message {

@@ -296,10 +296,16 @@ func (l *Loop) driveOneTurnWithID(
 	for round := 0; round < l.maxToolRounds; round++ {
 		// Drain anything the inbox accumulated since the last round
 		// boundary. Non-blocking — we only consume what's already
-		// queued. Notifications go straight into the context;
-		// non-event frames get deferred for the outer loop to handle
-		// after this event is over.
+		// queued. Events and notifications fold straight into the
+		// context so the LLM sees them this round; control / history
+		// frames defer to the outer loop.
 		l.drainPending(cctx, inbox, pendingFrames)
+
+		// Snapshot the message count so we can detect whether a new
+		// event or notification was folded in while the LLM was busy.
+		// If it was and the LLM returns no tool calls, we need to give
+		// it another round to react instead of declaring the turn done.
+		preCallLen := cctx.Len()
 
 		_ = l.out.Status("thinking")
 		req := &llm.CreateRequest{
@@ -310,9 +316,9 @@ func (l *Loop) driveOneTurnWithID(
 		}
 
 		// Run the LLM call in its own goroutine so the main goroutine
-		// can keep draining the inbox. A notification arriving mid-call
-		// is appended to the context but does NOT cancel the call —
-		// canceling would waste tokens, and the notification will be
+		// can keep draining the inbox. An event or notification arriving
+		// mid-call is appended to the context but does NOT cancel the
+		// call — canceling would waste tokens, and the new input will be
 		// visible at the next round.
 		respCh := make(chan llmResult, 1)
 		go func() {
@@ -347,27 +353,16 @@ func (l *Loop) driveOneTurnWithID(
 					waitForResp = false
 					continue
 				}
-				switch {
-				case item.ReaderErr != nil:
-					// stdin failure — defer it for the outer loop so
-					// the EOF/error message lands in the same handler
-					// as any other reader error.
-					*pendingFrames = append(*pendingFrames, &ipc.Inbound{Kind: "__reader_err__"})
-					_ = item // not used further; outer loop will surface
-				case item.Frame != nil:
-					// Defer non-event frames (notably control:shutdown)
-					// to after the current event. Event frames stack
-					// up behind the current one too — we never start
-					// a second event mid-round.
-					*pendingFrames = append(*pendingFrames, item.Frame)
-				case item.Notification != "":
-					// Background task finished mid-LLM-call. Append it
-					// to the context so it's visible at the next round
-					// — but don't cancel the in-flight call.
-					cctx.AppendUser(item.Notification)
-				}
+				l.applyInboxItem(cctx, item, pendingFrames)
 			}
 		}
+
+		// Catch anything that landed between respCh receiving and now —
+		// otherwise an event queued in the final nanoseconds of the call
+		// would only be visible *after* the no-tool-call termination
+		// check below, which would silently drop it into the next turn.
+		l.drainPending(cctx, inbox, pendingFrames)
+		postCallLen := cctx.Len()
 
 		if callErr != nil {
 			// llm.Client already retries on transport/5xx/429 with
@@ -392,6 +387,12 @@ func (l *Loop) driveOneTurnWithID(
 		_ = l.out.Message("assistant", resp.Content, toIPCToolCalls(resp.ToolCalls))
 
 		if len(resp.ToolCalls) == 0 {
+			// New user-side input arrived during the call (folded event
+			// or background-task notification). Give the LLM another
+			// pass with it visible before closing the turn.
+			if postCallLen > preCallLen {
+				continue
+			}
 			_ = l.out.Done(turnID)
 			return nil
 		}
@@ -412,8 +413,7 @@ func (l *Loop) driveOneTurnWithID(
 }
 
 // drainPending consumes whatever is already buffered on the inbox
-// without blocking, routing each item to its destination: notifications
-// into the LLM context, frames into the deferred queue.
+// without blocking, routing each item via applyInboxItem.
 func (l *Loop) drainPending(cctx *Context, inbox <-chan inboxItem, pendingFrames *[]*ipc.Inbound) {
 	for {
 		select {
@@ -421,17 +421,47 @@ func (l *Loop) drainPending(cctx *Context, inbox <-chan inboxItem, pendingFrames
 			if !ok {
 				return
 			}
-			switch {
-			case item.ReaderErr != nil:
-				*pendingFrames = append(*pendingFrames, &ipc.Inbound{Kind: "__reader_err__"})
-			case item.Frame != nil:
-				*pendingFrames = append(*pendingFrames, item.Frame)
-			case item.Notification != "":
-				cctx.AppendUser(item.Notification)
-			}
+			l.applyInboxItem(cctx, item, pendingFrames)
 		default:
 			return
 		}
+	}
+}
+
+// applyInboxItem routes a single inbox item. Events and notifications
+// are folded directly into the LLM context so they are visible on the
+// next round of the current turn — this is the seam that lets a new
+// event piggy-back into an in-progress tool-call loop instead of waiting
+// for the loop to finish. Control / history frames have outer-loop
+// semantics (state reset, lifecycle) that don't compose with the middle
+// of a turn, so they defer.
+func (l *Loop) applyInboxItem(cctx *Context, item inboxItem, pendingFrames *[]*ipc.Inbound) {
+	switch {
+	case item.ReaderErr != nil:
+		// stdin failure — defer for the outer loop so the EOF / error
+		// lands in the same place as any other reader error.
+		*pendingFrames = append(*pendingFrames, &ipc.Inbound{Kind: "__reader_err__"})
+	case item.Frame != nil:
+		if item.Frame.Kind == "event" {
+			msg, err := renderEventMessage(item.Frame.Event, item.Frame.Payload)
+			if err != nil {
+				// Malformed payload from the runner; log and drop. We
+				// don't defer it to the outer loop because that path
+				// also calls renderEventMessage and would just produce
+				// the same error.
+				_ = l.out.Log("error", fmt.Sprintf("render event mid-turn: %s", err))
+				return
+			}
+			cctx.AppendUser(msg)
+			return
+		}
+		// control / history / unknown kinds — defer to the outer loop.
+		*pendingFrames = append(*pendingFrames, item.Frame)
+	case item.Notification != "":
+		// Background task finished. Append to the context so it's
+		// visible on the next round; the in-flight call (if any) is
+		// not cancelled — we don't want to waste tokens.
+		cctx.AppendUser(item.Notification)
 	}
 }
 

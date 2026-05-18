@@ -428,6 +428,142 @@ func TestLoopNotificationDuringEvent(t *testing.T) {
 	}
 }
 
+// TestLoopEventDuringTurnFoldsIn pins the headline mid-turn-event
+// contract: when a new `event` frame arrives WHILE the LLM is processing
+// an in-flight turn, the agent must fold the event into the current
+// conversation so the LLM sees it on the very next round — instead of
+// queuing it until the current turn fully terminates. The end-user
+// expectation: telling the agent "also do X" while it's mid-tool-loop
+// should feel like an immediate interjection, not a request that's
+// deferred behind whatever it's doing right now.
+//
+// We assert two things:
+//  1. The second LLM call's request body contains the new event's payload.
+//  2. The combined turn emits exactly one `done` frame (the new event is
+//     part of the same turn, not a separate one).
+func TestLoopEventDuringTurnFoldsIn(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeBash()
+
+	// Scripted LLM:
+	//   call #1: stalls ~250ms, returns one tool call so the loop comes
+	//            back for round 2. During the stall we push a SECOND
+	//            event frame onto stdin.
+	//   call #2: returns final message. The test inspects this body for
+	//            the second event's marker.
+	var (
+		call2Body atomic.Value // string
+		callCount atomic.Int32
+	)
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch n {
+		case 1:
+			time.Sleep(250 * time.Millisecond)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "r1",
+				"output": []map[string]any{
+					{"type": "function_call", "call_id": "tc_1", "name": "glob",
+						"arguments": `{"pattern":"*.nonexistent"}`},
+				},
+				"usage": map[string]any{},
+			})
+		default:
+			body, _ := io.ReadAll(r.Body)
+			call2Body.Store(string(body))
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "r2",
+				"output": []map[string]any{
+					{"type": "message", "role": "assistant",
+						"content": []map[string]any{{"type": "output_text", "text": "done"}}},
+				},
+				"usage": map[string]any{},
+			})
+		}
+	}))
+	t.Cleanup(llmServer.Close)
+
+	llmClient := llm.New(llmServer.URL, "test-token")
+	bundle := local.Build()
+	registry := tools.Build(bundle.Tools, nil, nil)
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdoutR.Close()
+
+	loop := runtime.NewLoop(
+		ipc.NewReader(stdinR),
+		ipc.NewWriter(stdoutW),
+		llmClient,
+		"gpt-4o-mini",
+		registry,
+		"system prompt",
+		fake,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	loopErr := make(chan error, 1)
+	go func() {
+		loopErr <- loop.Run(ctx)
+		stdoutW.Close()
+	}()
+
+	go func() {
+		_, _ = stdinW.Write([]byte(`{"kind":"history","messages":[]}` + "\n"))
+		_, _ = stdinW.Write([]byte(`{"kind":"event","event":"first","payload":{"marker":"first_event_body"}}` + "\n"))
+		// Wait long enough that LLM call #1 is in flight, then push the
+		// second event so it lands mid-call.
+		time.Sleep(80 * time.Millisecond)
+		_, _ = stdinW.Write([]byte(`{"kind":"event","event":"second","payload":{"marker":"second_event_body"}}` + "\n"))
+		time.Sleep(600 * time.Millisecond)
+		_, _ = stdinW.Write([]byte(`{"kind":"control","op":"shutdown"}` + "\n"))
+		stdinW.Close()
+	}()
+
+	frames, err := drainFrames(stdoutR)
+	if err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if err := <-loopErr; err != nil {
+		t.Fatalf("loop: %v", err)
+	}
+
+	body, _ := call2Body.Load().(string)
+	if body == "" {
+		t.Fatal("LLM call #2 never happened; the tool-call round didn't run")
+	}
+	if !strings.Contains(body, "second_event_body") {
+		t.Errorf("mid-turn event should appear in the next LLM request body; body=%s", body)
+	}
+
+	// Exactly one done — the absorbed event must NOT spawn a separate
+	// turn. If we see two, the loop reverted to the old defer-to-outer
+	// behaviour.
+	var doneCount, idleCount int
+	for _, f := range frames {
+		switch f.Kind {
+		case "done":
+			doneCount++
+		case "idle":
+			idleCount++
+		}
+	}
+	if doneCount != 1 {
+		t.Errorf("mid-turn event should be folded into the current turn (1 done); got %d", doneCount)
+	}
+	if idleCount != 1 {
+		t.Errorf("expected exactly 1 idle frame (one turn); got %d", idleCount)
+	}
+	if got := callCount.Load(); got != 2 {
+		t.Errorf("expected 2 LLM calls (round 1 had tool calls, round 2 finalised); got %d", got)
+	}
+}
+
 // TestLoopNotificationDrivesIdleTurn pins the second half of the inbox
 // contract: when a notification arrives WHILE the loop is idle (no
 // event in progress), it kicks off a brand-new LLM turn so the agent
