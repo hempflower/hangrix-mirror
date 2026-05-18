@@ -581,7 +581,7 @@
       "submitting": "发送中…",
       "failed": "评论失败",
       "title": "添加评论",
-      "hostYamlError": ".hangrix/agents.yml 解析失败 —— @ 提示不会出现、issue.opened / issue.comment / commit.pushed 触发器也都不会唤醒任何 agent，需要先修复该文件"
+      "hostYamlError": ".hangrix/agents.yml 解析失败 —— {'@'} 提示不会出现、issue.opened / issue.comment / commit.pushed 触发器也都不会唤醒任何 agent，需要先修复该文件"
     },
     "opened": "创建了这个 issue",
     "commented": "发表了评论",
