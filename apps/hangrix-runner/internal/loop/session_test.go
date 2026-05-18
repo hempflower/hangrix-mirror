@@ -29,20 +29,20 @@ import (
 //   - all four outbound IPC frames the fake agent emitted ended up
 //     as /messages POSTs on the platform.
 //   - server.terminate was called with status=succeeded and exit 0.
-//   - the stdin pipe carried at least the history frame the platform
-//     enqueued via /inputs.
+//   - the driver fetched the history frame from GET /history once and
+//     wrote it onto the agent's stdin before the /inputs shipper ran.
 func TestSessionDriverEndToEnd(t *testing.T) {
 	t.Parallel()
 
 	// Test fixture: in-memory record of what the runner posted.
 	var (
-		mu               sync.Mutex
-		messages         []map[string]any
-		inputsCalls      atomic.Int32
-		markRunningHits  atomic.Int32
-		terminateBody    map[string]any
-		historyFrame     = json.RawMessage(`{"kind":"history","messages":[]}`)
-		eventFrameJSON   = json.RawMessage(`{"kind":"event","event":"test.poke","payload":{"hi":1}}`)
+		mu              sync.Mutex
+		messages        []map[string]any
+		inputsCalls     atomic.Int32
+		historyCalls    atomic.Int32
+		markRunningHits atomic.Int32
+		terminateBody   map[string]any
+		eventFrameJSON  = json.RawMessage(`{"kind":"event","event":"test.poke","payload":{"hi":1}}`)
 	)
 
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -58,13 +58,19 @@ func TestSessionDriverEndToEnd(t *testing.T) {
 			messages = append(messages, m)
 			mu.Unlock()
 			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/api/runner/sessions/42/history":
+			historyCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"frame": json.RawMessage(`{"kind":"history","messages":[]}`),
+			})
 		case r.URL.Path == "/api/runner/sessions/42/inputs":
-			// First call returns the history + event frames; subsequent
-			// calls return empty so the shipStdin loop keeps polling.
+			// First call returns the event frame; subsequent calls return
+			// empty so the shipStdin loop keeps polling. History is no
+			// longer on this queue — it's served via /history above.
 			n := inputsCalls.Add(1)
 			if n == 1 {
 				_ = json.NewEncoder(w).Encode(map[string]any{
-					"frames": []json.RawMessage{historyFrame, eventFrameJSON},
+					"frames": []json.RawMessage{eventFrameJSON},
 				})
 				return
 			}
@@ -134,6 +140,9 @@ func TestSessionDriverEndToEnd(t *testing.T) {
 	if got := markRunningHits.Load(); got != 1 {
 		t.Errorf("markRunning hits=%d, want 1", got)
 	}
+	if got := historyCalls.Load(); got != 1 {
+		t.Errorf("history fetch hits=%d, want 1", got)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -189,6 +198,10 @@ func TestSessionDriverSkipsCloneWhenReusingContainer(t *testing.T) {
 			r.URL.Path == "/api/runner/sessions/77/terminate",
 			r.URL.Path == "/api/runner/sessions/77/container":
 			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/api/runner/sessions/77/history":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"frame": json.RawMessage(`{"kind":"history","messages":[]}`),
+			})
 		case r.URL.Path == "/api/runner/sessions/77/inputs":
 			_ = json.NewEncoder(w).Encode(map[string]any{"frames": []json.RawMessage{}})
 		default:
@@ -202,9 +215,12 @@ func TestSessionDriverSkipsCloneWhenReusingContainer(t *testing.T) {
 	fake := orchestrator.NewFake()
 
 	go func() {
-		// Brief grace so the driver wires up its IO loop before we tear
-		// the agent down. Exit closes all pipes; handle.Wait then returns.
-		time.Sleep(50 * time.Millisecond)
+		// Wait until the driver has written the history frame (the first
+		// stdin byte) before tearing down the fake agent. Reading from
+		// stdin blocks until the driver writes; exiting too early would
+		// race the stdin write and surface a "closed pipe" error.
+		buf := make([]byte, 4096)
+		_, _ = fake.AgentStdin().Read(buf)
 		fake.Exit(0)
 	}()
 

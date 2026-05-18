@@ -329,10 +329,12 @@ type Message struct {
 	CreatedAt  time.Time
 }
 
-// SessionInput is one row of agent_session_inputs — a frame the runner
-// will write to the agent's stdin. The platform enqueues these (the first
-// is always a "history" frame seeded at session-start); the runner long-
-// polls, marks consumed_at, and writes the payload one line at a time.
+// SessionInput is one row of agent_session_inputs — an event frame the
+// runner will write to the agent's stdin. The platform enqueues these
+// (cause events only — the seed `kind:history` frame the agent reads
+// first is served separately via GET /sessions/{id}/history); the
+// runner long-polls /inputs, marks consumed_at, and writes the payload
+// one line at a time.
 type SessionInput struct {
 	ID         int64
 	SessionID  int64
@@ -441,12 +443,6 @@ type NewSessionToken struct {
 	Sealed string
 }
 
-// HistoryFrame is what BuildHistoryFrame returns — the seed `kind:history`
-// payload the runner must feed into the agent's stdin as the first frame.
-// JSON shape matches ipc.Inbound{Kind:"history", Messages: [...]}.
-type HistoryFrame struct {
-	Payload []byte // JSON-encoded {"kind":"history","messages":[...]}
-}
 
 // ContainerCleanupTask is one (session, container) pair the runner's
 // cleanup sweeper should `docker rm`. Returned by

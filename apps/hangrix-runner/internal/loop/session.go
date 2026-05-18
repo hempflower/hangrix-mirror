@@ -166,6 +166,26 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 	// can't interleave bytes in the middle of a JSON line.
 	stdin := &lockedWriter{w: handle.Stdin()}
 
+	// Seed the agent's first frame. The agent loop's first inbound MUST
+	// be `kind:history` (see hangrix-agent/internal/runtime/loop.go); the
+	// runner owns delivery of that frame so the invariant holds across
+	// every agent process boot — fresh container, docker-exec into a
+	// reused container, and crash-and-respawn paths alike. The platform
+	// no longer enqueues this frame onto /inputs; we fetch it here once
+	// and write it before the shipStdin goroutine starts pulling event
+	// frames off the queue.
+	historyFrame, err := d.Client.FetchHistory(ctx, task.SessionID)
+	if err != nil {
+		_ = handle.Stdin().Close()
+		_, _ = handle.Wait()
+		return -1, d.fail(ctx, task.SessionID, fmt.Errorf("fetch history: %w", err))
+	}
+	if _, err := stdin.Write(append([]byte(historyFrame), '\n')); err != nil {
+		_ = handle.Stdin().Close()
+		_, _ = handle.Wait()
+		return -1, d.fail(ctx, task.SessionID, fmt.Errorf("write history frame: %w", err))
+	}
+
 	// activitySig is non-blocking: senders use a select-default to drop
 	// when the watcher isn't ready. It only needs to flag "we observed
 	// activity since the last idle"; missing one signal just delays

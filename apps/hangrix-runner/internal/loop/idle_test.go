@@ -32,9 +32,7 @@ import (
 func TestSessionIdleTimeoutSendsShutdown(t *testing.T) {
 	t.Parallel()
 
-	platform, _ := newRecordingPlatform(t, 77, []json.RawMessage{
-		json.RawMessage(`{"kind":"history","messages":[]}`),
-	})
+	platform, _ := newRecordingPlatform(t, 77, nil)
 
 	fake := orchestrator.NewFake()
 	cli := client.New(platform.URL).WithAgentToken("hgxr_AAAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
@@ -108,8 +106,9 @@ func TestSessionIdleTimeoutResetsOnNewEvent(t *testing.T) {
 	// event ~100ms after the first idle without racing the timer.
 	const idleWindow = 300 * time.Millisecond
 
-	// inputsCalls: first call returns history; second call (after a
-	// gap) returns one event; subsequent calls return empty.
+	// inputsCalls: first call (after a gap, to let the first idle start
+	// its retirement timer) returns one event; subsequent calls return
+	// empty. History is served via /history, not /inputs.
 	var inputsCall atomic.Int32
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -117,17 +116,17 @@ func TestSessionIdleTimeoutResetsOnNewEvent(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		case strings.HasSuffix(r.URL.Path, "/messages"):
 			w.WriteHeader(http.StatusNoContent)
+		case strings.HasSuffix(r.URL.Path, "/history"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"frame": json.RawMessage(`{"kind":"history","messages":[]}`),
+			})
 		case strings.HasSuffix(r.URL.Path, "/inputs"):
 			n := inputsCall.Add(1)
 			switch n {
 			case 1:
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"frames": []json.RawMessage{json.RawMessage(`{"kind":"history","messages":[]}`)},
-				})
-			case 2:
 				// Pause briefly so the first idle has time to start
 				// the retirement timer before we hand the agent its
-				// second event.
+				// event.
 				time.Sleep(120 * time.Millisecond)
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"frames": []json.RawMessage{json.RawMessage(`{"kind":"event","event":"e","payload":{}}`)},
@@ -242,9 +241,7 @@ func TestSessionRunningJobsGetsLongerTimeout(t *testing.T) {
 		idleLong  = 1 * time.Second
 	)
 
-	platform, _ := newRecordingPlatform(t, 79, []json.RawMessage{
-		json.RawMessage(`{"kind":"history","messages":[]}`),
-	})
+	platform, _ := newRecordingPlatform(t, 79, nil)
 
 	fake := orchestrator.NewFake()
 	cli := client.New(platform.URL).WithAgentToken("hgxr_AAAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
@@ -342,9 +339,13 @@ func newRecordingPlatform(t *testing.T, sessionID int64, frames []json.RawMessag
 			messages = append(messages, m)
 			mu.Unlock()
 			w.WriteHeader(http.StatusNoContent)
+		case strings.HasSuffix(r.URL.Path, "/history"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"frame": json.RawMessage(`{"kind":"history","messages":[]}`),
+			})
 		case strings.HasSuffix(r.URL.Path, "/inputs"):
 			n := called.Add(1)
-			if n == 1 {
+			if n == 1 && len(frames) > 0 {
 				_ = json.NewEncoder(w).Encode(map[string]any{"frames": frames})
 				return
 			}

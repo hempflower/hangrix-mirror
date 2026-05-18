@@ -265,6 +265,32 @@ func (c *Client) PollInputs(ctx context.Context, sessionID int64) (*InputsRespon
 	return &out, nil
 }
 
+// HistoryResponse is the seed `kind:history` frame the agent's loop reads
+// as its mandatory first inbound. Returned by GET /sessions/{id}/history
+// — the runner calls this exactly once per agent process boot and writes
+// Frame onto the container's stdin before starting the /inputs shipper.
+type HistoryResponse struct {
+	Frame json.RawMessage `json:"frame"`
+}
+
+// FetchHistory pulls the seed history frame for a session. The runner
+// owns the responsibility of feeding the agent its first frame; the
+// platform owns the contents of that frame (today always empty, M9
+// will populate it from the message log). Keeping history off the
+// /inputs queue means the agent's "first frame must be history"
+// invariant survives crash + respawn, runner restart, and container
+// reuse paths that the old enqueue-on-spawn design could not.
+func (c *Client) FetchHistory(ctx context.Context, sessionID int64) (json.RawMessage, error) {
+	var out HistoryResponse
+	if err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/runner/sessions/%d/history", sessionID), nil, &out, true); err != nil {
+		return nil, err
+	}
+	if len(out.Frame) == 0 {
+		return nil, fmt.Errorf("history: empty frame")
+	}
+	return out.Frame, nil
+}
+
 // ---- binary downloads ----
 
 // DownloadBinary GETs a server-relative path (typically the URL field of

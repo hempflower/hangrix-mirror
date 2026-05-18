@@ -457,14 +457,9 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Seed inputs queue: (1) initial history=[] frame, (2) the mock event
-	// if the admin supplied one. The runner will read both via long-poll
-	// and write them to the agent's stdin in order.
-	history := []byte(`{"kind":"history","messages":[]}`)
-	if _, err := h.repo.EnqueueInput(r.Context(), sess.ID, history); err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
+	// Seed the inputs queue with the mock event if the admin supplied
+	// one. The seed history frame is fetched by the runner from
+	// GET /sessions/{sid}/history at agent boot — not queued here.
 	if req.MockEvent.Name != "" {
 		// Persist the event as a kind=event message too, so the audit
 		// log shows the trigger.

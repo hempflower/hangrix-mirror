@@ -57,6 +57,10 @@ func TestLoopParallelismFansOut(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/running"):
 			runningHits.Add(1)
 			w.WriteHeader(http.StatusNoContent)
+		case strings.HasSuffix(r.URL.Path, "/history"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"frame": json.RawMessage(`{"kind":"history","messages":[]}`),
+			})
 		case strings.HasSuffix(r.URL.Path, "/inputs"):
 			// Block long-poll with a small sleep so we don't spin the
 			// shipStdin goroutine; same shape as the real platform.

@@ -119,15 +119,9 @@ func (c *Controller) Resume(ctx context.Context, sessionID int64) error {
 	}); err != nil {
 		return err
 	}
-	// Seed a fresh history frame so the agent loop's first-frame
-	// invariant holds. We deliberately don't replay the prior message
-	// log — that's an M9 follow-up; the agent will see the most
-	// recent comment context via the issue's comment thread when it
-	// uses platform tools.
-	history := []byte(`{"kind":"history","messages":[]}`)
-	if _, err := c.runner.EnqueueInput(ctx, sessionID, history); err != nil {
-		return fmt.Errorf("enqueue history on resume: %w", err)
-	}
+	// The history frame is fetched by the runner from
+	// GET /sessions/{sid}/history at agent boot, so resume only needs to
+	// enqueue the synthetic cause event for the agent to react to.
 	// Synthetic manual cause so the agent has an event to react to.
 	frame, _ := json.Marshal(map[string]any{
 		"kind":  "event",

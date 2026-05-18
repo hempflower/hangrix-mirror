@@ -184,8 +184,9 @@ func TestEncryptionKeyShape(t *testing.T) {
 
 // TestOnTriggerHappyPath fires issue.opened on a host yaml that has a
 // matching role. We assert: exactly one session row created, snapshot
-// fields populated, history+cause frames seeded, GIT_AUTHOR_NAME env
-// matches the role key.
+// fields populated, cause frame seeded, GIT_AUTHOR_NAME env matches
+// the role key. The history frame is no longer seeded onto /inputs —
+// the runner fetches it from GET /sessions/{id}/history at agent boot.
 func TestOnTriggerHappyPath(t *testing.T) {
 	h := newTestSpawner(t, []byte(hostYAML), nil)
 	got, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
@@ -275,15 +276,13 @@ func TestOnTriggerHappyPath(t *testing.T) {
 		t.Fatalf("NODE_ENV = %q", env["NODE_ENV"])
 	}
 
-	// Inputs queue: history frame + cause frame (2 entries).
-	if len(h.runner.inputs) != 2 {
-		t.Fatalf("inputs queued = %d, want 2", len(h.runner.inputs))
+	// Inputs queue: cause frame only. History is served separately via
+	// GET /sessions/{id}/history at runner boot, not enqueued here.
+	if len(h.runner.inputs) != 1 {
+		t.Fatalf("inputs queued = %d, want 1", len(h.runner.inputs))
 	}
-	if !strings.HasPrefix(string(h.runner.inputs[0].Payload), `{"kind":"history"`) {
-		t.Fatalf("first input is not history frame: %s", string(h.runner.inputs[0].Payload))
-	}
-	if !strings.Contains(string(h.runner.inputs[1].Payload), `"event":"issue.opened"`) {
-		t.Fatalf("second input is not issue.opened event: %s", string(h.runner.inputs[1].Payload))
+	if !strings.Contains(string(h.runner.inputs[0].Payload), `"event":"issue.opened"`) {
+		t.Fatalf("first input is not issue.opened event: %s", string(h.runner.inputs[0].Payload))
 	}
 
 	// Message log: one event message persisted for the cause.
@@ -540,12 +539,13 @@ func TestOnTriggerEnqueueOntoLiveSession(t *testing.T) {
 	if len(h.runner.sessions) != 1 {
 		t.Fatalf("stub stored %d rows, want 1 (no duplicate spawn)", len(h.runner.sessions))
 	}
-	// Inputs queue should now have history + cause-1 + cause-2.
-	if len(h.runner.inputs) != 3 {
-		t.Fatalf("inputs = %d, want 3 (history + 2 cause events)", len(h.runner.inputs))
+	// Inputs queue should now have cause-1 + cause-2. History lives on
+	// GET /sessions/{id}/history, not on this queue.
+	if len(h.runner.inputs) != 2 {
+		t.Fatalf("inputs = %d, want 2 (2 cause events)", len(h.runner.inputs))
 	}
-	if !strings.Contains(string(h.runner.inputs[2].Payload), `"cause_id":"101"`) {
-		t.Fatalf("third input is not cause_id=101: %s", string(h.runner.inputs[2].Payload))
+	if !strings.Contains(string(h.runner.inputs[1].Payload), `"cause_id":"101"`) {
+		t.Fatalf("second input is not cause_id=101: %s", string(h.runner.inputs[1].Payload))
 	}
 }
 
@@ -723,10 +723,10 @@ func TestOnTriggerPayloadMergedIntoCauseFrame(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OnTrigger err: %v", err)
 	}
-	if len(h.runner.inputs) != 2 {
-		t.Fatalf("inputs = %d, want 2", len(h.runner.inputs))
+	if len(h.runner.inputs) != 1 {
+		t.Fatalf("inputs = %d, want 1", len(h.runner.inputs))
 	}
-	body := string(h.runner.inputs[1].Payload)
+	body := string(h.runner.inputs[0].Payload)
 	if !strings.Contains(body, `"comment_body":"please add /healthz"`) {
 		t.Fatalf("cause frame missing comment_body: %s", body)
 	}

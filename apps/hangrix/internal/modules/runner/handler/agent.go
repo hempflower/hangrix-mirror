@@ -80,6 +80,7 @@ func (h *AgentHandler) RegisterRoutes(r chi.Router) {
 			r.Post("/sessions/{sid}/running", h.markRunning)
 			r.Post("/sessions/{sid}/messages", h.appendMessage)
 			r.Get("/sessions/{sid}/inputs", h.pollInputs)
+			r.Get("/sessions/{sid}/history", h.getHistory)
 			r.Post("/sessions/{sid}/terminate", h.terminate)
 			r.Put("/sessions/{sid}/container", h.setContainer)
 			r.Get("/cleanup-tasks", h.listCleanupTasks)
@@ -612,6 +613,34 @@ func (h *AgentHandler) pollInputs(w http.ResponseWriter, r *http.Request) {
 		case <-time.After(pollTick):
 		}
 	}
+}
+
+// historyResp wraps the seed history frame the agent's loop reads as its
+// mandatory first inbound. The frame is returned as raw JSON so the runner
+// can write it to the agent's stdin verbatim — no re-encode round-trip.
+type historyResp struct {
+	Frame json.RawMessage `json:"frame"`
+}
+
+// getHistory returns the seed `kind:history` frame for a session. The
+// runner calls this exactly once per agent process boot (every container
+// launch and every docker-exec into a reused container), and writes the
+// frame onto the agent's stdin before starting the /inputs shipper. This
+// is what makes the agent's "first frame must be history" invariant hold
+// across container restarts, runner restarts, and crash-mid-event paths
+// that previously left the inputs queue mismatched against the agent's
+// boot expectations.
+//
+// History today is always seeded empty; faithful turn-by-turn replay of
+// the message log is M9. Moving the source here means runner code stays
+// the same when replay lands — only this handler grows a message read.
+func (h *AgentHandler) getHistory(w http.ResponseWriter, r *http.Request) {
+	if _, ok := httpx.ParseID(w, chi.URLParam(r, "sid")); !ok {
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, historyResp{
+		Frame: json.RawMessage(`{"kind":"history","messages":[]}`),
+	})
 }
 
 // ---- container lifecycle ----

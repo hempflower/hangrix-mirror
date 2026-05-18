@@ -269,9 +269,13 @@ func (s *Spawner) LoadHostConfig(ctx context.Context, repoID int64) (*agentsconf
 // clones from before the helper landed continue to authenticate
 // because the same token is being re-installed on the row.
 //
-// History on rewake is seeded as empty for simplicity; the next agent
-// container sees the cause event and acts on it. Faithful turn-by-turn
-// replay of the prior message log is an M9 follow-up.
+// The history frame is no longer seeded onto the inputs queue here.
+// The runner fetches it from GET /sessions/{sid}/history at every agent
+// process boot and writes it to stdin before draining /inputs. That
+// keeps the agent's "first frame must be history" invariant intact even
+// when status lags reality (crash mid-event, runner restart, container
+// reuse) — paths where the previous enqueue-on-spawn design could leave
+// a stale cause frame at the head of the queue.
 func (s *Spawner) rewakeRole(ctx context.Context, in domain.TriggerInput, existing *runnerdomain.AgentSession) (domain.SpawnedSession, error) {
 	tok, err := s.resumeToken(existing)
 	if err != nil {
@@ -279,10 +283,6 @@ func (s *Spawner) rewakeRole(ctx context.Context, in domain.TriggerInput, existi
 	}
 	if err := s.runner.ResumeSession(ctx, existing.ID, tok); err != nil {
 		return domain.SpawnedSession{}, fmt.Errorf("resume session: %w", err)
-	}
-	history := []byte(`{"kind":"history","messages":[]}`)
-	if _, err := s.runner.EnqueueInput(ctx, existing.ID, history); err != nil {
-		return domain.SpawnedSession{}, fmt.Errorf("enqueue history on rewake: %w", err)
 	}
 	frame, err := buildCauseFrame(in)
 	if err != nil {
@@ -512,13 +512,12 @@ func (s *Spawner) spawnRole(
 		return domain.SpawnedSession{}, fmt.Errorf("create session row: %w", err)
 	}
 
-	// Seed the inputs queue: history frame first (agent stdin always
-	// opens with a history frame, currently empty until event replay
-	// lands), then the cause event so the agent sees what woke it.
-	history := []byte(`{"kind":"history","messages":[]}`)
-	if _, err := s.runner.EnqueueInput(ctx, sess.ID, history); err != nil {
-		return domain.SpawnedSession{}, fmt.Errorf("enqueue history: %w", err)
-	}
+	// Seed the inputs queue with just the cause event. The history frame
+	// the agent's loop reads as its first inbound is fetched directly by
+	// the runner from GET /sessions/{sid}/history at every agent process
+	// boot — keeping it off the inputs queue means the agent's first-frame
+	// invariant survives crash-and-respawn paths that previously left a
+	// stale cause at the head of the queue.
 	causeFrame, err := buildCauseFrame(in)
 	if err != nil {
 		return domain.SpawnedSession{}, fmt.Errorf("build cause frame: %w", err)
