@@ -436,6 +436,149 @@ func TestLoopCompactSession(t *testing.T) {
 	}
 }
 
+// TestLoopAtMentionNudge verifies the at-mention reminder: when the
+// model returns plain assistant text containing `@` and no tool calls,
+// the loop should NOT close the turn — it must inject a system_reminder
+// telling the model to use the issue_comment tool, then make a second
+// LLM call so the model can retry. We assert two LLM calls happened,
+// the second saw the reminder, and the turn closed cleanly afterwards.
+func TestLoopAtMentionNudge(t *testing.T) {
+	t.Parallel()
+
+	var (
+		llmCallCount   atomic.Int32
+		secondCallBody atomic.Value // []byte
+	)
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		callN := llmCallCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch callN {
+		case 1:
+			// First turn: the model "forgets" to use issue_comment and
+			// just emits a plain assistant message with an @-mention.
+			resp := map[string]any{
+				"id": "resp_1",
+				"output": []map[string]any{
+					{
+						"type": "message",
+						"role": "assistant",
+						"content": []map[string]any{
+							{"type": "output_text", "text": "@agent-frontend please review"},
+						},
+					},
+				},
+				"usage": map[string]any{"input_tokens": 8, "output_tokens": 4, "total_tokens": 12},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case 2:
+			// Second turn: the loop should have injected the reminder.
+			// Capture the body so we can assert it.
+			secondCallBody.Store(body)
+			resp := map[string]any{
+				"id": "resp_2",
+				"output": []map[string]any{
+					{
+						"type": "message",
+						"role": "assistant",
+						"content": []map[string]any{
+							{"type": "output_text", "text": "acknowledged, will retry via tool"},
+						},
+					},
+				},
+				"usage": map[string]any{"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			http.Error(w, "unexpected extra LLM call", http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(llmServer.Close)
+
+	llmClient := llm.New(llmServer.URL, "test-token")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bundle := local.Build()
+	registry := tools.Build(bundle.Tools, nil, nil)
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdoutR.Close()
+
+	loop := runtime.NewLoop(
+		ipc.NewReader(stdinR),
+		ipc.NewWriter(stdoutW),
+		llmClient,
+		"gpt-4o-mini",
+		registry,
+		"system prompt for test",
+		bundle.Bash,
+		0,
+	)
+
+	loopErr := make(chan error, 1)
+	go func() {
+		loopErr <- loop.Run(ctx)
+		stdoutW.Close()
+	}()
+
+	go func() {
+		_, _ = stdinW.Write([]byte(`{"kind":"history","messages":[]}` + "\n"))
+		_, _ = stdinW.Write([]byte(`{"kind":"event","event":"issue.comment.mentioned","payload":{"body":"hello"}}` + "\n"))
+		time.Sleep(500 * time.Millisecond)
+		_, _ = stdinW.Write([]byte(`{"kind":"control","op":"shutdown"}` + "\n"))
+		stdinW.Close()
+	}()
+
+	frames, err := drainFrames(stdoutR)
+	if err != nil {
+		t.Fatalf("drain frames: %v", err)
+	}
+	if err := <-loopErr; err != nil {
+		t.Fatalf("loop returned error: %v", err)
+	}
+	if got := llmCallCount.Load(); got != 2 {
+		t.Fatalf("expected 2 LLM calls (nudge forces a retry), got %d", got)
+	}
+	rawBody, _ := secondCallBody.Load().([]byte)
+	if len(rawBody) == 0 {
+		t.Fatal("did not capture second LLM call body")
+	}
+	body := string(rawBody)
+	if !strings.Contains(body, "issue_comment") {
+		t.Errorf("second LLM call body missing the at-mention reminder pointing at issue_comment:\n%s", body)
+	}
+	if !strings.Contains(body, "system_reminder") {
+		t.Errorf("second LLM call body missing the system_reminder wrapper:\n%s", body)
+	}
+
+	// Outbound stream should show both assistant messages and exactly
+	// one `done` frame (the second turn closed the loop).
+	var (
+		assistantMsgs int
+		doneFrames    int
+	)
+	for _, f := range frames {
+		switch f.Kind {
+		case "message":
+			assistantMsgs++
+		case "done":
+			doneFrames++
+		}
+	}
+	if assistantMsgs != 2 {
+		t.Errorf("expected 2 assistant messages, got %d", assistantMsgs)
+	}
+	if doneFrames != 1 {
+		t.Errorf("expected exactly 1 done frame, got %d", doneFrames)
+	}
+}
+
 // drainFrames reads outbound JSON-Lines until EOF.
 func drainFrames(r io.Reader) ([]ipc.Outbound, error) {
 	dec := json.NewDecoder(r)

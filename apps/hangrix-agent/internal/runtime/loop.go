@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/ipc"
@@ -316,6 +317,10 @@ func (l *Loop) driveOneTurnWithID(
 	pendingFrames *[]*ipc.Inbound,
 	turnID string,
 ) error {
+	// atMentionNudged is scoped per-turn so a fresh event can re-arm the
+	// reminder. We fire at most once within a turn to avoid wedging the
+	// loop on a model that keeps echoing `@` in plain text.
+	atMentionNudged := false
 	for round := 0; round < l.maxToolRounds; round++ {
 		// Drain anything the inbox accumulated since the last round
 		// boundary. Non-blocking — we only consume what's already
@@ -420,11 +425,26 @@ func (l *Loop) driveOneTurnWithID(
 		_ = l.out.Message("assistant", resp.Content, toIPCToolCalls(resp.ToolCalls))
 		l.lastInputTokens = resp.Usage.InputTokens
 
+		// Plain assistant text containing `@` is almost always a model
+		// mistake — @agent-<role-key> mentions only wake other roles when
+		// posted through the issue_comment tool. Inject a one-shot
+		// reminder and force another round so the model can retry via
+		// the tool. Fires at most once per turn (see atMentionNudged
+		// docstring above) so a model that ignores us doesn't wedge the
+		// loop in an infinite re-prompt.
+		nudgedAtMentionThisRound := false
+		if !atMentionNudged && strings.ContainsRune(resp.Content, '@') {
+			cctx.AppendUser("<system_reminder>Your last assistant message contains an `@`. If you meant to mention another role (e.g. `@agent-<role-key>`) or post to the issue thread, call the `issue_comment` tool and put the text in its `body` argument — plain assistant text is recorded on the session timeline but does NOT wake other roles or post a comment. If the `@` was incidental (an email address, a code snippet), ignore this reminder and continue.</system_reminder>")
+			atMentionNudged = true
+			nudgedAtMentionThisRound = true
+		}
+
 		if len(resp.ToolCalls) == 0 {
 			// New user-side input arrived during the call (folded event
-			// or background-task notification). Give the LLM another
-			// pass with it visible before closing the turn.
-			if postCallLen > preCallLen {
+			// or background-task notification), or we just injected an
+			// at-mention reminder. Give the LLM another pass with the
+			// new input visible before closing the turn.
+			if postCallLen > preCallLen || nudgedAtMentionThisRound {
 				continue
 			}
 			_ = l.out.Done(turnID)
