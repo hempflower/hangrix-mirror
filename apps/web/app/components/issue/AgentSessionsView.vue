@@ -11,7 +11,29 @@
 // inactive tab (`active` prop false) both pause the poller.
 
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
-import { AlertTriangle, ArrowDownToLine, Bot, Cog, FileText, Hammer, Megaphone, Play, RotateCcw, Sparkles, Square, Trash2 } from 'lucide-vue-next'
+import {
+  AlertTriangle,
+  ArrowDownToLine,
+  Bot,
+  ChevronRight,
+  Cog,
+  FileEdit,
+  FilePlus,
+  FileText,
+  FolderSearch,
+  Globe,
+  Hammer,
+  Keyboard,
+  Megaphone,
+  Play,
+  RotateCcw,
+  Search,
+  Sparkles,
+  Square,
+  Telescope,
+  Terminal,
+  Trash2,
+} from 'lucide-vue-next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -163,17 +185,6 @@ function shortSha(s: string) {
   return s ? s.slice(0, 8) : ''
 }
 
-function relTime(iso: string) {
-  if (!iso) return ''
-  const t = Date.parse(iso)
-  if (!t) return iso
-  const diff = Math.max(0, Math.floor((Date.now() - t) / 1000))
-  if (diff < 60) return `${diff}s`
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h`
-  return `${Math.floor(diff / 86400)}d`
-}
-
 function duration(s: AgentSession) {
   const start = Date.parse(s.created_at)
   const end = s.ended_at ? Date.parse(s.ended_at) : Date.now()
@@ -233,17 +244,302 @@ function payloadString(m: AgentMessage): string {
   }
 }
 
-function payloadField(m: AgentMessage, key: string): string {
-  const p = m.payload as Record<string, unknown> | null
-  if (!p || typeof p !== 'object') return ''
-  const v = p[key]
+// ---- tool-call helpers ----
+//
+// The agent's JSONL tool_call frames bundle `args` (the tool's input) and
+// `result` (the tool's output) into one payload. The collapsed-row chip
+// and the tool-specific expanded view both read from the same envelope,
+// so the helpers below normalise the access pattern instead of letting
+// every renderer do its own `payload?.args?.foo` dance.
+
+type AnyRecord = Record<string, unknown>
+
+function asRecord(v: unknown): AnyRecord {
+  return (v && typeof v === 'object' && !Array.isArray(v)) ? (v as AnyRecord) : {}
+}
+
+function payloadArgs(m: AgentMessage): AnyRecord {
+  return asRecord(asRecord(m.payload).args)
+}
+
+function payloadResult(m: AgentMessage): AnyRecord {
+  return asRecord(asRecord(m.payload).result)
+}
+
+function asString(v: unknown): string {
   if (v == null) return ''
   if (typeof v === 'string') return v
+  return String(v)
+}
+
+function asNumber(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  if (typeof v === 'string' && v !== '' && Number.isFinite(Number(v))) return Number(v)
+  return null
+}
+
+function countLines(s: string): number {
+  if (!s) return 0
+  return s.split('\n').length
+}
+
+function truncate(s: string, n: number): string {
+  if (s.length <= n) return s
+  return s.slice(0, n - 1) + '…'
+}
+
+// shortenPath drops everything but the trailing two segments of a path
+// so the collapsed-row chip stays under one line. Absolute paths like
+// /workspace/apps/foo/bar/baz.go become …/bar/baz.go; short paths pass
+// through unchanged.
+function shortenPath(p: string): string {
+  if (!p) return ''
+  const parts = p.split('/').filter(Boolean)
+  if (parts.length <= 2) return p
+  return '…/' + parts.slice(-2).join('/')
+}
+
+function shortenUrl(u: string): string {
+  if (!u) return ''
   try {
-    return JSON.stringify(v, null, 2)
+    const x = new URL(u)
+    let path = x.pathname
+    if (path.length > 32) path = path.slice(0, 31) + '…'
+    return x.host + path
   } catch {
-    return String(v)
+    return truncate(u, 48)
   }
+}
+
+function toolIcon(name: string | undefined) {
+  switch (name) {
+    case 'read': return FileText
+    case 'write': return FilePlus
+    case 'edit': return FileEdit
+    case 'bash': return Terminal
+    case 'bash_input': return Keyboard
+    case 'grep': return Search
+    case 'glob': return FolderSearch
+    case 'webfetch': return Globe
+    case 'research': return Telescope
+    default: return Hammer
+  }
+}
+
+// toolSummary returns the inline label that sits next to the tool name
+// in a collapsed tool_call row — "src/foo.go:1-100" for a read,
+// "src/foo.go · -2 +5" for an edit, the LLM-supplied bash summary, etc.
+// Returns '' when there's nothing meaningful to show (the row then just
+// renders the tool name on its own).
+function toolSummary(m: AgentMessage): string {
+  const a = payloadArgs(m)
+  const r = payloadResult(m)
+  switch (m.tool_name) {
+    case 'read': {
+      const path = asString(a.path)
+      const offset = asNumber(a.offset) ?? 1
+      const content = asString(r.content)
+      const lines = content ? countLines(content) : 0
+      const end = lines > 0 ? offset + lines - 1 : null
+      return end ? `${shortenPath(path)}:${offset}-${end}` : shortenPath(path)
+    }
+    case 'write': {
+      const bytes = asNumber(r.bytes)
+      return `${shortenPath(asString(a.path))}${bytes != null ? ` · ${bytes}B` : ''}`
+    }
+    case 'edit': {
+      const path = shortenPath(asString(a.path))
+      const mode = asString(a.mode)
+      let dels = 0
+      let adds = 0
+      if (mode === 'replace') {
+        dels = countLines(asString(a.find))
+        adds = countLines(asString(a.replace))
+      } else if (mode === 'insert') {
+        adds = countLines(asString(a.text))
+      } else if (mode === 'delete') {
+        dels = countLines(asString(a.find))
+      }
+      return `${path} · -${dels} +${adds}`
+    }
+    case 'bash': {
+      // Prefer the result's echoed summary (it survives task_id polls);
+      // fall back to args.summary on the start frame, then to the first
+      // line of the command for legacy frames that predate summary.
+      const sum = asString(r.summary) || asString(a.summary)
+      if (sum) return sum
+      const cmd = asString(a.command)
+      if (cmd) return truncate(cmd.split('\n').find((l) => l.trim()) ?? '', 60)
+      return asString(a.task_id)
+    }
+    case 'bash_input': {
+      const tid = asString(a.task_id)
+      const n = asNumber(r.bytes_written) ?? countLines(asString(a.data))
+      return `${tid.slice(0, 14)}${n != null ? ` · ${n}B` : ''}`
+    }
+    case 'webfetch':
+      return shortenUrl(asString(a.url))
+    case 'grep': {
+      const p = asString(a.pattern)
+      const n = asNumber(r.count) ?? 0
+      const trunc = r.truncated ? '+' : ''
+      return `${truncate(p, 40)} · ${n}${trunc} match${n === 1 ? '' : 'es'}`
+    }
+    case 'glob': {
+      const p = asString(a.pattern)
+      const n = asNumber(r.count) ?? 0
+      return `${truncate(p, 40)} · ${n} file${n === 1 ? '' : 's'}`
+    }
+    case 'research': {
+      const tasks = Array.isArray(a.tasks) ? (a.tasks as unknown[]).length : 0
+      return `${tasks} task${tasks === 1 ? '' : 's'}`
+    }
+    default:
+      return ''
+  }
+}
+
+// toolBadge is the colored pill at the right end of a tool-call row —
+// the part the user scans for "did this succeed". We only set it for
+// tools whose result has a clear pass/fail/in-flight signal; otherwise
+// the chip is just the summary text.
+interface ToolBadge { text: string; cls: string }
+
+function toolBadge(m: AgentMessage): ToolBadge | null {
+  const r = payloadResult(m)
+  switch (m.tool_name) {
+    case 'bash': {
+      if (r.timed_out) return { text: 'timed out', cls: 'bg-destructive/15 text-destructive' }
+      const s = asString(r.status)
+      if (s === 'running') return { text: 'running', cls: 'bg-blue-500/15 text-blue-700 dark:text-blue-300' }
+      if (s === 'promoted') return { text: 'promoted', cls: 'bg-amber-500/15 text-amber-700 dark:text-amber-300' }
+      const exit = asNumber(r.exit_code)
+      if (exit === 0) return { text: 'exit 0', cls: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' }
+      if (exit != null) return { text: `exit ${exit}`, cls: 'bg-destructive/15 text-destructive' }
+      return null
+    }
+    case 'webfetch': {
+      const s = asNumber(r.status)
+      if (s == null) return null
+      const cls = s >= 200 && s < 300
+        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+        : s >= 400
+          ? 'bg-destructive/15 text-destructive'
+          : 'bg-muted text-muted-foreground'
+      return { text: String(s), cls }
+    }
+    case 'research': {
+      const results = Array.isArray(r.results) ? r.results as AnyRecord[] : []
+      if (results.length === 0) return null
+      const ok = results.filter((x) => x.outcome === 'ok').length
+      const cls = ok === results.length
+        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+        : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+      return { text: `${ok}/${results.length}`, cls }
+    }
+    case 'edit': {
+      const occ = asNumber(payloadResult(m).occurrences)
+      if (occ == null || occ <= 1) return null
+      return { text: `×${occ}`, cls: 'bg-muted text-muted-foreground' }
+    }
+    default:
+      return null
+  }
+}
+
+// editDiffLines renders the args of an edit into a unified-diff-style
+// preview the expanded view can iterate over. For 'replace' it stacks
+// the find lines (red) on top of the replace lines (green); 'insert' is
+// pure additions; 'delete' is pure removals. The text is shown verbatim
+// — no syntax highlighting — because the LLM operates on whitespace-
+// sensitive substrings and we want the user to see exactly what was
+// matched.
+interface DiffLine { id: string; type: 'add' | 'del' | 'ctx'; text: string }
+
+function editDiffLines(m: AgentMessage): DiffLine[] {
+  const a = payloadArgs(m)
+  const mode = asString(a.mode)
+  const out: DiffLine[] = []
+  let n = 0
+  const push = (type: DiffLine['type'], text: string) => {
+    for (const line of text.split('\n')) out.push({ id: `${type}-${n++}`, type, text: line })
+  }
+  if (mode === 'replace') {
+    push('del', asString(a.find))
+    push('add', asString(a.replace))
+  } else if (mode === 'insert') {
+    const after = asNumber(a.after) ?? 0
+    out.push({ id: `ctx-${n++}`, type: 'ctx', text: `@@ after line ${after} @@` })
+    push('add', asString(a.text))
+  } else if (mode === 'delete') {
+    push('del', asString(a.find))
+  }
+  return out
+}
+
+// readResultContent returns the file content the read tool emitted.
+// The agent's read tool prefixes each line with "lineno\t...", so the
+// text already looks like a numbered listing; we just hand it back
+// verbatim for the <pre>.
+function readResultContent(m: AgentMessage): string {
+  return asString(payloadResult(m).content)
+}
+
+// bashFooter is the single status line shown under the terminal output:
+// exit code, elapsed status, output-file pointer for background jobs.
+function bashFooter(m: AgentMessage): string {
+  const r = payloadResult(m)
+  const bits: string[] = []
+  if (r.timed_out) bits.push('timed out')
+  const status = asString(r.status)
+  if (status) bits.push(`status=${status}`)
+  const exit = asNumber(r.exit_code)
+  if (exit != null) bits.push(`exit=${exit}`)
+  const tid = asString(r.task_id)
+  if (tid) bits.push(`task=${tid}`)
+  const file = asString(r.output_file)
+  if (file) bits.push(`log=${file}`)
+  return bits.join(' · ')
+}
+
+function webfetchBody(m: AgentMessage): string {
+  const r = payloadResult(m)
+  return asString(r.markdown) || asString(r.body) || asString(r.conversion_error)
+}
+
+function grepMatches(m: AgentMessage): string[] {
+  const r = payloadResult(m)
+  const arr = r.matches
+  if (Array.isArray(arr)) return arr.map((x) => asString(x))
+  return []
+}
+
+function globPaths(m: AgentMessage): string[] {
+  const r = payloadResult(m)
+  const arr = r.paths
+  if (Array.isArray(arr)) return arr.map((x) => asString(x))
+  return []
+}
+
+interface ResearchEntry { prompt: string; outcome: string; summary: string; steps: number | null; error: string }
+
+function researchEntries(m: AgentMessage): ResearchEntry[] {
+  const a = payloadArgs(m)
+  const r = payloadResult(m)
+  const tasks = Array.isArray(a.tasks) ? a.tasks as AnyRecord[] : []
+  const results = Array.isArray(r.results) ? r.results as AnyRecord[] : []
+  const n = Math.max(tasks.length, results.length)
+  const out: ResearchEntry[] = []
+  for (let i = 0; i < n; i++) {
+    out.push({
+      prompt: asString(tasks[i]?.prompt),
+      outcome: asString(results[i]?.outcome) || '—',
+      summary: asString(results[i]?.summary),
+      steps: asNumber(results[i]?.steps_used),
+      error: asString(results[i]?.error),
+    })
+  }
+  return out
 }
 
 function messageIcon(kind: string) {
@@ -266,6 +562,24 @@ function messageIcon(kind: string) {
       return Bot
   }
 }
+
+// Low-level frames (status pings, log notes, idle markers, internal
+// events) are noise for the human reader by default — they fire once
+// per turn boundary and are useful only when debugging the runtime
+// itself. We hide them behind a toggle so the normal log view stays
+// focused on the assistant's thoughts and tool calls.
+const showVerbose = ref(false)
+const verboseKinds = new Set(['status', 'log', 'event', 'done', 'system'])
+
+const visibleMessages = computed<AgentMessage[]>(() => {
+  if (showVerbose.value) return messages.value
+  return messages.value.filter((m) => !verboseKinds.has(m.kind))
+})
+
+const hiddenVerboseCount = computed(() => {
+  if (showVerbose.value) return 0
+  return messages.value.filter((m) => verboseKinds.has(m.kind)).length
+})
 
 // ---- log container scroll / auto-scroll ----
 
@@ -567,14 +881,24 @@ async function deleteSession(s: AgentSession) {
                view; the relative wrapper anchors the floating
                "scroll to bottom" affordance. -->
           <div>
-            <div class="mb-2 flex items-center justify-between">
+            <div class="mb-2 flex items-center justify-between gap-2">
               <h4 class="text-xs font-semibold uppercase text-muted-foreground">
                 {{ t('agentSessions.messages') }}
               </h4>
-              <span
-                v-if="autoScroll && isLive(selected.status)"
-                class="text-[10px] text-muted-foreground"
-              >{{ t('agentSessions.actions.autoScroll') }}</span>
+              <div class="flex items-center gap-3 text-[10px] text-muted-foreground">
+                <button
+                  v-if="hiddenVerboseCount > 0 || showVerbose"
+                  class="hover:text-foreground"
+                  @click="showVerbose = !showVerbose"
+                >
+                  {{ showVerbose
+                    ? t('agentSessions.actions.hideVerbose')
+                    : t('agentSessions.actions.showVerbose', { n: hiddenVerboseCount }) }}
+                </button>
+                <span v-if="autoScroll && isLive(selected.status)">
+                  {{ t('agentSessions.actions.autoScroll') }}
+                </span>
+              </div>
             </div>
             <p v-if="messages.length === 0" class="text-xs text-muted-foreground">
               {{ t('agentSessions.messagesEmpty') }}
@@ -582,47 +906,177 @@ async function deleteSession(s: AgentSession) {
             <div v-else class="relative">
               <ol
                 ref="logContainer"
-                class="max-h-112 space-y-2 overflow-y-auto rounded border bg-background/40 p-2 text-sm"
+                class="max-h-128 overflow-y-auto rounded border bg-background/40 p-1 text-sm divide-y divide-border/30"
                 @scroll.passive="onLogScroll"
               >
                 <li
-                  v-for="m in messages"
+                  v-for="m in visibleMessages"
                   :key="m.id"
-                  class="rounded border bg-muted/20 px-3 py-2"
+                  class="text-sm"
                 >
-                  <div class="flex items-center gap-2 text-xs text-muted-foreground">
-                    <component :is="messageIcon(m.kind)" class="size-3.5 shrink-0" />
-                    <span class="font-mono">{{ offsetFrom(selected.created_at, m.created_at) }}</span>
-                    <span class="font-medium text-foreground">{{ m.kind }}</span>
-                    <span v-if="m.tool_name" class="font-mono">{{ m.tool_name }}</span>
-                    <span v-else-if="m.event" class="font-mono">{{ m.event }}</span>
-                    <span v-else-if="m.role" class="font-mono">{{ m.role }}</span>
-                    <Button
-                      v-if="m.payload"
-                      variant="ghost"
-                      size="sm"
-                      class="ml-auto h-6 px-2 text-xs"
+                  <!-- ─── Tool call: header + tool-aware expanded body ─ -->
+                  <template v-if="m.kind === 'tool_call'">
+                    <button
+                      type="button"
+                      class="group flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-muted/40"
                       @click="toggleExpand(m.seq)"
-                    >{{ isExpanded(m.seq) ? t('agentSessions.collapse') : t('agentSessions.expand') }}</Button>
-                  </div>
-                  <!-- assistant / message content rendered as text -->
-                  <p v-if="m.content" class="mt-1 whitespace-pre-wrap wrap-break-word">{{ m.content }}</p>
-                  <!-- tool_call: show args + result as two panes when expanded -->
-                  <div v-if="isExpanded(m.seq) && m.kind === 'tool_call'" class="mt-2 space-y-2">
-                    <div v-if="payloadField(m, 'args')">
-                      <p class="text-[10px] uppercase text-muted-foreground">args</p>
-                      <pre class="mt-0.5 overflow-x-auto rounded bg-muted/40 p-2 text-xs">{{ payloadField(m, 'args') }}</pre>
+                    >
+                      <ChevronRight
+                        class="size-3 shrink-0 text-muted-foreground transition-transform"
+                        :class="{ 'rotate-90': isExpanded(m.seq) }"
+                      />
+                      <component :is="toolIcon(m.tool_name)" class="size-3.5 shrink-0 text-muted-foreground" />
+                      <span class="shrink-0 font-mono text-[10px] text-muted-foreground">{{ offsetFrom(selected.created_at, m.created_at) }}</span>
+                      <span class="shrink-0 text-xs font-semibold">{{ m.tool_name }}</span>
+                      <span class="truncate font-mono text-xs text-muted-foreground">{{ toolSummary(m) }}</span>
+                      <span
+                        v-if="toolBadge(m)"
+                        class="ml-auto shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px]"
+                        :class="toolBadge(m)!.cls"
+                      >{{ toolBadge(m)!.text }}</span>
+                    </button>
+
+                    <div v-if="isExpanded(m.seq)" class="border-t bg-background/60">
+                      <!-- read: numbered content (pre-formatted by the tool) -->
+                      <template v-if="m.tool_name === 'read'">
+                        <pre class="max-h-96 overflow-auto bg-zinc-950 p-2 font-mono text-[11px] leading-relaxed text-zinc-100">{{ readResultContent(m) || '(empty)' }}</pre>
+                      </template>
+
+                      <!-- edit: inline find/replace diff -->
+                      <template v-else-if="m.tool_name === 'edit'">
+                        <div class="space-y-0.5 px-2 py-2 font-mono text-[11px]">
+                          <div
+                            v-for="line in editDiffLines(m)"
+                            :key="line.id"
+                            class="whitespace-pre-wrap wrap-break-word px-1"
+                            :class="line.type === 'add'
+                              ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                              : line.type === 'del'
+                                ? 'bg-destructive/10 text-destructive line-through decoration-destructive/60'
+                                : 'text-muted-foreground'"
+                          ><span class="mr-1 inline-block w-3 select-none opacity-70">{{ line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' ' }}</span>{{ line.text }}</div>
+                        </div>
+                      </template>
+
+                      <!-- bash: $ command + terminal output + footer -->
+                      <template v-else-if="m.tool_name === 'bash'">
+                        <div class="space-y-1 px-2 py-2">
+                          <div v-if="payloadArgs(m).command" class="break-all font-mono text-[11px] text-muted-foreground">
+                            <span class="mr-1 opacity-60">$</span>{{ payloadArgs(m).command }}
+                          </div>
+                          <div v-else-if="payloadArgs(m).task_id" class="font-mono text-[11px] text-muted-foreground">
+                            poll {{ payloadArgs(m).task_id }}
+                          </div>
+                          <pre class="max-h-96 overflow-auto rounded bg-zinc-950 p-2 font-mono text-[11px] leading-relaxed text-zinc-100 whitespace-pre-wrap wrap-break-word">{{ payloadResult(m).output || '(no output)' }}</pre>
+                          <div v-if="bashFooter(m)" class="font-mono text-[10px] text-muted-foreground">{{ bashFooter(m) }}</div>
+                        </div>
+                      </template>
+
+                      <!-- write: content preview with byte count -->
+                      <template v-else-if="m.tool_name === 'write'">
+                        <div class="space-y-1 px-2 py-2">
+                          <div class="font-mono text-[10px] text-muted-foreground">{{ payloadArgs(m).path }}<span v-if="payloadResult(m).bytes"> · {{ payloadResult(m).bytes }} B</span></div>
+                          <pre class="max-h-96 overflow-auto rounded bg-muted/40 p-2 font-mono text-[11px] whitespace-pre-wrap wrap-break-word">{{ payloadArgs(m).content }}</pre>
+                        </div>
+                      </template>
+
+                      <!-- webfetch: header + markdown/body -->
+                      <template v-else-if="m.tool_name === 'webfetch'">
+                        <div class="space-y-1 px-2 py-2">
+                          <div class="break-all font-mono text-[10px] text-muted-foreground">
+                            {{ payloadArgs(m).url }}<span v-if="payloadResult(m).content_type"> · {{ payloadResult(m).content_type }}</span>
+                          </div>
+                          <pre class="max-h-96 overflow-auto rounded bg-muted/40 p-2 text-[11px] whitespace-pre-wrap wrap-break-word">{{ webfetchBody(m) || '(empty)' }}</pre>
+                        </div>
+                      </template>
+
+                      <!-- grep: matches list, one per line -->
+                      <template v-else-if="m.tool_name === 'grep'">
+                        <div class="px-2 py-2">
+                          <pre class="max-h-96 overflow-auto rounded bg-muted/40 p-2 font-mono text-[11px] whitespace-pre">{{ grepMatches(m).join('\n') || '(no matches)' }}</pre>
+                        </div>
+                      </template>
+
+                      <!-- glob: paths list -->
+                      <template v-else-if="m.tool_name === 'glob'">
+                        <div class="px-2 py-2">
+                          <pre class="max-h-96 overflow-auto rounded bg-muted/40 p-2 font-mono text-[11px] whitespace-pre">{{ globPaths(m).join('\n') || '(no paths)' }}</pre>
+                        </div>
+                      </template>
+
+                      <!-- research: per-task prompt → outcome/summary -->
+                      <template v-else-if="m.tool_name === 'research'">
+                        <div class="space-y-2 px-2 py-2">
+                          <div v-for="(e, i) in researchEntries(m)" :key="i" class="rounded border bg-muted/20 p-2">
+                            <div class="mb-1 flex items-center gap-2 text-[10px] font-mono text-muted-foreground">
+                              <span>#{{ i + 1 }}</span>
+                              <span
+                                class="rounded px-1.5 py-0.5"
+                                :class="e.outcome === 'ok'
+                                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                  : e.outcome === 'step_limit'
+                                    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                                    : 'bg-destructive/15 text-destructive'"
+                              >{{ e.outcome }}</span>
+                              <span v-if="e.steps != null">{{ e.steps }} steps</span>
+                            </div>
+                            <p v-if="e.prompt" class="mb-1 text-[11px] italic text-muted-foreground whitespace-pre-wrap wrap-break-word">{{ e.prompt }}</p>
+                            <p v-if="e.summary" class="text-[11px] whitespace-pre-wrap wrap-break-word">{{ e.summary }}</p>
+                            <p v-if="e.error" class="text-[11px] text-destructive whitespace-pre-wrap wrap-break-word">{{ e.error }}</p>
+                          </div>
+                        </div>
+                      </template>
+
+                      <!-- Fallback: pretty-printed args + result -->
+                      <template v-else>
+                        <div class="space-y-2 px-2 py-2">
+                          <div>
+                            <p class="text-[10px] uppercase text-muted-foreground">args</p>
+                            <pre class="mt-0.5 overflow-x-auto rounded bg-muted/40 p-2 text-[11px]">{{ JSON.stringify(payloadArgs(m), null, 2) }}</pre>
+                          </div>
+                          <div>
+                            <p class="text-[10px] uppercase text-muted-foreground">result</p>
+                            <pre class="mt-0.5 overflow-x-auto rounded bg-muted/40 p-2 text-[11px]">{{ JSON.stringify(payloadResult(m), null, 2) }}</pre>
+                          </div>
+                        </div>
+                      </template>
                     </div>
-                    <div v-if="payloadField(m, 'result')">
-                      <p class="text-[10px] uppercase text-muted-foreground">result</p>
-                      <pre class="mt-0.5 overflow-x-auto rounded bg-muted/40 p-2 text-xs">{{ payloadField(m, 'result') }}</pre>
+                  </template>
+
+                  <!-- ─── Assistant / user text bubble ─────────────── -->
+                  <template v-else-if="m.kind === 'message'">
+                    <div class="flex items-start gap-2 px-2 py-1.5">
+                      <Sparkles class="mt-0.5 size-3.5 shrink-0 text-primary" />
+                      <span class="shrink-0 font-mono text-[10px] text-muted-foreground">{{ offsetFrom(selected.created_at, m.created_at) }}</span>
+                      <p class="min-w-0 flex-1 whitespace-pre-wrap wrap-break-word">{{ m.content }}</p>
                     </div>
-                  </div>
-                  <!-- event / status / log / system: just show the payload raw -->
-                  <pre
-                    v-else-if="isExpanded(m.seq) && m.payload"
-                    class="mt-2 overflow-x-auto rounded bg-muted/40 p-2 text-xs"
-                  >{{ payloadString(m) }}</pre>
+                  </template>
+
+                  <!-- ─── Low-level frames (status/log/event/done/sys) ─ -->
+                  <template v-else>
+                    <button
+                      type="button"
+                      class="flex w-full items-center gap-2 px-2 py-0.5 text-left text-[11px] text-muted-foreground hover:bg-muted/30"
+                      :disabled="!m.payload"
+                      @click="m.payload && toggleExpand(m.seq)"
+                    >
+                      <ChevronRight
+                        v-if="m.payload"
+                        class="size-3 shrink-0 transition-transform"
+                        :class="{ 'rotate-90': isExpanded(m.seq) }"
+                      />
+                      <span v-else class="inline-block size-3 shrink-0" />
+                      <component :is="messageIcon(m.kind)" class="size-3 shrink-0" />
+                      <span class="font-mono text-[10px]">{{ offsetFrom(selected.created_at, m.created_at) }}</span>
+                      <span>{{ m.kind }}</span>
+                      <span v-if="m.event" class="truncate font-mono">{{ m.event }}</span>
+                      <span v-else-if="m.content" class="truncate">{{ m.content }}</span>
+                    </button>
+                    <pre
+                      v-if="isExpanded(m.seq) && m.payload"
+                      class="mx-2 mb-1 overflow-x-auto rounded bg-muted/40 p-2 text-[11px]"
+                    >{{ payloadString(m) }}</pre>
+                  </template>
                 </li>
               </ol>
               <Button

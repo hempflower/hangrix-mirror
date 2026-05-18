@@ -727,6 +727,8 @@
       "deleteConfirm": "确认删除该会话？消息日志会一并清空且无法恢复。",
       "scrollToBottom": "滚动到底部",
       "autoScroll": "自动滚动",
+      "showVerbose": "显示 {n} 条底层事件",
+      "hideVerbose": "隐藏底层事件",
       "stopFailed": "停止会话失败",
       "resumeFailed": "恢复会话失败",
       "deleteFailed": "删除会话失败"

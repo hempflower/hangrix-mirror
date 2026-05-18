@@ -727,6 +727,8 @@
       "deleteConfirm": "Delete this session? Its message log will be removed and cannot be recovered.",
       "scrollToBottom": "Scroll to bottom",
       "autoScroll": "Auto-scroll",
+      "showVerbose": "Show {n} runtime frames",
+      "hideVerbose": "Hide runtime frames",
       "stopFailed": "Failed to stop session",
       "resumeFailed": "Failed to resume session",
       "deleteFailed": "Failed to delete session"
