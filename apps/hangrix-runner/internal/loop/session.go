@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -184,14 +185,25 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 	// fresh container will pick them up.
 	pollCtx, stopPolling := context.WithCancel(ioCtx)
 
+	// stderrTail captures the agent's final stderr lines so a failed
+	// session row carries the cause even if the appendLog HTTP fan-out
+	// races the container exit (see shipStderr docs).
+	stderrTail := newStderrTail(stderrTailCap)
+
 	var wg sync.WaitGroup
 	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		d.shipStdin(pollCtx, task.SessionID, stdin, activitySig)
 	}()
-	go func() { defer wg.Done(); d.shipStdout(ioCtx, task.SessionID, handle.Stdout(), idleSig, activitySig) }()
-	go func() { defer wg.Done(); d.shipStderr(ioCtx, task.SessionID, handle.Stderr()) }()
+	// shipStdout / shipStderr use the parent ctx (not ioCtx) for their
+	// HTTP append calls so the agent's last words — written to stdout/
+	// stderr microseconds before os.Exit(1) — still make it to the
+	// platform after handle.Wait returns and cancelIO fires. Lifecycle
+	// is governed by pipe EOF, which arrives naturally on container
+	// exit; ioCtx is only for the actively-blocking goroutines below.
+	go func() { defer wg.Done(); d.shipStdout(ctx, task.SessionID, handle.Stdout(), idleSig, activitySig) }()
+	go func() { defer wg.Done(); d.shipStderr(ctx, task.SessionID, handle.Stderr(), stderrTail) }()
 	go func() {
 		defer wg.Done()
 		d.watchIdle(ioCtx, task.SessionID, stdin, idleSig, activitySig, stopPolling)
@@ -219,8 +231,17 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 	status := client.TerminateRequest{Status: "idle", ExitCode: &exitCode}
 	if waitErr != nil || ec != 0 {
 		status.Status = "failed"
-		if waitErr != nil {
+		switch {
+		case waitErr != nil:
 			status.Message = waitErr.Error()
+		default:
+			// Surface the agent's tail-of-stderr directly on the session
+			// row so an operator opening the UI sees the cause without
+			// having to scan log frames. The appendLog path delivers
+			// the same lines into the message timeline; this is the
+			// belt-and-suspenders copy for the most common shape
+			// ("hangrix-agent: <one-line reason>" then exit 1).
+			status.Message = stderrTail.String()
 		}
 	}
 	if err := d.Client.Terminate(ctx, task.SessionID, status); err != nil {
@@ -358,6 +379,15 @@ func (d *SessionDriver) shipStdin(ctx context.Context, sessionID int64, w io.Wri
 //     the watcher can see that the agent is mid-event (writing
 //     messages, tool calls, log lines) and shouldn't be considered
 //     truly idle even if it hasn't gotten back to the idle frame yet.
+//
+// ctx is the long-lived parent ctx (process scope), NOT ioCtx. That
+// matters because the agent's final log frame — e.g. `{"kind":"log",
+// "level":"error","msg":"llm call failed: ..."}` — is written just
+// before os.Exit(1). The scanner drains it after handle.Wait returns
+// and cancelIO has fired; if we forwarded it under ioCtx the
+// AppendMessage HTTP call would see context.Canceled and the cause
+// would silently vanish. The drain exits naturally on pipe EOF, so we
+// don't need ioCtx for lifecycle here.
 func (d *SessionDriver) shipStdout(
 	ctx context.Context,
 	sessionID int64,
@@ -378,10 +408,17 @@ func (d *SessionDriver) shipStdout(
 			continue
 		}
 		if frame.Kind == "idle" {
+			// Non-blocking: idleSig is a fast-path hint for watchIdle,
+			// not a strict event stream. The buffer (size 4) absorbs
+			// normal traffic — one idle per event — and dropping on
+			// overflow is safe because watchIdle only consumes the
+			// most recent signal to (re)arm its timer. Going
+			// non-blocking also removes the need to watch ctx here: a
+			// dead watcher (after cancelIO) no longer wedges shipStdout
+			// against a full channel during the post-exit drain.
 			select {
 			case idleSig <- idleSignal{runningJobs: frame.RunningJobs}:
-			case <-ctx.Done():
-				return
+			default:
 			}
 			continue
 		}
@@ -401,16 +438,25 @@ func (d *SessionDriver) shipStdout(
 	}
 }
 
-// shipStderr forwards stderr lines as log frames. The agent in M6b
-// writes startup banners + recover-on-panic lines to stderr; capturing
-// them on the platform side keeps the diagnostics in one place.
-func (d *SessionDriver) shipStderr(ctx context.Context, sessionID int64, r io.Reader) {
+// shipStderr forwards stderr lines as log frames AND mirrors them into
+// a bounded in-memory tail buffer the caller reads on session
+// termination. The agent's recover-on-panic line and the "hangrix-agent:
+// <err>" written immediately before os.Exit(1) both land on stderr;
+// keeping a copy on the runner side means the cause makes it onto the
+// session's terminate.Message even if the appendLog HTTP call is
+// racing the container exit. ctx here is the parent ctx (see shipStdout
+// for the same rationale) so the appendLog tail post-handle.Wait
+// survives cancelIO.
+func (d *SessionDriver) shipStderr(ctx context.Context, sessionID int64, r io.Reader, tail *stderrTail) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 32*1024), 4<<20)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			continue
+		}
+		if tail != nil {
+			tail.Add(line)
 		}
 		d.appendLog(ctx, sessionID, "info", "stderr: "+line)
 	}
@@ -615,4 +661,59 @@ func buildAgentEnv(task *client.Task, baseURL string) map[string]string {
 		env["HANGRIX_BASE_BRANCH"] = task.BaseBranch
 	}
 	return env
+}
+
+// stderrTailCap bounds how much of the agent's stderr we keep around
+// to attach to a failed session's terminate.Message. Sized to fit a
+// handful of typical hangrix-agent error lines plus any pre-recover
+// stderr noise; large enough to carry context, small enough that the
+// /terminate payload never bloats.
+const stderrTailCap = 4096
+
+// stderrTail is a small bounded buffer that retains the *last* N bytes
+// of the agent's stderr. shipStderr appends each line; Run reads the
+// snapshot on session termination to surface the cause via
+// terminate.Message. Concurrency: shipStderr (one goroutine) appends,
+// Run reads after wg.Wait, so a single mutex covers it without contention.
+type stderrTail struct {
+	mu    sync.Mutex
+	lines []string
+	bytes int
+	cap   int
+}
+
+func newStderrTail(cap int) *stderrTail {
+	return &stderrTail{cap: cap}
+}
+
+func (t *stderrTail) Add(line string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.lines = append(t.lines, line)
+	t.bytes += len(line) + 1 // +1 for the join newline
+	// Trim from the front until we fit under cap. Keep at least one
+	// line so a single very long line still produces a (truncated)
+	// non-empty tail.
+	for t.bytes > t.cap && len(t.lines) > 1 {
+		t.bytes -= len(t.lines[0]) + 1
+		t.lines = t.lines[1:]
+	}
+}
+
+func (t *stderrTail) String() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	s := strings.Join(t.lines, "\n")
+	// Final guard: if a single retained line still exceeds cap, clip
+	// it so terminate.Message never balloons past the bound.
+	if len(s) > t.cap {
+		s = s[len(s)-t.cap:]
+	}
+	return s
 }
