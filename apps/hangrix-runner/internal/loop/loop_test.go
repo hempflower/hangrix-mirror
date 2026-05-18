@@ -69,6 +69,12 @@ func TestLoopParallelismFansOut(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/api/runner/heartbeat":
 			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/api/runner/cleanup-tasks":
+			// Cleanup sweeper poll — empty queue for this test.
+			_ = json.NewEncoder(w).Encode(map[string]any{"tasks": []any{}})
+		case strings.HasSuffix(r.URL.Path, "/container"):
+			// SetContainer ACK from the session driver after Start.
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			t.Errorf("unexpected platform call: %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)
@@ -162,6 +168,8 @@ func (g *gatingOrch) Start(ctx context.Context, _ orchestrator.Task) (orchestrat
 	return h, nil
 }
 
+func (g *gatingOrch) RemoveContainer(context.Context, string) error { return nil }
+
 func (g *gatingOrch) startedCount() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -200,6 +208,7 @@ func newGatingHandle() *gatingHandle {
 func (h *gatingHandle) Stdin() io.WriteCloser { return h.stdinW }
 func (h *gatingHandle) Stdout() io.Reader     { return h.stdoutR }
 func (h *gatingHandle) Stderr() io.Reader     { return h.stderrR }
+func (h *gatingHandle) ContainerID() string   { return "" }
 
 func (h *gatingHandle) Wait() (int, error) {
 	code := <-h.waitCh

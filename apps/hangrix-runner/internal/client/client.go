@@ -131,6 +131,11 @@ type Task struct {
 	HostAddendum  string            `json:"host_addendum"`
 	Env           map[string]string `json:"env"`
 	SessionToken  string            `json:"session_token"`
+	// ContainerID is the long-lived docker container previously created
+	// for this session (empty for a fresh session or after a 7-day idle
+	// reap). The orchestrator reuses it via `docker exec` when set; it
+	// falls back to creating a fresh container if the id is stale.
+	ContainerID string `json:"container_id,omitempty"`
 }
 
 // PollTasks returns (task, true, nil) on a real assignment, (nil, false, nil)
@@ -159,6 +164,56 @@ func (c *Client) PollTasks(ctx context.Context) (*Task, bool, error) {
 
 func (c *Client) MarkRunning(ctx context.Context, sessionID int64) error {
 	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/runner/sessions/%d/running", sessionID), nil, nil, true)
+}
+
+// SetContainer records the long-lived container id the orchestrator
+// created (or attached to) for this session. Called once per agent run,
+// right after orchestrator.Start succeeds. Idempotent: posting the same
+// id again just re-stamps container_last_used_at on the server side,
+// which drives the 7-day idle reaper.
+func (c *Client) SetContainer(ctx context.Context, sessionID int64, containerID string) error {
+	return c.do(ctx, http.MethodPut,
+		fmt.Sprintf("/api/runner/sessions/%d/container", sessionID),
+		setContainerRequest{ContainerID: containerID}, nil, true)
+}
+
+type setContainerRequest struct {
+	ContainerID string `json:"container_id"`
+}
+
+// ---- container cleanup ----
+
+// CleanupTask is one (session, container) pair the platform wants the
+// runner to `docker rm`. Returned by ListCleanupTasks.
+type CleanupTask struct {
+	SessionID   int64  `json:"session_id"`
+	ContainerID string `json:"container_id"`
+}
+
+type CleanupTasksResponse struct {
+	Tasks []CleanupTask `json:"tasks"`
+}
+
+// ListCleanupTasks polls the platform for containers this runner should
+// remove. The endpoint is keyed off the agent token (so the platform
+// knows which runner is asking) and returns at most ~50 entries per
+// call; the runner's sweeper loops until it gets an empty page.
+func (c *Client) ListCleanupTasks(ctx context.Context) (*CleanupTasksResponse, error) {
+	var out CleanupTasksResponse
+	if err := c.do(ctx, http.MethodGet, "/api/runner/cleanup-tasks", nil, &out, true); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// MarkCleanupDone reports that `docker rm` of the session's container
+// succeeded (or that the container was already gone — see
+// orchestrator.DockerOrchestrator.RemoveContainer for the no-op path).
+// The platform clears container_id + container_cleanup_pending in one
+// UPDATE on receipt.
+func (c *Client) MarkCleanupDone(ctx context.Context, sessionID int64) error {
+	return c.do(ctx, http.MethodPost,
+		fmt.Sprintf("/api/runner/cleanup-tasks/%d/done", sessionID), nil, nil, true)
 }
 
 type TerminateRequest struct {

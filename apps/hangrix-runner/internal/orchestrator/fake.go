@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
 )
@@ -40,6 +41,7 @@ type FakeOrchestrator struct {
 	stderrW *io.PipeWriter
 
 	lastTask Task
+	removed  []string
 }
 
 func NewFake() *FakeOrchestrator {
@@ -55,6 +57,24 @@ func (f *FakeOrchestrator) Start(ctx context.Context, t Task) (Handle, error) {
 	f.lastTask = t
 	f.mu.Unlock()
 	return &fakeHandle{f: f}, nil
+}
+
+// RemoveContainer satisfies the Orchestrator interface. Tests that drive
+// the cleanup sweeper can assert against RemovedContainers afterwards.
+func (f *FakeOrchestrator) RemoveContainer(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removed = append(f.removed, id)
+	return nil
+}
+
+// RemovedContainers returns the ids passed through RemoveContainer in
+// call order. Useful for asserting cleanup-sweeper behaviour in unit
+// tests.
+func (f *FakeOrchestrator) RemovedContainers() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.removed...)
 }
 
 // AgentStdin is the read-side of the runner→agent pipe. Tests treat it
@@ -101,6 +121,16 @@ type fakeHandle struct {
 func (h *fakeHandle) Stdin() io.WriteCloser { return h.f.stdinW }
 func (h *fakeHandle) Stdout() io.Reader     { return h.f.stdoutR }
 func (h *fakeHandle) Stderr() io.Reader     { return h.f.stderrR }
+
+// ContainerID returns either the id Task.ContainerID passed in (when the
+// session is being resumed) or a deterministic synthetic id keyed off
+// SessionID so the runner can persist+reuse it in a multi-run test.
+func (h *fakeHandle) ContainerID() string {
+	if h.f.lastTask.ContainerID != "" {
+		return h.f.lastTask.ContainerID
+	}
+	return fmt.Sprintf("fake-container-%d", h.f.lastTask.SessionID)
+}
 
 func (h *fakeHandle) Wait() (int, error) {
 	<-h.f.waitCh

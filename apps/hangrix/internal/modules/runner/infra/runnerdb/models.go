@@ -9,34 +9,37 @@ import (
 )
 
 type AgentSession struct {
-	ID                    int64
-	RunnerID              pgtype.Int8
-	RepoID                pgtype.Int8
-	IssueNumber           pgtype.Int4
-	Status                string
-	Role                  string
-	Model                 string
-	AgentImage            string
-	WorkingBranch         string
-	BaseBranch            string
-	HostAddendum          string
-	Env                   []byte
-	SessionTokenPrefix    string
-	SessionTokenHash      string
-	SessionTokenSealed    pgtype.Text
-	SessionTokenRevokedAt pgtype.Timestamptz
-	ExitCode              pgtype.Int4
-	ErrorMessage          string
-	CreatedBy             int64
-	CreatedAt             pgtype.Timestamptz
-	ClaimedAt             pgtype.Timestamptz
-	StartedAt             pgtype.Timestamptz
-	EndedAt               pgtype.Timestamptz
-	RepoSha               string
-	RoleKey               string
-	CauseKind             string
-	CauseID               string
-	RoleConfig            []byte
+	ID                      int64
+	RunnerID                pgtype.Int8
+	RepoID                  pgtype.Int8
+	IssueNumber             pgtype.Int4
+	Status                  string
+	Role                    string
+	Model                   string
+	AgentImage              string
+	WorkingBranch           string
+	BaseBranch              string
+	HostAddendum            string
+	Env                     []byte
+	SessionTokenPrefix      string
+	SessionTokenHash        string
+	SessionTokenSealed      pgtype.Text
+	SessionTokenRevokedAt   pgtype.Timestamptz
+	ExitCode                pgtype.Int4
+	ErrorMessage            string
+	CreatedBy               int64
+	CreatedAt               pgtype.Timestamptz
+	ClaimedAt               pgtype.Timestamptz
+	StartedAt               pgtype.Timestamptz
+	EndedAt                 pgtype.Timestamptz
+	RepoSha                 string
+	RoleKey                 string
+	CauseKind               string
+	CauseID                 string
+	RoleConfig              []byte
+	ContainerID             string
+	ContainerLastUsedAt     pgtype.Timestamptz
+	ContainerCleanupPending bool
 }
 
 type AgentSessionInput struct {

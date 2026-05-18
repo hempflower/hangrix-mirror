@@ -39,6 +39,9 @@ type Loop struct {
 // Run blocks until ctx is cancelled. Internally it fans out into:
 //
 //   - one heartbeat goroutine (period = HeartbeatEvery).
+//   - one cleanup-sweeper goroutine that polls the platform for
+//     containers to `docker rm` (migration 00004 — archive / delete /
+//     7-day idle).
 //   - N task-worker goroutines, where N = max(Parallelism, 1). Each
 //     worker independently long-polls /tasks; on a hit it claims the
 //     row, drives the session synchronously, then loops back to poll.
@@ -62,6 +65,17 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.heartbeatLoop(ctx, n)
 	}()
 
+	// Cleanup-sweeper goroutine. Independent of task workers because
+	// cleanup is low-frequency and inherently sequential per container.
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		sw := &CleanupSweeper{Client: l.Client, Orchestrator: l.Orchestrator}
+		if err := sw.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("cleanup sweeper exited: %v", err)
+		}
+	}()
+
 	var wg sync.WaitGroup
 	for i := 1; i <= n; i++ {
 		wg.Add(1)
@@ -72,6 +86,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	}
 	wg.Wait()
 	<-hbDone
+	<-cleanupDone
 
 	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return nil

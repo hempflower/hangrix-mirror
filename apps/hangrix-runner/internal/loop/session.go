@@ -105,10 +105,21 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 		HostAddendumPath: hostAddendumPath,
 		HostWorkdir:      mountPath,
 		Env:              env,
+		ContainerID:      task.ContainerID,
 	}
 	handle, err := d.Orchestrator.Start(ctx, otask)
 	if err != nil {
 		return -1, d.fail(ctx, task.SessionID, fmt.Errorf("start container: %w", err))
+	}
+	// Persist the container id back to the platform. We post even when
+	// the orchestrator reused an existing id — the SetContainer call
+	// bumps container_last_used_at, which the 7-day idle reaper keys on.
+	// Failure here is logged but non-fatal: the run proceeds, and the
+	// next run will resurface the unchanged id.
+	if cid := handle.ContainerID(); cid != "" {
+		if err := d.Client.SetContainer(ctx, task.SessionID, cid); err != nil {
+			log.Printf("session %d: set container id: %v", task.SessionID, err)
+		}
 	}
 
 	// IO fan-out. Three goroutines:

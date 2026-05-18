@@ -447,6 +447,14 @@ func (r *PostgresRepo) ArchiveSessionsByIssue(ctx context.Context, repoID int64,
 	})
 }
 
+// ArchiveSessionByID archives one session by id (and flags any live
+// container for runner cleanup in the same UPDATE). Idempotent on
+// already-archived rows; returns nil even when zero rows match.
+func (r *PostgresRepo) ArchiveSessionByID(ctx context.Context, id int64) error {
+	_, err := r.q.ArchiveSessionByID(ctx, id)
+	return err
+}
+
 // ClaimNextSession picks the oldest pending session pinned to the runner
 // (or any unpinned session) and flips it to 'claimed'. A returning rowless
 // case is ErrNoPendingSession — the runner long-poller treats that as
@@ -577,6 +585,110 @@ func (r *PostgresRepo) DeleteSession(ctx context.Context, id int64) error {
 		return domain.ErrSessionNotFound
 	}
 	return nil
+}
+
+// ---- container lifecycle ----
+
+// SetSessionContainer records the long-lived container id the runner is
+// using and bumps container_last_used_at. The runner posts this from its
+// session driver on every successful Start (cheap, idempotent, drives the
+// 7-day idle reaper's freshness check).
+func (r *PostgresRepo) SetSessionContainer(ctx context.Context, sessionID int64, containerID string) error {
+	n, err := r.q.SetSessionContainer(ctx, runnerdb.SetSessionContainerParams{
+		ContainerID: containerID,
+		ID:          sessionID,
+	})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrSessionNotFound
+	}
+	return nil
+}
+
+// FlagSessionContainerCleanup marks one session's container as needing
+// runner-side reaping. Returns ErrSessionNotFound only when the row truly
+// does not exist — when the row exists but has no live container, the
+// UPDATE matches zero rows and we silently no-op (nothing to clean).
+// Callers (Controller.Delete, future force-kill admin) don't need to
+// distinguish those cases.
+func (r *PostgresRepo) FlagSessionContainerCleanup(ctx context.Context, sessionID int64) error {
+	n, err := r.q.FlagSessionContainerCleanup(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		// Either the row is gone, or it had no live container. Probe
+		// existence so the caller's error path is meaningful — the
+		// extra round-trip is fine for a low-frequency op.
+		if _, err := r.q.GetSessionByID(ctx, sessionID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return domain.ErrSessionNotFound
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// ListPendingContainerCleanups powers the runner's cleanup-tasks poll.
+// The partial index keeps this O(flagged rows on this runner), so the
+// runner can poll cheaply on a short interval.
+func (r *PostgresRepo) ListPendingContainerCleanups(ctx context.Context, runnerID int64, limit int) ([]domain.ContainerCleanupTask, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := r.q.ListPendingContainerCleanups(ctx, runnerdb.ListPendingContainerCleanupsParams{
+		RunnerID: pgtype.Int8{Int64: runnerID, Valid: true},
+		Lim:      int32(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.ContainerCleanupTask, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.ContainerCleanupTask{
+			SessionID:   row.ID,
+			ContainerID: row.ContainerID,
+		})
+	}
+	return out, nil
+}
+
+// ClearSessionContainer is the runner's ACK that `docker rm` succeeded.
+// We scope the UPDATE by runner_id so a runner that doesn't own the
+// session can't clear its sibling's column (defence-in-depth against a
+// stolen agent token).
+func (r *PostgresRepo) ClearSessionContainer(ctx context.Context, sessionID, ownerRunnerID int64) error {
+	n, err := r.q.ClearSessionContainer(ctx, runnerdb.ClearSessionContainerParams{
+		ID:       sessionID,
+		RunnerID: pgtype.Int8{Int64: ownerRunnerID, Valid: true},
+	})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrSessionNotFound
+	}
+	return nil
+}
+
+// SweepIdleSessionContainers flags every live container whose session has
+// been idle (in a non-running terminal-ish state) for over 7 days. The
+// platform reaper calls this on a 1-hour ticker; the runner picks the
+// flagged rows up on its next cleanup poll.
+func (r *PostgresRepo) SweepIdleSessionContainers(ctx context.Context) (int64, error) {
+	return r.q.SweepIdleSessionContainers(ctx)
+}
+
+// SweepAbandonedSessionContainers clears the container_id column for
+// sessions that have been flagged for cleanup for over 30 days with no
+// runner pickup. After this fires, the container is orphaned on the
+// host (if the host still exists), but the session row stops claiming
+// ownership of it so user-facing affordances can show it as fully gone.
+func (r *PostgresRepo) SweepAbandonedSessionContainers(ctx context.Context) (int64, error) {
+	return r.q.SweepAbandonedSessionContainers(ctx)
 }
 
 // ---- messages ----
@@ -759,11 +871,17 @@ func sessionFromRow(r runnerdb.AgentSession) *domain.AgentSession {
 		ErrorMessage:       r.ErrorMessage,
 		CreatedBy:          r.CreatedBy,
 		CreatedAt:          r.CreatedAt.Time,
-		RepoSHA:            r.RepoSha,
-		RoleKey:            r.RoleKey,
-		CauseKind:          r.CauseKind,
-		CauseID:            r.CauseID,
-		RoleConfig:         r.RoleConfig,
+		RepoSHA:                 r.RepoSha,
+		RoleKey:                 r.RoleKey,
+		CauseKind:               r.CauseKind,
+		CauseID:                 r.CauseID,
+		RoleConfig:              r.RoleConfig,
+		ContainerID:             r.ContainerID,
+		ContainerCleanupPending: r.ContainerCleanupPending,
+	}
+	if r.ContainerLastUsedAt.Valid {
+		v := r.ContainerLastUsedAt.Time
+		out.ContainerLastUsedAt = &v
 	}
 	if r.RunnerID.Valid {
 		v := r.RunnerID.Int64

@@ -81,6 +81,9 @@ func (h *AgentHandler) RegisterRoutes(r chi.Router) {
 			r.Post("/sessions/{sid}/messages", h.appendMessage)
 			r.Get("/sessions/{sid}/inputs", h.pollInputs)
 			r.Post("/sessions/{sid}/terminate", h.terminate)
+			r.Put("/sessions/{sid}/container", h.setContainer)
+			r.Get("/cleanup-tasks", h.listCleanupTasks)
+			r.Post("/cleanup-tasks/{sid}/done", h.markCleanupDone)
 		})
 	})
 
@@ -353,6 +356,11 @@ type taskResp struct {
 	// HANGRIX_SESSION_TOKEN. Decrypted server-side; transmitted over the
 	// runner's authenticated channel only.
 	SessionToken string `json:"session_token,omitempty"`
+	// ContainerID is the long-lived container the runner previously
+	// created for this session (empty for a fresh session, or after the
+	// 7-day idle reaper cleared it). When set, the orchestrator reuses
+	// it via `docker exec`; container state survives across triggers.
+	ContainerID string `json:"container_id,omitempty"`
 }
 
 // pollTasks blocks up to pollWait waiting for a pending session pinned to
@@ -394,6 +402,7 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 				HostAddendum:  sess.HostAddendum,
 				Env:           env,
 				SessionToken:  plaintext,
+				ContainerID:   sess.ContainerID,
 			})
 			return
 		}
@@ -603,6 +612,108 @@ func (h *AgentHandler) pollInputs(w http.ResponseWriter, r *http.Request) {
 		case <-time.After(pollTick):
 		}
 	}
+}
+
+// ---- container lifecycle ----
+
+type setContainerReq struct {
+	ContainerID string `json:"container_id"`
+}
+
+// setContainer records the long-lived container id the runner created (or
+// reattached to) for this session. The runner posts this once per agent
+// run, right after orchestrator.Start. We also bump container_last_used_at
+// in the same UPDATE — that timestamp feeds the 7-day idle reaper. The
+// caller's runner_id is not validated against sess.RunnerID here because
+// ClaimNextSession already pinned the session to this runner; a misrouted
+// PUT could only land on a session the runner doesn't own if its agent
+// token leaked, in which case the cleanup_pending flag (cleared by a
+// separate, runner-scoped query) is the safety net.
+func (h *AgentHandler) setContainer(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "sid"))
+	if !ok {
+		return
+	}
+	var req setContainerReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	cid := strings.TrimSpace(req.ContainerID)
+	if cid == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "container_id required")
+		return
+	}
+	if err := h.repo.SetSessionContainer(r.Context(), id, cid); err != nil {
+		if errors.Is(err, domain.ErrSessionNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type cleanupTaskDTO struct {
+	SessionID   int64  `json:"session_id"`
+	ContainerID string `json:"container_id"`
+}
+
+type cleanupTasksResp struct {
+	Tasks []cleanupTaskDTO `json:"tasks"`
+}
+
+// listCleanupTasks returns up to 50 (session, container) pairs the
+// platform has flagged for this runner to `docker rm`. The partial
+// index keeps it O(flagged rows owned by this runner) so the runner can
+// poll cheaply on a short interval. Empty list returns 200 with an empty
+// array (not 204) so a polling client can treat it as a successful poll.
+func (h *AgentHandler) listCleanupTasks(w http.ResponseWriter, r *http.Request) {
+	runner := runnerFromContext(r.Context())
+	if runner == nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "no runner in context")
+		return
+	}
+	tasks, err := h.repo.ListPendingContainerCleanups(r.Context(), runner.ID, 50)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := cleanupTasksResp{Tasks: make([]cleanupTaskDTO, 0, len(tasks))}
+	for _, t := range tasks {
+		out.Tasks = append(out.Tasks, cleanupTaskDTO{SessionID: t.SessionID, ContainerID: t.ContainerID})
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// markCleanupDone is the runner's ACK that `docker rm` of the session's
+// container succeeded (or that the container was already gone — see
+// DockerOrchestrator.RemoveContainer's idempotent path). Scoped by
+// runner_id at the SQL layer so a runner that doesn't own the session
+// can't clear another runner's column even with a leaked agent token.
+func (h *AgentHandler) markCleanupDone(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "sid"))
+	if !ok {
+		return
+	}
+	runner := runnerFromContext(r.Context())
+	if runner == nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "no runner in context")
+		return
+	}
+	if err := h.repo.ClearSessionContainer(r.Context(), id, runner.ID); err != nil {
+		if errors.Is(err, domain.ErrSessionNotFound) {
+			// The session may have been deleted between the runner's
+			// listCleanupTasks and this ACK. Treat as success — the
+			// container is gone either way and the flag is moot.
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---- token + ctx helpers ----

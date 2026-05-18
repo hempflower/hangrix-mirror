@@ -155,10 +155,15 @@ WHERE (sqlc.narg('role_key')::TEXT   IS NULL OR role_key   = sqlc.narg('role_key
 -- rows are skipped so the call is idempotent. session_token_sealed is
 -- NULL'd so a leaked DB snapshot of an archived session can't expose the
 -- bearer plaintext.
+--
+-- We also flag any live container on these rows for cleanup in the same
+-- UPDATE so the runner reaper can `docker rm` them. The flag is a no-op
+-- for archived sessions that never owned a container (container_id = '').
 UPDATE agent_sessions
-SET status               = 'archived',
-    ended_at             = COALESCE(ended_at, NOW()),
-    session_token_sealed = NULL
+SET status                    = 'archived',
+    ended_at                  = COALESCE(ended_at, NOW()),
+    session_token_sealed      = NULL,
+    container_cleanup_pending = container_cleanup_pending OR container_id <> ''
 WHERE repo_id      = sqlc.arg('repo_id')
   AND issue_number = sqlc.arg('issue_number')
   AND status      != 'archived';
@@ -254,6 +259,22 @@ WHERE id = sqlc.arg('id')
 -- and the user doesn't want it recoverable, this clears the row.
 DELETE FROM agent_sessions WHERE id = sqlc.arg('id');
 
+-- name: ArchiveSessionByID :execrows
+-- Archive one session by id, plus flag any live container for runner
+-- cleanup in the same UPDATE. Used by Controller.Delete when the session
+-- has a live container: hard-DELETE would strand the container (the
+-- runner would have no row to find a cleanup task on), so we instead
+-- archive the row and let the cleanup sweeper reach it. Idempotent for
+-- already-archived rows; never overwrites the issue-driven archive
+-- because that path also lands here with the same end state.
+UPDATE agent_sessions
+SET status                    = 'archived',
+    ended_at                  = COALESCE(ended_at, NOW()),
+    session_token_sealed      = NULL,
+    container_cleanup_pending = container_cleanup_pending OR container_id <> ''
+WHERE id = sqlc.arg('id')
+  AND status != 'archived';
+
 -- ---- messages ----
 
 -- name: AppendMessage :one
@@ -301,3 +322,83 @@ LIMIT sqlc.arg('lim');
 
 -- name: MarkInputsConsumed :exec
 UPDATE agent_session_inputs SET consumed_at = NOW() WHERE id = ANY(sqlc.arg('ids')::BIGINT[]);
+
+-- ---- session container lifecycle ----
+
+-- name: SetSessionContainer :execrows
+-- Records the long-lived container id the runner created (or re-attached
+-- to) for this session and bumps container_last_used_at so the 7-day
+-- idle reaper sees a fresh timestamp. Called once per agent run — the
+-- runner posts this right after orchestrator.Start succeeds. Idempotent:
+-- writing the same container_id twice in a row just re-stamps the
+-- timestamp.
+UPDATE agent_sessions
+SET container_id           = sqlc.arg('container_id'),
+    container_last_used_at = NOW()
+WHERE id = sqlc.arg('id');
+
+-- name: FlagSessionContainerCleanup :execrows
+-- Marks a single session's container for runner-side reaping. Used by:
+--   - the controller's delete-session path (user-initiated trash),
+--   - any future per-session "force kill container" admin surface.
+-- No-op when there is no live container (we still return the row count
+-- so the caller can distinguish "nothing to do" from "row missing").
+UPDATE agent_sessions
+SET container_cleanup_pending = TRUE
+WHERE id = sqlc.arg('id')
+  AND container_id <> ''
+  AND container_cleanup_pending = FALSE;
+
+-- name: ListPendingContainerCleanups :many
+-- Runner-side cleanup poll: every (id, container_id) on this runner with
+-- a live container the platform has flagged for removal. The partial
+-- index `agent_sessions_cleanup_idx` makes this O(flagged rows).
+SELECT id, container_id
+FROM agent_sessions
+WHERE runner_id = sqlc.arg('runner_id')
+  AND container_cleanup_pending = TRUE
+  AND container_id <> ''
+ORDER BY id ASC
+LIMIT sqlc.arg('lim');
+
+-- name: ClearSessionContainer :execrows
+-- Runner reports `docker rm` succeeded: drop both the id and the flag in
+-- a single UPDATE so a later poll doesn't re-issue the cleanup. Scoped
+-- to the runner that owns the session so a misrouted cleanup ACK can't
+-- clear a sibling's column.
+UPDATE agent_sessions
+SET container_id              = '',
+    container_cleanup_pending = FALSE,
+    container_last_used_at    = NULL
+WHERE id = sqlc.arg('id')
+  AND runner_id = sqlc.arg('runner_id');
+
+-- name: SweepIdleSessionContainers :execrows
+-- 7-day idle reaper (platform side): flags every live container whose
+-- session is non-running and hasn't been touched in 7 days. Bounded by
+-- the partial index `agent_sessions_container_idle_idx`. The reaper
+-- runs on a 1-hour ticker; setting the flag is cheap and the actual
+-- `docker rm` happens runner-side on its next cleanup poll.
+UPDATE agent_sessions
+SET container_cleanup_pending = TRUE
+WHERE container_id <> ''
+  AND container_cleanup_pending = FALSE
+  AND status IN ('idle', 'succeeded', 'failed', 'cancelled', 'archived')
+  AND container_last_used_at IS NOT NULL
+  AND container_last_used_at < NOW() - INTERVAL '7 days';
+
+-- name: SweepAbandonedSessionContainers :execrows
+-- 30-day giveup sweep (platform side): if a session has been flagged
+-- for cleanup for over 30 days with no runner pickup (e.g. the owning
+-- runner is permanently offline / deleted), clear the column server-
+-- side. The container is effectively orphaned on the host, but holding
+-- the flag forever just blocks future "session truly gone" UI affordances.
+-- Logged at WARN level by the reaper so operators see what was dropped.
+UPDATE agent_sessions
+SET container_id              = '',
+    container_cleanup_pending = FALSE,
+    container_last_used_at    = NULL
+WHERE container_cleanup_pending = TRUE
+  AND container_id <> ''
+  AND container_last_used_at IS NOT NULL
+  AND container_last_used_at < NOW() - INTERVAL '30 days';

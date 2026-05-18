@@ -150,6 +150,16 @@ func (c *Controller) Resume(ctx context.Context, sessionID int64) error {
 // Delete satisfies domain.Controller. Refuses live sessions to keep
 // runner-side state coherent: a runner that just claimed the row would
 // 500 on its next AppendMessage if we deleted from under it.
+//
+// Container-aware: when the session owns a long-lived container (see
+// migration 00004), hard-DELETE would strand the container — the
+// runner's cleanup poll keys off agent_sessions.runner_id, and a deleted
+// row has nothing to match. We instead archive the row (so the user
+// sees it leave their active list) and flag the container for cleanup;
+// the runner's sweeper picks it up on its next poll and `docker rm`s.
+// A future commit can add a "purge archived" sweeper to hard-DELETE
+// these rows once the container is gone — for now they stay archived,
+// which is cheap (zero non-row state) and audit-friendly.
 func (c *Controller) Delete(ctx context.Context, sessionID int64) error {
 	sess, err := c.runner.GetSessionByID(ctx, sessionID)
 	if err != nil {
@@ -160,6 +170,9 @@ func (c *Controller) Delete(ctx context.Context, sessionID int64) error {
 		runnerdomain.SessionStatusClaimed,
 		runnerdomain.SessionStatusRunning:
 		return domain.ErrSessionLive
+	}
+	if sess.ContainerID != "" {
+		return c.runner.ArchiveSessionByID(ctx, sessionID)
 	}
 	return c.runner.DeleteSession(ctx, sessionID)
 }

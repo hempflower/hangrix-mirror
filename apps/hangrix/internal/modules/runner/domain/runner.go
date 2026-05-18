@@ -228,6 +228,22 @@ type AgentSession struct {
 	CauseKind  string // trigger family (e.g. "issue_opened", "comment_mentioned")
 	CauseID    string // upstream artefact id (opaque to runner)
 	RoleConfig []byte // resolved role config snapshot (JSON), empty == "{}"
+
+	// Container lifecycle (decoupled from agent-process lifecycle since
+	// migration 00004). Live containers are owned by the runner_id row;
+	// the platform tracks the id, last-touched timestamp, and a pending-
+	// cleanup flag the runner polls for.
+	//
+	//   ContainerID              "" when no live container (fresh session
+	//                            or container already reaped).
+	//   ContainerLastUsedAt      bumped on every exec; drives the 7-day
+	//                            idle reaper.
+	//   ContainerCleanupPending  TRUE when the platform wants the runner
+	//                            to `docker rm` this container — set on
+	//                            archive, user-delete, or idle sweep.
+	ContainerID             string
+	ContainerLastUsedAt     *time.Time
+	ContainerCleanupPending bool
 }
 
 // SessionTokenActive reports whether the session's identity token is
@@ -425,6 +441,15 @@ type HistoryFrame struct {
 	Payload []byte // JSON-encoded {"kind":"history","messages":[...]}
 }
 
+// ContainerCleanupTask is one (session, container) pair the runner's
+// cleanup sweeper should `docker rm`. Returned by
+// Repo.ListPendingContainerCleanups and consumed by the runner-facing
+// HTTP layer's `/api/runner/cleanup-tasks` endpoint.
+type ContainerCleanupTask struct {
+	SessionID   int64
+	ContainerID string
+}
+
 // Errors.
 var (
 	ErrRunnerNotFound         = errors.New("runner not found")
@@ -532,7 +557,59 @@ type Repo interface {
 	// issue.merged — there is no per-session manual archive surface.
 	// Returns the number of rows updated so the caller can log/no-op
 	// when the issue had no live sessions.
+	//
+	// As of migration 00004, this also flips
+	// container_cleanup_pending = TRUE for any archived row that owns a
+	// live container, so the runner's cleanup sweeper picks them up.
 	ArchiveSessionsByIssue(ctx context.Context, repoID int64, issueNumber int32) (int64, error)
+
+	// ArchiveSessionByID archives one session by id and flags any live
+	// container for runner cleanup. Used by the user-delete path when the
+	// row has a container — hard-DELETE would orphan the container, so we
+	// archive instead and rely on the cleanup sweeper to reach it.
+	// Idempotent on already-archived rows.
+	ArchiveSessionByID(ctx context.Context, id int64) error
+
+	// SetSessionContainer records the long-lived container id the runner
+	// is using for this session and bumps container_last_used_at. Called
+	// from the runner-facing handler once per agent run, immediately
+	// after orchestrator.Start. Idempotent — writing the same id again
+	// just re-stamps the timestamp (which the 7-day idle reaper relies
+	// on).
+	SetSessionContainer(ctx context.Context, sessionID int64, containerID string) error
+
+	// FlagSessionContainerCleanup marks one session's container for
+	// runner-side reaping. Used by the per-session delete path; the
+	// archive and idle-sweep paths use their own batch queries.
+	// Returns ErrSessionNotFound when no row matches; a no-op (return
+	// nil) when the row exists but has no live container.
+	FlagSessionContainerCleanup(ctx context.Context, sessionID int64) error
+
+	// ListPendingContainerCleanups returns up to `limit` (session_id,
+	// container_id) tuples that the given runner owns and the platform
+	// has flagged for cleanup. The runner's cleanup sweeper polls this
+	// and `docker rm`s each container.
+	ListPendingContainerCleanups(ctx context.Context, runnerID int64, limit int) ([]ContainerCleanupTask, error)
+
+	// ClearSessionContainer is the runner's ACK that `docker rm` of
+	// (sessionID, ownerRunnerID)'s container succeeded. Clears
+	// container_id, container_cleanup_pending, and container_last_used_at
+	// in a single UPDATE. Scoped by runner_id so a misrouted ACK can't
+	// clear a sibling runner's column.
+	ClearSessionContainer(ctx context.Context, sessionID, ownerRunnerID int64) error
+
+	// SweepIdleSessionContainers is the 7-day idle reaper: flags every
+	// live container whose session is non-running and hasn't been used in
+	// 7 days. Returns the number of rows flagged so the reaper can log
+	// what it did. Called by the platform's reaper goroutine on a 1-hour
+	// ticker.
+	SweepIdleSessionContainers(ctx context.Context) (int64, error)
+
+	// SweepAbandonedSessionContainers is the 30-day giveup sweep: clears
+	// container_id on rows that have been flagged for cleanup for over
+	// 30 days with no runner pickup (typically because the owning runner
+	// is permanently offline). Returns row count for logging.
+	SweepAbandonedSessionContainers(ctx context.Context) (int64, error)
 
 	// messages
 	AppendMessage(ctx context.Context, m *Message) (*Message, error)

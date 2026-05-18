@@ -73,6 +73,11 @@ func TestSessionDriverEndToEnd(t *testing.T) {
 			_ = json.Unmarshal(body, &terminateBody)
 			mu.Unlock()
 			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/api/runner/sessions/42/container":
+			// SetContainer ACK from the session driver — the fake
+			// orchestrator returns "fake-container-42" via Handle.ContainerID,
+			// the driver posts it back, this endpoint records receipt.
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			t.Errorf("unexpected platform call: %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)

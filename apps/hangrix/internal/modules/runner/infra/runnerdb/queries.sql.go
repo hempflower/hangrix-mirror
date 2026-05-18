@@ -73,11 +73,37 @@ func (q *Queries) AppendMessage(ctx context.Context, arg AppendMessageParams) (A
 	return i, err
 }
 
+const archiveSessionByID = `-- name: ArchiveSessionByID :execrows
+UPDATE agent_sessions
+SET status                    = 'archived',
+    ended_at                  = COALESCE(ended_at, NOW()),
+    session_token_sealed      = NULL,
+    container_cleanup_pending = container_cleanup_pending OR container_id <> ''
+WHERE id = $1
+  AND status != 'archived'
+`
+
+// Archive one session by id, plus flag any live container for runner
+// cleanup in the same UPDATE. Used by Controller.Delete when the session
+// has a live container: hard-DELETE would strand the container (the
+// runner would have no row to find a cleanup task on), so we instead
+// archive the row and let the cleanup sweeper reach it. Idempotent for
+// already-archived rows; never overwrites the issue-driven archive
+// because that path also lands here with the same end state.
+func (q *Queries) ArchiveSessionByID(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, archiveSessionByID, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const archiveSessionsByIssue = `-- name: ArchiveSessionsByIssue :execrows
 UPDATE agent_sessions
-SET status               = 'archived',
-    ended_at             = COALESCE(ended_at, NOW()),
-    session_token_sealed = NULL
+SET status                    = 'archived',
+    ended_at                  = COALESCE(ended_at, NOW()),
+    session_token_sealed      = NULL,
+    container_cleanup_pending = container_cleanup_pending OR container_id <> ''
 WHERE repo_id      = $1
   AND issue_number = $2
   AND status      != 'archived'
@@ -95,6 +121,10 @@ type ArchiveSessionsByIssueParams struct {
 // rows are skipped so the call is idempotent. session_token_sealed is
 // NULL'd so a leaked DB snapshot of an archived session can't expose the
 // bearer plaintext.
+//
+// We also flag any live container on these rows for cleanup in the same
+// UPDATE so the runner reaper can `docker rm` them. The flag is a no-op
+// for archived sessions that never owned a container (container_id = ”).
 func (q *Queries) ArchiveSessionsByIssue(ctx context.Context, arg ArchiveSessionsByIssueParams) (int64, error) {
 	result, err := q.db.Exec(ctx, archiveSessionsByIssue, arg.RepoID, arg.IssueNumber)
 	if err != nil {
@@ -104,7 +134,7 @@ func (q *Queries) ArchiveSessionsByIssue(ctx context.Context, arg ArchiveSession
 }
 
 const claimNextSessionLock = `-- name: ClaimNextSessionLock :one
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config FROM agent_sessions
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending FROM agent_sessions
 WHERE status = 'pending'
   AND (runner_id = $1 OR runner_id IS NULL)
 ORDER BY created_at ASC, id ASC
@@ -150,6 +180,9 @@ func (q *Queries) ClaimNextSessionLock(ctx context.Context, runnerID pgtype.Int8
 		&i.CauseKind,
 		&i.CauseID,
 		&i.RoleConfig,
+		&i.ContainerID,
+		&i.ContainerLastUsedAt,
+		&i.ContainerCleanupPending,
 	)
 	return i, err
 }
@@ -211,6 +244,32 @@ type ClaimSessionUpdateParams struct {
 func (q *Queries) ClaimSessionUpdate(ctx context.Context, arg ClaimSessionUpdateParams) error {
 	_, err := q.db.Exec(ctx, claimSessionUpdate, arg.RunnerID, arg.ID)
 	return err
+}
+
+const clearSessionContainer = `-- name: ClearSessionContainer :execrows
+UPDATE agent_sessions
+SET container_id              = '',
+    container_cleanup_pending = FALSE,
+    container_last_used_at    = NULL
+WHERE id = $1
+  AND runner_id = $2
+`
+
+type ClearSessionContainerParams struct {
+	ID       int64
+	RunnerID pgtype.Int8
+}
+
+// Runner reports `docker rm` succeeded: drop both the id and the flag in
+// a single UPDATE so a later poll doesn't re-issue the cleanup. Scoped
+// to the runner that owns the session so a misrouted cleanup ACK can't
+// clear a sibling's column.
+func (q *Queries) ClearSessionContainer(ctx context.Context, arg ClearSessionContainerParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearSessionContainer, arg.ID, arg.RunnerID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const countRecentSessions = `-- name: CountRecentSessions :one
@@ -330,7 +389,7 @@ INSERT INTO agent_sessions (
     $18,
     $19::jsonb
 )
-RETURNING id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config
+RETURNING id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending
 `
 
 type CreateSessionParams struct {
@@ -408,6 +467,9 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (A
 		&i.CauseKind,
 		&i.CauseID,
 		&i.RoleConfig,
+		&i.ContainerID,
+		&i.ContainerLastUsedAt,
+		&i.ContainerCleanupPending,
 	)
 	return i, err
 }
@@ -489,6 +551,28 @@ func (q *Queries) EnqueueInput(ctx context.Context, arg EnqueueInputParams) (Age
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const flagSessionContainerCleanup = `-- name: FlagSessionContainerCleanup :execrows
+UPDATE agent_sessions
+SET container_cleanup_pending = TRUE
+WHERE id = $1
+  AND container_id <> ''
+  AND container_cleanup_pending = FALSE
+`
+
+// Marks a single session's container for runner-side reaping. Used by:
+//   - the controller's delete-session path (user-initiated trash),
+//   - any future per-session "force kill container" admin surface.
+//
+// No-op when there is no live container (we still return the row count
+// so the caller can distinguish "nothing to do" from "row missing").
+func (q *Queries) FlagSessionContainerCleanup(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, flagSessionContainerCleanup, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getRunnerByAgentPrefix = `-- name: GetRunnerByAgentPrefix :one
@@ -580,7 +664,7 @@ func (q *Queries) GetRunnerByID(ctx context.Context, id int64) (Runner, error) {
 }
 
 const getSessionByID = `-- name: GetSessionByID :one
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config FROM agent_sessions WHERE id = $1
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending FROM agent_sessions WHERE id = $1
 `
 
 func (q *Queries) GetSessionByID(ctx context.Context, id int64) (AgentSession, error) {
@@ -615,12 +699,15 @@ func (q *Queries) GetSessionByID(ctx context.Context, id int64) (AgentSession, e
 		&i.CauseKind,
 		&i.CauseID,
 		&i.RoleConfig,
+		&i.ContainerID,
+		&i.ContainerLastUsedAt,
+		&i.ContainerCleanupPending,
 	)
 	return i, err
 }
 
 const getSessionByTokenPrefix = `-- name: GetSessionByTokenPrefix :one
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config FROM agent_sessions WHERE session_token_prefix = $1
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending FROM agent_sessions WHERE session_token_prefix = $1
 `
 
 func (q *Queries) GetSessionByTokenPrefix(ctx context.Context, sessionTokenPrefix string) (AgentSession, error) {
@@ -655,6 +742,9 @@ func (q *Queries) GetSessionByTokenPrefix(ctx context.Context, sessionTokenPrefi
 		&i.CauseKind,
 		&i.CauseID,
 		&i.RoleConfig,
+		&i.ContainerID,
+		&i.ContainerLastUsedAt,
+		&i.ContainerCleanupPending,
 	)
 	return i, err
 }
@@ -697,8 +787,51 @@ func (q *Queries) ListMessages(ctx context.Context, sessionID int64) ([]AgentSes
 	return items, nil
 }
 
+const listPendingContainerCleanups = `-- name: ListPendingContainerCleanups :many
+SELECT id, container_id
+FROM agent_sessions
+WHERE runner_id = $1
+  AND container_cleanup_pending = TRUE
+  AND container_id <> ''
+ORDER BY id ASC
+LIMIT $2
+`
+
+type ListPendingContainerCleanupsParams struct {
+	RunnerID pgtype.Int8
+	Lim      int32
+}
+
+type ListPendingContainerCleanupsRow struct {
+	ID          int64
+	ContainerID string
+}
+
+// Runner-side cleanup poll: every (id, container_id) on this runner with
+// a live container the platform has flagged for removal. The partial
+// index `agent_sessions_cleanup_idx` makes this O(flagged rows).
+func (q *Queries) ListPendingContainerCleanups(ctx context.Context, arg ListPendingContainerCleanupsParams) ([]ListPendingContainerCleanupsRow, error) {
+	rows, err := q.db.Query(ctx, listPendingContainerCleanups, arg.RunnerID, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPendingContainerCleanupsRow{}
+	for rows.Next() {
+		var i ListPendingContainerCleanupsRow
+		if err := rows.Scan(&i.ID, &i.ContainerID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecentSessions = `-- name: ListRecentSessions :many
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config FROM agent_sessions
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending FROM agent_sessions
 WHERE ($1::TEXT   IS NULL OR role_key   = $1::TEXT)
   AND ($2::TEXT     IS NULL OR status     = $2::TEXT)
   AND ($3::BIGINT  IS NULL OR repo_id    = $3::BIGINT)
@@ -766,6 +899,9 @@ func (q *Queries) ListRecentSessions(ctx context.Context, arg ListRecentSessions
 			&i.CauseKind,
 			&i.CauseID,
 			&i.RoleConfig,
+			&i.ContainerID,
+			&i.ContainerLastUsedAt,
+			&i.ContainerCleanupPending,
 		); err != nil {
 			return nil, err
 		}
@@ -827,7 +963,7 @@ func (q *Queries) ListRunners(ctx context.Context, arg ListRunnersParams) ([]Run
 }
 
 const listSessions = `-- name: ListSessions :many
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config FROM agent_sessions
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending FROM agent_sessions
 WHERE ($1::BIGINT IS NULL OR runner_id = $1)
   AND ($2::TEXT   IS NULL OR status    = $2)
 ORDER BY id DESC
@@ -878,6 +1014,9 @@ func (q *Queries) ListSessions(ctx context.Context, arg ListSessionsParams) ([]A
 			&i.CauseKind,
 			&i.CauseID,
 			&i.RoleConfig,
+			&i.ContainerID,
+			&i.ContainerLastUsedAt,
+			&i.ContainerCleanupPending,
 		); err != nil {
 			return nil, err
 		}
@@ -890,7 +1029,7 @@ func (q *Queries) ListSessions(ctx context.Context, arg ListSessionsParams) ([]A
 }
 
 const listSessionsByIssue = `-- name: ListSessionsByIssue :many
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config FROM agent_sessions
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending FROM agent_sessions
 WHERE repo_id      = $1
   AND issue_number = $2
 ORDER BY id ASC
@@ -942,6 +1081,9 @@ func (q *Queries) ListSessionsByIssue(ctx context.Context, arg ListSessionsByIss
 			&i.CauseKind,
 			&i.CauseID,
 			&i.RoleConfig,
+			&i.ContainerID,
+			&i.ContainerLastUsedAt,
+			&i.ContainerCleanupPending,
 		); err != nil {
 			return nil, err
 		}
@@ -1115,6 +1257,82 @@ func (q *Queries) ResumeSession(ctx context.Context, arg ResumeSessionParams) (i
 		arg.SessionTokenSealed,
 		arg.ID,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setSessionContainer = `-- name: SetSessionContainer :execrows
+
+UPDATE agent_sessions
+SET container_id           = $1,
+    container_last_used_at = NOW()
+WHERE id = $2
+`
+
+type SetSessionContainerParams struct {
+	ContainerID string
+	ID          int64
+}
+
+// ---- session container lifecycle ----
+// Records the long-lived container id the runner created (or re-attached
+// to) for this session and bumps container_last_used_at so the 7-day
+// idle reaper sees a fresh timestamp. Called once per agent run — the
+// runner posts this right after orchestrator.Start succeeds. Idempotent:
+// writing the same container_id twice in a row just re-stamps the
+// timestamp.
+func (q *Queries) SetSessionContainer(ctx context.Context, arg SetSessionContainerParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSessionContainer, arg.ContainerID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const sweepAbandonedSessionContainers = `-- name: SweepAbandonedSessionContainers :execrows
+UPDATE agent_sessions
+SET container_id              = '',
+    container_cleanup_pending = FALSE,
+    container_last_used_at    = NULL
+WHERE container_cleanup_pending = TRUE
+  AND container_id <> ''
+  AND container_last_used_at IS NOT NULL
+  AND container_last_used_at < NOW() - INTERVAL '30 days'
+`
+
+// 30-day giveup sweep (platform side): if a session has been flagged
+// for cleanup for over 30 days with no runner pickup (e.g. the owning
+// runner is permanently offline / deleted), clear the column server-
+// side. The container is effectively orphaned on the host, but holding
+// the flag forever just blocks future "session truly gone" UI affordances.
+// Logged at WARN level by the reaper so operators see what was dropped.
+func (q *Queries) SweepAbandonedSessionContainers(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, sweepAbandonedSessionContainers)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const sweepIdleSessionContainers = `-- name: SweepIdleSessionContainers :execrows
+UPDATE agent_sessions
+SET container_cleanup_pending = TRUE
+WHERE container_id <> ''
+  AND container_cleanup_pending = FALSE
+  AND status IN ('idle', 'succeeded', 'failed', 'cancelled', 'archived')
+  AND container_last_used_at IS NOT NULL
+  AND container_last_used_at < NOW() - INTERVAL '7 days'
+`
+
+// 7-day idle reaper (platform side): flags every live container whose
+// session is non-running and hasn't been touched in 7 days. Bounded by
+// the partial index `agent_sessions_container_idle_idx`. The reaper
+// runs on a 1-hour ticker; setting the flag is cheap and the actual
+// `docker rm` happens runner-side on its next cleanup poll.
+func (q *Queries) SweepIdleSessionContainers(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, sweepIdleSessionContainers)
 	if err != nil {
 		return 0, err
 	}

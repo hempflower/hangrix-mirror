@@ -365,6 +365,41 @@ func (r *stubRunnerRepo) ClaimPendingInputs(context.Context, int64, int) ([]*run
 	panic("ClaimPendingInputs not stubbed")
 }
 
+// Container-lifecycle methods (migration 00004). The spawner under test
+// doesn't drive these directly — the runner-facing handler and the
+// reaper goroutine do — so the stubs are minimal no-ops sufficient to
+// satisfy the Repo interface for unit-test compilation.
+func (r *stubRunnerRepo) SetSessionContainer(context.Context, int64, string) error {
+	return nil
+}
+func (r *stubRunnerRepo) FlagSessionContainerCleanup(context.Context, int64) error {
+	return nil
+}
+func (r *stubRunnerRepo) ListPendingContainerCleanups(context.Context, int64, int) ([]runnerdomain.ContainerCleanupTask, error) {
+	return nil, nil
+}
+func (r *stubRunnerRepo) ClearSessionContainer(context.Context, int64, int64) error {
+	return nil
+}
+func (r *stubRunnerRepo) SweepIdleSessionContainers(context.Context) (int64, error) {
+	return 0, nil
+}
+func (r *stubRunnerRepo) SweepAbandonedSessionContainers(context.Context) (int64, error) {
+	return 0, nil
+}
+func (r *stubRunnerRepo) ArchiveSessionByID(_ context.Context, id int64) error {
+	for _, s := range r.sessions {
+		if s.ID == id {
+			s.Status = runnerdomain.SessionStatusArchived
+			if s.ContainerID != "" {
+				s.ContainerCleanupPending = true
+			}
+			return nil
+		}
+	}
+	return runnerdomain.ErrSessionNotFound
+}
+
 // dump is a debug helper unused by tests but handy from a debugger.
 func (r *stubRunnerRepo) dump() string {
 	return fmt.Sprintf("sessions=%d messages=%d inputs=%d", len(r.sessions), len(r.messages), len(r.inputs))
