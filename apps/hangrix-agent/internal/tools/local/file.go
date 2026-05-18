@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	gitignore "github.com/denormal/go-gitignore"
 )
 
 // ----- read -----
@@ -282,7 +284,7 @@ func newGlobTool() Tool { return &globTool{} }
 
 func (globTool) Name() string { return "glob" }
 func (globTool) Description() string {
-	return "Find files matching a glob pattern (supports ** for recursive). Results are sorted by mtime descending so the most-recently-touched files appear first."
+	return "Find files matching a glob pattern (supports ** for recursive). Respects .gitignore and never returns anything under .git/. Results are sorted by mtime descending so the most-recently-touched files appear first."
 }
 func (globTool) Schema() map[string]any {
 	return map[string]any{
@@ -306,7 +308,12 @@ func (globTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 	if a.Limit <= 0 {
 		a.Limit = 200
 	}
-	matches, err := globRecursive(a.Pattern)
+	// ignorer is rooted at the nearest enclosing git repo so nested
+	// .gitignore files higher up still apply. nil when no usable base
+	// could be found — the walker still prunes `.git/` in that case so
+	// the only thing lost is .gitignore awareness.
+	ignorer := loadGitignore()
+	matches, err := globRecursive(a.Pattern, ignorer)
 	if err != nil {
 		return nil, fmt.Errorf("glob: invalid pattern %q: %w. Patterns follow filepath.Match syntax with '**' for recursion (e.g. 'pkg/**/*_test.go').", a.Pattern, err)
 	}
@@ -318,6 +325,11 @@ func (globTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 	for _, m := range matches {
 		st, err := os.Stat(m)
 		if err != nil || st.IsDir() {
+			continue
+		}
+		if pathIgnored(ignorer, m, false) {
+			// filepath.Glob's no-`**` branch doesn't see the walker, so
+			// the gitignore check has to happen here too.
 			continue
 		}
 		entries = append(entries, entry{Path: m, MTime: st.ModTime().UnixNano()})
@@ -337,10 +349,67 @@ func (globTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 	}, nil
 }
 
+// loadGitignore returns a matcher rooted at the nearest enclosing repo —
+// found by walking up from cwd until a `.git` entry is hit — so nested
+// `.gitignore` files at any level above cwd are honoured. When no `.git`
+// is found we anchor at cwd, which is still useful when an owner edits a
+// fresh project (the local `.gitignore` is consulted) but doesn't reach
+// parent ignores. Returns nil only when cwd itself can't be resolved.
+func loadGitignore() gitignore.GitIgnore {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+	base := cwd
+	for {
+		if _, err := os.Stat(filepath.Join(base, ".git")); err == nil {
+			break
+		}
+		parent := filepath.Dir(base)
+		if parent == base {
+			base = cwd
+			break
+		}
+		base = parent
+	}
+	ig, err := gitignore.NewRepository(base)
+	if err != nil {
+		return nil
+	}
+	return ig
+}
+
+// pathIgnored asks the matcher whether p is excluded. Resolving to an
+// absolute path lets the repository pick the correct nested .gitignore.
+// A nil matcher (no repo found) means "don't filter" — the caller still
+// gets `.git/` pruning from the walker.
+//
+// The base directory itself is never "ignored" — short-circuit before
+// the Absolute call because the underlying library panics on a path that
+// exactly equals its base (it tries to slice off the trailing separator
+// that isn't there).
+func pathIgnored(ig gitignore.GitIgnore, p string, isDir bool) bool {
+	if ig == nil {
+		return false
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return false
+	}
+	if abs == ig.Base() {
+		return false
+	}
+	m := ig.Absolute(abs, isDir)
+	return m != nil && m.Ignore()
+}
+
 // globRecursive supports the `**` segment by walking when the pattern
 // contains it. Without `**` we fall through to filepath.Glob, which is
-// faster and avoids walking large trees we don't care about.
-func globRecursive(pattern string) ([]string, error) {
+// faster and avoids walking large trees we don't care about. The ignorer
+// is consulted during the walk so ignored directories (and `.git/`) are
+// pruned rather than walked then filtered — important for repos with
+// `node_modules` and similar large ignored trees.
+func globRecursive(pattern string, ig gitignore.GitIgnore) ([]string, error) {
 	if !strings.Contains(pattern, "**") {
 		return filepath.Glob(pattern)
 	}
@@ -356,6 +425,18 @@ func globRecursive(pattern string) ([]string, error) {
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // tolerate per-entry errors so one perm denial doesn't kill the walk
+		}
+		// Never descend into `.git/`. The check uses basename so we skip
+		// nested `.git` dirs too (submodule workdirs, vendored repos).
+		// The `path != root` guard preserves intentional `.git/...` roots.
+		if d.IsDir() && d.Name() == ".git" && path != root {
+			return filepath.SkipDir
+		}
+		if pathIgnored(ig, path, d.IsDir()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if suffix == "" {
 			out = append(out, path)

@@ -120,6 +120,78 @@ func TestBashTaskIDMutualExclusion(t *testing.T) {
 	}
 }
 
+// TestGlobRespectsGitignore pins the two filters layered on top of the
+// raw walker: `.git/` is never returned, and paths matched by `.gitignore`
+// are dropped. Both matter because an agent globbing `**/*` in a real
+// repo otherwise drowns in `.git/objects/...` and `node_modules/...`
+// noise, burning context on files the human didn't author. The matcher
+// is pure Go (go-gitignore), so this test doesn't need a real git binary
+// — we just stub out a `.git/` directory so the matcher anchors at the
+// temp dir.
+func TestGlobRespectsGitignore(t *testing.T) {
+	dir := t.TempDir()
+	// Layout:
+	//   keep.txt              — should appear
+	//   ignored.txt           — listed in .gitignore, should NOT appear
+	//   sub/keep.txt          — should appear
+	//   ignored-dir/skip.txt  — under an ignored directory, should NOT appear
+	//   .git/HEAD             — never returned regardless of .gitignore
+	mustWrite := func(rel, body string) {
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite(".gitignore", "ignored.txt\nignored-dir/\n")
+	mustWrite("keep.txt", "k")
+	mustWrite("ignored.txt", "x")
+	mustWrite("sub/keep.txt", "k")
+	mustWrite("ignored-dir/skip.txt", "x")
+	mustWrite(".git/HEAD", "ref: refs/heads/main\n")
+
+	// loadGitignore walks up cwd looking for a `.git` marker; switching
+	// cwd into the temp dir anchors the matcher there.
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prev) })
+
+	tools := byName(local.All())
+	glob := tools["glob"]
+	res, err := glob.Call(context.Background(), mustJSON(map[string]any{"pattern": "**/*"}))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	out := mustReJSON(res)
+	var fields struct {
+		Paths []string `json:"paths"`
+	}
+	if err := json.Unmarshal(out, &fields); err != nil {
+		t.Fatalf("decode: %v (%s)", err, out)
+	}
+	got := map[string]bool{}
+	for _, p := range fields.Paths {
+		got[filepath.ToSlash(p)] = true
+	}
+	for _, want := range []string{"keep.txt", "sub/keep.txt"} {
+		if !got[want] {
+			t.Errorf("expected glob to return %q; got %v", want, fields.Paths)
+		}
+	}
+	for _, banned := range []string{"ignored.txt", "ignored-dir/skip.txt", ".git/HEAD"} {
+		if got[banned] {
+			t.Errorf("glob should have filtered %q (gitignored / inside .git); got %v", banned, fields.Paths)
+		}
+	}
+}
+
 func byName(ts []local.Tool) map[string]local.Tool {
 	m := map[string]local.Tool{}
 	for _, t := range ts {
