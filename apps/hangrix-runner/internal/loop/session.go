@@ -89,10 +89,12 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 
 	// Clone the host repo into hostWorkdir/repo before launching the
 	// container. The agent sees a real working tree at /workspace and
-	// can `git push` straight back to the platform — http.extraHeader
-	// with the session token is baked into the cloned .git/config by
-	// cloneRepo. Sessions without owner/name in env (admin smoke
-	// path) skip the clone and get an empty workdir like before.
+	// can `git push` straight back to the platform — cloneRepo bakes
+	// a per-host credential.helper into the cloned .git/config; that
+	// helper reads $HANGRIX_SESSION_TOKEN at request time so the same
+	// .git/config keeps working across token refreshes. Sessions
+	// without owner/name in env (admin smoke path) skip the clone
+	// and get an empty workdir like before.
 	//
 	// We only clone on the FIRST trigger of a session (task.ContainerID
 	// empty). Subsequent triggers reuse the long-lived container — its

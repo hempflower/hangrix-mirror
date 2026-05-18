@@ -11,8 +11,9 @@ import (
 
 // TestCloneRepoLocalFile exercises the clone helper against a local
 // bare repo (file:// URL) so the test doesn't need an HTTP server. We
-// can't validate the http.extraHeader path this way, but the
-// branch-checkout + wipe-and-re-clone behaviour is fully covered.
+// can't validate the credential-helper path this way (a file://
+// upstream needs no auth), but the branch-checkout + wipe-and-re-clone
+// behaviour is fully covered.
 func TestCloneRepoLocalFile(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -103,8 +104,8 @@ func TestCloneRepoLocalFile(t *testing.T) {
 	}
 }
 
-// TestCloneSpecBuildsURL is a unit check on the URL + Basic auth header
-// assembly; no git invocation needed.
+// TestCloneSpecBuildsURL is a unit check on the URL + credential-helper
+// config assembly; no git invocation needed.
 func TestCloneSpecBuildsURL(t *testing.T) {
 	s := cloneSpec{
 		BaseURL:      "https://hangrix.example/",
@@ -115,9 +116,32 @@ func TestCloneSpecBuildsURL(t *testing.T) {
 	if got, want := s.gitURL(), "https://hangrix.example/git/alice/myproject.git"; got != want {
 		t.Errorf("gitURL = %q, want %q", got, want)
 	}
-	header := s.authHeader()
-	if !strings.HasPrefix(header, "Authorization: Basic ") {
-		t.Errorf("authHeader = %q, want Authorization: Basic prefix", header)
+
+	arg := s.credentialHelperConfigArg()
+	// Section must be scoped to BaseURL (sans trailing slash) so the
+	// helper never fires for any other host the agent talks to.
+	wantPrefix := "credential.https://hangrix.example.helper=!"
+	if !strings.HasPrefix(arg, wantPrefix) {
+		t.Errorf("credentialHelperConfigArg = %q, want prefix %q", arg, wantPrefix)
+	}
+	// The helper must read the token from env at request time — if it
+	// ever bakes the literal token in, the rotation guarantee
+	// (cloned .git/config keeps working when the env value changes)
+	// silently regresses.
+	if strings.Contains(arg, s.SessionToken) {
+		t.Errorf("credentialHelperConfigArg leaked literal token: %q", arg)
+	}
+	if !strings.Contains(arg, "$HANGRIX_SESSION_TOKEN") {
+		t.Errorf("credentialHelperConfigArg missing $HANGRIX_SESSION_TOKEN expansion: %q", arg)
+	}
+	// Helper must emit both username and password lines per
+	// gitcredentials(7); missing either makes git fall back to a
+	// terminal prompt that GIT_TERMINAL_PROMPT=0 then refuses.
+	if !strings.Contains(arg, "echo username=") {
+		t.Errorf("credentialHelperConfigArg missing username output: %q", arg)
+	}
+	if !strings.Contains(arg, "password=") {
+		t.Errorf("credentialHelperConfigArg missing password output: %q", arg)
 	}
 }
 

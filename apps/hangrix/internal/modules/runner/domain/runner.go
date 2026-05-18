@@ -191,11 +191,14 @@ func (s SessionStatus) Terminal() bool {
 //     the validator to authenticate inbound requests.
 //   - SessionTokenSealed: the cryptobox-sealed plaintext, decryptable only
 //     by the platform. The runner fetches it at task-claim time so it can
-//     inject HANGRIX_SESSION_TOKEN into the agent's env. Preserved across
-//     idle and terminal (failed / succeeded / cancelled) so a rewake can
-//     re-export the same identity (keeps the prior container's .git/config
-//     http.extraHeader valid). NULL'd only when the row is archived —
-//     issue closed or user-deleted — i.e. genuinely never coming back.
+//     inject HANGRIX_SESSION_TOKEN into the agent's env, which the inline
+//     credential.helper baked into the cloned .git/config reads at request
+//     time. Preserved across idle and terminal (failed / succeeded /
+//     cancelled) so a rewake re-exports the same identity — cheaper than
+//     minting and zero DB churn, even though the helper would in principle
+//     happily pick up a freshly minted value. NULL'd only when the row is
+//     archived — issue closed or user-deleted — i.e. genuinely never
+//     coming back.
 //   - SessionTokenRevokedAt: set when the session terminates so a leaked
 //     token from a dead session can't be replayed.
 type AgentSession struct {
@@ -541,8 +544,8 @@ type Repo interface {
 	// MarkSessionTerminal flips a claimed/running session into a terminal
 	// state (failed / succeeded / cancelled). session_token_sealed is
 	// intentionally preserved so a rewake can re-export the same
-	// HANGRIX_SESSION_TOKEN and keep the previous container's
-	// .git/config http.extraHeader valid — see the query comment for
+	// HANGRIX_SESSION_TOKEN identity to the next container without
+	// re-cloning or re-writing .git/config — see the query comment for
 	// the full rationale. Inbound auth using the token is still blocked
 	// while the row is terminal because SessionTokenActive() checks
 	// Status.Terminal().

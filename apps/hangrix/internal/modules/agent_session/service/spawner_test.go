@@ -487,9 +487,11 @@ func TestOnTriggerEnqueueOntoLiveSession(t *testing.T) {
 // TestOnTriggerRewakePreservesIdleToken asserts that a re-trigger
 // against an idle row keeps the same session token (prefix / hash /
 // sealed) instead of rotating it. The runner reuses the previous
-// container on rewake and the agent's `.git/config` has the original
-// token baked into http.extraHeader at clone time — rotating the
-// token mid-session would silently break `git push`.
+// container on rewake; even though the cloned .git/config now uses
+// a credential.helper that reads the token from env at request time
+// (so rotation would no longer 401 git push), holding the row's
+// identity stable keeps audit trails coherent and avoids gratuitous
+// DB churn on every wake.
 func TestOnTriggerRewakePreservesIdleToken(t *testing.T) {
 	h := newTestSpawner(t, []byte(hostYAML), nil)
 	first, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{

@@ -2,7 +2,6 @@ package loop
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -50,13 +49,32 @@ func (s cloneSpec) gitURL() string {
 	return strings.TrimRight(s.BaseURL, "/") + "/git/" + s.Owner + "/" + s.Name + ".git"
 }
 
-// authHeader is the value of the http.extraHeader config we bake into
-// the cloned repo. Git server's identifyGitCaller accepts HTTP Basic
-// with the session token as the password and any username ("x" by
-// convention).
-func (s cloneSpec) authHeader() string {
-	creds := base64.StdEncoding.EncodeToString([]byte("x:" + s.SessionToken))
-	return "Authorization: Basic " + creds
+// credentialHelperConfigArg returns the `--config key=value` argument
+// that wires a per-host inline credential helper into the cloned repo.
+// The helper is a tiny shell snippet that prints HTTP Basic creds to
+// stdout when git asks for them; it reads the session token from the
+// HANGRIX_SESSION_TOKEN env var at request time rather than baking it
+// into .git/config. That means a rotated / refreshed token (whether
+// from a future rotation feature or just rewake re-injecting the same
+// value) is picked up automatically — no .git/config rewrite, no
+// container rebuild.
+//
+// Scoping: the section is `credential.<BaseURL>.helper`, so the helper
+// only fires for requests targeting the Hangrix platform. If the agent
+// happens to clone github.com (or anything else) the helper won't run
+// and our session token doesn't leak to third parties.
+//
+// Git server's identifyGitCaller accepts HTTP Basic with the session
+// token as the password and any username ("x" by convention).
+func (s cloneSpec) credentialHelperConfigArg() string {
+	base := strings.TrimRight(s.BaseURL, "/")
+	// !... = run as shell. Use a function so the `; f` invocation
+	// pattern matches the canonical example in gitcredentials(7) and
+	// keeps the quoting simple. Double quotes around the variable
+	// guard against tokens that ever grow shell-metacharacters; today
+	// the wire format is [A-Za-z0-9_] so it's belt-and-braces.
+	helper := `!f() { echo username=x; echo "password=$HANGRIX_SESSION_TOKEN"; }; f`
+	return "credential." + base + ".helper=" + helper
 }
 
 // cloneRepo prepares the working tree at spec.Dest:
@@ -75,9 +93,13 @@ func (s cloneSpec) authHeader() string {
 //     inode goes stale and runc rejects the next `docker exec` with
 //     `current working directory is outside of container mount
 //     namespace root`.
-//  2. `git clone` the host repo with http.extraHeader baked into
-//     .git/config so the agent's later `git push` / `git fetch` reuse
-//     the same session-token auth without us re-injecting it.
+//  2. `git clone` the host repo with a per-host credential.helper
+//     baked into .git/config. The helper is an inline shell snippet
+//     that reads $HANGRIX_SESSION_TOKEN at request time, so the
+//     agent's later `git push` / `git fetch` from inside the container
+//     pick up whatever token the runner injected into the agent's env
+//     for the current turn — no .git/config rewrite needed if the
+//     token ever rotates.
 //  3. Try to check out spec.WorkingBranch. If origin already has it
 //     (mid-issue work, previous agent already pushed), check out the
 //     remote ref. Otherwise branch fresh from spec.BaseBranch — the
@@ -97,23 +119,21 @@ func cloneRepo(ctx context.Context, spec cloneSpec) (string, error) {
 		return "", fmt.Errorf("clone: ensure parent of %s: %w", spec.Dest, err)
 	}
 
-	// `git clone --config` writes the http.extraHeader entry into the
-	// new repo's .git/config *before* the remote fetch, so the same
-	// value covers both the initial clone and subsequent fetch/push
-	// from inside the container. We deliberately do NOT also pass
-	// `-c http.extraHeader=...`: git treats http.extraHeader as a
-	// multi-valued config, so combining `-c` and `--config` with the
-	// same value sends two Authorization headers on the wire — Caddy
-	// / nginx reject duplicate Authorization with HTTP 400.
+	// `git clone --config` writes the credential.<host>.helper entry
+	// into the new repo's .git/config *before* the remote fetch, so
+	// the same helper covers both the initial clone (running on the
+	// runner host with HANGRIX_SESSION_TOKEN in its subprocess env)
+	// and later fetch/push from inside the container (which has the
+	// same env var injected by the orchestrator).
 	cloneArgs := []string{
 		"clone",
-		"--config", "http.extraHeader=" + spec.authHeader(),
+		"--config", spec.credentialHelperConfigArg(),
 		"--branch", branchOrDefault(spec.BaseBranch, "main"),
 		"--",
 		spec.gitURL(),
 		spec.Dest,
 	}
-	if err := runGit(ctx, "", cloneArgs...); err != nil {
+	if err := runGitWithEnv(ctx, "", []string{"HANGRIX_SESSION_TOKEN=" + spec.SessionToken}, cloneArgs...); err != nil {
 		return "", fmt.Errorf("clone %s: %w", spec.gitURL(), err)
 	}
 
@@ -143,17 +163,23 @@ func cloneRepo(ctx context.Context, spec cloneSpec) (string, error) {
 // blank), wiring stderr into the returned error so failures surface
 // the actual git diagnostic instead of just "exit status 128".
 func runGit(ctx context.Context, dir string, args ...string) error {
+	return runGitWithEnv(ctx, dir, nil, args...)
+}
+
+// runGitWithEnv is runGit plus extra env entries (e.g. the session
+// token the inline credential helper reads). The base env still
+// inherits PATH from the runner process and suppresses host-side
+// credential prompts so a misconfigured runner can't hang on stdin.
+func runGitWithEnv(ctx context.Context, dir string, extraEnv []string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	// Inherit PATH etc. but suppress any host credential helpers — we
-	// inject auth via http.extraHeader and don't want a prompt to
-	// pop on a misconfigured runner host.
 	cmd.Env = append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_ASKPASS=/bin/true",
 	)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// Truncate noisy output so a 500-line clone log doesn't

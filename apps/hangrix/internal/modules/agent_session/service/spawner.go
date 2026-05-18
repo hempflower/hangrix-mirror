@@ -265,18 +265,19 @@ func (s *Spawner) LoadHostConfig(ctx context.Context, repoID int64) (*agentsconf
 // preserved across rewake whenever the DB still has the sealed
 // plaintext. Both MarkSessionIdle and MarkSessionTerminal now leave
 // sealed intact, so the common path reads prefix / hash / sealed off
-// the existing row and passes them through. Keeping the token stable
-// is what lets the previous container's `git clone` (with the token
-// baked into `.git/config` http.extraHeader) keep authenticating
-// across rewake; rotating it on every rewake — the previous
-// behaviour — caused `git push` to 401 after the first idle cycle.
+// the existing row and passes them through. The cloned .git/config
+// uses an inline credential.helper that reads $HANGRIX_SESSION_TOKEN
+// at request time, so the helper would actually tolerate a rotated
+// token — but reusing the same row's token avoids DB churn and keeps
+// audit trails coherent across an issue's full life.
 //
 // Legacy rows whose sealed was NULL'd by the old terminate path
 // (rows that died before this change rolled out) fall back to a
 // fresh mint: we have no plaintext to recover, so a new identity is
-// the only option. Those rows still work but the cloned .git/config
-// will need to be re-created before push works again — acceptable
-// for the migration window since no new rows enter that branch.
+// the only option. Those rows still work — the new helper picks up
+// the fresh value on next exec — and existing extraHeader-style
+// clones from before the helper landed continue to authenticate
+// because the same token is being re-installed on the row.
 //
 // History on rewake is seeded as empty for simplicity; the next agent
 // container sees the cause event and acts on it. Faithful turn-by-turn

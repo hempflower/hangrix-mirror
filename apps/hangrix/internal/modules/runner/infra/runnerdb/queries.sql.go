@@ -1167,10 +1167,11 @@ type MarkSessionTerminalParams struct {
 // `succeeded` / `cancelled` describe the most recent container's exit,
 // not the logical session — a new trigger (user comment, push, etc.)
 // can still rewake the row via ResumeSession, and rewake-from-terminal
-// needs the sealed plaintext to (a) hand the same HANGRIX_SESSION_TOKEN
-// to the next container and (b) keep the http.extraHeader baked into
-// the previous clone's .git/config valid so `git push` still
-// authenticates. The status guard plus SessionTokenActive() already
+// needs the sealed plaintext to hand the same HANGRIX_SESSION_TOKEN
+// back to the next container. The cloned .git/config carries an inline
+// credential.helper that reads that env var at request time, so
+// reusing the same value keeps `git push` working without rebuilding
+// the working tree. The status guard plus SessionTokenActive() already
 // block the token from being used for inbound auth while the row is
 // terminal — keeping sealed gives the platform the option to re-export
 // the same identity on rewake without revoking the working tree.
@@ -1259,12 +1260,16 @@ type ResumeSessionParams struct {
 // AND MarkSessionTerminal both leave session_token_sealed intact, so
 // the common path is for the caller to read the existing prefix /
 // hash / sealed off the row and pass them through unchanged — the
-// same HANGRIX_SESSION_TOKEN identity continues across rewake, which
-// is what keeps the previous container's clone (.git/config
-// http.extraHeader) usable. Legacy rows whose sealed was already
-// NULL'd by the old terminate behaviour fall back to a freshly minted
-// token; that path still works but the cloned .git/config will
-// 401 on push until the container is re-created.
+// same HANGRIX_SESSION_TOKEN identity continues across rewake. The
+// cloned .git/config now uses an inline credential.helper that reads
+// the token from env at request time, so rotation alone would no
+// longer break git push; we still preserve the identity to avoid DB
+// churn and keep audit trails on a session coherent.
+//
+// Legacy rows whose sealed was already NULL'd by the old terminate
+// behaviour fall back to a freshly minted token. The new helper
+// picks up that fresh value on the next docker exec, so push works
+// without rebuilding the container.
 //
 // archived rows are not resumable — the parent issue archived them and
 // a new issue is required to start fresh.
