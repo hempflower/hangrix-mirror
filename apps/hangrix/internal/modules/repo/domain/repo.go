@@ -96,7 +96,6 @@ type MemberStore interface {
 	GetMember(ctx context.Context, repoID, userID int64) (*RepoMember, error)
 }
 
-
 // ErrRepoNotFound is returned by Store lookups when no row matches.
 var ErrRepoNotFound = errors.New("repo not found")
 

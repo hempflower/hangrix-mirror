@@ -109,7 +109,7 @@ func (s *Storage) InitOnDisk(repo *domain.Repo, ownerUsername string, seedReadme
 // handler immediately before invoking git-receive-pack:
 //
 //   - hangrix-protections (one rule per line)
-//       <pattern> <forbid_force_push> <forbid_delete> <forbid_direct_push>
+//     <pattern> <forbid_force_push> <forbid_delete> <forbid_direct_push>
 //     Flags are "1" / "0". Pattern is matched against the branch short-name
 //     via the shell's `case` glob — close enough to path.Match for the
 //     limited grammar we accept.

@@ -39,19 +39,19 @@ import (
 //     repos. PAT used over HTTP Basic must carry `repo:write` scope.
 //
 // Credentials are checked in this order on every Basic-auth attempt:
-//   1. password looks like an agent session token (`hgxs_*`) → validate
-//      via SessionTokenValidator; the request is authorized for the
-//      session's bound repo only. This is the agent push path.
-//   2. password looks like a PAT (`hgx_*`) → validate via Validator
-//   3. otherwise bcrypt-compare against the user's password_hash
+//  1. password looks like an agent session token (`hgxs_*`) → validate
+//     via SessionTokenValidator; the request is authorized for the
+//     session's bound repo only. This is the agent push path.
+//  2. password looks like a PAT (`hgx_*`) → validate via Validator
+//  3. otherwise bcrypt-compare against the user's password_hash
 //
 // gitCaller wraps the resolved identity. authMethod is "cookie" / "pat" /
 // "password" / "session" — used downstream to enforce per-method rules
 // (PAT scopes, session repo binding).
 type gitCaller struct {
 	user       *userdomain.User
-	token      *tokendomain.Token            // nil unless authMethod == "pat"
-	session    *runnerdomain.AgentSession    // nil unless authMethod == "session"
+	token      *tokendomain.Token         // nil unless authMethod == "pat"
+	session    *runnerdomain.AgentSession // nil unless authMethod == "session"
 	authMethod string
 }
 
@@ -482,7 +482,6 @@ func (h *Handler) identifyGitCaller(r *http.Request) (*gitCaller, bool) {
 	return &gitCaller{user: u, authMethod: "password"}, true
 }
 
-
 // parseReceivePackRefs extracts ref-update commands from a git receive-pack
 // pkt-line stream. Returns the parsed updates and the byte offset where the
 // binary pack data begins (after the "0000" flush pkt). packStart is 0 when
@@ -552,7 +551,6 @@ func parseReceivePackRefs(data []byte) ([]domain.PushRefUpdate, int) {
 	}
 	return refs, pos
 }
-
 
 // packetLine encodes one Git wire-protocol packet line: 4-hex-digit length
 // prefix (covering the prefix itself) followed by the payload.

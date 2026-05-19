@@ -47,22 +47,22 @@ var repoNameRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$`)
 var usernameRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$`)
 
 type Handler struct {
-	store         domain.Store
-	protections   domain.ProtectionStore
-	members       domain.MemberStore
-	storage       *infra.Storage
-	git           gitdomain.Git
-	users         userdomain.Repo
-	orgs          orgdomain.OrgRepo
-	resolver      orgdomain.Resolver
-	tokens        tokendomain.Validator
+	store       domain.Store
+	protections domain.ProtectionStore
+	members     domain.MemberStore
+	storage     *infra.Storage
+	git         gitdomain.Git
+	users       userdomain.Repo
+	orgs        orgdomain.OrgRepo
+	resolver    orgdomain.Resolver
+	tokens      tokendomain.Validator
 	// sessions validates hgxs_ agent session tokens for git push. Nil
 	// in test configurations that don't load the runner module; the
 	// inline auth path nil-checks before consulting it.
-	sessions      runnerdomain.SessionTokenValidator
-	middleware    authdomain.Middleware
-	guards        []domain.BranchWriteGuard
-	observers     []domain.PushObserver
+	sessions   runnerdomain.SessionTokenValidator
+	middleware authdomain.Middleware
+	guards     []domain.BranchWriteGuard
+	observers  []domain.PushObserver
 }
 
 type HandlerDeps struct {
@@ -75,9 +75,9 @@ type HandlerDeps struct {
 	// Orgs + Resolver come from the org module. Orgs handles
 	// "is caller a member of this org" / "what's their role" queries; the
 	// Resolver turns the path-segment {owner} into an Owner (kind, id, name).
-	Orgs       orgdomain.OrgRepo
-	Resolver   orgdomain.Resolver
-	Tokens     tokendomain.Validator
+	Orgs     orgdomain.OrgRepo
+	Resolver orgdomain.Resolver
+	Tokens   tokendomain.Validator
 	// Sessions resolves an `hgxs_*` Basic-auth password to its
 	// agent_session row so the agent path can `git push` over the same
 	// Smart-HTTP endpoint humans use. Optional — repo handler works
@@ -994,144 +994,144 @@ func (h *Handler) resolveRepoForWrite(w http.ResponseWriter, r *http.Request) (*
 	}
 	return repo, true
 }
-	// resolveRepoForManage enforces owner-or-admin authorization for management
-	// endpoints (PATCH metadata, DELETE, transfer, branch protections, members).
-	func (h *Handler) resolveRepoForManage(w http.ResponseWriter, r *http.Request) (*domain.Repo, bool) {
-		repo, ok := h.loadRepoFromPath(w, r)
-		if !ok {
-			return nil, false
-		}
-		caller, _ := authdomain.UserFromRequest(r)
-		can, err := h.canManageRepo(r.Context(), caller, repo)
-		if err != nil {
-			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-			return nil, false
-		}
-		if !can {
-			httpx.WriteError(w, http.StatusForbidden, "forbidden")
-			return nil, false
-		}
-		return repo, true
-	}
 
+// resolveRepoForManage enforces owner-or-admin authorization for management
+// endpoints (PATCH metadata, DELETE, transfer, branch protections, members).
+func (h *Handler) resolveRepoForManage(w http.ResponseWriter, r *http.Request) (*domain.Repo, bool) {
+	repo, ok := h.loadRepoFromPath(w, r)
+	if !ok {
+		return nil, false
+	}
+	caller, _ := authdomain.UserFromRequest(r)
+	can, err := h.canManageRepo(r.Context(), caller, repo)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return nil, false
+	}
+	if !can {
+		httpx.WriteError(w, http.StatusForbidden, "forbidden")
+		return nil, false
+	}
+	return repo, true
+}
 
 // canReadRepo: caller may read a (private) repo if they own it (user-owned),
-	// are a repo member (user-owned), are any-role member of the owning org,
-	// or are a platform admin.
-	func (h *Handler) canReadRepo(ctx context.Context, caller *userdomain.User, repo *domain.Repo) (bool, error) {
-		if caller == nil {
-			return false, nil
-		}
-		if caller.Role == userdomain.RoleAdmin {
-			return true, nil
-		}
-		switch repo.OwnerKind {
-		case domain.OwnerKindUser:
-			if caller.ID == repo.OwnerID {
-				return true, nil
-			}
-			// Check repo_members for user-owned repos: any role (read or write) grants read access.
-			m, err := h.members.GetMember(ctx, repo.ID, caller.ID)
-			if err != nil {
-				if errors.Is(err, domain.ErrRepoMemberNotFound) {
-					return false, nil
-				}
-				return false, err
-			}
-			return m.Role == domain.MemberRoleRead || m.Role == domain.MemberRoleWrite, nil
-		case domain.OwnerKindOrg:
-			_, ok, err := h.resolver.Membership(ctx, repo.OwnerID, caller.ID)
-			return ok, err
-		}
+// are a repo member (user-owned), are any-role member of the owning org,
+// or are a platform admin.
+func (h *Handler) canReadRepo(ctx context.Context, caller *userdomain.User, repo *domain.Repo) (bool, error) {
+	if caller == nil {
 		return false, nil
 	}
-
-	// canManageRepo: caller may manage repo metadata (PATCH/DELETE/transfer),
-	// members, and branch protections. Only the repo owner or admin.
-	// For user-owned repos: the user owner. For org-owned repos: org owner.
-	func (h *Handler) canManageRepo(ctx context.Context, caller *userdomain.User, repo *domain.Repo) (bool, error) {
-		if caller == nil {
-			return false, nil
-		}
-		if caller.Role == userdomain.RoleAdmin {
+	if caller.Role == userdomain.RoleAdmin {
+		return true, nil
+	}
+	switch repo.OwnerKind {
+	case domain.OwnerKindUser:
+		if caller.ID == repo.OwnerID {
 			return true, nil
 		}
-		switch repo.OwnerKind {
-		case domain.OwnerKindUser:
-			return caller.ID == repo.OwnerID, nil
-		case domain.OwnerKindOrg:
-			role, ok, err := h.resolver.Membership(ctx, repo.OwnerID, caller.ID)
-			if err != nil || !ok {
-				return false, err
+		// Check repo_members for user-owned repos: any role (read or write) grants read access.
+		m, err := h.members.GetMember(ctx, repo.ID, caller.ID)
+		if err != nil {
+			if errors.Is(err, domain.ErrRepoMemberNotFound) {
+				return false, nil
 			}
-			return role == orgdomain.RoleOwner, nil
+			return false, err
 		}
+		return m.Role == domain.MemberRoleRead || m.Role == domain.MemberRoleWrite, nil
+	case domain.OwnerKindOrg:
+		_, ok, err := h.resolver.Membership(ctx, repo.OwnerID, caller.ID)
+		return ok, err
+	}
+	return false, nil
+}
+
+// canManageRepo: caller may manage repo metadata (PATCH/DELETE/transfer),
+// members, and branch protections. Only the repo owner or admin.
+// For user-owned repos: the user owner. For org-owned repos: org owner.
+func (h *Handler) canManageRepo(ctx context.Context, caller *userdomain.User, repo *domain.Repo) (bool, error) {
+	if caller == nil {
 		return false, nil
 	}
-
-	// canWriteContents: caller may push and create/delete branches/tags.
-	// Owner/admin always; for user-owned repos, write members also qualify.
-	func (h *Handler) canWriteContents(ctx context.Context, caller *userdomain.User, repo *domain.Repo) (bool, error) {
-		if caller == nil {
-			return false, nil
+	if caller.Role == userdomain.RoleAdmin {
+		return true, nil
+	}
+	switch repo.OwnerKind {
+	case domain.OwnerKindUser:
+		return caller.ID == repo.OwnerID, nil
+	case domain.OwnerKindOrg:
+		role, ok, err := h.resolver.Membership(ctx, repo.OwnerID, caller.ID)
+		if err != nil || !ok {
+			return false, err
 		}
-		if caller.Role == userdomain.RoleAdmin {
+		return role == orgdomain.RoleOwner, nil
+	}
+	return false, nil
+}
+
+// canWriteContents: caller may push and create/delete branches/tags.
+// Owner/admin always; for user-owned repos, write members also qualify.
+func (h *Handler) canWriteContents(ctx context.Context, caller *userdomain.User, repo *domain.Repo) (bool, error) {
+	if caller == nil {
+		return false, nil
+	}
+	if caller.Role == userdomain.RoleAdmin {
+		return true, nil
+	}
+	switch repo.OwnerKind {
+	case domain.OwnerKindUser:
+		if caller.ID == repo.OwnerID {
 			return true, nil
 		}
-		switch repo.OwnerKind {
-		case domain.OwnerKindUser:
-			if caller.ID == repo.OwnerID {
-				return true, nil
+		m, err := h.members.GetMember(ctx, repo.ID, caller.ID)
+		if err != nil {
+			if errors.Is(err, domain.ErrRepoMemberNotFound) {
+				return false, nil
 			}
-			m, err := h.members.GetMember(ctx, repo.ID, caller.ID)
-			if err != nil {
-				if errors.Is(err, domain.ErrRepoMemberNotFound) {
-					return false, nil
-				}
-				return false, err
-			}
-			return m.Role == domain.MemberRoleWrite, nil
-		case domain.OwnerKindOrg:
-			role, ok, err := h.resolver.Membership(ctx, repo.OwnerID, caller.ID)
-			if err != nil || !ok {
-				return false, err
-			}
-			return role == orgdomain.RoleOwner, nil
+			return false, err
 		}
-		return false, nil
+		return m.Role == domain.MemberRoleWrite, nil
+	case domain.OwnerKindOrg:
+		role, ok, err := h.resolver.Membership(ctx, repo.OwnerID, caller.ID)
+		if err != nil || !ok {
+			return false, err
+		}
+		return role == orgdomain.RoleOwner, nil
 	}
+	return false, nil
+}
 
-	// viewerPermission returns the viewer's permission level for the frontend.
-	// Values: "manage", "write", "read", or "" (none).
-	func (h *Handler) viewerPermission(ctx context.Context, caller *userdomain.User, repo *domain.Repo) string {
-		if caller == nil {
-			return ""
-		}
-		if caller.Role == userdomain.RoleAdmin {
-			return "manage"
-		}
-		switch repo.OwnerKind {
-		case domain.OwnerKindUser:
-			if caller.ID == repo.OwnerID {
-				return "manage"
-			}
-			m, err := h.members.GetMember(ctx, repo.ID, caller.ID)
-			if err != nil {
-				return ""
-			}
-			return string(m.Role) // "write" or "read"
-		case domain.OwnerKindOrg:
-			role, ok, err := h.resolver.Membership(ctx, repo.OwnerID, caller.ID)
-			if err != nil || !ok {
-				return ""
-			}
-			if role == orgdomain.RoleOwner {
-				return "manage"
-			}
-			return "read"
-		}
+// viewerPermission returns the viewer's permission level for the frontend.
+// Values: "manage", "write", "read", or "" (none).
+func (h *Handler) viewerPermission(ctx context.Context, caller *userdomain.User, repo *domain.Repo) string {
+	if caller == nil {
 		return ""
 	}
+	if caller.Role == userdomain.RoleAdmin {
+		return "manage"
+	}
+	switch repo.OwnerKind {
+	case domain.OwnerKindUser:
+		if caller.ID == repo.OwnerID {
+			return "manage"
+		}
+		m, err := h.members.GetMember(ctx, repo.ID, caller.ID)
+		if err != nil {
+			return ""
+		}
+		return string(m.Role) // "write" or "read"
+	case domain.OwnerKindOrg:
+		role, ok, err := h.resolver.Membership(ctx, repo.OwnerID, caller.ID)
+		if err != nil || !ok {
+			return ""
+		}
+		if role == orgdomain.RoleOwner {
+			return "manage"
+		}
+		return "read"
+	}
+	return ""
+}
 
 func (h *Handler) loadRepoFromPath(w http.ResponseWriter, r *http.Request) (*domain.Repo, bool) {
 	ownerName := chi.URLParam(r, "owner")
@@ -1751,223 +1751,222 @@ func (h *Handler) runGuards(ctx context.Context, op domain.BranchWriteOp) error 
 	return nil
 }
 
-	// ---- Repo members ----
+// ---- Repo members ----
 
-	type publicRepoMember struct {
-		UserID   int64     `json:"user_id"`
-		Username string    `json:"username"`
-		Role     string    `json:"role"`
-		AddedAt  time.Time `json:"added_at"`
-		AddedBy  int64     `json:"added_by"`
+type publicRepoMember struct {
+	UserID   int64     `json:"user_id"`
+	Username string    `json:"username"`
+	Role     string    `json:"role"`
+	AddedAt  time.Time `json:"added_at"`
+	AddedBy  int64     `json:"added_by"`
+}
+
+func toPublicRepoMember(m *domain.RepoMember) publicRepoMember {
+	return publicRepoMember{
+		UserID:   m.UserID,
+		Username: m.Username,
+		Role:     string(m.Role),
+		AddedAt:  m.AddedAt,
+		AddedBy:  m.AddedBy,
+	}
+}
+
+// resolveRepoForMembers loads the repo and gates on: must be user-owned,
+// caller must be owner/admin. Returns the repo. Writes HTTP errors itself.
+func (h *Handler) resolveRepoForMembers(w http.ResponseWriter, r *http.Request) (*domain.Repo, bool) {
+	repo, ok := h.resolveRepoForManage(w, r)
+	if !ok {
+		return nil, false
+	}
+	if repo.OwnerKind != domain.OwnerKindUser {
+		httpx.WriteError(w, http.StatusBadRequest, "repo members are only supported on user-owned repos")
+		return nil, false
+	}
+	return repo, true
+}
+
+func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForRead(w, r)
+	if !ok {
+		return
+	}
+	if repo.OwnerKind != domain.OwnerKindUser {
+		httpx.WriteError(w, http.StatusBadRequest, "repo members are only supported on user-owned repos")
+		return
+	}
+	members, err := h.members.ListMembers(r.Context(), repo.ID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]publicRepoMember, 0, len(members))
+	for _, m := range members {
+		out = append(out, toPublicRepoMember(m))
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
+type addRepoMemberReq struct {
+	Username string `json:"username"`
+	Role     string `json:"role"`
+}
+
+func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForMembers(w, r)
+	if !ok {
+		return
 	}
 
-	func toPublicRepoMember(m *domain.RepoMember) publicRepoMember {
-		return publicRepoMember{
-			UserID:   m.UserID,
-			Username: m.Username,
-			Role:     string(m.Role),
-			AddedAt:  m.AddedAt,
-			AddedBy:  m.AddedBy,
+	var req addRepoMemberReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	req.Username = strings.TrimSpace(req.Username)
+	if !usernameRe.MatchString(req.Username) {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid username")
+		return
+	}
+	role := domain.MemberRole(strings.TrimSpace(req.Role))
+	if role == "" {
+		role = domain.MemberRoleRead
+	}
+	if !role.Valid() {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid role")
+		return
+	}
+
+	target, err := h.users.GetByUsername(r.Context(), req.Username)
+	if err != nil {
+		if errors.Is(err, userdomain.ErrUserNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Don't allow adding the repo owner as a member.
+	if target.ID == repo.OwnerID {
+		httpx.WriteError(w, http.StatusBadRequest, "cannot add the repo owner as a member")
+		return
+	}
+
+	caller, _ := authdomain.UserFromRequest(r)
+	if err := h.members.AddMember(r.Context(), repo.ID, target.ID, caller.ID, role); err != nil {
+		if errors.Is(err, domain.ErrRepoMemberConflict) {
+			httpx.WriteError(w, http.StatusConflict, "already a member")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	m, err := h.members.GetMember(r.Context(), repo.ID, target.ID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, toPublicRepoMember(m))
+}
+
+type patchRepoMemberReq struct {
+	Role string `json:"role"`
+}
+
+func (h *Handler) patchMember(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForMembers(w, r)
+	if !ok {
+		return
+	}
+	target, ok := h.loadMemberUser(w, r)
+	if !ok {
+		return
+	}
+
+	var req patchRepoMemberReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	role := domain.MemberRole(strings.TrimSpace(req.Role))
+	if !role.Valid() {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid role")
+		return
+	}
+
+	current, err := h.members.GetMember(r.Context(), repo.ID, target.ID)
+	if err != nil {
+		if errors.Is(err, domain.ErrRepoMemberNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "member not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if current.Role == role {
+		// No-op: return current state.
+		httpx.WriteJSON(w, http.StatusOK, toPublicRepoMember(current))
+		return
+	}
+
+	if err := h.members.UpdateMemberRole(r.Context(), repo.ID, target.ID, role); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	m, err := h.members.GetMember(r.Context(), repo.ID, target.ID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, toPublicRepoMember(m))
+}
+
+func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForMembers(w, r)
+	if !ok {
+		return
+	}
+	target, ok := h.loadMemberUser(w, r)
+	if !ok {
+		return
+	}
+
+	caller, _ := authdomain.UserFromRequest(r)
+	// A user may always remove themselves; otherwise it's owner-only.
+	if caller.ID != target.ID {
+		// Already gated by resolveRepoForMembers, but double-check.
+		can, err := h.canManageRepo(r.Context(), caller, repo)
+		if err != nil || !can {
+			httpx.WriteError(w, http.StatusForbidden, "forbidden")
+			return
 		}
 	}
 
-	// resolveRepoForMembers loads the repo and gates on: must be user-owned,
-	// caller must be owner/admin. Returns the repo. Writes HTTP errors itself.
-	func (h *Handler) resolveRepoForMembers(w http.ResponseWriter, r *http.Request) (*domain.Repo, bool) {
-		repo, ok := h.resolveRepoForManage(w, r)
-		if !ok {
+	if err := h.members.RemoveMember(r.Context(), repo.ID, target.ID); err != nil {
+		if errors.Is(err, domain.ErrRepoMemberNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "member not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// loadMemberUser looks up a user by the {username} URL param.
+func (h *Handler) loadMemberUser(w http.ResponseWriter, r *http.Request) (*userdomain.User, bool) {
+	username := chi.URLParam(r, "username")
+	if !usernameRe.MatchString(username) {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid username")
+		return nil, false
+	}
+	u, err := h.users.GetByUsername(r.Context(), username)
+	if err != nil {
+		if errors.Is(err, userdomain.ErrUserNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "user not found")
 			return nil, false
 		}
-		if repo.OwnerKind != domain.OwnerKindUser {
-			httpx.WriteError(w, http.StatusBadRequest, "repo members are only supported on user-owned repos")
-			return nil, false
-		}
-		return repo, true
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return nil, false
 	}
-
-	func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
-		repo, ok := h.resolveRepoForRead(w, r)
-		if !ok {
-			return
-		}
-		if repo.OwnerKind != domain.OwnerKindUser {
-			httpx.WriteError(w, http.StatusBadRequest, "repo members are only supported on user-owned repos")
-			return
-		}
-		members, err := h.members.ListMembers(r.Context(), repo.ID)
-		if err != nil {
-			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		out := make([]publicRepoMember, 0, len(members))
-		for _, m := range members {
-			out = append(out, toPublicRepoMember(m))
-		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": out})
-	}
-
-	type addRepoMemberReq struct {
-		Username string `json:"username"`
-		Role     string `json:"role"`
-	}
-
-	func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {
-		repo, ok := h.resolveRepoForMembers(w, r)
-		if !ok {
-			return
-		}
-
-		var req addRepoMemberReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteError(w, http.StatusBadRequest, "invalid body")
-			return
-		}
-		req.Username = strings.TrimSpace(req.Username)
-		if !usernameRe.MatchString(req.Username) {
-			httpx.WriteError(w, http.StatusBadRequest, "invalid username")
-			return
-		}
-		role := domain.MemberRole(strings.TrimSpace(req.Role))
-		if role == "" {
-			role = domain.MemberRoleRead
-		}
-		if !role.Valid() {
-			httpx.WriteError(w, http.StatusBadRequest, "invalid role")
-			return
-		}
-
-		target, err := h.users.GetByUsername(r.Context(), req.Username)
-		if err != nil {
-			if errors.Is(err, userdomain.ErrUserNotFound) {
-				httpx.WriteError(w, http.StatusNotFound, "user not found")
-				return
-			}
-			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		// Don't allow adding the repo owner as a member.
-		if target.ID == repo.OwnerID {
-			httpx.WriteError(w, http.StatusBadRequest, "cannot add the repo owner as a member")
-			return
-		}
-
-		caller, _ := authdomain.UserFromRequest(r)
-		if err := h.members.AddMember(r.Context(), repo.ID, target.ID, caller.ID, role); err != nil {
-			if errors.Is(err, domain.ErrRepoMemberConflict) {
-				httpx.WriteError(w, http.StatusConflict, "already a member")
-				return
-			}
-			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		m, err := h.members.GetMember(r.Context(), repo.ID, target.ID)
-		if err != nil {
-			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		httpx.WriteJSON(w, http.StatusCreated, toPublicRepoMember(m))
-	}
-
-	type patchRepoMemberReq struct {
-		Role string `json:"role"`
-	}
-
-	func (h *Handler) patchMember(w http.ResponseWriter, r *http.Request) {
-		repo, ok := h.resolveRepoForMembers(w, r)
-		if !ok {
-			return
-		}
-		target, ok := h.loadMemberUser(w, r)
-		if !ok {
-			return
-		}
-
-		var req patchRepoMemberReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteError(w, http.StatusBadRequest, "invalid body")
-			return
-		}
-		role := domain.MemberRole(strings.TrimSpace(req.Role))
-		if !role.Valid() {
-			httpx.WriteError(w, http.StatusBadRequest, "invalid role")
-			return
-		}
-
-		current, err := h.members.GetMember(r.Context(), repo.ID, target.ID)
-		if err != nil {
-			if errors.Is(err, domain.ErrRepoMemberNotFound) {
-				httpx.WriteError(w, http.StatusNotFound, "member not found")
-				return
-			}
-			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if current.Role == role {
-			// No-op: return current state.
-			httpx.WriteJSON(w, http.StatusOK, toPublicRepoMember(current))
-			return
-		}
-
-		if err := h.members.UpdateMemberRole(r.Context(), repo.ID, target.ID, role); err != nil {
-			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		m, err := h.members.GetMember(r.Context(), repo.ID, target.ID)
-		if err != nil {
-			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		httpx.WriteJSON(w, http.StatusOK, toPublicRepoMember(m))
-	}
-
-	func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
-		repo, ok := h.resolveRepoForMembers(w, r)
-		if !ok {
-			return
-		}
-		target, ok := h.loadMemberUser(w, r)
-		if !ok {
-			return
-		}
-
-		caller, _ := authdomain.UserFromRequest(r)
-		// A user may always remove themselves; otherwise it's owner-only.
-		if caller.ID != target.ID {
-			// Already gated by resolveRepoForMembers, but double-check.
-			can, err := h.canManageRepo(r.Context(), caller, repo)
-			if err != nil || !can {
-				httpx.WriteError(w, http.StatusForbidden, "forbidden")
-				return
-			}
-		}
-
-		if err := h.members.RemoveMember(r.Context(), repo.ID, target.ID); err != nil {
-			if errors.Is(err, domain.ErrRepoMemberNotFound) {
-				httpx.WriteError(w, http.StatusNotFound, "member not found")
-				return
-			}
-			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}
-
-	// loadMemberUser looks up a user by the {username} URL param.
-	func (h *Handler) loadMemberUser(w http.ResponseWriter, r *http.Request) (*userdomain.User, bool) {
-		username := chi.URLParam(r, "username")
-		if !usernameRe.MatchString(username) {
-			httpx.WriteError(w, http.StatusBadRequest, "invalid username")
-			return nil, false
-		}
-		u, err := h.users.GetByUsername(r.Context(), username)
-		if err != nil {
-			if errors.Is(err, userdomain.ErrUserNotFound) {
-				httpx.WriteError(w, http.StatusNotFound, "user not found")
-				return nil, false
-			}
-			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-			return nil, false
-		}
-		return u, true
-	}
-
+	return u, true
+}
