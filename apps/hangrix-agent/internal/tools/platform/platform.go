@@ -212,6 +212,12 @@ func All(client *Client) []local.Tool {
 			schema:      objectSchema(nil, nil),
 		},
 		{
+			name:        "issue_mergeable",
+			description: "Check whether the issue branch is fast-forward mergeable into its base. Returns mergeable status, mode, and hint.",
+			schema:      objectSchema(nil, nil),
+		},
+
+		{
 			name:        "issue_children",
 			description: "List sub-issues (child issues) of the current issue.",
 			schema:      objectSchema(nil, nil),

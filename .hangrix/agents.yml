@@ -38,6 +38,7 @@ roles:
     can:
       - issue_read
       - issue_diff
+      - issue_mergeable
       - issue_comment
       - issue_review_vote
       - issue_checks
@@ -83,6 +84,7 @@ roles:
     can:
       - issue_read
       - issue_diff
+      - issue_mergeable
       - issue_comment
       - roster_list
     prompt_file: .hangrix/prompts/server.md
@@ -115,6 +117,7 @@ roles:
     can:
       - issue_read
       - issue_diff
+      - issue_mergeable
       - issue_comment
       - roster_list
     prompt_file: .hangrix/prompts/runtime.md
