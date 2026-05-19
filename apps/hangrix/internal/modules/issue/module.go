@@ -1,8 +1,7 @@
-// Package issue wires the M4 issue feature: persistence (Postgres), the
-// branch-write guard that gates pushes onto issue branches, the push
-// observer that records commit_pushed events, and the HTTP handler. Other
-// modules consume domain.Store via the ioc container; nothing imports this
-// package directly.
+// Package issue wires the issue feature: persistence (Postgres), the push
+// observer that records commit_pushed events on `issue/<n>` branches, and
+// the HTTP handler. Other modules consume domain.Store via the ioc
+// container; nothing imports this package directly.
 package issue
 
 import (
@@ -17,7 +16,6 @@ import (
 func Module() *ioc.Module {
 	m := ioc.NewModule()
 	m.Provide(infra.NewPostgresStore).ToInterface(new(domain.Store))
-	m.Provide(infra.NewIssueGuard).ToInterface(new(repodomain.BranchWriteGuard))
 
 	// The handler doubles as a RouteProvider and is also a dependency of
 	// the PushObserver — bind it through ToSelf (so the observer can

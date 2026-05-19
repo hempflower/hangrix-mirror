@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log"
-	"net/http"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
@@ -180,29 +179,3 @@ func collectNewCommits(g gitdomain.Git, fsPath, baseline, head string) []domain.
 	return out
 }
 
-// refreshIssueMode rewrites the receive-pack sidecar (hangrix-issue-mode)
-// from the current set of open-issue numbers. Called after any state change
-// that can change which branches a push should accept — issue creation,
-// state transitions, merges.
-func (h *Handler) refreshIssueMode(r *http.Request, rc *repoCtx) {
-	if err := h.RefreshHook(r.Context(), rc.repo, rc.fsPath); err != nil {
-		// Best-effort: a stale sidecar means a push might be denied that
-		// "should" be accepted, or vice-versa. Surface via log only — we
-		// don't want to fail the surrounding mutation.
-		// (Standard library log is fine; the project's chi middleware
-		// already wires request logging.)
-		_ = err
-	}
-}
-
-// RefreshHook regenerates the issue-mode sidecar so the pre-receive hook
-// sees the current list of open issues. Public so the cross-module sync API
-// (M4) and the agent hooks (M5) can call it without depending on the
-// handler internals.
-func (h *Handler) RefreshHook(ctx context.Context, repo *repodomain.Repo, fsPath string) error {
-	openNumbers, err := h.issues.ListOpenIssueNumbers(ctx, repo.ID)
-	if err != nil {
-		return err
-	}
-	return h.storage.SyncIssueMode(fsPath, repo.DefaultBranch, openNumbers, true)
-}

@@ -394,9 +394,6 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Keep the receive-pack sidecar in sync so a fresh issue is immediately
-	// pushable.
-	h.refreshIssueMode(r, rc)
 	// Fire issue.opened at the agent_session spawner so any role whose
 	// triggers include issue.opened wakes on its own. Failures don't
 	// block issue creation — operator repairs the host yaml then nudges
@@ -562,7 +559,6 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 			payload, _ := json.Marshal(domain.StateChangedPayload{From: updated.State, To: want})
 			_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventStateChanged, payload, caller.ID)
 			updated = next
-			h.refreshIssueMode(r, rc)
 			// Issue transitioned to closed → archive every live session
 			// on it. Transition from closed back to open does NOT
 			// resurrect sessions: per spec, archived is terminal and
@@ -956,10 +952,6 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventBranchMerged, mergePayload, caller.ID)
 	statePayload, _ := json.Marshal(domain.StateChangedPayload{From: domain.StateOpen, To: domain.StateMerged})
 	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventStateChanged, statePayload, caller.ID)
-
-	// Closing the issue removes it from the "open" list; re-sync the
-	// receive-pack sidecar so a follow-up push to issue/<n> is rejected.
-	h.refreshIssueMode(r, rc)
 
 	// Archive every live session on this issue. The parent issue is the
 	// only thing that can archive sessions — admin "stop this agent" is

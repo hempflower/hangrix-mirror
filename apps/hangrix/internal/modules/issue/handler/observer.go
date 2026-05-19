@@ -26,8 +26,11 @@ func NewPushObserver(deps *PushObserverDeps) *PushObserver {
 	return &PushObserver{h: deps.Handler}
 }
 
+// PreReceive is a no-op: the GitHub-style protection model no longer needs
+// an issue-bound sidecar — branch_protections rules are written by the repo
+// module's SyncProtectionRules call upstream of this observer chain.
 func (o *PushObserver) PreReceive(ctx context.Context, repo *repodomain.Repo, fsPath string) error {
-	return o.h.RefreshHook(ctx, repo, fsPath)
+	return nil
 }
 
 // PostReceive walks every open issue in the repo and reconciles its on-disk
