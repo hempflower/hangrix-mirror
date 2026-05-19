@@ -36,4 +36,9 @@ runner:
   # Fallback image the runner pulls when a session doesn't pin one.
   # The real session-spawn path drives this per-role from the host
   # repo's `.hangrix/agents.yml`, so this is rarely hit.
+
+automation:
+  # Interval between scheduler scans for automation tasks.
+  scanner_interval: "60s"
+
   default_agent_image: "ubuntu:24.04"
