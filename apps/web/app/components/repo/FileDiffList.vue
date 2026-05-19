@@ -225,7 +225,7 @@ function afterHref(d: FileDiff): string {
            table so the gutter stays at a fixed width regardless of line
            contents. -->
       <div v-else class="overflow-x-auto">
-        <table class="w-full border-collapse font-mono text-xs leading-5">
+        <table v-if="parsed[i]" class="w-full border-collapse font-mono text-xs leading-5">
           <tbody>
             <tr
               v-for="(r, j) in parsed[i].rows"

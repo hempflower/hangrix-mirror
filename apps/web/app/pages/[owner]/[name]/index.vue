@@ -558,7 +558,7 @@ onMounted(async () => {
                   <!-- Tree rows table -->
                   <Table>
                     <TableBody>
-                      <TableRow v-if="currentPath" class="cursor-pointer" @click="onBreadcrumbClick(breadcrumbParts.length > 1 ? breadcrumbParts[breadcrumbParts.length - 2].path : '')">
+                      <TableRow v-if="currentPath" class="cursor-pointer" @click="onBreadcrumbClick(breadcrumbParts.at(-2)?.path ?? '')">
                         <TableCell class="w-[40%]">
                           <span class="inline-flex items-center gap-2">
                             <Folder class="size-4 text-muted-foreground" />
