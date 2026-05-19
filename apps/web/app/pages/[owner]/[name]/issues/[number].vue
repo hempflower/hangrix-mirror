@@ -550,6 +550,7 @@ onUnmounted(stopRefreshTimer)
       <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div class="min-w-0 space-y-4">
           <Tabs v-model="tab">
+            <div class="sticky top-16 z-10 bg-background pb-2">
             <TabsList>
               <TabsTrigger value="conversation">
                 <MessageSquare class="size-4" />
@@ -571,6 +572,7 @@ onUnmounted(stopRefreshTimer)
                 {{ t('issue.tabs.agents') }}
               </TabsTrigger>
             </TabsList>
+            </div>
 
             <TabsContent value="conversation" class="space-y-3">
               <!-- Issue body: same comment-card shape as replies. The opener
@@ -792,7 +794,7 @@ onUnmounted(stopRefreshTimer)
           </Tabs>
         </div>
 
-        <aside class="space-y-4">
+        <aside class="sticky top-16 self-start space-y-4 max-h-[calc(100vh-5rem)] overflow-y-auto">
           <Card class="gap-0 py-0">
             <CardContent class="space-y-3 p-4 text-sm">
               <div class="flex items-center gap-2 text-xs text-muted-foreground">
