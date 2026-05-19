@@ -49,5 +49,6 @@ func splitAddrs(raw string) []string {
 func Module() *ioc.Module {
 	m := ioc.NewModule()
 	m.Provide(NewClient).ToInterface(new(redis.UniversalClient))
+	m.Provide(NewRepoCache).ToSelf()
 	return m
 }

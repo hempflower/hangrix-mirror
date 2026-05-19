@@ -214,6 +214,10 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 	for _, obs := range h.observers {
 		_ = obs.PostReceive(postCtx, repo, fsPath, pusher)
 	}
+	// Push may have changed refs (branch / tag updates, force-pushes,
+	// etc.) — drop every git-read cache key for this repo so the next
+	// page load sees the new state.
+	h.invalidateCache(postCtx, repo.ID)
 }
 
 // pusherFromCaller maps the resolved write caller to a domain.Pusher.

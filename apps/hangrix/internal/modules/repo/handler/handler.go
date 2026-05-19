@@ -10,7 +10,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	"io"
 	"net/http"
 	"os/exec"
@@ -21,6 +20,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/kv"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
@@ -35,6 +36,14 @@ import (
 // larger than this (clients should hit a future raw-streaming endpoint for
 // big files) — 1 MiB is plenty for source code; larger payloads bloat JSON.
 const maxBlobBytes = 1 << 20 // 1 MiB
+
+// Cache TTLs per the product spec: short enough to keep the view fresh after
+// writes, long enough to absorb repeated reads from the same page load.
+const (
+	refsCacheTTL    = 15 * time.Second
+	treeViewCacheTTL = 30 * time.Second
+	commitsCacheTTL  = 20 * time.Second
+)
 
 // repoNameRe is the canonical repo-name regex. Must start with an
 // alphanumeric or underscore, then up to 99 more chars from a slightly wider
@@ -61,6 +70,7 @@ type Handler struct {
 	// inline auth path nil-checks before consulting it.
 	sessions   runnerdomain.SessionTokenValidator
 	middleware authdomain.Middleware
+	cache      *kv.RepoCache
 	guards     []domain.BranchWriteGuard
 	observers  []domain.PushObserver
 }
@@ -92,6 +102,9 @@ type HandlerDeps struct {
 	// pipeline. M4's issue module uses this to sync its sidecar before each
 	// push and append commit_pushed events afterwards.
 	Observers []domain.PushObserver
+	// Cache provides the Redis-backed read cache for hot git endpoints
+	// (refs, tree-view, commits). Nil when not configured (e.g. tests).
+	Cache *kv.RepoCache
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
@@ -107,6 +120,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		tokens:      deps.Tokens,
 		sessions:    deps.Sessions,
 		middleware:  deps.Middleware,
+		cache:       deps.Cache,
 		guards:      deps.Guards,
 		observers:   deps.Observers,
 	}
@@ -534,6 +548,9 @@ func (h *Handler) patchOne(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if req.DefaultBranch != nil && *req.DefaultBranch != repo.DefaultBranch {
+		h.invalidateCache(r.Context(), repo.ID)
+	}
 	httpx.WriteJSON(w, http.StatusOK, toPublic(updated))
 }
 
@@ -659,11 +676,20 @@ func (h *Handler) getRefs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+	// Try cache first; on miss fall through to git.
+	cacheKey := kv.RefKey(repo.ID)
+	var refs gitdomain.Refs
+	if h.cache.Get(r.Context(), cacheKey, &refs) {
+		httpx.WriteJSON(w, http.StatusOK, &refs)
+		return
+	}
+
 	path, ok := h.resolveFsPath(w, repo)
 	if !ok {
 		return
 	}
-	refs, err := h.git.ListRefs(path)
+	gitRefs, err := h.git.ListRefs(path)
 	if err != nil {
 		if mapGitErr(w, err) {
 			return
@@ -671,15 +697,12 @@ func (h *Handler) getRefs(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, refs)
+	h.cache.Set(r.Context(), cacheKey, gitRefs, refsCacheTTL)
+	httpx.WriteJSON(w, http.StatusOK, gitRefs)
 }
 
 func (h *Handler) listCommits(w http.ResponseWriter, r *http.Request) {
 	repo, ok := h.resolveRepoForRead(w, r)
-	if !ok {
-		return
-	}
-	path, ok := h.resolveFsPath(w, repo)
 	if !ok {
 		return
 	}
@@ -688,9 +711,46 @@ func (h *Handler) listCommits(w http.ResponseWriter, r *http.Request) {
 		ref = repo.DefaultBranch
 	}
 	offset, limit := parseOffsetLimit(r)
+
+	// Cache only the first page (offset=0), which is the common browser
+	// scenario. Subsequent pages and custom offsets bypass the cache.
+	if offset == 0 {
+		cacheKey := kv.CommitsKey(repo.ID, ref, offset, limit)
+		var cached []*gitdomain.Commit
+		if h.cache.Get(r.Context(), cacheKey, &cached) {
+			httpx.WriteJSON(w, http.StatusOK, cached)
+			return
+		}
+
+		path, ok := h.resolveFsPath(w, repo)
+		if !ok {
+			return
+		}
+		commits, err := h.git.ListCommits(path, ref, int(offset), int(limit))
+		if err != nil {
+			if errors.Is(err, gitdomain.ErrEmptyRepo) {
+				h.cache.Set(r.Context(), cacheKey, []*gitdomain.Commit{}, commitsCacheTTL)
+				httpx.WriteJSON(w, http.StatusOK, []*gitdomain.Commit{})
+				return
+			}
+			if mapGitErr(w, err) {
+				return
+			}
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		h.cache.Set(r.Context(), cacheKey, commits, commitsCacheTTL)
+		httpx.WriteJSON(w, http.StatusOK, commits)
+		return
+	}
+
+	// Non-first-page: no caching.
+	path, ok := h.resolveFsPath(w, repo)
+	if !ok {
+		return
+	}
 	commits, err := h.git.ListCommits(path, ref, int(offset), int(limit))
 	if err != nil {
-		// Empty repo is a normal state, not a 4xx — surface an empty list.
 		if errors.Is(err, gitdomain.ErrEmptyRepo) {
 			httpx.WriteJSON(w, http.StatusOK, []*gitdomain.Commit{})
 			return
@@ -859,16 +919,25 @@ func (h *Handler) getTreeView(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	path, ok := h.resolveFsPath(w, repo)
-	if !ok {
-		return
-	}
 	ref := r.URL.Query().Get("ref")
 	if ref == "" {
 		ref = repo.DefaultBranch
 	}
 	treePath := r.URL.Query().Get("path")
-	view, err := h.git.TreeView(path, ref, treePath)
+
+	// Try cache; the key includes repo + ref + path.
+	cacheKey := kv.TreeViewKey(repo.ID, ref, treePath)
+	var view gitdomain.TreeView
+	if h.cache.Get(r.Context(), cacheKey, &view) {
+		httpx.WriteJSON(w, http.StatusOK, &view)
+		return
+	}
+
+	path, ok := h.resolveFsPath(w, repo)
+	if !ok {
+		return
+	}
+	gitView, err := h.git.TreeView(path, ref, treePath)
 	if err != nil {
 		// TreeView returns a well-formed empty view on empty repos; any
 		// error here is a real problem (bad ref, broken bare repo, etc.)
@@ -878,7 +947,8 @@ func (h *Handler) getTreeView(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, view)
+	h.cache.Set(r.Context(), cacheKey, gitView, treeViewCacheTTL)
+	httpx.WriteJSON(w, http.StatusOK, gitView)
 }
 
 type blobResp struct {
@@ -1328,6 +1398,7 @@ func (h *Handler) createBranch(w http.ResponseWriter, r *http.Request) {
 	// follow-up GET /refs round-trip. We resolve via ListRefs to stay on
 	// the public Git interface rather than reaching into go-git here.
 	sha := lookupBranchSHA(h.git, path, name)
+	h.invalidateCache(r.Context(), repo.ID)
 	httpx.WriteJSON(w, http.StatusCreated, refMutationResp{Name: name, SHA: sha})
 }
 
@@ -1383,6 +1454,7 @@ func (h *Handler) deleteBranch(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.invalidateCache(r.Context(), repo.ID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1448,6 +1520,7 @@ func (h *Handler) createTag(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sha := lookupTagSHA(h.git, path, name)
+	h.invalidateCache(r.Context(), repo.ID)
 	httpx.WriteJSON(w, http.StatusCreated, refMutationResp{Name: name, SHA: sha})
 }
 
@@ -1474,6 +1547,7 @@ func (h *Handler) deleteTag(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.invalidateCache(r.Context(), repo.ID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1737,6 +1811,13 @@ func (h *Handler) matchedProtection(r *http.Request, repoID int64, branchName st
 		return nil, err
 	}
 	return domain.MatchProtection(rules, branchName), nil
+}
+
+// invalidateCache drops every cached git-read result for the given repo.
+// Best-effort — failures are swallowed because stale reads are acceptable
+// for the remaining TTL, and a Redis blip shouldn't fail the write.
+func (h *Handler) invalidateCache(ctx context.Context, repoID int64) {
+	h.cache.InvalidateRepo(ctx, repoID)
 }
 
 // runGuards walks every registered BranchWriteGuard. The first one that
