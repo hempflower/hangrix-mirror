@@ -141,14 +141,16 @@ func (s *Scheduler) processTask(ctx context.Context, repo domain.RepoRef, task *
 		return
 	}
 
-	// Determine the reference time: last run (or an hour ago for first-time tasks).
-	refTime := now.Add(-1 * time.Hour)
-	if lastRun != nil {
-		refTime = lastRun.CreatedAt
+	// For first-time tasks, skip automatic execution.
+	// The spec requires not triggering all overdue tasks on startup;
+	// a never-run task must be triggered manually (POST …/trigger)
+	// before the scheduler picks it up on subsequent scans.
+	if lastRun == nil {
+		return
 	}
 
-	// Compute the next scheduled time after refTime.
-	nextTime := sched.Next(refTime)
+	// Compute the next scheduled time after the last run.
+	nextTime := sched.Next(lastRun.CreatedAt)
 
 	// If the next scheduled time hasn't happened yet, skip.
 	if nextTime.After(now) {
@@ -167,7 +169,7 @@ func (s *Scheduler) processTask(ctx context.Context, repo domain.RepoRef, task *
 
 	// Fire.
 	log.Printf("automation scheduler: triggering repo %d task %s (last run: %v, next: %v)",
-		repo.ID, task.Name, refTime, nextTime)
+		repo.ID, task.Name, lastRun.CreatedAt, nextTime)
 	if _, err := s.executor.Execute(ctx, repo.ID, repo.DefaultBranch, repo.AuthorUserID, task); err != nil {
 		log.Printf("automation scheduler: repo %d task %s execute: %v", repo.ID, task.Name, err)
 	}
