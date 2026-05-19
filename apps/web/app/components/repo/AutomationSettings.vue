@@ -377,12 +377,15 @@ onMounted(load)
               </TableCell>
               <TableCell>
                 <NuxtLink
-                  v-if="run.issue_id"
-                  :to="`/${owner}/${name}/issues/${run.issue_id}`"
+                  v-if="run.issue_id && run.issue_number"
+                  :to="`/${owner}/${name}/issues/${run.issue_number}`"
                   class="text-primary hover:underline"
                 >
-                  #{{ run.issue_id }}
+                  #{{ run.issue_number }}
                 </NuxtLink>
+                <span v-else-if="run.issue_id" class="text-sm">
+                  #{{ run.issue_id }} (DB)
+                </span>
                 <span v-else class="text-muted-foreground">—</span>
               </TableCell>
               <TableCell class="text-sm">{{ formatTime(run.started_at) }}</TableCell>
