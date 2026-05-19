@@ -129,7 +129,7 @@ type Git interface {
 	// branch on it. ErrRefNotFound when the ref does not exist at all.
 	ResolveCommit(path, ref string) (string, error)
 
-	// MergeBranch merges fromRef into intoBranch. Behavior:
+// MergeBranch merges fromRef into intoBranch. Behavior:
 	//   - intoBranch is unborn → intoBranch is created pointing at fromRef
 	//     (mode "fast-forward").
 	//   - intoBranch == fromRef commit → no-op (mode "up-to-date").

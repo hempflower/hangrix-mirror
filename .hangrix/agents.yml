@@ -38,6 +38,7 @@ roles:
     can:
       - issue_read
       - issue_diff
+      - issue_mergeable
       - issue_comment
       - issue_create
       - issue_review_vote
@@ -86,6 +87,7 @@ roles:
     can:
       - issue_read
       - issue_diff
+      - issue_mergeable
       - issue_comment
       - issue_create
       - roster_list
@@ -119,6 +121,7 @@ roles:
     can:
       - issue_read
       - issue_diff
+      - issue_mergeable
       - issue_comment
       - issue_create
       - roster_list
