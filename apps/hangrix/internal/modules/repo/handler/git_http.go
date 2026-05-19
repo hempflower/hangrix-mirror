@@ -383,7 +383,18 @@ func (h *Handler) canAccessRepo(ctx context.Context, caller *gitCaller, repo *do
 	}
 	switch repo.OwnerKind {
 	case domain.OwnerKindUser:
-		return user.ID == repo.OwnerID
+		if user.ID == repo.OwnerID {
+			return true
+		}
+		// Check repo_members for user-owned repos.
+		m, err := h.members.GetMember(ctx, repo.ID, user.ID)
+		if err != nil {
+			return false
+		}
+		if write {
+			return m.Role == domain.MemberRoleWrite
+		}
+		return m.Role == domain.MemberRoleRead || m.Role == domain.MemberRoleWrite
 	case domain.OwnerKindOrg:
 		role, ok, err := h.resolver.Membership(ctx, repo.OwnerID, user.ID)
 		if err != nil || !ok {
