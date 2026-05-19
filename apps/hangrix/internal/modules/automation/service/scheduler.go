@@ -22,6 +22,12 @@ const scannerIntervalDefault = 60 * time.Second
 // for the same (repo, task) pair.
 const dedupWindow = 60 * time.Second
 
+// taskKey uniquely identifies a task within a repo for the first-seen map.
+type taskKey struct {
+	repoID   int64
+	taskName string
+}
+
 // Scheduler is a BackgroundJob that scans every repo on a ticker,
 // reads .hangrix/automation.yml from the repo's default branch via
 // git cat-file, and triggers enabled tasks whose cron schedule has
@@ -32,6 +38,10 @@ type Scheduler struct {
 	validator *Validator
 	executor  *Executor
 	interval  time.Duration
+	// firstSeen records when a never-run task was first observed by the
+	// scheduler. On subsequent scans this timestamp is used as the cron
+	// reference so that new tasks auto-fire without manual kick-off.
+	firstSeen map[taskKey]time.Time
 }
 
 // SchedulerDeps wires the Scheduler's dependencies through ioc.
@@ -55,6 +65,7 @@ func NewScheduler(deps *SchedulerDeps) *Scheduler {
 		validator: deps.Validator,
 		executor:  deps.Executor,
 		interval:  interval,
+		firstSeen: make(map[taskKey]time.Time),
 	}
 }
 
@@ -141,16 +152,26 @@ func (s *Scheduler) processTask(ctx context.Context, repo domain.RepoRef, task *
 		return
 	}
 
-	// For first-time tasks, skip automatic execution.
-	// The spec requires not triggering all overdue tasks on startup;
-	// a never-run task must be triggered manually (POST …/trigger)
-	// before the scheduler picks it up on subsequent scans.
+	// Determine the reference time for cron scheduling.
+	// For never-run tasks we remember when we first saw them and use that
+	// as the reference — this avoids a startup explosion while still
+	// letting tasks auto-fire on their next cron tick (e.g. "* * * * *"
+	// fires ~60s after the second scan).
+	var refTime time.Time
 	if lastRun == nil {
-		return
+		key := taskKey{repoID: repo.ID, taskName: task.Name}
+		if t, seen := s.firstSeen[key]; seen {
+			refTime = t
+		} else {
+			s.firstSeen[key] = now
+			return
+		}
+	} else {
+		refTime = lastRun.CreatedAt
 	}
 
-	// Compute the next scheduled time after the last run.
-	nextTime := sched.Next(lastRun.CreatedAt)
+	// Compute the next scheduled time after the reference time.
+	nextTime := sched.Next(refTime)
 
 	// If the next scheduled time hasn't happened yet, skip.
 	if nextTime.After(now) {
@@ -168,8 +189,8 @@ func (s *Scheduler) processTask(ctx context.Context, repo domain.RepoRef, task *
 	}
 
 	// Fire.
-	log.Printf("automation scheduler: triggering repo %d task %s (last run: %v, next: %v)",
-		repo.ID, task.Name, lastRun.CreatedAt, nextTime)
+	log.Printf("automation scheduler: triggering repo %d task %s (ref: %v, next: %v)",
+		repo.ID, task.Name, refTime, nextTime)
 	if _, err := s.executor.Execute(ctx, repo.ID, repo.DefaultBranch, repo.AuthorUserID, task); err != nil {
 		log.Printf("automation scheduler: repo %d task %s execute: %v", repo.ID, task.Name, err)
 	}
