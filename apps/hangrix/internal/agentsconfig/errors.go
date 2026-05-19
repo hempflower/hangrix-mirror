@@ -67,12 +67,16 @@ var (
 	// absolute, contains `..`, or has an empty name.
 	ErrInvalidVolumeMount = errors.New("invalid volume mount")
 
+	// ErrInvalidContainerEntrypoint fires when container.entrypoint
+	// contains an empty string. A nil / omitted list is fine (it
+	// means "use the runner's built-in sleep default").
+	ErrInvalidContainerEntrypoint = errors.New("invalid container entrypoint")
+
 	// ErrInvalidModel fires when llm.model is empty.
 	ErrInvalidModel = errors.New("llm.model is required when llm is present")
 
-	// ErrInvalidLLMParam fires for out-of-range temperature / top_p,
-	// negative max_output_tokens / max_context_tokens, or a
-	// reasoning_effort outside the allowed enum.
+	// ErrInvalidLLMParam fires for out-of-range temperature / top_p
+	// or negative max_output_tokens / max_context_tokens.
 	ErrInvalidLLMParam = errors.New("invalid llm parameter")
 
 	// ErrDuplicateRoleKey fires when a role key appears twice in the

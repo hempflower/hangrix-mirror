@@ -63,6 +63,11 @@
             }
           }
         },
+        "entrypoint": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Overrides the container's PID 1. First element becomes `docker create --entrypoint`; subsequent elements are appended after the image name as CMD args. Omit / empty list = the runner uses its built-in default `/usr/bin/sleep infinity` so the container is a passive docker-exec sandbox. Set to e.g. `[\"/init\"]` (s6-overlay) when the image bakes in a supervisor that should auto-start background services."
+        },
         "env": {
           "type": "object",
           "description": "Plain-text env vars injected into every role container. Keys uppercase `[A-Z_][A-Z0-9_]*`.",
@@ -106,17 +111,16 @@
     },
     "llm": {
       "type": "object",
-      "required": ["model"],
-      "description": "LLM tuning block. Appears at team level (top-level llm:) and per-role; role-level overrides team, team overrides platform default. The parser refuses an empty model — an llm block with no model is a misconfiguration, not 'use defaults'.",
+      "description": "LLM tuning block. Appears at team level (top-level llm:) and per-role. Merge is field-by-field: any field present at role level overrides team, any field omitted at role level inherits team's value. At team level `model` is required; at role level `model` MAY be omitted to inherit team's. (JSON-Schema cannot express that conditional, so `required` is not declared here — the Go parser enforces it.)",
       "properties": {
         "model": {
           "type": "string",
           "minLength": 1,
-          "description": "Model name; must appear in some provider's allowed_models at runtime."
+          "description": "Model name; must appear in some provider's allowed_models at runtime. Required at team level; optional at role level (omit to inherit team)."
         },
         "reasoning_effort": {
-          "description": "Thinking intensity. OpenAI-compat adapters pass it through; the Anthropic adapter translates to thinking.budget_tokens (minimal/low → 1024, medium → 4096, high → 16384) and drops temperature. Empty string is equivalent to omission.",
-          "enum": ["", "minimal", "low", "medium", "high"]
+          "type": "string",
+          "description": "Thinking intensity. The parser accepts any string for forward-compat with new upstream enum values; canonical values 'minimal' / 'low' / 'medium' / 'high' drive the Anthropic adapter's thinking.budget_tokens translation (minimal/low → 1024, medium → 4096, high → 16384, temperature dropped) and pass through verbatim on OpenAI-compat adapters. Other non-empty strings are forwarded verbatim — the upstream decides whether to honour or reject. Empty string is equivalent to omission."
         },
         "max_context_tokens": {
           "type": "integer",

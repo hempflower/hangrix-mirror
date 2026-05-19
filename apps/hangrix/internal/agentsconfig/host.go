@@ -36,6 +36,15 @@ type Container struct {
 	// repo ships its own Dockerfile.
 	Build *Build
 
+	// Entrypoint overrides the container's PID 1. First element is
+	// the executable; subsequent elements are appended after the
+	// image name in `docker create`. Empty / nil = the runner uses
+	// its built-in default (`/usr/bin/sleep infinity`) so the
+	// container is a passive sandbox for `docker exec`. Set this to
+	// `[/init]` (s6-overlay) or any other supervisor when you want
+	// the image to bring up background services automatically.
+	Entrypoint []string
+
 	// Env is the plain-text env-var map injected into every role
 	// container. Keys are uppercase `[A-Z_][A-Z0-9_]*`. Values may
 	// be any string — including JSON / shell-quoted blobs the agent
@@ -83,61 +92,53 @@ type Volume struct {
 }
 
 // LLMConfig is the LLM tuning block. It appears twice in the host yaml
-// (team default and per-role override); the same shape backs both. The
-// parser refuses an empty Model — an LLM block with no model is a
-// misconfiguration, not "use defaults".
+// (team default and per-role override); the same shape backs both, with
+// one asymmetry: at team level the parser refuses an empty Model (an
+// llm block declared with no model is a misconfiguration), at role
+// level Model MAY be empty meaning "inherit from team".
+//
+// Every scalar field except Model is a pointer so the merge step can
+// distinguish "field omitted, inherit team value" (nil) from "field
+// explicitly set, override team" (non-nil) — including legitimate zero
+// values like `temperature: 0`. Field-level merge happens at session
+// spawn time in modules/agent_session/service.resolveLLM.
 type LLMConfig struct {
 	// Model is a name string the LLM provider's allowed_models list
-	// must contain at runtime. This package does not resolve the
-	// model against any registry — that lookup belongs in the
-	// llm_provider module.
+	// must contain at runtime. Empty at role level = inherit team's
+	// model; empty at team level is rejected by the parser.
 	Model string
 
 	// MaxOutputTokens caps the per-call output budget (Anthropic
-	// `max_tokens`, OpenAI `max_output_tokens`). 0 means "let the
-	// upstream apply its default"; negative is rejected by the parser.
-	MaxOutputTokens int
+	// `max_tokens`, OpenAI `max_output_tokens`). nil = inherit (or
+	// "let the upstream apply its default" at the bottom of the
+	// chain); 0 has the same operational meaning as nil but the
+	// pointer lets a role explicitly reset team's non-zero default.
+	// Negative is rejected by the parser.
+	MaxOutputTokens *int
 
 	// MaxContextTokens caps the prompt+history window the agent will
-	// pack before truncation. 0 means "no cap declared here — the
-	// agent / proxy applies its own ceiling". Negative is rejected.
-	// The agent runtime enforces this; the LLM proxy does not.
-	MaxContextTokens int
+	// pack before truncation. nil = inherit (or "no cap" at the
+	// bottom of the chain). Negative is rejected. The agent runtime
+	// enforces this; the LLM proxy does not.
+	MaxContextTokens *int
 
-	// ReasoningEffort mirrors OpenAI's `reasoning.effort` enum and
-	// drives Anthropic `thinking.budget_tokens` translation in the
-	// proxy. Allowed values: "" (unset, upstream default) /
-	// "minimal" / "low" / "medium" / "high". Adapters without a
-	// native reasoning knob ignore the field.
-	ReasoningEffort string
+	// ReasoningEffort is passed through to the upstream as the
+	// `reasoning.effort` / equivalent thinking knob. nil = inherit.
+	// Canonical values "minimal" / "low" / "medium" / "high" drive
+	// the Anthropic adapter's `thinking.budget_tokens` translation;
+	// any other non-empty string is forwarded verbatim to the
+	// upstream. Pointer-to-empty-string explicitly resets a team
+	// default back to "don't send reasoning to upstream".
+	ReasoningEffort *string
 
-	// Temperature must be in [0.0, 2.0]. The zero value is a
-	// legitimate setting (deterministic decoding) and indistinguishable
-	// from "not set" — callers that need that distinction should rely
-	// on the per-role / team-default override chain instead of probing
-	// for zero.
-	Temperature float64
+	// Temperature must be in [0.0, 2.0]. nil = inherit (or "upstream
+	// default" at the bottom of the chain). The pointer lets a role
+	// legitimately request `temperature: 0` (deterministic decoding)
+	// without that being mistaken for "field omitted".
+	Temperature *float64
 
-	// TopP must be in [0.0, 1.0]. Same zero-value caveat as Temperature.
-	TopP float64
+	// TopP must be in [0.0, 1.0]. Same nil-as-inherit semantics as
+	// Temperature.
+	TopP *float64
 }
 
-// ValidReasoningEfforts is the closed set of values accepted on
-// `llm.reasoning_effort`. The empty string is the unset sentinel and is
-// also accepted by the parser; it is not listed here because the
-// validator treats "" as "field omitted".
-var ValidReasoningEfforts = []string{"minimal", "low", "medium", "high"}
-
-// IsValidReasoningEffort reports whether s is "" (unset) or one of the
-// canonical OpenAI reasoning.effort values.
-func IsValidReasoningEffort(s string) bool {
-	if s == "" {
-		return true
-	}
-	for _, v := range ValidReasoningEfforts {
-		if s == v {
-			return true
-		}
-	}
-	return false
-}

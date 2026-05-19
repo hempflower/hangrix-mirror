@@ -23,11 +23,12 @@ type hostWire struct {
 }
 
 type containerWire struct {
-	Image   string             `yaml:"image"`
-	Build   *buildWire         `yaml:"build"`
-	Env     map[string]string  `yaml:"env"`
-	Secrets []string           `yaml:"secrets"`
-	Volumes []volumeWire       `yaml:"volumes"`
+	Image      string             `yaml:"image"`
+	Build      *buildWire         `yaml:"build"`
+	Entrypoint []string           `yaml:"entrypoint"`
+	Env        map[string]string  `yaml:"env"`
+	Secrets    []string           `yaml:"secrets"`
+	Volumes    []volumeWire       `yaml:"volumes"`
 }
 
 type buildWire struct {
@@ -41,13 +42,17 @@ type volumeWire struct {
 	Mount string `yaml:"mount"`
 }
 
+// llmWire mirrors the yaml `llm:` block. Every tuning field is a
+// pointer so the parser can tell "field omitted" from "field set to
+// zero" — required to support per-field inheritance from team default
+// to role override (see LLMConfig docstring).
 type llmWire struct {
-	Model            string  `yaml:"model"`
-	MaxOutputTokens  int     `yaml:"max_output_tokens"`
-	MaxContextTokens int     `yaml:"max_context_tokens"`
-	ReasoningEffort  string  `yaml:"reasoning_effort"`
-	Temperature      float64 `yaml:"temperature"`
-	TopP             float64 `yaml:"top_p"`
+	Model            string   `yaml:"model"`
+	MaxOutputTokens  *int     `yaml:"max_output_tokens"`
+	MaxContextTokens *int     `yaml:"max_context_tokens"`
+	ReasoningEffort  *string  `yaml:"reasoning_effort"`
+	Temperature      *float64 `yaml:"temperature"`
+	TopP             *float64 `yaml:"top_p"`
 }
 
 type roleWire struct {
@@ -126,7 +131,7 @@ func ParseHostConfig(body []byte) (*HostConfig, error) {
 
 	var teamLLM *LLMConfig
 	if wire.LLM != nil {
-		llm, err := buildLLM(wire.LLM, "llm")
+		llm, err := buildLLM(wire.LLM, "llm", true)
 		if err != nil {
 			return nil, err
 		}
@@ -187,6 +192,13 @@ func buildContainer(w *containerWire) (Container, error) {
 		}
 	}
 
+	for i, arg := range w.Entrypoint {
+		if arg == "" {
+			return c, fmt.Errorf("%w: entrypoint[%d]: empty string", ErrInvalidContainerEntrypoint, i)
+		}
+	}
+	c.Entrypoint = append([]string(nil), w.Entrypoint...)
+
 	for k := range w.Env {
 		if !isValidEnvKey(k) {
 			return c, fmt.Errorf("%w: %q", ErrInvalidEnvKey, k)
@@ -217,25 +229,24 @@ func buildContainer(w *containerWire) (Container, error) {
 
 // buildLLM validates an llm block and lifts it. ctx names the parent
 // path ("llm" / "roles.backend.llm") so the error message can pinpoint
-// the offending block.
-func buildLLM(w *llmWire, ctx string) (*LLMConfig, error) {
-	if w.Model == "" {
+// the offending block. requireModel switches on the team-vs-role
+// asymmetry: team `llm:` MUST declare `model:`; role `llm:` MAY omit
+// it to inherit team's model.
+func buildLLM(w *llmWire, ctx string, requireModel bool) (*LLMConfig, error) {
+	if requireModel && w.Model == "" {
 		return nil, fmt.Errorf("%w: %s.model empty", ErrInvalidModel, ctx)
 	}
-	if w.MaxOutputTokens < 0 {
-		return nil, fmt.Errorf("%w: %s.max_output_tokens=%d (must be >= 0)", ErrInvalidLLMParam, ctx, w.MaxOutputTokens)
+	if w.MaxOutputTokens != nil && *w.MaxOutputTokens < 0 {
+		return nil, fmt.Errorf("%w: %s.max_output_tokens=%d (must be >= 0)", ErrInvalidLLMParam, ctx, *w.MaxOutputTokens)
 	}
-	if w.MaxContextTokens < 0 {
-		return nil, fmt.Errorf("%w: %s.max_context_tokens=%d (must be >= 0)", ErrInvalidLLMParam, ctx, w.MaxContextTokens)
+	if w.MaxContextTokens != nil && *w.MaxContextTokens < 0 {
+		return nil, fmt.Errorf("%w: %s.max_context_tokens=%d (must be >= 0)", ErrInvalidLLMParam, ctx, *w.MaxContextTokens)
 	}
-	if !IsValidReasoningEffort(w.ReasoningEffort) {
-		return nil, fmt.Errorf("%w: %s.reasoning_effort=%q (want one of %v)", ErrInvalidLLMParam, ctx, w.ReasoningEffort, ValidReasoningEfforts)
+	if w.Temperature != nil && (*w.Temperature < 0 || *w.Temperature > 2) {
+		return nil, fmt.Errorf("%w: %s.temperature=%v (must be in [0,2])", ErrInvalidLLMParam, ctx, *w.Temperature)
 	}
-	if w.Temperature < 0 || w.Temperature > 2 {
-		return nil, fmt.Errorf("%w: %s.temperature=%v (must be in [0,2])", ErrInvalidLLMParam, ctx, w.Temperature)
-	}
-	if w.TopP < 0 || w.TopP > 1 {
-		return nil, fmt.Errorf("%w: %s.top_p=%v (must be in [0,1])", ErrInvalidLLMParam, ctx, w.TopP)
+	if w.TopP != nil && (*w.TopP < 0 || *w.TopP > 1) {
+		return nil, fmt.Errorf("%w: %s.top_p=%v (must be in [0,1])", ErrInvalidLLMParam, ctx, *w.TopP)
 	}
 	return &LLMConfig{
 		Model:            w.Model,
@@ -274,7 +285,7 @@ func buildRole(key string, w *roleWire) (*Role, error) {
 
 	var roleLLM *LLMConfig
 	if w.LLM != nil {
-		llm, err := buildLLM(w.LLM, "roles."+key+".llm")
+		llm, err := buildLLM(w.LLM, "roles."+key+".llm", false)
 		if err != nil {
 			return nil, err
 		}

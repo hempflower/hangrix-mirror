@@ -406,14 +406,13 @@ func (s *Spawner) spawnRole(
 		return domain.SpawnedSession{}, fmt.Errorf("host yaml: container.image is required (build: not yet supported)")
 	}
 
-	// Resolve effective LLM: role.LLM > host.LLM > {empty}. Empty model
-	// is rejected so the runner doesn't ship an unparseable env.
+	// Resolve effective LLM: per-field merge of host.LLM (team) and
+	// role.LLM (override). Empty model is rejected so the runner
+	// doesn't ship an unparseable env.
+	effective := resolveLLM(role, hostCfg)
 	model := ""
-	switch {
-	case role.LLM != nil && role.LLM.Model != "":
-		model = role.LLM.Model
-	case hostCfg.LLM != nil && hostCfg.LLM.Model != "":
-		model = hostCfg.LLM.Model
+	if effective != nil {
+		model = effective.Model
 	}
 	if model == "" {
 		return domain.SpawnedSession{}, fmt.Errorf("no llm model resolved (role + host both empty)")
@@ -431,7 +430,7 @@ func (s *Spawner) spawnRole(
 	// resolution), can list, scope, llm, container — so the audit row
 	// can reproduce exactly what the agent saw without re-parsing host
 	// yaml at the snapshot sha.
-	snapshot, err := buildRoleSnapshot(role, hostCfg, addendum, model)
+	snapshot, err := buildRoleSnapshot(role, hostCfg, addendum, model, effective)
 	if err != nil {
 		return domain.SpawnedSession{}, err
 	}
@@ -778,7 +777,13 @@ func issueBranchName(n int32) string {
 // buildRoleSnapshot freezes the resolved role config into the JSON blob
 // stored on `agent_sessions.role_config`. Schema is intentionally
 // open-ended (a JSON object) so it can extend without a migration.
-func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, addendum, model string) ([]byte, error) {
+//
+// effective is the per-field merged LLMConfig computed by resolveLLM in
+// the caller. Pointer fields are dereferenced into the JSON (with
+// ,omitempty + zero on nil) so the audit row carries the resolved
+// scalar values an operator expects to see, without re-running the
+// inheritance to read it back.
+func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, addendum, model string, effective *agentsconfig.LLMConfig) ([]byte, error) {
 	type rs struct {
 		Triggers            map[string]any `json:"triggers"`
 		Can                 []string       `json:"can"`
@@ -799,16 +804,22 @@ func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, a
 		HostAddendum: addendum,
 		Model:        model,
 	}
-	// Resolved LLM block: role.LLM > host.LLM. Snapshot the effective
-	// values rather than just the role-level override so an audit can
-	// read the file standalone without re-running the inheritance.
-	if effective := resolveLLM(role, host); effective != nil {
-		snap.LLMMaxOutputTokens = effective.MaxOutputTokens
-		snap.LLMMaxContextTokens = effective.MaxContextTokens
-		snap.LLMReasoningEffort = effective.ReasoningEffort
+	if effective != nil {
+		if effective.MaxOutputTokens != nil {
+			snap.LLMMaxOutputTokens = *effective.MaxOutputTokens
+		}
+		if effective.MaxContextTokens != nil {
+			snap.LLMMaxContextTokens = *effective.MaxContextTokens
+		}
+		if effective.ReasoningEffort != nil {
+			snap.LLMReasoningEffort = *effective.ReasoningEffort
+		}
 	}
 	snap.Container = map[string]any{
 		"image": host.Container.Image,
+	}
+	if len(host.Container.Entrypoint) > 0 {
+		snap.Container["entrypoint"] = host.Container.Entrypoint
 	}
 	if len(host.Container.Secrets) > 0 {
 		snap.Container["secrets"] = host.Container.Secrets
@@ -855,14 +866,52 @@ func serializeTriggerSpec(spec *agentsconfig.TriggerSpec) map[string]any {
 	return body
 }
 
-// resolveLLM returns the effective LLM block for a role: per-role
-// override wins, host default fills in. Returns nil only when both are
-// nil (model resolution would already have failed earlier in spawnRole).
+// resolveLLM returns the effective LLM block for a role by merging the
+// team default (host.LLM) and the per-role override (role.LLM)
+// field-by-field. A non-nil pointer on role.LLM wins; a nil pointer
+// inherits the team's value. Returns nil only when both are nil.
+//
+// Model is a string (not a pointer) so the inheritance test is "role
+// non-empty" → role wins, else team. Every other scalar uses pointer
+// non-nil to mean "explicitly set" — that's how a role can override
+// `temperature: 0` or `reasoning_effort: ""` without it being
+// indistinguishable from "field omitted".
 func resolveLLM(role *agentsconfig.Role, host *agentsconfig.HostConfig) *agentsconfig.LLMConfig {
-	if role.LLM != nil {
-		return role.LLM
+	var team, perRole *agentsconfig.LLMConfig
+	if host != nil {
+		team = host.LLM
 	}
-	return host.LLM
+	if role != nil {
+		perRole = role.LLM
+	}
+	if team == nil && perRole == nil {
+		return nil
+	}
+	out := &agentsconfig.LLMConfig{}
+	if team != nil {
+		*out = *team
+	}
+	if perRole != nil {
+		if perRole.Model != "" {
+			out.Model = perRole.Model
+		}
+		if perRole.MaxOutputTokens != nil {
+			out.MaxOutputTokens = perRole.MaxOutputTokens
+		}
+		if perRole.MaxContextTokens != nil {
+			out.MaxContextTokens = perRole.MaxContextTokens
+		}
+		if perRole.ReasoningEffort != nil {
+			out.ReasoningEffort = perRole.ReasoningEffort
+		}
+		if perRole.Temperature != nil {
+			out.Temperature = perRole.Temperature
+		}
+		if perRole.TopP != nil {
+			out.TopP = perRole.TopP
+		}
+	}
+	return out
 }
 
 // buildCauseFrame is the JSON the runner writes to agent stdin to tell

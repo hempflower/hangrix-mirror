@@ -145,6 +145,7 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 	otask := orchestrator.Task{
 		SessionID:        task.SessionID,
 		Image:            task.AgentImage,
+		Entrypoint:       task.AgentEntrypoint,
 		AgentBinaryPath:  d.AgentBinaryPath,
 		HostAddendumPath: hostAddendumPath,
 		HostWorkdir:      mountPath,

@@ -198,7 +198,10 @@ func buildAnthropicBody(req *Request) anthropicRequest {
 
 // thinkingBudgetTokens maps an OpenAI `reasoning.effort` enum to an
 // Anthropic `thinking.budget_tokens` value. Anthropic requires
-// budget_tokens ≥ 1024 and strictly less than max_tokens.
+// budget_tokens ≥ 1024 and strictly less than max_tokens. Unknown
+// values (the parser allows arbitrary strings for upstream
+// forward-compat) return 0 — thinking stays disabled rather than
+// guessing a budget that might exceed max_tokens.
 func thinkingBudgetTokens(effort string) int {
 	switch effort {
 	case "minimal", "low":

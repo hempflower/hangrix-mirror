@@ -62,11 +62,13 @@ type Request struct {
 	// drop the field rather than 400ing upstream.
 	Temperature *float64
 
-	// ReasoningEffort mirrors OpenAI's `reasoning.effort` enum:
-	// "" / "minimal" / "low" / "medium" / "high". Adapters with a
-	// native reasoning knob (Anthropic thinking, DeepSeek reasoner,
-	// OpenAI o-series) translate this to their own setting; others
-	// ignore it.
+	// ReasoningEffort is forwarded to the upstream's reasoning knob.
+	// Canonical values "minimal" / "low" / "medium" / "high" drive
+	// the Anthropic adapter's `thinking.budget_tokens` translation
+	// (and analogous handling in DeepSeek reasoner / OpenAI o-series);
+	// any other non-empty string is passed through verbatim so newer
+	// upstream enum values work without an adapter change. Adapters
+	// without a native reasoning knob ignore the field.
 	ReasoningEffort string
 
 	// APIKey is the decrypted upstream credential the adapter places

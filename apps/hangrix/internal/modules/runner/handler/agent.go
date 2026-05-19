@@ -347,6 +347,7 @@ func (h *AgentHandler) heartbeat(w http.ResponseWriter, r *http.Request) {
 type taskResp struct {
 	SessionID     int64             `json:"session_id"`
 	AgentImage    string            `json:"agent_image"`
+	AgentEntrypoint []string        `json:"agent_entrypoint,omitempty"`
 	Role          string            `json:"role"`
 	Model         string            `json:"model,omitempty"`
 	WorkingBranch string            `json:"working_branch"`
@@ -394,16 +395,17 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 				_ = json.Unmarshal(sess.Env, &env)
 			}
 			httpx.WriteJSON(w, http.StatusOK, taskResp{
-				SessionID:     sess.ID,
-				AgentImage:    sess.AgentImage,
-				Role:          sess.Role,
-				Model:         sess.Model,
-				WorkingBranch: sess.WorkingBranch,
-				BaseBranch:    sess.BaseBranch,
-				HostAddendum:  sess.HostAddendum,
-				Env:           env,
-				SessionToken:  plaintext,
-				ContainerID:   sess.ContainerID,
+				SessionID:       sess.ID,
+				AgentImage:      sess.AgentImage,
+				AgentEntrypoint: extractEntrypoint(sess.RoleConfig),
+				Role:            sess.Role,
+				Model:           sess.Model,
+				WorkingBranch:   sess.WorkingBranch,
+				BaseBranch:      sess.BaseBranch,
+				HostAddendum:    sess.HostAddendum,
+				Env:             env,
+				SessionToken:    plaintext,
+				ContainerID:     sess.ContainerID,
 			})
 			return
 		}
@@ -746,6 +748,29 @@ func (h *AgentHandler) markCleanupDone(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---- token + ctx helpers ----
+
+// extractEntrypoint reads container.entrypoint out of the frozen
+// role_config snapshot. Returns nil on any decode error or missing
+// field — the runner falls back to its built-in `sleep infinity`
+// default in that case. The snapshot is written by
+// agent_session/service.buildRoleSnapshot.
+func extractEntrypoint(roleConfig []byte) []string {
+	if len(roleConfig) == 0 {
+		return nil
+	}
+	var snap struct {
+		Container struct {
+			Entrypoint []string `json:"entrypoint"`
+		} `json:"container"`
+	}
+	if err := json.Unmarshal(roleConfig, &snap); err != nil {
+		return nil
+	}
+	if len(snap.Container.Entrypoint) == 0 {
+		return nil
+	}
+	return snap.Container.Entrypoint
+}
 
 func bearerToken(r *http.Request) (string, error) {
 	h := r.Header.Get("Authorization")

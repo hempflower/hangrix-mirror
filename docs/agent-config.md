@@ -34,6 +34,11 @@ container:                        # host 声明的容器环境
   #   context: .
   #   args: { GO_VERSION: "1.26" }
 
+  # entrypoint: 覆盖容器 PID 1。省略 = runner 用内置默认
+  # `/usr/bin/sleep infinity`（容器只是被 docker-exec 的 sandbox）。
+  # 镜像里烤了 s6-overlay / supervisord 等监管进程要让它接管时填这里。
+  # entrypoint: ["/init"]
+
   env:                            # 明文环境变量，入 git
     NODE_ENV: development
     GOFLAGS: "-mod=readonly"
@@ -48,7 +53,7 @@ container:                        # host 声明的容器环境
 
 llm:                              # team 默认 LLM（可选；省略走 admin 配的 platform default）
   model: claude-sonnet-4-6        # 路由由 provider.allowed_models 反查决定
-  reasoning_effort: medium        # 思考强度：minimal | low | medium | high；省略走上游默认
+  reasoning_effort: medium        # 思考强度：minimal / low / medium / high 走内置翻译，其它字符串原样透传给上游；省略走上游默认
   max_context_tokens: 200000      # 最大上下文 token（agent 端 prompt+历史的上限）；0 = 不约束
   max_output_tokens: 8000         # 最大输出 token（单次调用 completion 上限）；0 = 上游默认
 
@@ -111,6 +116,7 @@ roles:
 
 ### 字段语义
 
+- **`container.entrypoint:`** —— `[]string`，覆盖容器 PID 1。第一个元素作为 `docker create --entrypoint <argv0>`，后续元素作为 image 后的 CMD args。省略 / 空列表 = runner 用内置默认 `/usr/bin/sleep infinity`（容器仅作为 `docker exec` 的被动 sandbox）。要让镜像里烤好的 supervisor（如 s6-overlay `/init`、`supervisord`、`tini`）接管 PID 1 在容器启动时拉起 postgres / redis 等服务，就把它显式写出来。元素不能是空串；空列表跟未声明等价。
 - **`triggers:`** —— 事件订阅。**Map 形式**（GitHub Actions 风格）：key 是事件名，value 是该事件的过滤参数（空 mapping `{}` 表示「无过滤」）。没有 wildcard，未识别的 key 直接报错。可用事件：
   - `issue.opened` / `issue.closed` —— 无参数。
   - `issue.comment` —— 单一事件覆盖原 `comment.any` / `comment.mentioned` 两路。过滤参数：
@@ -127,13 +133,13 @@ roles:
 - **`not:`** —— 平台工具黑名单。仅在 `can:` 留空时生效，语义是「除列出的工具外其它都可用」。`can:` 和 `not:` 同时给值时**白名单优先**，`not:` 被忽略；两者都为空则 fail-closed（无任何工具）。
 - **`scope.paths:`** —— 软约束（写进 role 的初始 prompt 让 dispatcher 知道分派给谁），不在 pre-receive 强制。
 - **`prompt:` 或 `prompt_file:`** —— role 的提示词。二选一（schema mutually exclusive）；`prompt_file:` 必须以 `.hangrix/prompts/` 开头，文件随仓库一起进 git。**没有 host addendum 的概念了** —— 直接写 role 自己的完整 prompt 即可。
-- **`llm:`** —— team 级 + per-role 两层；role 级覆盖 team 级，team 级覆盖 platform default。字段：
-  - `model` —— 必须命中某 provider 的 `allowed_models`。
-  - `reasoning_effort` —— 思考强度，枚举 `minimal | low | medium | high`，省略走上游默认。`openai-compat` 透传，`anthropic` 翻成 `thinking.budget_tokens`（minimal/low → 1024、medium → 4096、high → 16384，同时 drop temperature、bump max_output_tokens 防 400）。
+- **`llm:`** —— team 级 + per-role 两层，**按字段合并**：role 写了哪个字段就覆盖哪个字段，没写的字段继承 team；team 没设的字段走 platform default（即 adapter / upstream 的内置默认）。字段：
+  - `model` —— team 级必填，必须命中某 provider 的 `allowed_models`；role 级可省略（= 继承 team）。
+  - `reasoning_effort` —— 思考强度，任意字符串（parser 不校验枚举，新模型可直接填新值）。规范值 `minimal | low | medium | high` 走内置翻译：`openai-compat` 原样透传；`anthropic` 翻成 `thinking.budget_tokens`（minimal/low → 1024、medium → 4096、high → 16384，同时 drop temperature、bump max_output_tokens 防 400）。其它非空字符串一律透传，上游自行决定接受或拒绝。`anthropic` 在非规范值下不启用 thinking（避免猜测的预算超 `max_tokens`）。空字符串等同省略。
   - `max_context_tokens` —— Agent 打包 prompt+对话历史时的上限（>= 0，0 = 不约束）。LLM proxy 不强制；由 agent runtime 在送进上游前裁剪。
   - `max_output_tokens` —— 单次 completion 的输出预算（>= 0，0 = 上游默认）。Anthropic 必填 `max_tokens` 由 adapter 兜底到 4096。
-  - `temperature` / `top_p` —— 采样旋钮，分别落在 `[0, 2]` / `[0, 1]` 内。
-  Spawn session 时按 role > team > platform default 三层合并 resolved 视图缓存到 session 元数据，runner 注入 env 时直接读。
+  - `temperature` / `top_p` —— 采样旋钮，分别落在 `[0, 2]` / `[0, 1]` 内。零值是合法显式值（确定性解码 / 不做 top_p 截断），跟"字段省略 = 继承"是两件事——内部用指针区分，写了 `temperature: 0` 就是真的把 team 的非零默认覆盖掉。
+  Spawn session 时把 host.LLM 和 role.LLM 按字段 merge 出 resolved 视图缓存到 session 元数据，runner 注入 env 时直接读。所以只想改 `model` 而保留 team 的 `max_context_tokens` / `reasoning_effort`，role 里只写一行 `model: …` 就行，不必复制整块。
 - **Runner 默认注入：** 给每个 role 容器注入一张统一的 session token（[agent-identity.md](agent-identity.md)），LLM endpoint + model 也是默认注入。
 
 ### Schema 强约束

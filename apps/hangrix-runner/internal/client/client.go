@@ -120,7 +120,15 @@ func (c *Client) Heartbeat(ctx context.Context, req HeartbeatRequest) error {
 type Task struct {
 	SessionID  int64  `json:"session_id"`
 	AgentImage string `json:"agent_image"`
-	Role       string `json:"role"`
+	// AgentEntrypoint overrides the container's PID 1 (docker
+	// --entrypoint plus appended args). Empty / nil means the
+	// orchestrator falls back to its built-in default
+	// (`/usr/bin/sleep infinity`) so the container is a passive
+	// sandbox for docker-exec; set this from host yaml when the
+	// image bakes in a supervisor (e.g. s6-overlay /init) that
+	// should auto-start background services.
+	AgentEntrypoint []string `json:"agent_entrypoint,omitempty"`
+	Role            string   `json:"role"`
 	// Model is the resolved LLM model name the spawner picked for this
 	// session (role.llm.model > host.llm.model). Surfaced into the
 	// container as HANGRIX_LLM_MODEL so the agent's LLM client knows

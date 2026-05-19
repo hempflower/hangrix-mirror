@@ -30,6 +30,13 @@ import (
 type Task struct {
 	SessionID        int64
 	Image            string
+	// Entrypoint overrides the container's PID 1. First element is
+	// the argv0 passed to docker --entrypoint; subsequent elements
+	// are appended after the image name as CMD args. Empty / nil
+	// falls back to the orchestrator's built-in default
+	// (`/usr/bin/sleep infinity`) so the container stays alive as a
+	// passive docker-exec sandbox.
+	Entrypoint       []string
 	AgentBinaryPath  string
 	HostAddendumPath string
 	HostWorkdir      string

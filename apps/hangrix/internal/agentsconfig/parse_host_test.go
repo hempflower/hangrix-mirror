@@ -131,14 +131,14 @@ func TestParseHostConfig_Happy(t *testing.T) {
 	if rev.LLM == nil || rev.LLM.Model != "claude-opus-4-7" {
 		t.Fatalf("reviewer llm: %+v", rev.LLM)
 	}
-	if rev.LLM.MaxOutputTokens != 8000 {
-		t.Fatalf("reviewer llm max_output_tokens: %d", rev.LLM.MaxOutputTokens)
+	if rev.LLM.MaxOutputTokens == nil || *rev.LLM.MaxOutputTokens != 8000 {
+		t.Fatalf("reviewer llm max_output_tokens: %v", rev.LLM.MaxOutputTokens)
 	}
-	if rev.LLM.MaxContextTokens != 200000 {
-		t.Fatalf("reviewer llm max_context_tokens: %d", rev.LLM.MaxContextTokens)
+	if rev.LLM.MaxContextTokens == nil || *rev.LLM.MaxContextTokens != 200000 {
+		t.Fatalf("reviewer llm max_context_tokens: %v", rev.LLM.MaxContextTokens)
 	}
-	if rev.LLM.ReasoningEffort != "high" {
-		t.Fatalf("reviewer llm reasoning_effort: %q", rev.LLM.ReasoningEffort)
+	if rev.LLM.ReasoningEffort == nil || *rev.LLM.ReasoningEffort != "high" {
+		t.Fatalf("reviewer llm reasoning_effort: %v", rev.LLM.ReasoningEffort)
 	}
 	revPush := rev.Triggers[TriggerCommitPushed]
 	if revPush == nil || revPush.Push == nil {
@@ -160,6 +160,48 @@ func TestParseHostConfig_Happy(t *testing.T) {
 
 	if len(be.Scope.Paths) != 2 || be.Scope.Paths[0] != "apps/api/**" {
 		t.Fatalf("backend scope: %+v", be.Scope)
+	}
+}
+
+func TestParseHostConfig_Entrypoint(t *testing.T) {
+	t.Parallel()
+
+	body := `
+version: 1
+container:
+  image: x
+  entrypoint: ["/init"]
+roles:
+  r:
+    triggers: { issue.opened: {} }
+    prompt: hi
+`
+	cfg, err := ParseHostConfig([]byte(body))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got, want := cfg.Container.Entrypoint, []string{"/init"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("entrypoint: %v", got)
+	}
+}
+
+func TestParseHostConfig_EntrypointOmittedDefaultsToNil(t *testing.T) {
+	t.Parallel()
+
+	body := `
+version: 1
+container: { image: x }
+roles:
+  r:
+    triggers: { issue.opened: {} }
+    prompt: hi
+`
+	cfg, err := ParseHostConfig([]byte(body))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if cfg.Container.Entrypoint != nil {
+		t.Fatalf("entrypoint should be nil when omitted, got %v", cfg.Container.Entrypoint)
 	}
 }
 
@@ -461,18 +503,6 @@ roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 			target: ErrInvalidLLMParam,
 		},
 		{
-			name: "bad-llm-reasoning-effort",
-			body: `
-version: 1
-container: { image: x }
-llm:
-  model: m
-  reasoning_effort: ultra
-roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
-`,
-			target: ErrInvalidLLMParam,
-		},
-		{
 			name: "llm-missing-model",
 			body: `
 version: 1
@@ -483,18 +513,15 @@ roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 			target: ErrInvalidModel,
 		},
 		{
-			name: "per-role-llm-missing-model",
+			name: "entrypoint-empty-element",
 			body: `
 version: 1
-container: { image: x }
-roles:
-  r:
-    triggers:
-      issue.opened: {}
-    prompt: hi
-    llm: { max_output_tokens: 100 }
+container:
+  image: x
+  entrypoint: ["/init", ""]
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
-			target: ErrInvalidModel,
+			target: ErrInvalidContainerEntrypoint,
 		},
 		{
 			name: "duplicate-role-key",
@@ -513,6 +540,81 @@ roles:
 				t.Fatalf("got %v, want errors.Is %v", err, tc.target)
 			}
 		})
+	}
+}
+
+// TestParseHostConfig_RoleLLMInheritsFields pins the field-level
+// inheritance contract: a role's `llm:` block MAY omit any subset of
+// fields (including `model`); omitted fields inherit the team default,
+// present fields override it — including legitimate zero values like
+// `temperature: 0`. Inheritance itself is applied by the spawner; the
+// parser's job is just to preserve "omitted vs explicitly zero" so the
+// merge has the information it needs.
+func TestParseHostConfig_RoleLLMInheritsFields(t *testing.T) {
+	t.Parallel()
+
+	body := `
+version: 1
+container: { image: x }
+llm:
+  model: team-model
+  max_output_tokens: 4096
+  max_context_tokens: 100000
+  reasoning_effort: medium
+  temperature: 0.7
+roles:
+  bumps-effort-only:
+    triggers: { issue.opened: {} }
+    prompt: hi
+    llm:
+      reasoning_effort: high
+  resets-temperature-to-zero:
+    triggers: { issue.opened: {} }
+    prompt: hi
+    llm:
+      temperature: 0
+  swaps-model-only:
+    triggers: { issue.opened: {} }
+    prompt: hi
+    llm:
+      model: special-model
+`
+	cfg, err := ParseHostConfig([]byte(body))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+
+	r1 := cfg.Roles["bumps-effort-only"]
+	if r1.LLM == nil {
+		t.Fatalf("bumps-effort-only.LLM nil")
+	}
+	if r1.LLM.Model != "" {
+		t.Fatalf("model should be empty (inherit): %q", r1.LLM.Model)
+	}
+	if r1.LLM.ReasoningEffort == nil || *r1.LLM.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort: %v", r1.LLM.ReasoningEffort)
+	}
+	if r1.LLM.MaxOutputTokens != nil {
+		t.Fatalf("max_output_tokens should be nil (inherit): %v", *r1.LLM.MaxOutputTokens)
+	}
+	if r1.LLM.Temperature != nil {
+		t.Fatalf("temperature should be nil (inherit): %v", *r1.LLM.Temperature)
+	}
+
+	r2 := cfg.Roles["resets-temperature-to-zero"]
+	if r2.LLM == nil || r2.LLM.Temperature == nil {
+		t.Fatalf("temperature should be non-nil pointer-to-zero, got %+v", r2.LLM)
+	}
+	if *r2.LLM.Temperature != 0 {
+		t.Fatalf("temperature: %v", *r2.LLM.Temperature)
+	}
+
+	r3 := cfg.Roles["swaps-model-only"]
+	if r3.LLM == nil || r3.LLM.Model != "special-model" {
+		t.Fatalf("model: %+v", r3.LLM)
+	}
+	if r3.LLM.MaxOutputTokens != nil || r3.LLM.ReasoningEffort != nil {
+		t.Fatalf("other fields should be nil (inherit): %+v", r3.LLM)
 	}
 }
 

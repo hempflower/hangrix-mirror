@@ -281,17 +281,19 @@ func (o *DockerOrchestrator) containerExists(ctx context.Context, id string) boo
 // id docker echoed back on stdout. The container is left in the running
 // state so the immediate exec succeeds.
 func (o *DockerOrchestrator) createContainer(ctx context.Context, t Task) (string, error) {
+	entrypoint, cmdArgs := dockerEntrypoint(t.Entrypoint)
 	args := []string{
 		"create",
 		"--network", o.network,
-		"--entrypoint", "/usr/bin/sleep",
+		"--entrypoint", entrypoint,
 		"-v", o.absMount(t.AgentBinaryPath, "/usr/local/bin/hangrix-agent", true),
 		"-v", o.absMount(t.HostWorkdir, "/workspace", false),
 	}
 	if t.HostAddendumPath != "" {
 		args = append(args, "-v", o.absMount(t.HostAddendumPath, "/opt/hangrix/host_addendum.md", true))
 	}
-	args = append(args, t.Image, "infinity")
+	args = append(args, t.Image)
+	args = append(args, cmdArgs...)
 
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, o.bin, args...)
@@ -312,6 +314,19 @@ func (o *DockerOrchestrator) createContainer(ctx context.Context, t Task) (strin
 		return "", fmt.Errorf("docker start %s: %w", id, err)
 	}
 	return id, nil
+}
+
+// dockerEntrypoint folds host-supplied Task.Entrypoint into the pair
+// docker create needs: a string for --entrypoint (the argv0) and a
+// slice of CMD args appended after the image name. Empty / nil input
+// returns the orchestrator's built-in default — `/usr/bin/sleep
+// infinity` — which keeps the container alive as a passive docker-
+// exec sandbox.
+func dockerEntrypoint(spec []string) (string, []string) {
+	if len(spec) == 0 {
+		return "/usr/bin/sleep", []string{"infinity"}
+	}
+	return spec[0], append([]string(nil), spec[1:]...)
 }
 
 // run is the no-output docker invocation helper used by start / rm.
