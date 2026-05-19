@@ -174,6 +174,10 @@ func (g *stubGit) ContainsCommit(string, string) (*gitdomain.ContainingRefs, err
 func (g *stubGit) IsAncestor(string, string, string) (bool, error) {
 	panic("IsAncestor not stubbed")
 }
+func (g *stubGit) CheckFastForward(string, string, string) (bool, string, error) {
+	panic("CheckFastForward not stubbed")
+}
+
 func (g *stubGit) MergeBranch(string, string, string, string, gitdomain.Signature) (string, string, error) {
 	panic("MergeBranch not stubbed")
 }
