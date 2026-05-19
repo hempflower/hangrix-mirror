@@ -492,7 +492,7 @@ onMounted(load)
                       :model-value="rule.forbid_direct_push"
                       @update:model-value="(v) => onToggleProtection(rule, 'forbid_direct_push', Boolean(v))"
                     />
-                    <Badge variant="outline" class="text-[10px]">M4</Badge>
+
                   </div>
                 </TableCell>
                 <TableCell class="text-right">
@@ -541,7 +541,7 @@ onMounted(load)
                 <Checkbox v-model="protectionForm.forbid_direct_push" />
                 <span class="flex items-center gap-2">
                   {{ t('repo.protections.forbidDirectPush') }}
-                  <Badge variant="outline" class="text-[10px]">M4</Badge>
+
                 </span>
               </Label>
             </div>

@@ -61,7 +61,7 @@ const stats = computed(() => {
           <CardDescription>{{ t('home.m1Description') }}</CardDescription>
         </CardHeader>
         <CardContent class="flex items-center gap-2">
-          <Badge variant="secondary">M1</Badge>
+
           <span class="text-xs text-muted-foreground">{{ t('app.tagline') }}</span>
         </CardContent>
       </Card>
