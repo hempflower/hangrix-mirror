@@ -37,3 +37,7 @@ runner:
   # The real session-spawn path drives this per-role from the host
   # repo's `.hangrix/agents.yml`, so this is rarely hit.
   default_agent_image: "ubuntu:24.04"
+
+automation:
+  # Interval between scheduler scans for automation tasks.
+  scanner_interval: "60s"

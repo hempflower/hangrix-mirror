@@ -126,3 +126,23 @@ sql:
         emit_interface: false
         emit_exact_table_names: false
         emit_empty_slices: true
+  - engine: postgresql
+    queries: internal/modules/automation/infra/queries.sql
+    # automation_runs FKs repos(id); union repo + its transitive schemas
+    # so sqlc can resolve the reference at generate time.
+    schema:
+      - internal/modules/user/infra/migrations
+      - internal/modules/org/infra/migrations
+      - internal/modules/repo/infra/migrations
+      - internal/modules/automation/infra/migrations
+    gen:
+      go:
+        package: automationdb
+        out: internal/modules/automation/infra/automationdb
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_empty_slices: true
+

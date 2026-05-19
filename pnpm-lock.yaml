@@ -79,6 +79,9 @@ importers:
       vue-router:
         specifier: ^4.4.0
         version: 4.6.4(vue@3.5.34(typescript@5.9.3))
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
       zod:
         specifier: 3.25.76
         version: 3.25.76
@@ -3647,6 +3650,7 @@ packages:
 
   lucide-vue-next@0.460.0:
     resolution: {integrity: sha512-IhM1tm3gPhc3u6RagNra4W6Oe48Mz0l3fAJzk0oSLzsRQqt3WU3XiX5ngRyjIs8fzCtvgzu7fC6Qk7XVhS00DQ==}
+    deprecated: Package deprecated. Please use @lucide/vue instead.
     peerDependencies:
       vue: '>=3.0.1'
 
