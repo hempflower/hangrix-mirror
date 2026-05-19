@@ -15,6 +15,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation/infra/automationdb"
+	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 )
 
 //go:embed migrations/*.sql
@@ -25,16 +26,25 @@ type PostgresStore struct {
 	q *automationdb.Queries
 }
 
-func NewPostgresStore(pool *pgxpool.Pool, q *automationdb.Queries) *PostgresStore {
+type PostgresStoreDeps struct {
+	Pool *pgxpool.Pool
+	// Repos forces the repo module's migrations to run before our own:
+	// 00001_automation_runs.sql has an FK on repos(id), so booting against
+	// a fresh DB would otherwise hit "relation repos does not exist".
+	Repos repodomain.Store
+}
+
+func NewPostgresStore(deps *PostgresStoreDeps) *PostgresStore {
+	_ = deps.Repos // ordering-only dependency — see PostgresStoreDeps doc.
 	sub, err := fs.Sub(migrationsFS, "migrations")
 	if err != nil {
 		panic(fmt.Errorf("automation migrations sub-fs: %w", err))
 	}
-	if err := database.Migrate(pool, sub, "goose_automation", "."); err != nil {
+	if err := database.Migrate(deps.Pool, sub, "goose_automation", "."); err != nil {
 		panic(fmt.Errorf("apply automation migrations: %w", err))
 	}
 	return &PostgresStore{
-		q: q,
+		q: automationdb.New(deps.Pool),
 	}
 }
 

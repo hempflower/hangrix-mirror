@@ -5,12 +5,9 @@
 package automation
 
 import (
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation/handler"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation/infra"
-	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation/infra/automationdb"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation/service"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/server"
 	"github.com/hangrix/hangrix/pkg/ioc"
@@ -20,11 +17,9 @@ import (
 func Module() *ioc.Module {
 	m := ioc.NewModule()
 
-	// Infra: Postgres implementations. Provide automationdb.Queries from
-	// the pool so both PostgresStore and RepoLister can use it.
-	m.Provide(func(pool *pgxpool.Pool) *automationdb.Queries {
-		return automationdb.New(pool)
-	}).ToSelf()
+	// Infra: Postgres implementations. Each constructor mints its own
+	// sqlc Queries from the pool — Queries is a stateless wrapper, so
+	// there's no benefit to a shared instance.
 	m.Provide(infra.NewPostgresStore).ToInterface(new(domain.Store))
 	m.Provide(infra.NewRepoLister).ToInterface(new(domain.RepoLister))
 

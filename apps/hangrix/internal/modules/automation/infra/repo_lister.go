@@ -3,6 +3,8 @@ package infra
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation/infra/automationdb"
 )
@@ -13,9 +15,13 @@ type RepoLister struct {
 	q *automationdb.Queries
 }
 
+type RepoListerDeps struct {
+	Pool *pgxpool.Pool
+}
+
 // NewRepoLister returns a ready-to-use RepoLister backed by sqlc.
-func NewRepoLister(q *automationdb.Queries) *RepoLister {
-	return &RepoLister{q: q}
+func NewRepoLister(deps *RepoListerDeps) *RepoLister {
+	return &RepoLister{q: automationdb.New(deps.Pool)}
 }
 
 // ListAll returns every repo with enough metadata for the scheduler to
