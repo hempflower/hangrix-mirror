@@ -52,6 +52,15 @@ type Pusher struct {
 	AgentRole string
 }
 
+// PushRefUpdate is one ref update command parsed from the receive-pack pkt-line
+// stream. OldSHA and NewSHA are 40-char hex; NewSHA is zero-valued ("0000...0")
+// for a branch deletion.
+type PushRefUpdate struct {
+	RefName string
+	OldSHA  string
+	NewSHA  string
+}
+
 // PushObserver is notified before and after each receive-pack run so other
 // modules can sync sidecars (the M4 issue-mode hook) and write
 // commit_pushed events. PreReceive runs after authorization but before the
@@ -63,7 +72,12 @@ type Pusher struct {
 // PostReceive receives a Pusher so observers writing audit events can
 // attribute them correctly. PreReceive doesn't take one because sidecar
 // refresh is identity-agnostic.
+//
+// refUpdates carries the parsed pkt-line ref commands. Observers that gate
+// pushes (e.g. fast-forward checks) can inspect the intended new SHA before
+// the ref is updated. The pack data has already been extracted into the repo
+// before PreReceive runs, so the new SHA is resolvable.
 type PushObserver interface {
-	PreReceive(ctx context.Context, repo *Repo, fsPath string) error
+	PreReceive(ctx context.Context, repo *Repo, fsPath string, refUpdates []PushRefUpdate) error
 	PostReceive(ctx context.Context, repo *Repo, fsPath string, pusher Pusher) error
 }

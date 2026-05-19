@@ -1512,3 +1512,25 @@ func patchToFileDiffs(p *object.Patch) []*domain.FileDiff {
 	}
 	return out
 }
+
+// CheckFastForward reports whether head-ref is a descendant of base-ref
+// (i.e. fast-forward is possible). Uses IsAncestor internally; the
+// value-add is the structured (bool, mode) return and the zero-headRef /
+// unresolved-ref guard rails.
+func (g *GoGit) CheckFastForward(path, baseRef, headRef string) (bool, string, error) {
+	if headRef == "" {
+		return false, "unknown", nil
+	}
+	ok, err := g.IsAncestor(path, baseRef, headRef)
+	if err != nil {
+		if errors.Is(err, domain.ErrRefNotFound) {
+			return false, "unknown", nil
+		}
+		return false, "unknown", err
+	}
+	if ok {
+		return true, "fast-forward", nil
+	}
+	return false, "diverged", nil
+}
+

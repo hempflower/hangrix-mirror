@@ -2,7 +2,11 @@ package handler
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 )
 
@@ -26,10 +30,54 @@ func NewPushObserver(deps *PushObserverDeps) *PushObserver {
 	return &PushObserver{h: deps.Handler}
 }
 
-// PreReceive is a no-op: the GitHub-style protection model no longer needs
-// an issue-bound sidecar — branch_protections rules are written by the repo
-// module's SyncProtectionRules call upstream of this observer chain.
-func (o *PushObserver) PreReceive(ctx context.Context, repo *repodomain.Repo, fsPath string) error {
+// PreReceive runs fast-forward checks on each `issue/<n>` branch touched by
+// the push. A push is rejected when any open issue's branch has diverged
+// from its base (i.e. the base tip is not an ancestor of the new issue head).
+//
+// Non-issue branches are skipped. Already merged/closed issues are not
+// checked — only open issues gate pushes.
+func (o *PushObserver) PreReceive(ctx context.Context, repo *repodomain.Repo, fsPath string, refUpdates []repodomain.PushRefUpdate) error {
+	for _, u := range refUpdates {
+		refName := u.RefName
+		// Strip "refs/heads/" prefix if present.
+		branch := strings.TrimPrefix(refName, "refs/heads/")
+
+		// Only gate `issue/<n>` branches.
+		if !strings.HasPrefix(branch, "issue/") {
+			continue
+		}
+
+		numStr := strings.TrimPrefix(branch, "issue/")
+		n, err := strconv.ParseInt(numStr, 10, 64)
+		if err != nil || n <= 0 {
+			continue
+		}
+
+		iss, err := o.h.issues.GetByNumber(ctx, repo.ID, n)
+		if err != nil {
+			// Issue not found in DB — defer to git, no gate.
+			continue
+		}
+
+		// Only gate open issues. Merged/closed issues are not checked.
+		if iss.State != domain.StateOpen {
+			continue
+		}
+
+		// Use the new SHA from the push. The pack objects have already
+		// been extracted into the repo before PreReceive runs, so the
+		// SHA is resolvable by go-git.
+		isFF, mode, err := o.h.git.CheckFastForward(fsPath, iss.BaseBranch, u.NewSHA)
+		if err != nil {
+			return fmt.Errorf("check fast-forward for %s: %w", branch, err)
+		}
+		if !isFF {
+			return fmt.Errorf(
+				"branch has diverged from %s — rebase onto %s first (mode=%s)",
+				iss.BaseBranch, iss.BaseBranch, mode,
+			)
+		}
+	}
 	return nil
 }
 

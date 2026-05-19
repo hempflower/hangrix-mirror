@@ -242,3 +242,72 @@ func eventsToDTO(in []*issuedomain.Event) []eventDTO {
 	}
 	return out
 }
+
+type mergeableResult struct {
+	Mergeable  bool   `json:"mergeable"`
+	Mode       string `json:"mode"`
+	BaseBranch string `json:"base_branch"`
+	BaseSHA    string `json:"base_sha"`
+	HeadSHA    string `json:"head_sha"`
+	Hint       string `json:"hint"`
+}
+
+
+// issueMergeableTool returns mergeable status for the current issue's branch
+// vs its base. A no-parameter read-only tool — the scope is determined from
+// the session's repo+issue. Agents call this before issue_merge to avoid a
+// failed merge round-trip.
+func (r *Registry) issueMergeableTool() *platformmcpdomain.Tool {
+	return &platformmcpdomain.Tool{
+		Name:        "issue_mergeable",
+		Description: "Check whether the issue branch is fast-forward mergeable into its base. Returns mergeable status, mode, and hint.",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, _ json.RawMessage) (platformmcpdomain.Result, error) {
+			scope, err := r.loadScope(ctx, sess)
+			if err != nil {
+				return errorResult(err.Error()), nil
+			}
+			iss := scope.issue
+			if iss.HeadSHA == "" {
+				return textResult(mergeableResult{
+					Mergeable:  false,
+					Mode:       "unknown",
+					BaseBranch: iss.BaseBranch,
+					Hint:       "issue branch has no commits yet",
+				}), nil
+			}
+			baseSHA, err := r.deps.Git.ResolveCommit(scope.fsPath, iss.BaseBranch)
+			if err != nil {
+				if errors.Is(err, gitdomain.ErrRefNotFound) {
+					return textResult(mergeableResult{
+						Mergeable:  false,
+						Mode:       "unknown",
+						BaseBranch: iss.BaseBranch,
+						HeadSHA:    iss.HeadSHA,
+						Hint:       "base branch not found",
+					}), nil
+				}
+				return errorResult("resolve base: " + err.Error()), nil
+			}
+			isFF, mode, err := r.deps.Git.CheckFastForward(scope.fsPath, iss.BaseBranch, iss.HeadSHA)
+			if err != nil {
+				return errorResult("check fast-forward: " + err.Error()), nil
+			}
+			result := mergeableResult{
+				Mergeable:  isFF,
+				Mode:       mode,
+				BaseBranch: iss.BaseBranch,
+				BaseSHA:    baseSHA,
+				HeadSHA:    iss.HeadSHA,
+			}
+			if !isFF {
+				result.Hint = "branch has diverged from " + iss.BaseBranch + " — rebase onto " + iss.BaseBranch + " first"
+			}
+			return textResult(result), nil
+		},
+	}
+}
+

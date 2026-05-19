@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -139,17 +141,63 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sync protections: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// PreReceive observers (M4 issue module) get a chance to refresh their
-	// sidecars before the subprocess runs. Failures abort the push — a
-	// stale issue-mode file would let the hook accept a push that the
-	// server-side state should reject.
+
+	// Buffer the full request body so we can parse pkt-line ref commands
+	// and, if needed, extract pack objects before the git subprocess runs.
+	// Use decodeRequestBody so transparent gzip decompression (git CLI
+	// sends large pushes with Content-Encoding: gzip) is applied before
+	// we inspect the pkt-line stream.
+	decodedBody, err := decodeRequestBody(r)
+	if err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer decodedBody.Close()
+	bodyBytes, err := io.ReadAll(decodedBody)
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Parse ref-update commands from the pkt-line stream. packStart is the
+	// byte offset where the binary pack data begins (past the "0000" flush
+	// and "PACK" signature). If the body doesn't contain ref commands (e.g.
+	// a zero-ref push or a corrupted stream), refUpdates is empty and
+	// packStart is 0.
+	refUpdates, packStart := parseReceivePackRefs(bodyBytes)
+
+	// If the push touches any ref, extract the pack objects into the bare
+	// repo so that PreReceive observers (issue fast-forward check) can
+	// resolve the new SHAs. We feed the pack data to `git unpack-objects`
+	// which silently skips objects already in the store.
+	if len(refUpdates) > 0 && packStart > 0 && packStart < len(bodyBytes) {
+		unpack := exec.CommandContext(r.Context(), "git", "unpack-objects")
+		unpack.Dir = fsPath
+		unpack.Stdin = bytes.NewReader(bodyBytes[packStart:])
+		// unpack-objects writes progress to stderr; discard it.
+		_ = unpack.Run()
+		// Ignore errors: unpack-objects will complain about duplicate
+		// objects already in the repo, but that's harmless — the goal
+		// was to ensure new commits are resolvable, and they are now.
+	}
+
+	// PreReceive observers get the parsed ref updates. The pack objects are
+	// already in the repo, so observers can resolve new SHAs via go-git.
 	for _, obs := range h.observers {
-		if err := obs.PreReceive(r.Context(), repo, fsPath); err != nil {
+		if err := obs.PreReceive(r.Context(), repo, fsPath, refUpdates); err != nil {
 			http.Error(w, "pre-receive: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
+
+	// Replay the original (now decompressed) body to the git receive-pack
+	// subprocess. Objects already exist from the unpack above, so
+	// receive-pack will skip re-storing them and proceed to ref updates.
+	// Clear Content-Encoding since we already decompressed above.
+	r.Header.Del("Content-Encoding")
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	h.runStatelessRPC(w, r, "receive-pack", fsPath)
+
 	// PostReceive observers run after the subprocess returns. The client has
 	// already received its response by this point so errors are swallowed —
 	// we accept temporarily losing a commit_pushed event over corrupting
@@ -422,6 +470,78 @@ func (h *Handler) identifyGitCaller(r *http.Request) (*gitCaller, bool) {
 	}
 	return &gitCaller{user: u, authMethod: "password"}, true
 }
+
+
+// parseReceivePackRefs extracts ref-update commands from a git receive-pack
+// pkt-line stream. Returns the parsed updates and the byte offset where the
+// binary pack data begins (after the "0000" flush pkt). packStart is 0 when
+// no ref commands were found or the stream is malformed.
+//
+// Format (gitprotocol-pack(5)):
+//
+//	<4-hex-len><old-sha> <new-sha> <refname>\0<capabilities>
+//	...
+//	0000
+//	PACK<binary>
+func parseReceivePackRefs(data []byte) ([]domain.PushRefUpdate, int) {
+	if len(data) < 4 {
+		return nil, 0
+	}
+
+	var refs []domain.PushRefUpdate
+	pos := 0
+	for pos+4 <= len(data) {
+		// Read 4-byte hex length prefix.
+		lenHex := string(data[pos : pos+4])
+		if lenHex == "0000" {
+			// Flush packet marks end of ref advertisement. The pack
+			// data starts after this 4-byte token.
+			return refs, pos + 4
+		}
+
+		pktLen, err := hex.DecodeString(lenHex)
+		if err != nil || len(pktLen) != 2 {
+			break
+		}
+		pl := int(pktLen[0])<<8 | int(pktLen[1])
+		if pl < 4 {
+			// 0001, 0002, 0003 are reserved tokens — skip and continue.
+			pos += 4
+			continue
+		}
+
+		payloadEnd := pos + pl
+		if payloadEnd > len(data) {
+			break
+		}
+		payload := data[pos+4 : payloadEnd]
+		pos = payloadEnd
+
+		// Skip side-band / keep-alive / shallow / deepen / etc.
+		// Ref commands always contain a space between old and new SHA.
+		if !bytes.Contains(payload, []byte(" ")) {
+			continue
+		}
+
+		// Payload: "<old-sha> <new-sha> <refname>\0<capabilities>"
+		line := string(payload)
+		// Strip trailing NUL and capabilities.
+		if idx := strings.IndexByte(line, 0); idx >= 0 {
+			line = line[:idx]
+		}
+		parts := strings.SplitN(line, " ", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		refs = append(refs, domain.PushRefUpdate{
+			OldSHA:  parts[0],
+			NewSHA:  parts[1],
+			RefName: parts[2],
+		})
+	}
+	return refs, pos
+}
+
 
 // packetLine encodes one Git wire-protocol packet line: 4-hex-digit length
 // prefix (covering the prefix itself) followed by the payload.

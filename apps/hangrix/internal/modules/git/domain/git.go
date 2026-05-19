@@ -114,6 +114,16 @@ type Git interface {
 	// either cannot be resolved.
 	IsAncestor(path, ancestor, descendant string) (bool, error)
 
+	// CheckFastForward reports whether headRef is a descendant of baseRef
+	// (i.e. baseRef can be fast-forward merged into headRef). Returns
+	// (isFF, mode, error). mode is "fast-forward" when baseRef is an
+	// ancestor, "diverged" when there is no ancestor relationship, or
+	// "unknown" when either ref cannot be resolved. Both inputs may be
+	// any ref or SHA. A zero-value headRef (empty string) means the
+	// branch has no commits yet — returns (false, "unknown", nil).
+	CheckFastForward(path, baseRef, headRef string) (bool, string, error)
+
+
 	// ResolveCommit returns the commit SHA the ref resolves to. Empty string
 	// (no error) is reserved for the "unborn branch" case so callers can
 	// branch on it. ErrRefNotFound when the ref does not exist at all.
