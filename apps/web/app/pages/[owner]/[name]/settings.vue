@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { toTypedSchema } from '@vee-validate/zod'
 import * as z from 'zod'
-import { AlertTriangle, Plus, Shield, Trash2 } from 'lucide-vue-next'
+import { AlertTriangle, Clock, Plus, Settings, Shield, Trash2 } from 'lucide-vue-next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -20,6 +20,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Select,
   SelectContent,
@@ -36,6 +37,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import type { BranchProtection, PublicRepo, RepoRefs } from '~/types/repo'
+import AutomationSettings from '@/components/repo/AutomationSettings.vue'
 
 definePageMeta({ layout: 'repo' })
 
@@ -332,7 +334,19 @@ onMounted(load)
       {{ t('common.loading') }}
     </p>
 
-    <template v-else-if="repo && canManage">
+    <Tabs v-else-if="repo && canManage" default-value="general" class="space-y-6">
+      <TabsList>
+        <TabsTrigger value="general">
+          <Settings class="size-4" />
+          <span class="ml-1.5">{{ t('repo.settings.general') }}</span>
+        </TabsTrigger>
+        <TabsTrigger value="automation">
+          <Clock class="size-4" />
+          <span class="ml-1.5">{{ t('repo.automation.tabLabel') }}</span>
+        </TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="general" class="space-y-6 mt-0">
       <Card>
         <CardHeader>
           <CardTitle>{{ t('repo.settings.general') }}</CardTitle>
@@ -649,6 +663,11 @@ onMounted(load)
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </template>
+      </TabsContent>
+
+      <TabsContent value="automation" class="mt-0">
+        <AutomationSettings :owner="owner" :name="name" />
+      </TabsContent>
+    </Tabs>
   </div>
 </template>
