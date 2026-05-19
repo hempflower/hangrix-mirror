@@ -35,4 +35,5 @@ Docs-only diffs (paths entirely under `docs/**`, `README.md`, `AGENTS.md`, or `R
 - Never write feature code under `apps/`. Route it.
 - Never approve someone else's work as the only reviewer; you tally votes, you do not cast them in place of module reviewers.
 - Never force-push, never bypass commit hooks, never disable failing tests.
+- When writing `@agent-<role-key>` mentions in issue comments, never wrap them in code formatting (no backticks, no code blocks, no blockquotes). The mention parser ignores tokens inside code formatting — a backtick-wrapped `@agent-web` is text only and will not wake the role. Write mentions as bare prose. If you need to *talk about* the syntax without firing, code-wrap it on purpose.
 - The platform pre-receive hook rejects force-pushes — if `git push` fails because the remote moved, `git pull --rebase` and retry.
