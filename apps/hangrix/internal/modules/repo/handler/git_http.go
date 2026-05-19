@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -139,17 +141,44 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sync protections: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Decode and buffer the request body so we can parse the ref update
+	// commands before feeding them to the git subprocess. receive-pack stdin
+	// carries the pkt-line-encoded command list followed by the pack data.
+	body, err := decodeRequestBody(r)
+	if err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer body.Close()
+
+	bodyBytes, err := io.ReadAll(body)
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Parse ref updates from the pkt-line command list. This gives
+	// PreReceive observers visiblity into exactly which refs the push
+	// is updating — the issue module uses this to gate fast-forward
+	// checks per issue branch.
+	refUpdates := parseReceivePackRefUpdates(bodyBytes)
+
 	// PreReceive observers (M4 issue module) get a chance to refresh their
 	// sidecars before the subprocess runs. Failures abort the push — a
 	// stale issue-mode file would let the hook accept a push that the
 	// server-side state should reject.
 	for _, obs := range h.observers {
-		if err := obs.PreReceive(r.Context(), repo, fsPath); err != nil {
+		if err := obs.PreReceive(r.Context(), repo, fsPath, refUpdates); err != nil {
 			http.Error(w, "pre-receive: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
-	h.runStatelessRPC(w, r, "receive-pack", fsPath)
+
+	// Feed the buffered body into runStatelessRPCBody so the git subprocess
+	// receives the exact bytes the client sent.
+	h.runStatelessRPCBody(w, r, "receive-pack", fsPath, bodyBytes)
+
 	// PostReceive observers run after the subprocess returns. The client has
 	// already received its response by this point so errors are swallowed —
 	// we accept temporarily losing a commit_pushed event over corrupting
@@ -161,6 +190,76 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 	for _, obs := range h.observers {
 		_ = obs.PostReceive(postCtx, repo, fsPath, pusher)
 	}
+}
+
+// parseReceivePackRefUpdates extracts the ref-update commands from a
+// buffered receive-pack stdin. Returns the updates in the order they
+// appear. Non-update pkt-lines (flush, delim, response-end) are skipped.
+// The body is left intact — the returned slice is a lightweight view.
+func parseReceivePackRefUpdates(data []byte) []domain.PushRefUpdate {
+	var out []domain.PushRefUpdate
+	for len(data) > 0 {
+		if len(data) < 4 {
+			break
+		}
+		lengthHex := string(data[:4])
+		// Flush pkt ("0000") terminates the command list.
+		if lengthHex == "0000" {
+			break
+		}
+		// Delim ("0001") and response-end ("0002") are not ref updates.
+		if lengthHex == "0001" || lengthHex == "0002" {
+			data = data[4:]
+			continue
+		}
+		length, err := strconv.ParseInt(lengthHex, 16, 32)
+		if err != nil || length < 5 {
+			break
+		}
+		if int(length) > len(data) {
+			break
+		}
+		payload := string(data[4:length])
+		data = data[length:]
+
+		// Format: <old-sha> <new-sha> <ref-name>[\0<capabilities>]
+		parts := strings.SplitN(payload, " ", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		oldSHA := parts[0]
+		newSHA := parts[1]
+		refName := parts[2]
+		if idx := strings.IndexByte(refName, 0); idx >= 0 {
+			refName = refName[:idx]
+		}
+
+		// Ignore deletes (all-zero new SHA).
+		if newSHA == "0000000000000000000000000000000000000000" {
+			continue
+		}
+		out = append(out, domain.PushRefUpdate{
+			RefName: refName,
+			OldSHA:  oldSHA,
+			NewSHA:  newSHA,
+		})
+	}
+	return out
+}
+
+// runStatelessRPCBody is the same as runStatelessRPC but takes a
+// pre-buffered body instead of reading from the request. Used by
+// gitReceivePack so the body bytes can be inspected before the git
+// subprocess consumes them.
+func (h *Handler) runStatelessRPCBody(w http.ResponseWriter, r *http.Request, sub, fsPath string, bodyBytes []byte) {
+	cmd := exec.CommandContext(r.Context(), "git", sub, "--stateless-rpc", fsPath)
+	cmd.Stdin = bytes.NewReader(bodyBytes)
+	cmd.Stdout = w
+	cmd.Stderr = io.Discard
+
+	w.Header().Set("Content-Type", "application/x-git-"+sub+"-result")
+	w.Header().Set("Cache-Control", "no-cache")
+	_ = cmd.Run()
 }
 
 // pusherFromCaller maps the resolved write caller to a domain.Pusher.

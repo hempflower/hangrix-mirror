@@ -119,6 +119,14 @@ type Git interface {
 	// branch on it. ErrRefNotFound when the ref does not exist at all.
 	ResolveCommit(path, ref string) (string, error)
 
+	// CheckFastForward reports whether headRef can be fast-forward merged into
+	// baseRef — i.e. whether baseRef's tip is reachable from headRef via the
+	// parent chain. Returns (true, "fast-forward", nil) when baseRef is an
+	// ancestor of headRef; (false, "diverged", nil) when baseRef is ahead or
+	// the branches have diverged; (false, "unknown", ...) when either ref
+	// cannot be resolved (including when headRef has no commits yet).
+	CheckFastForward(path, baseRef, headRef string) (bool, string, error)
+
 	// MergeBranch merges fromRef into intoBranch. Behavior:
 	//   - intoBranch is unborn → intoBranch is created pointing at fromRef
 	//     (mode "fast-forward").

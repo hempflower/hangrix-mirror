@@ -918,6 +918,63 @@ func (g *GoGit) IsAncestor(path, ancestor, descendant string) (bool, error) {
 	return aCommit.IsAncestor(dCommit)
 }
 
+// CheckFastForward reports whether headRef can be fast-forward merged into
+// baseRef. Reuses the same commit.IsAncestor() logic as MergeBranch but never
+// modifies any ref. Returns (isFF, mode, error):
+//
+//	fast-forward — baseRef is an ancestor of headRef (or unborn headRef)
+//	diverged     — baseRef is ahead of, or diverged from, headRef
+//	unknown      — either ref cannot be resolved
+func (g *GoGit) CheckFastForward(path, baseRef, headRef string) (bool, string, error) {
+	repo, err := openRepo(path)
+	if err != nil {
+		return false, "unknown", err
+	}
+
+	baseHash, err := resolveRef(repo, baseRef)
+	if err != nil {
+		if errors.Is(err, domain.ErrRefNotFound) {
+			// Base branch doesn't exist (empty repo) — fast-forward possible.
+			return true, "fast-forward", nil
+		}
+		return false, "unknown", err
+	}
+
+	headHash, err := resolveRef(repo, headRef)
+	if err != nil {
+		if errors.Is(err, domain.ErrRefNotFound) {
+			// Head branch doesn't exist yet — unknown.
+			return false, "unknown", nil
+		}
+		return false, "unknown", err
+	}
+
+	// Unborn head (empty HEAD ref for a branch) — fast-forward possible
+	// because there's nothing to diverge.
+	if headHash.IsZero() {
+		return true, "fast-forward", nil
+	}
+
+	baseCommit, err := repo.CommitObject(baseHash)
+	if err != nil {
+		return false, "unknown", nil
+	}
+	headCommit, err := repo.CommitObject(headHash)
+	if err != nil {
+		return false, "unknown", nil
+	}
+
+	isAncestor, err := baseCommit.IsAncestor(headCommit)
+	if err != nil {
+		return false, "unknown", err
+	}
+	if isAncestor {
+		return true, "fast-forward", nil
+	}
+	return false, "diverged", nil
+}
+
+
 // ResolveCommit returns the commit SHA the ref resolves to. Unborn branches
 // (HEAD pointing at an unborn ref, or an explicit branch name that hasn't been
 // created yet for a fresh repo) yield an empty string with no error so callers

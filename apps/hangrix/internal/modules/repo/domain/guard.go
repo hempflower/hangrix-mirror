@@ -52,6 +52,16 @@ type Pusher struct {
 	AgentRole string
 }
 
+// PushRefUpdate describes a single ref change the client asked to push.
+// One receive-pack run may carry multiple updates (a multi-branch push).
+// OldSHA / NewSHA are zero-strings ("0000…000") for branch create / delete
+// respectively.
+type PushRefUpdate struct {
+	RefName string
+	OldSHA  string
+	NewSHA  string
+}
+
 // PushObserver is notified before and after each receive-pack run so other
 // modules can sync sidecars (the M4 issue-mode hook) and write
 // commit_pushed events. PreReceive runs after authorization but before the
@@ -64,6 +74,6 @@ type Pusher struct {
 // attribute them correctly. PreReceive doesn't take one because sidecar
 // refresh is identity-agnostic.
 type PushObserver interface {
-	PreReceive(ctx context.Context, repo *Repo, fsPath string) error
+	PreReceive(ctx context.Context, repo *Repo, fsPath string, refUpdates []PushRefUpdate) error
 	PostReceive(ctx context.Context, repo *Repo, fsPath string, pusher Pusher) error
 }

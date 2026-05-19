@@ -97,6 +97,55 @@ func (r *Registry) issueDiffTool() *platformmcpdomain.Tool {
 	}
 }
 
+// issueMergeableTool returns whether the issue branch can be fast-forward
+// merged into its base. Agent calls this before issue_merge to avoid the
+// round-trip of a failed merge attempt.
+func (r *Registry) issueMergeableTool() *platformmcpdomain.Tool {
+	return &platformmcpdomain.Tool{
+		Name:        "issue_mergeable",
+		Description: "Check whether the issue branch is fast-forward mergeable into its base. Returns mergeable status, mode, and hint.",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, _ json.RawMessage) (platformmcpdomain.Result, error) {
+			scope, err := r.loadScope(ctx, sess)
+			if err != nil {
+				return errorResult(err.Error()), nil
+			}
+			baseRef := scope.issue.BaseBranch
+			headRef := scope.issue.BranchName
+
+			baseSHA, _ := r.deps.Git.ResolveCommit(scope.fsPath, baseRef)
+			headSHA, _ := r.deps.Git.ResolveCommit(scope.fsPath, headRef)
+
+			isFF, mode, err := r.deps.Git.CheckFastForward(scope.fsPath, baseRef, headRef)
+			hint := ""
+			if !isFF {
+				if mode == "diverged" {
+					hint = "branch has diverged from " + baseRef + " — rebase onto " + baseRef + " first"
+				} else {
+					hint = "cannot determine mergeability — ensure both " + baseRef + " and " + headRef + " exist"
+				}
+			}
+
+			// Make err non-fatal: tools always return their result shape,
+			// with mode="unknown" when the check itself errored.
+			_ = err
+
+			out := map[string]any{
+				"mergeable":   isFF,
+				"mode":        mode,
+				"base_branch": baseRef,
+				"base_sha":    baseSHA,
+				"head_sha":    headSHA,
+				"hint":        hint,
+			}
+			return textResult(out), nil
+		},
+	}
+}
+
 // issueChildrenTool lists sub-issues whose parent is the current issue.
 // Returns a small array; merge_subissue flows in M4 use this.
 func (r *Registry) issueChildrenTool() *platformmcpdomain.Tool {
