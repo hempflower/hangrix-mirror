@@ -397,6 +397,15 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Create the branch ref in the bare repo so it appears in branch
+	// listings immediately — before anyone pushes. The new branch points
+	// at the base branch's tip, so a subsequent push is a normal
+	// fast-forward. If the base ref doesn't exist (empty repo, default
+	// branch not yet initialised), skip — the issue metadata is already
+	// committed and the branch will appear after the first push.
+	if err := h.git.CreateBranch(rc.fsPath, iss.BranchName, base); err != nil {
+		log.Printf("issue: create branch ref %s (base %s): %v", iss.BranchName, base, err)
+	}
 	// Fire issue.opened at the agent_session spawner so any role whose
 	// triggers include issue.opened wakes on its own. Failures don't
 	// block issue creation — operator repairs the host yaml then nudges
