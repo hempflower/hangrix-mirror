@@ -389,6 +389,86 @@ func (r *Registry) sessionRecoverTool() *platformmcpdomain.Tool {
 }
 
 
+// issueCreateTool creates a new issue (optionally as a child of the
+// current issue). When parent=true the new issue's base_branch is set
+// to the current issue's branch so merging a child fast-forwards into
+// the parent's working line. Author is the agent (authorID=0).
+func (r *Registry) issueCreateTool() *platformmcpdomain.Tool {
+	return &platformmcpdomain.Tool{
+		Name:        "issue_create",
+		Description: "Create a new issue (optionally as a child of the current one). Returns the new issue's number, title, state, and branch_name.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"title": map[string]any{
+					"type":        "string",
+					"description": "Title of the new issue (required, 1-200 chars).",
+				},
+				"body": map[string]any{
+					"type":        "string",
+					"description": "Optional body text for the new issue.",
+				},
+				"parent": map[string]any{
+					"type":        "boolean",
+					"description": "When true, create as a child of the current issue. Default false.",
+				},
+			},
+			"required": []string{"title"},
+		},
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
+			scope, err := r.loadScope(ctx, sess)
+			if err != nil {
+				return errorResult(err.Error()), nil
+			}
+			var req struct {
+				Title  string `json:"title"`
+				Body   string `json:"body"`
+				Parent bool   `json:"parent"`
+			}
+			if err := unmarshalArgs(args, &req); err != nil {
+				return errorResult("invalid arguments: " + err.Error()), nil
+			}
+			title := strings.TrimSpace(req.Title)
+			if title == "" || len(title) > 200 {
+				return errorResult("title is required (1-200 chars)"), nil
+			}
+
+			baseBranch := scope.repo.DefaultBranch
+			var parentID, parentNumber int64
+			if req.Parent {
+				baseBranch = scope.issue.BranchName
+				parentID = scope.issue.ID
+				parentNumber = scope.issue.Number
+			}
+
+			iss, err := r.deps.Issues.Create(ctx, scope.repo.ID, 0, title, req.Body, baseBranch, parentID, parentNumber)
+			if err != nil {
+				return errorResult("create issue: " + err.Error()), nil
+			}
+
+			// Fire issue.opened so subscribing roles wake.
+			if r.deps.Spawner != nil {
+				_, _ = r.deps.Spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
+					Trigger:     agentsconfig.TriggerIssueOpened,
+					CauseKind:   agentsessiondomain.CauseKindIssueOpened,
+					CauseID:     "",
+					RepoID:      scope.repo.ID,
+					IssueNumber: int32(iss.Number),
+					ActorID:     sess.CreatedBy,
+				})
+			}
+
+			return textResult(map[string]any{
+				"number":      iss.Number,
+				"title":       iss.Title,
+				"state":       string(iss.State),
+				"branch_name": iss.BranchName,
+			}), nil
+		},
+	}
+}
+
+
 // unmarshalArgs accepts an empty body as the empty object — LLMs
 // occasionally emit `""` for no-arg tools and we don't want that to
 // reject the call.
