@@ -480,11 +480,15 @@ const pushSnippet = computed(() => {
 // commentBody / parent / repo — those are either user-edited locally or
 // immutable for the page's lifetime. Hidden tabs pause the poll so we don't
 // burn requests while the user is elsewhere.
-const REFRESH_INTERVAL_MS = 15_000
+const REFRESH_INTERVAL_MS = 5_000
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 async function refreshLive() {
   if (!issue.value) return
+  if (issue.value.state === 'closed' || issue.value.state === 'merged') {
+    stopRefreshTimer()
+    return
+  }
   await Promise.all([loadIssue(), loadTimeline(), loadDiff(), loadCommits(), loadChildren(), loadMentionAgents()])
 }
 
