@@ -18,6 +18,8 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/local"
 )
 
+const atMentionReminder = "<system_reminder>Your last assistant message contains an `@`. If you meant to mention another role (e.g. `@agent-<role-key>`) or post to the issue thread, call the `issue_comment` tool and put the text in its `body` argument — plain assistant text is recorded on the session timeline but does NOT wake other roles or post a comment. If the `@` was incidental (an email address, a code snippet), ignore this reminder and continue.</system_reminder>"
+
 // Loop owns the message-pump that ties IPC, LLM and tools together.
 // It reads inbound frames from `in`, drives the LLM, dispatches tool
 // calls, and emits outbound frames on `out`. Single-instance; not safe
@@ -432,9 +434,16 @@ func (l *Loop) driveOneTurnWithID(
 		// the tool. Fires at most once per turn (see atMentionNudged
 		// docstring above) so a model that ignores us doesn't wedge the
 		// loop in an infinite re-prompt.
+		//
+		// CRITICAL: when the assistant message also carries tool_calls,
+		// the reminder must NOT be appended between the assistant entry
+		// and its tool results — upstream rejects an assistant(tool_calls)
+		// item whose results are not the immediately-following messages.
+		// Defer the nudge to after the tool-dispatch loop in that case.
+		shouldNudgeAtMention := !atMentionNudged && strings.ContainsRune(resp.Content, '@')
 		nudgedAtMentionThisRound := false
-		if !atMentionNudged && strings.ContainsRune(resp.Content, '@') {
-			cctx.AppendUser("<system_reminder>Your last assistant message contains an `@`. If you meant to mention another role (e.g. `@agent-<role-key>`) or post to the issue thread, call the `issue_comment` tool and put the text in its `body` argument — plain assistant text is recorded on the session timeline but does NOT wake other roles or post a comment. If the `@` was incidental (an email address, a code snippet), ignore this reminder and continue.</system_reminder>")
+		if shouldNudgeAtMention && len(resp.ToolCalls) == 0 {
+			cctx.AppendUser(atMentionReminder)
 			atMentionNudged = true
 			nudgedAtMentionThisRound = true
 		}
@@ -484,6 +493,13 @@ func (l *Loop) driveOneTurnWithID(
 			// size and the nudge can re-arm naturally if growth resumes.
 			l.compactNudged = false
 			_ = l.out.Log("info", "compact_session: session memory compacted")
+		}
+		// Deferred @-mention nudge: tool results are now in place, so the
+		// assistant(tool_calls) → tool(result)+ chain is intact and it's
+		// safe to append the reminder as the next user-role message.
+		if shouldNudgeAtMention {
+			cctx.AppendUser(atMentionReminder)
+			atMentionNudged = true
 		}
 	}
 

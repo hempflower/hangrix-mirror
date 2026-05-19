@@ -579,6 +579,185 @@ func TestLoopAtMentionNudge(t *testing.T) {
 	}
 }
 
+// TestLoopAtMentionNudgeWithToolCallsPreservesChain is the regression
+// guard for the bug where the @-mention reminder was injected between
+// an assistant(tool_calls=…) entry and its tool_result(s). Upstream
+// requires the tool_result items to immediately follow the assistant
+// message that produced the tool_calls — any user-role item wedged in
+// between makes the API reject the next call with a 400.
+//
+// Scenario: the first LLM call returns BOTH `@`-text content AND a
+// tool_call. The loop must (a) append the assistant message, (b)
+// dispatch the tool and append its result, and only THEN (c) append
+// the @-mention nudge. We verify the order of input items on the
+// second LLM call body.
+func TestLoopAtMentionNudgeWithToolCallsPreservesChain(t *testing.T) {
+	t.Parallel()
+
+	var (
+		llmCallCount   atomic.Int32
+		secondCallBody atomic.Value // []byte
+	)
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		callN := llmCallCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch callN {
+		case 1:
+			// Assistant returns `@` text AND a tool call in the same
+			// response. The tool name doesn't have to exist — the
+			// registry will surface an error result, which is still
+			// a valid function_call_output that needs to be paired
+			// with the function_call before any user-role item.
+			resp := map[string]any{
+				"id": "resp_1",
+				"output": []map[string]any{
+					{
+						"type": "message",
+						"role": "assistant",
+						"content": []map[string]any{
+							{"type": "output_text", "text": "@agent-frontend please review"},
+						},
+					},
+					{
+						"type":      "function_call",
+						"call_id":   "call_abc",
+						"name":      "noop_unknown_tool",
+						"arguments": "{}",
+					},
+				},
+				"usage": map[string]any{"input_tokens": 8, "output_tokens": 4, "total_tokens": 12},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case 2:
+			secondCallBody.Store(body)
+			resp := map[string]any{
+				"id": "resp_2",
+				"output": []map[string]any{
+					{
+						"type": "message",
+						"role": "assistant",
+						"content": []map[string]any{
+							{"type": "output_text", "text": "ack"},
+						},
+					},
+				},
+				"usage": map[string]any{"input_tokens": 20, "output_tokens": 1, "total_tokens": 21},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			http.Error(w, "unexpected extra LLM call", http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(llmServer.Close)
+
+	llmClient := llm.New(llmServer.URL, "test-token")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bundle := local.Build()
+	registry := tools.Build(bundle.Tools, nil, nil)
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdoutR.Close()
+
+	loop := runtime.NewLoop(
+		ipc.NewReader(stdinR),
+		ipc.NewWriter(stdoutW),
+		llmClient,
+		"gpt-4o-mini",
+		registry,
+		"system prompt for test",
+		bundle.Bash,
+		0,
+	)
+
+	loopErr := make(chan error, 1)
+	go func() {
+		loopErr <- loop.Run(ctx)
+		stdoutW.Close()
+	}()
+
+	go func() {
+		_, _ = stdinW.Write([]byte(`{"kind":"history","messages":[]}` + "\n"))
+		_, _ = stdinW.Write([]byte(`{"kind":"event","event":"issue.comment.mentioned","payload":{"body":"hello"}}` + "\n"))
+		time.Sleep(500 * time.Millisecond)
+		_, _ = stdinW.Write([]byte(`{"kind":"control","op":"shutdown"}` + "\n"))
+		stdinW.Close()
+	}()
+
+	if _, err := drainFrames(stdoutR); err != nil {
+		t.Fatalf("drain frames: %v", err)
+	}
+	if err := <-loopErr; err != nil {
+		t.Fatalf("loop returned error: %v", err)
+	}
+	if got := llmCallCount.Load(); got != 2 {
+		t.Fatalf("expected 2 LLM calls, got %d", got)
+	}
+
+	rawBody, _ := secondCallBody.Load().([]byte)
+	if len(rawBody) == 0 {
+		t.Fatal("did not capture second LLM call body")
+	}
+
+	var parsed struct {
+		Input []map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(rawBody, &parsed); err != nil {
+		t.Fatalf("unmarshal second call body: %v", err)
+	}
+
+	// Find the function_call we returned in turn 1 and assert the very
+	// next item is its function_call_output (NOT a user-role reminder).
+	var fcIdx = -1
+	for i, item := range parsed.Input {
+		if item["type"] == "function_call" && item["call_id"] == "call_abc" {
+			fcIdx = i
+			break
+		}
+	}
+	if fcIdx < 0 {
+		t.Fatalf("function_call for call_abc not found in second call input:\n%s", string(rawBody))
+	}
+	if fcIdx+1 >= len(parsed.Input) {
+		t.Fatalf("function_call is the last input item — no tool result followed:\n%s", string(rawBody))
+	}
+	next := parsed.Input[fcIdx+1]
+	if next["type"] != "function_call_output" || next["call_id"] != "call_abc" {
+		t.Fatalf("expected function_call_output immediately after function_call, got %v:\n%s", next, string(rawBody))
+	}
+
+	// And the system_reminder must appear, but only AFTER the tool result.
+	var reminderIdx = -1
+	for i, item := range parsed.Input {
+		if item["role"] != "user" {
+			continue
+		}
+		content, _ := item["content"].([]any)
+		if len(content) == 0 {
+			continue
+		}
+		first, _ := content[0].(map[string]any)
+		text, _ := first["text"].(string)
+		if strings.Contains(text, "system_reminder") && strings.Contains(text, "issue_comment") {
+			reminderIdx = i
+			break
+		}
+	}
+	if reminderIdx < 0 {
+		t.Fatalf("at-mention reminder not found in second call input:\n%s", string(rawBody))
+	}
+	if reminderIdx <= fcIdx+1 {
+		t.Fatalf("at-mention reminder (idx=%d) must come AFTER the tool result (idx=%d), but didn't — chain is broken:\n%s", reminderIdx, fcIdx+1, string(rawBody))
+	}
+}
+
 // drainFrames reads outbound JSON-Lines until EOF.
 func drainFrames(r io.Reader) ([]ipc.Outbound, error) {
 	dec := json.NewDecoder(r)
