@@ -719,7 +719,7 @@ async function deleteSession(s: AgentSession) {
     <div v-else class="grid gap-3 lg:grid-cols-[260px_minmax(0,1fr)]">
       <!-- ─── left pane: session list ───────────────────────────── -->
       <Card class="gap-0 py-0">
-        <CardContent class="p-0">
+        <CardContent class="max-h-48 overflow-y-auto p-0 lg:max-h-none">
           <ul class="divide-y">
             <li
               v-for="s in sessions"
@@ -757,7 +757,7 @@ async function deleteSession(s: AgentSession) {
       <Card v-if="selected" class="gap-0 py-0">
         <CardContent class="space-y-4 p-4">
           <!-- Identity strip -->
-          <header class="flex items-start justify-between gap-3 border-b pb-3">
+          <header class="flex flex-wrap items-start justify-between gap-3 border-b pb-3">
             <div class="min-w-0">
               <h3 class="flex items-center gap-2 text-base font-semibold">
                 <Bot class="size-4" /> {{ selected.role_key }}
@@ -766,7 +766,7 @@ async function deleteSession(s: AgentSession) {
                 {{ t('agentSessions.spawnedBy') }}: {{ causeLabel(selected) }}
               </p>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="flex flex-wrap items-center gap-2">
               <Badge :variant="statusVariant(selected.status)">
                 {{ selected.status }}
               </Badge>
@@ -918,7 +918,7 @@ async function deleteSession(s: AgentSession) {
                   <template v-if="m.kind === 'tool_call'">
                     <button
                       type="button"
-                      class="group flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-muted/40"
+                      class="group flex w-full flex-wrap items-center gap-x-2 gap-y-0.5 px-2 py-1 text-left hover:bg-muted/40"
                       @click="toggleExpand(m.seq)"
                     >
                       <ChevronRight
@@ -926,9 +926,9 @@ async function deleteSession(s: AgentSession) {
                         :class="{ 'rotate-90': isExpanded(m.seq) }"
                       />
                       <component :is="toolIcon(m.tool_name)" class="size-3.5 shrink-0 text-muted-foreground" />
-                      <span class="shrink-0 font-mono text-[10px] text-muted-foreground">{{ offsetFrom(selected.created_at, m.created_at) }}</span>
+                      <span class="hidden shrink-0 font-mono text-[10px] text-muted-foreground sm:inline">{{ offsetFrom(selected.created_at, m.created_at) }}</span>
                       <span class="shrink-0 text-xs font-semibold">{{ m.tool_name }}</span>
-                      <span class="truncate font-mono text-xs text-muted-foreground">{{ toolSummary(m) }}</span>
+                      <span class="min-w-0 truncate font-mono text-xs text-muted-foreground">{{ toolSummary(m) }}</span>
                       <span
                         v-if="toolBadge(m)"
                         class="ml-auto shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px]"
@@ -939,7 +939,7 @@ async function deleteSession(s: AgentSession) {
                     <div v-if="isExpanded(m.seq)" class="border-t bg-background/60">
                       <!-- read: numbered content (pre-formatted by the tool) -->
                       <template v-if="m.tool_name === 'read'">
-                        <pre class="max-h-96 overflow-auto bg-zinc-950 p-2 font-mono text-[11px] leading-relaxed text-zinc-100">{{ readResultContent(m) || '(empty)' }}</pre>
+                        <pre class="max-h-96 overflow-auto whitespace-pre-wrap break-all bg-zinc-950 p-2 font-mono text-[11px] leading-relaxed text-zinc-100">{{ readResultContent(m) || '(empty)' }}</pre>
                       </template>
 
                       <!-- edit: inline find/replace diff -->
@@ -993,14 +993,14 @@ async function deleteSession(s: AgentSession) {
                       <!-- grep: matches list, one per line -->
                       <template v-else-if="m.tool_name === 'grep'">
                         <div class="px-2 py-2">
-                          <pre class="max-h-96 overflow-auto rounded bg-muted/40 p-2 font-mono text-[11px] whitespace-pre">{{ grepMatches(m).join('\n') || '(no matches)' }}</pre>
+                          <pre class="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 font-mono text-[11px]">{{ grepMatches(m).join('\n') || '(no matches)' }}</pre>
                         </div>
                       </template>
 
                       <!-- glob: paths list -->
                       <template v-else-if="m.tool_name === 'glob'">
                         <div class="px-2 py-2">
-                          <pre class="max-h-96 overflow-auto rounded bg-muted/40 p-2 font-mono text-[11px] whitespace-pre">{{ globPaths(m).join('\n') || '(no paths)' }}</pre>
+                          <pre class="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 font-mono text-[11px]">{{ globPaths(m).join('\n') || '(no paths)' }}</pre>
                         </div>
                       </template>
 
@@ -1032,11 +1032,11 @@ async function deleteSession(s: AgentSession) {
                         <div class="space-y-2 px-2 py-2">
                           <div>
                             <p class="text-[10px] uppercase text-muted-foreground">args</p>
-                            <pre class="mt-0.5 overflow-x-auto rounded bg-muted/40 p-2 text-[11px]">{{ JSON.stringify(payloadArgs(m), null, 2) }}</pre>
+                            <pre class="mt-0.5 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 text-[11px]">{{ JSON.stringify(payloadArgs(m), null, 2) }}</pre>
                           </div>
                           <div>
                             <p class="text-[10px] uppercase text-muted-foreground">result</p>
-                            <pre class="mt-0.5 overflow-x-auto rounded bg-muted/40 p-2 text-[11px]">{{ JSON.stringify(payloadResult(m), null, 2) }}</pre>
+                            <pre class="mt-0.5 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 text-[11px]">{{ JSON.stringify(payloadResult(m), null, 2) }}</pre>
                           </div>
                         </div>
                       </template>
@@ -1074,7 +1074,7 @@ async function deleteSession(s: AgentSession) {
                     </button>
                     <pre
                       v-if="isExpanded(m.seq) && m.payload"
-                      class="mx-2 mb-1 overflow-x-auto rounded bg-muted/40 p-2 text-[11px]"
+                      class="mx-2 mb-1 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 text-[11px]"
                     >{{ payloadString(m) }}</pre>
                   </template>
                 </li>
