@@ -257,6 +257,13 @@ func All(client *Client) []local.Tool {
 				"message": stringProp("Optional merge commit message. Defaults to 'Merge issue #N: <title>'."),
 			}, nil),
 		},
+		{
+			name:        "session_recover",
+			description: "Recover a failed / succeeded / cancelled / idle session on the current issue. Sets it back to pending so the runner picks it up. Restricted to sessions on the same issue.",
+			schema: objectSchema(map[string]any{
+				"session_id": intProp("The session ID to recover. Must be on the same issue as the caller."),
+			}, []string{"session_id"}),
+		},
 	}
 	out := make([]local.Tool, 0, len(descriptors))
 	for _, d := range descriptors {
