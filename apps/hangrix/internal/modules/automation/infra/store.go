@@ -2,25 +2,39 @@ package infra
 
 import (
 	"context"
+	"embed"
 	"errors"
+	"fmt"
+	"io/fs"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation/infra/automationdb"
 )
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
 
 // PostgresStore implements domain.Store via sqlc-generated queries.
 type PostgresStore struct {
 	q *automationdb.Queries
 }
 
-func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
+func NewPostgresStore(pool *pgxpool.Pool, q *automationdb.Queries) *PostgresStore {
+	sub, err := fs.Sub(migrationsFS, "migrations")
+	if err != nil {
+		panic(fmt.Errorf("automation migrations sub-fs: %w", err))
+	}
+	if err := database.Migrate(pool, sub, "goose_automation", "."); err != nil {
+		panic(fmt.Errorf("apply automation migrations: %w", err))
+	}
 	return &PostgresStore{
-		q: automationdb.New(pool),
+		q: q,
 	}
 }
 

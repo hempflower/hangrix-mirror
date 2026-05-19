@@ -8,28 +8,33 @@ import (
 	"text/template"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
+	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 )
 
 // Executor runs a single automation task: records the run, creates an
-// issue, and updates the run status.
+// issue, fires the issue.opened event to wake agents, and updates the run
+// status.
 type Executor struct {
-	runs  domain.Store
-	issue issuedomain.Store
+	runs    domain.Store
+	issue   issuedomain.Store
+	spawner agentsessiondomain.Spawner
 }
 
 // ExecutorDeps wires the Executor's dependencies through ioc.
 type ExecutorDeps struct {
-	Runs  domain.Store
-	Issue issuedomain.Store
+	Runs    domain.Store
+	Issue   issuedomain.Store
+	Spawner agentsessiondomain.Spawner
 }
 
 // NewExecutor returns a ready-to-use Executor.
 func NewExecutor(deps *ExecutorDeps) *Executor {
 	return &Executor{
-		runs:  deps.Runs,
-		issue: deps.Issue,
+		runs:    deps.Runs,
+		issue:   deps.Issue,
+		spawner: deps.Spawner,
 	}
 }
 
@@ -57,7 +62,24 @@ func (e *Executor) Execute(ctx context.Context, repoID int64, defaultBranch stri
 		return nil, fmt.Errorf("create issue: %w", err)
 	}
 
-	// 4. Mark the run as complete.
+	// 4. Fire issue.opened so roles with that trigger wake. Nil-safe for
+	//    test configurations without the agent_session module; production
+	//    ioc binding always populates spawner. Failures don't block the
+	//    run — logs surface the error.
+	if e.spawner != nil {
+		if _, err := e.spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
+			Trigger:     agentsconfig.TriggerIssueOpened,
+			CauseKind:   agentsessiondomain.CauseKindIssueOpened,
+			CauseID:     "",
+			RepoID:      repoID,
+			IssueNumber: int32(issue.Number),
+			ActorID:     authorUserID,
+		}); err != nil {
+			log.Printf("automation executor: fire issue.opened repo=%d issue=%d: %v", repoID, issue.Number, err)
+		}
+	}
+
+	// 5. Mark the run as complete.
 	if err := e.runs.CompleteRun(ctx, run.ID, issue.ID); err != nil {
 		log.Printf("automation executor: complete run %d: %v", run.ID, err)
 		// The issue was created; the run update is best-effort. Return

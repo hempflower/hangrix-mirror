@@ -113,6 +113,63 @@ func (q *Queries) LastSuccessfulAutomationRun(ctx context.Context, arg LastSucce
 	return i, err
 }
 
+const listAllRepos = `-- name: ListAllRepos :many
+SELECT
+    r.id,
+    r.name,
+    r.default_branch,
+    COALESCE(u.username, o.name) AS owner_name,
+    CASE WHEN r.owner_user_id IS NOT NULL THEN 'user' ELSE 'org' END AS owner_kind,
+    COALESCE(r.owner_user_id, r.owner_org_id) AS owner_id,
+    COALESCE(r.owner_user_id,
+        (SELECT om.user_id FROM organization_members om
+         WHERE om.org_id = r.owner_org_id AND om.role = 'owner'
+         LIMIT 1)
+    ) AS author_user_id
+FROM repos r
+LEFT JOIN users u ON r.owner_user_id = u.id
+LEFT JOIN organizations o ON r.owner_org_id = o.id
+ORDER BY r.id
+`
+
+type ListAllReposRow struct {
+	ID            int64
+	Name          string
+	DefaultBranch string
+	OwnerName     string
+	OwnerKind     string
+	OwnerID       pgtype.Int8
+	AuthorUserID  pgtype.Int8
+}
+
+func (q *Queries) ListAllRepos(ctx context.Context) ([]ListAllReposRow, error) {
+	rows, err := q.db.Query(ctx, listAllRepos)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAllReposRow{}
+	for rows.Next() {
+		var i ListAllReposRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DefaultBranch,
+			&i.OwnerName,
+			&i.OwnerKind,
+			&i.OwnerID,
+			&i.AuthorUserID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAutomationRuns = `-- name: ListAutomationRuns :many
 SELECT id, repo_id, task_name, issue_id, status, error_message, started_at, finished_at, created_at
 FROM automation_runs
