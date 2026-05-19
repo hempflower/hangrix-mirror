@@ -172,3 +172,25 @@ roles:
     llm:
       model: gpt-5.4
       reasoning_effort: high
+
+  web-copy-lint:
+    triggers:
+      commit.pushed:
+        paths:
+          - "apps/web/**"
+        paths_ignore:
+          - "apps/web/dist/**"
+          - "apps/web/.output/**"
+          - "apps/web/.nuxt/**"
+      issue.comment:
+        mentioned_only: true
+    can:
+      - issue_read
+      - issue_diff
+      - issue_comment
+      - roster_list
+    prompt_file: .hangrix/prompts/web-copy-lint.md
+    llm:
+      model: gpt-5.4
+      reasoning_effort: low
+
