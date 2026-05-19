@@ -138,6 +138,8 @@ type publicIssue struct {
 	Number         int64      `json:"number"`
 	AuthorID       int64      `json:"author_id"`
 	AuthorUsername string     `json:"author_username"`
+	// AgentRole is set on agent-created issues; empty for human-created.
+	AgentRole      string     `json:"agent_role,omitempty"`
 	Title          string     `json:"title"`
 	Body           string     `json:"body"`
 	State          string     `json:"state"`
@@ -158,6 +160,7 @@ func toPublic(i *domain.Issue) publicIssue {
 		Number:         i.Number,
 		AuthorID:       i.AuthorID,
 		AuthorUsername: i.AuthorName,
+		AgentRole:      i.AgentRole,
 		Title:          i.Title,
 		Body:           i.Body,
 		State:          string(i.State),
@@ -389,7 +392,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	caller, _ := authdomain.UserFromRequest(r)
-	iss, err := h.issues.Create(r.Context(), rc.repo.ID, caller.ID, title, req.Body, base, parentID, parentNumber)
+	iss, err := h.issues.Create(r.Context(), rc.repo.ID, caller.ID, title, req.Body, base, "", parentID, parentNumber)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return

@@ -13,14 +13,18 @@ RETURNING (next - 1)::BIGINT AS number;
 -- ---- issues ----
 
 -- name: CreateIssue :one
+-- author_id and agent_role are mutually exclusive (CHECK constraint).
+-- Human path: sqlc.narg('author_id') with the user's ID, agent_role=''.
+-- Agent path: author_id=NULL (omit), agent_role with the role key.
 INSERT INTO issues (
-    repo_id, number, author_id, title, body, branch_name,
+    repo_id, number, author_id, agent_role, title, body, branch_name,
     base_branch, parent_id, parent_number
 )
 VALUES (
     sqlc.arg('repo_id'),
     sqlc.arg('number'),
-    sqlc.arg('author_id'),
+    sqlc.narg('author_id'),
+    sqlc.arg('agent_role'),
     sqlc.arg('title'),
     sqlc.arg('body'),
     sqlc.arg('branch_name'),
@@ -31,24 +35,30 @@ VALUES (
 RETURNING id, state, created_at, updated_at;
 
 -- name: GetIssueByNumber :one
-SELECT i.id, i.repo_id, i.number, i.author_id, u.username,
-       i.title, i.body, i.state, i.branch_name, i.base_branch,
+SELECT i.id, i.repo_id, i.number,
+       COALESCE(i.author_id, 0)::BIGINT AS author_id,
+       COALESCE(u.username, '')         AS author_name,
+       i.agent_role, i.title, i.body, i.state,
+       i.branch_name, i.base_branch,
        i.head_sha, i.merge_commit_sha, i.merged_at,
        COALESCE(i.parent_id, 0)::BIGINT AS parent_id, i.parent_number,
        i.created_at, i.updated_at
 FROM issues i
-JOIN users u ON u.id = i.author_id
+LEFT JOIN users u ON u.id = i.author_id
 WHERE i.repo_id = sqlc.arg('repo_id') AND i.number = sqlc.arg('number');
 
 -- name: ListIssues :many
 -- State arg is optional (NULL = "any state").
-SELECT i.id, i.repo_id, i.number, i.author_id, u.username,
-       i.title, i.body, i.state, i.branch_name, i.base_branch,
+SELECT i.id, i.repo_id, i.number,
+       COALESCE(i.author_id, 0)::BIGINT AS author_id,
+       COALESCE(u.username, '')         AS author_name,
+       i.agent_role, i.title, i.body, i.state,
+       i.branch_name, i.base_branch,
        i.head_sha, i.merge_commit_sha, i.merged_at,
        COALESCE(i.parent_id, 0)::BIGINT AS parent_id, i.parent_number,
        i.created_at, i.updated_at
 FROM issues i
-JOIN users u ON u.id = i.author_id
+LEFT JOIN users u ON u.id = i.author_id
 WHERE i.repo_id = sqlc.arg('repo_id')
   AND (sqlc.narg('state')::TEXT IS NULL OR i.state = sqlc.narg('state'))
 ORDER BY i.number DESC
@@ -60,13 +70,16 @@ WHERE i.repo_id = sqlc.arg('repo_id')
   AND (sqlc.narg('state')::TEXT IS NULL OR i.state = sqlc.narg('state'));
 
 -- name: ListIssueChildren :many
-SELECT i.id, i.repo_id, i.number, i.author_id, u.username,
-       i.title, i.body, i.state, i.branch_name, i.base_branch,
+SELECT i.id, i.repo_id, i.number,
+       COALESCE(i.author_id, 0)::BIGINT AS author_id,
+       COALESCE(u.username, '')         AS author_name,
+       i.agent_role, i.title, i.body, i.state,
+       i.branch_name, i.base_branch,
        i.head_sha, i.merge_commit_sha, i.merged_at,
        COALESCE(i.parent_id, 0)::BIGINT AS parent_id, i.parent_number,
        i.created_at, i.updated_at
 FROM issues i
-JOIN users u ON u.id = i.author_id
+LEFT JOIN users u ON u.id = i.author_id
 WHERE i.parent_id = sqlc.arg('parent_id')
 ORDER BY i.number ASC;
 
