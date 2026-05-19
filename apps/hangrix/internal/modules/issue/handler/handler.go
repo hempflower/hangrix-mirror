@@ -655,6 +655,12 @@ func (h *Handler) children(w http.ResponseWriter, r *http.Request) {
 // Empty head (no commits pushed yet) yields []; bad-ref / missing-branch on
 // disk also yields [] rather than 500 because the UI should render a clean
 // "nothing here yet" state in both cases.
+//
+// Once the issue is merged the base branch has absorbed every commit on the
+// issue branch (trivially for fast-forward, via the merge commit's second
+// parent otherwise), so the live "ancestor of base" check would short-circuit
+// to []. The merge handler captures the pre-merge base tip on the branch_merged
+// event payload; we use that as the stop point instead.
 func (h *Handler) commits(w http.ResponseWriter, r *http.Request) {
 	rc, ok := h.resolveRepo(w, r)
 	if !ok {
@@ -678,15 +684,55 @@ func (h *Handler) commits(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	stopRef := iss.BaseBranch
+	if iss.State == domain.StateMerged {
+		if pre := h.preMergeBaseRef(r.Context(), rc.fsPath, iss); pre != "" {
+			stopRef = pre
+		}
+	}
 	out := make([]*gitdomain.Commit, 0, len(all))
 	for _, c := range all {
-		isAncestor, err := h.git.IsAncestor(rc.fsPath, c.SHA, iss.BaseBranch)
+		isAncestor, err := h.git.IsAncestor(rc.fsPath, c.SHA, stopRef)
 		if err == nil && isAncestor {
 			break
 		}
 		out = append(out, c)
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// preMergeBaseRef recovers the base-branch tip as of the moment iss was
+// merged. New merges stamp this onto the branch_merged event payload; for
+// legacy events we can still reconstruct it for "merge-commit" mode by
+// reading the merge commit's first parent. Returns "" if neither path works
+// (e.g. legacy fast-forward merge) — callers should fall back to the live
+// base branch and accept that the list may collapse to empty.
+func (h *Handler) preMergeBaseRef(ctx context.Context, fsPath string, iss *domain.Issue) string {
+	events, err := h.issues.ListEvents(ctx, iss.ID)
+	if err != nil {
+		return ""
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		e := events[i]
+		if e.Kind != domain.EventBranchMerged {
+			continue
+		}
+		var p domain.BranchMergedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return ""
+		}
+		if p.BaseSHA != "" {
+			return p.BaseSHA
+		}
+		if p.Mode == "merge-commit" && iss.MergeCommitSHA != "" {
+			mc, err := h.git.ListCommits(fsPath, iss.MergeCommitSHA, 0, 1)
+			if err == nil && len(mc) == 1 && len(mc[0].ParentSHAs) > 0 {
+				return mc[0].ParentSHAs[0]
+			}
+		}
+		return ""
+	}
+	return ""
 }
 
 // diff returns the diff "base..issue_branch". When the issue branch has not
@@ -852,6 +898,11 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusConflict, "issue branch has no commits yet")
 		return
 	}
+	// Snapshot the base branch tip *before* merging — for fast-forward
+	// merges the base is rewritten to the issue tip, so we'd otherwise
+	// lose the divergence point and the post-merge commits view would
+	// short-circuit to empty.
+	preMergeBaseSHA, _ := h.git.ResolveCommit(rc.fsPath, iss.BaseBranch)
 
 	var req mergeReq
 	_ = json.NewDecoder(r.Body).Decode(&req)
@@ -885,6 +936,7 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	mergePayload, _ := json.Marshal(domain.BranchMergedPayload{
 		IntoBranch: iss.BaseBranch,
 		FromBranch: iss.BranchName,
+		BaseSHA:    preMergeBaseSHA,
 		MergeSHA:   mergeSHA,
 		Mode:       mode,
 	})

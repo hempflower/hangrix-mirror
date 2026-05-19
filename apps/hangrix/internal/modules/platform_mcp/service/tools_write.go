@@ -238,6 +238,10 @@ func (r *Registry) issueMergeTool() *platformmcpdomain.Tool {
 			if err != nil || headSHA == "" {
 				return errorResult("issue branch has no commits yet"), nil
 			}
+			// Snapshot base tip before MergeBranch rewrites it; needed so
+			// post-merge commit listings can recover the divergence point
+			// even after a fast-forward.
+			preMergeBaseSHA, _ := r.deps.Git.ResolveCommit(scope.fsPath, scope.issue.BaseBranch)
 
 			var req struct {
 				Message string `json:"message"`
@@ -270,6 +274,7 @@ func (r *Registry) issueMergeTool() *platformmcpdomain.Tool {
 			mergePayload, _ := json.Marshal(issuedomain.BranchMergedPayload{
 				IntoBranch: scope.issue.BaseBranch,
 				FromBranch: scope.issue.BranchName,
+				BaseSHA:    preMergeBaseSHA,
 				MergeSHA:   mergeSHA,
 				Mode:       mode,
 			})

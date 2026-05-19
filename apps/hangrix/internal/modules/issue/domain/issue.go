@@ -169,10 +169,14 @@ type CommitPushedSummary struct {
 
 // BranchMergedPayload is the JSON shape stored in Event.Payload for
 // EventBranchMerged. Mode is one of "fast-forward" / "merge-commit" /
-// "up-to-date" — mirrors the git domain's MergeBranch return.
+// "up-to-date" — mirrors the git domain's MergeBranch return. BaseSHA is
+// the commit BaseBranch pointed at immediately *before* the merge, captured
+// so post-merge views (e.g. the commits tab) can recover the "commits this
+// branch introduced" set after a fast-forward has erased the divergence.
 type BranchMergedPayload struct {
 	IntoBranch string `json:"into_branch"`
 	FromBranch string `json:"from_branch"`
+	BaseSHA    string `json:"base_sha,omitempty"`
 	MergeSHA   string `json:"merge_sha"`
 	Mode       string `json:"mode"`
 }

@@ -94,6 +94,7 @@ export interface CommitPushedPayload {
 export interface BranchMergedPayload {
   into_branch: string
   from_branch: string
+  base_sha?: string
   merge_sha: string
   mode: string
 }
