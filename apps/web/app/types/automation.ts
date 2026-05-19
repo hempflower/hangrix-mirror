@@ -17,6 +17,7 @@ export interface AutomationRun {
   repo_id: number
   task_name: string
   issue_id: number | null
+  issue_number: number | null
   status: AutomationRunStatus
   error_message: string
   started_at: string
