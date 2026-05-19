@@ -30,6 +30,7 @@ import (
 
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/kv"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
@@ -44,6 +45,7 @@ type Handler struct {
 	repos      repodomain.Store
 	storage    *repoinfra.Storage
 	git        gitdomain.Git
+		cache      *kv.RepoCache
 	users      userdomain.Repo
 	resolver   orgdomain.Resolver
 	middleware authdomain.Middleware
@@ -65,6 +67,9 @@ type HandlerDeps struct {
 	Users      userdomain.Repo
 	Resolver   orgdomain.Resolver
 	Middleware authdomain.Middleware
+		// Cache provides Redis-backed invalidation for git-read caches.
+		// When nil (tests, no Redis) the handler silently skips flushes.
+		Cache *kv.RepoCache
 	// Spawner + Archiver + Auditor + Controller come from the
 	// agent_session module. Wired through ioc.
 	Spawner    agentsessiondomain.Spawner
@@ -79,6 +84,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		repos:      deps.Repos,
 		storage:    deps.Storage,
 		git:        deps.Git,
+			cache:      deps.Cache,
 		users:      deps.Users,
 		resolver:   deps.Resolver,
 		middleware: deps.Middleware,
@@ -391,6 +397,23 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		parentNumber = parent.Number
 	}
 
+		// Verify the base ref is resolvable before writing anything to the
+		// database — empty repos (no commits) and unresolvable base refs must
+		// fail early so we never leave a DB record with no matching git ref.
+		baseSHA, err := h.git.ResolveCommit(rc.fsPath, base)
+		if err != nil {
+			if errors.Is(err, gitdomain.ErrRefNotFound) {
+				httpx.WriteError(w, http.StatusBadRequest, "base ref not found: "+base)
+			} else {
+				httpx.WriteError(w, http.StatusInternalServerError, "resolve base ref: "+err.Error())
+			}
+			return
+		}
+		if baseSHA == "" {
+			httpx.WriteError(w, http.StatusBadRequest, "base branch has no commits yet: "+base)
+			return
+		}
+
 	caller, _ := authdomain.UserFromRequest(r)
 	iss, err := h.issues.Create(r.Context(), rc.repo.ID, caller.ID, title, req.Body, base, "", parentID, parentNumber)
 	if err != nil {
@@ -399,12 +422,18 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	// Create the branch ref in the bare repo so it appears in branch
 	// listings immediately — before anyone pushes. The new branch points
-	// at the base branch's tip, so a subsequent push is a normal
-	// fast-forward. If the base ref doesn't exist (empty repo, default
-	// branch not yet initialised), skip — the issue metadata is already
-	// committed and the branch will appear after the first push.
+	// at the base branch's tip (pre-validated above), so a subsequent
+	// push is a normal fast-forward. If branch creation fails here, it's
+	// a real error — the caller already validated the base ref — and we
+	// must not return 201 for an issue that has no matching git ref.
 	if err := h.git.CreateBranch(rc.fsPath, iss.BranchName, base); err != nil {
-		log.Printf("issue: create branch ref %s (base %s): %v", iss.BranchName, base, err)
+		httpx.WriteError(w, http.StatusInternalServerError, "create branch ref: "+err.Error())
+		return
+	}
+	// Invalidate the /refs cache for this repo so the new branch is
+	// visible immediately — no waiting for the 15s TTL to expire.
+	if h.cache != nil {
+		h.cache.InvalidateRepo(r.Context(), rc.repo.ID)
 	}
 	// Fire issue.opened at the agent_session spawner so any role whose
 	// triggers include issue.opened wakes on its own. Failures don't
