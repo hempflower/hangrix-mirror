@@ -101,3 +101,80 @@ func TestParseMentions(t *testing.T) {
 		})
 	}
 }
+
+func TestHasBacktickWrappedMention(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{
+			name: "single-backtick wrapped mention",
+			in:   "use `@agent-server` to ping",
+			want: true,
+		},
+		{
+			name: "dual-backtick wrapped mention",
+			in:   "see ``@agent-backend`` for details",
+			want: true,
+		},
+		{
+			name: "bare mention not wrapped",
+			in:   "hey @agent-server please help",
+			want: false,
+		},
+		{
+			name: "mention inside fenced code block — skipped",
+			in:   "```\n`@agent-server`\n```\n@agent-reviewer ok",
+			want: false,
+		},
+		{
+			name: "mention inside indented code — skipped",
+			in:   "    `@agent-server`",
+			want: false,
+		},
+		{
+			name: "mention inside quote block — skipped",
+			in:   "> `@agent-server`",
+			want: false,
+		},
+		{
+			name: "no mention at all",
+			in:   "just some text with `code` spans",
+			want: false,
+		},
+		{
+			name: "empty body",
+			in:   "",
+			want: false,
+		},
+		{
+			name: "backtick wrapped mention mid-sentence",
+			in:   "please route to `@agent-backend` for the fix",
+			want: true,
+		},
+		{
+			name: "multiple spans, one has mention",
+			in:   "`code` and `@agent-reviewer` in same line",
+			want: true,
+		},
+		{
+			name: "unbalanced backtick — mention is literal",
+			in:   "stray `@agent-server oops",
+			want: false,
+		},
+		{
+			name: "@agent- without backtick is fine",
+			in:   "@agent-backend please review",
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := HasBacktickWrappedMention(tc.in)
+			if got != tc.want {
+				t.Fatalf("HasBacktickWrappedMention(%q): got %v want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}

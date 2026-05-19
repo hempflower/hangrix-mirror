@@ -60,6 +60,9 @@ func (r *Registry) issueCommentTool() *platformmcpdomain.Tool {
 			if body == "" {
 				return errorResult("body is required"), nil
 			}
+			if agentsconfig.HasBacktickWrappedMention(body) {
+				return errorResult("body contains an @agent-<role> mention wrapped in backticks — remove the backticks around the mention so the parser can see it, or omit the mention entirely"), nil
+			}
 			if sess.RoleKey == "" {
 				return errorResult("session has no role_key (admin smoke path?)"), nil
 			}
