@@ -181,10 +181,6 @@ func (g *stubGit) CheckFastForward(string, string, string) (bool, string, error)
 func (g *stubGit) MergeBranch(string, string, string, string, gitdomain.Signature) (string, string, error) {
 	panic("MergeBranch not stubbed")
 }
-func (g *stubGit) CheckFastForward(string, string, string) (bool, string, error) {
-	panic("CheckFastForward not stubbed")
-}
-
 
 // stubRunnerRepo satisfies runnerdomain.Repo for the spawner / archiver /
 // auditor surface. The actual storage layer is the runner module's
