@@ -1921,8 +1921,12 @@ func (h *Handler) patchMember(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
-	repo, ok := h.resolveRepoForMembers(w, r)
+	repo, ok := h.resolveRepoForRead(w, r)
 	if !ok {
+		return
+	}
+	if repo.OwnerKind != domain.OwnerKindUser {
+		httpx.WriteError(w, http.StatusBadRequest, "repo members are only supported on user-owned repos")
 		return
 	}
 	target, ok := h.loadMemberUser(w, r)
@@ -1933,7 +1937,6 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authdomain.UserFromRequest(r)
 	// A user may always remove themselves; otherwise it's owner-only.
 	if caller.ID != target.ID {
-		// Already gated by resolveRepoForMembers, but double-check.
 		can, err := h.canManageRepo(r.Context(), caller, repo)
 		if err != nil || !can {
 			httpx.WriteError(w, http.StatusForbidden, "forbidden")
