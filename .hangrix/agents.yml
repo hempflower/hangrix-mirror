@@ -1,0 +1,168 @@
+# Hangrix host-repo agent team.
+#
+# This repo IS the Hangrix platform — the parser that enforces this file
+# lives at apps/hangrix/internal/agentsconfig, the schema at
+# docs/agents.schema.json, and the reference at docs/agent-config.md.
+# Changes to the schema MUST be applied here AND in the starter template
+# at apps/hangrix/internal/modules/repo/templates/initial/.hangrix/agents.yml.
+
+version: 1
+
+container:
+  build:
+    dockerfile: .hangrix/agent.Dockerfile
+    context: .
+  # The image bakes in s6-overlay as PID 1, which auto-starts postgres
+  # + redis. Leaving entrypoint unset would make the runner override
+  # PID 1 with `sleep infinity` and the services would never come up.
+  entrypoint: ["/init"]
+  env:
+    NODE_ENV: development
+  volumes:
+    - { name: pnpm-store, mount: /caches/pnpm }
+    - { name: go-mod, mount: /go/pkg/mod }
+    - { name: go-build, mount: /home/vscode/.cache/go-build }
+
+llm:
+  model: deepseek-v4-pro
+  reasoning_effort: high
+  max_context_tokens: 800000
+  max_output_tokens: 256000
+
+roles:
+  maintainer:
+    triggers:
+      issue.opened: {}
+      issue.comment: {}
+      review_vote.posted: {}
+    can:
+      - issue_read
+      - issue_diff
+      - issue_comment
+      - issue_review_vote
+      - issue_checks
+      - issue_merge
+      - issue_close
+      - roster_list
+    prompt_file: .hangrix/prompts/maintainer.md
+    llm:
+      reasoning_effort: max   # bump only this; model / max_*_tokens inherit from team
+  product-designer:
+    triggers:
+      issue.comment:
+        mentioned_only: true
+    can: [issue_read, issue_diff, issue_comment, roster_list]
+    prompt_file: .hangrix/prompts/product-designer.md
+
+  tester:
+    triggers:
+      commit.pushed:
+        paths_ignore:
+          - "**/*.md"
+          - "**/testdata/**"
+          - ".hangrix/**"
+          - "apps/hangrix/internal/web/dist/**"
+      issue.comment:
+        mentioned_only: true
+    can:
+      - issue_read
+      - issue_diff
+      - issue_comment
+    prompt_file: .hangrix/prompts/tester.md
+
+  server:
+    triggers:
+      issue.comment:
+        mentioned_only: true
+    scope:
+      paths:
+        - "apps/hangrix/**"
+        - "pkg/**"
+        - "go.work"
+        - "go.work.sum"
+    can:
+      - issue_read
+      - issue_diff
+      - issue_comment
+      - roster_list
+    prompt_file: .hangrix/prompts/server.md
+
+  server-reviewer:
+    triggers:
+      commit.pushed:
+        paths:
+          - "apps/hangrix/**"
+          - "pkg/**"
+        paths_ignore:
+          - "apps/hangrix/internal/web/dist/**"
+          - "**/*db/**"
+      issue.comment:
+        mentioned_only: true
+    can: [issue_read, issue_diff, issue_comment, issue_review_vote, roster_list]
+    prompt_file: .hangrix/prompts/server-reviewer.md
+    llm:
+      model: claude-opus-4-7
+      reasoning_effort: high
+      max_output_tokens: 16000
+
+  runtime:
+    triggers:
+      issue.comment:
+        mentioned_only: true
+    scope:
+      paths:
+        - "apps/hangrix-agent/**"
+        - "apps/hangrix-runner/**"
+    can:
+      - issue_read
+      - issue_diff
+      - issue_comment
+      - roster_list
+    prompt_file: .hangrix/prompts/runtime.md
+
+  runtime-reviewer:
+    triggers:
+      commit.pushed:
+        paths:
+          - "apps/hangrix-agent/**"
+          - "apps/hangrix-runner/**"
+      issue.comment:
+        mentioned_only: true
+    can: [issue_read, issue_diff, issue_comment, issue_review_vote, roster_list]
+    prompt_file: .hangrix/prompts/runtime-reviewer.md
+    llm:
+      model: claude-opus-4-7
+      reasoning_effort: high
+      max_output_tokens: 16000
+
+  web:
+    triggers:
+      issue.comment:
+        mentioned_only: true
+    scope:
+      paths:
+        - "apps/web/**"
+    can:
+      - issue_read
+      - issue_diff
+      - issue_comment
+      - roster_list
+    prompt_file: .hangrix/prompts/web.md
+
+  web-reviewer:
+    triggers:
+      commit.pushed:
+        paths:
+          - "apps/web/**"
+        paths_ignore:
+          - "apps/web/dist/**"
+          - "apps/web/.output/**"
+          - "apps/web/.nuxt/**"
+      issue.comment:
+        mentioned_only: true
+    can: [issue_read, issue_diff, issue_comment, issue_review_vote, roster_list]
+    prompt_file: .hangrix/prompts/web-reviewer.md
+    llm:
+      model: claude-opus-4-7
+      reasoning_effort: high
+      max_output_tokens: 16000
