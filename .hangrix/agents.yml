@@ -40,6 +40,7 @@ roles:
       - issue_diff
       - issue_mergeable
       - issue_comment
+      - issue_create
       - issue_review_vote
       - issue_checks
       - issue_merge
@@ -52,7 +53,7 @@ roles:
     triggers:
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_diff, issue_comment, roster_list]
+    can: [issue_read, issue_diff, issue_comment, issue_create, roster_list]
     prompt_file: .hangrix/prompts/product-designer.md
 
   tester:
@@ -86,6 +87,7 @@ roles:
       - issue_diff
       - issue_mergeable
       - issue_comment
+      - issue_create
       - roster_list
     prompt_file: .hangrix/prompts/server.md
 
@@ -119,6 +121,7 @@ roles:
       - issue_diff
       - issue_mergeable
       - issue_comment
+      - issue_create
       - roster_list
     prompt_file: .hangrix/prompts/runtime.md
 
@@ -147,6 +150,7 @@ roles:
       - issue_read
       - issue_diff
       - issue_comment
+      - issue_create
       - roster_list
     prompt_file: .hangrix/prompts/web.md
 
