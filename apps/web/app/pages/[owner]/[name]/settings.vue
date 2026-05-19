@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { toTypedSchema } from '@vee-validate/zod'
 import * as z from 'zod'
-import { AlertTriangle, Clock, Plus, Settings, Shield, Trash2 } from 'lucide-vue-next'
+import { AlertTriangle, Clock, Plus, Settings, Shield, Trash2, Users } from 'lucide-vue-next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -36,7 +36,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import type { BranchProtection, PublicRepo, RepoRefs } from '~/types/repo'
+import type { BranchProtection, PublicRepo, RepoMember, RepoMemberListResp, RepoRefs } from '~/types/repo'
 import AutomationSettings from '@/components/repo/AutomationSettings.vue'
 
 definePageMeta({ layout: 'repo' })
@@ -100,6 +100,79 @@ const canManage = computed(() => {
   return (myOrgs.value ?? []).some(o => o.id === repo.value!.owner_id)
 })
 
+const canManageMembers = computed(() => {
+  return canManage.value && repo.value?.owner_kind === 'user'
+})
+
+const members = ref<RepoMember[]>([])
+const membersError = ref<string | null>(null)
+
+const addOpen = ref(false)
+const addUsername = ref('')
+const addRole = ref<'read' | 'write'>('read')
+const addError = ref<string | null>(null)
+const adding = ref(false)
+
+async function loadMembers() {
+  membersError.value = null
+  try {
+    const resp = await $fetch<RepoMemberListResp>(
+      `/api/repos/${owner.value}/${name.value}/members`,
+      { credentials: 'include' },
+    )
+    members.value = resp.items
+  } catch (e: any) {
+    membersError.value = e?.data?.error ?? t('repo.members.loadFailed')
+    members.value = []
+  }
+}
+
+async function onAddMember() {
+  addError.value = null
+  adding.value = true
+  try {
+    await $fetch(`/api/repos/${owner.value}/${name.value}/members`, {
+      method: 'POST',
+      credentials: 'include',
+      body: { username: addUsername.value.trim(), role: addRole.value },
+    })
+    addOpen.value = false
+    addUsername.value = ''
+    addRole.value = 'read'
+    await loadMembers()
+  } catch (e: any) {
+    addError.value = e?.data?.error ?? t('repo.members.addFailed')
+  } finally {
+    adding.value = false
+  }
+}
+
+async function onRoleChange(member: RepoMember, newRole: 'read' | 'write') {
+  if (newRole === member.role) return
+  try {
+    await $fetch(`/api/repos/${owner.value}/${name.value}/members/${member.username}`, {
+      method: 'PATCH',
+      credentials: 'include',
+      body: { role: newRole },
+    })
+    await loadMembers()
+  } catch (e: any) {
+    membersError.value = e?.data?.error ?? t('repo.members.roleFailed')
+  }
+}
+
+async function onRemove(member: RepoMember) {
+  try {
+    await $fetch(`/api/repos/${owner.value}/${name.value}/members/${member.username}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    await loadMembers()
+  } catch (e: any) {
+    membersError.value = e?.data?.error ?? t('repo.members.removeFailed')
+  }
+}
+
 const transferOpen = ref(false)
 const transferTarget = ref('')
 const transferConfirm = ref('')
@@ -162,6 +235,7 @@ async function load() {
       }
     }
     await loadProtections()
+    await loadMembers()
   } catch (e: any) {
     loadError.value = e?.data?.error ?? t('repo.notFound')
   } finally {
@@ -339,6 +413,10 @@ onMounted(load)
         <TabsTrigger value="general">
           <Settings class="size-4" />
           <span class="ml-1.5">{{ t('repo.settings.general') }}</span>
+        </TabsTrigger>
+        <TabsTrigger v-if="canManageMembers" value="members">
+          <Users class="size-4" />
+          <span class="ml-1.5">{{ t('repo.settings.members') }}</span>
         </TabsTrigger>
         <TabsTrigger value="automation">
           <Clock class="size-4" />
@@ -663,6 +741,104 @@ onMounted(load)
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      </TabsContent>
+
+      <TabsContent v-if="canManageMembers" value="members" class="mt-0">
+        <Card>
+          <CardHeader class="flex flex-row items-center justify-between gap-2">
+            <div class="space-y-1">
+              <CardTitle>{{ t('repo.members.title') }} ({{ members.length }})</CardTitle>
+              <p class="text-sm text-muted-foreground">{{ t('repo.members.subtitle') }}</p>
+            </div>
+            <Button size="sm" @click="addOpen = true">
+              <Plus class="size-4" />
+              {{ t('repo.members.add') }}
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <p v-if="membersError" class="text-sm text-destructive mb-3">{{ membersError }}</p>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{{ t('common.username') }}</TableHead>
+                  <TableHead>{{ t('repo.members.role') }}</TableHead>
+                  <TableHead>{{ t('repo.members.addedAt') }}</TableHead>
+                  <TableHead class="w-12 text-right" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow v-for="m in members" :key="m.user_id">
+                  <TableCell>
+                    <NuxtLink :to="`/${m.username}`" class="hover:underline">
+                      {{ m.username }}
+                    </NuxtLink>
+                  </TableCell>
+                  <TableCell>
+                    <Select
+                      :model-value="m.role"
+                      @update:model-value="(v) => onRoleChange(m, v as 'read' | 'write')"
+                    >
+                      <SelectTrigger class="w-28">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="read">{{ t('repo.members.roleRead') }}</SelectItem>
+                        <SelectItem value="write">{{ t('repo.members.roleWrite') }}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                  <TableCell class="text-sm text-muted-foreground">
+                    {{ new Date(m.added_at).toLocaleString() }}
+                  </TableCell>
+                  <TableCell class="text-right">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      @click="onRemove(m)"
+                    >
+                      <Trash2 class="size-4" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+
+        <Dialog v-model:open="addOpen">
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{{ t('repo.members.add') }}</DialogTitle>
+              <DialogDescription>{{ t('repo.members.addDescription') }}</DialogDescription>
+            </DialogHeader>
+            <div class="space-y-3">
+              <div class="space-y-1">
+                <Label for="add-username" class="text-sm">{{ t('common.username') }}</Label>
+                <Input id="add-username" v-model="addUsername" autocomplete="off" />
+              </div>
+              <div class="space-y-2">
+                <Label class="text-sm">{{ t('repo.members.role') }}</Label>
+                <RadioGroup :model-value="addRole" class="gap-2" @update:model-value="(v) => addRole = v as 'read' | 'write'">
+                  <div class="flex items-center gap-2">
+                    <RadioGroupItem id="role-read" value="read" />
+                    <Label for="role-read" class="text-sm">{{ t('repo.members.roleRead') }}</Label>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <RadioGroupItem id="role-write" value="write" />
+                    <Label for="role-write" class="text-sm">{{ t('repo.members.roleWrite') }}</Label>
+                  </div>
+                </RadioGroup>
+              </div>
+              <p v-if="addError" class="text-sm text-destructive">{{ addError }}</p>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" @click="addOpen = false">{{ t('common.cancel') }}</Button>
+              <Button :disabled="!addUsername.trim() || adding" @click="onAddMember">
+                {{ adding ? t('common.saving') : t('repo.members.add') }}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </TabsContent>
 
       <TabsContent value="automation" class="mt-0">

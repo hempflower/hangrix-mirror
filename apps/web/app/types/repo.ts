@@ -105,3 +105,17 @@ export interface ContainingRefs {
   branches: RepoRef[]
   tags: RepoRef[]
 }
+
+export type RepoMemberRole = 'read' | 'write'
+
+export interface RepoMember {
+  user_id: number
+  username: string
+  role: RepoMemberRole
+  added_at: string
+  added_by: number
+}
+
+export interface RepoMemberListResp {
+  items: RepoMember[]
+}

@@ -431,6 +431,7 @@
     "settings": {
       "title": "仓库设置",
       "general": "一般",
+      "members": "成员管理",
       "danger": "危险区",
       "saveGeneral": "保存",
       "saving": "保存中…",
@@ -525,6 +526,20 @@
     },
     "readme": "README",
     "settingsLink": "设置",
+    "members": {
+      "title": "成员管理",
+      "subtitle": "管理谁可以访问此仓库及其角色。",
+      "add": "添加成员",
+      "addDescription": "将已有用户添加到该仓库。",
+      "addFailed": "添加失败",
+      "roleRead": "只读",
+      "roleWrite": "读写",
+      "roleFailed": "角色变更失败",
+      "removeFailed": "移除失败",
+      "loadFailed": "加载失败",
+      "addedAt": "加入时间",
+      "role": "角色"
+    },
     "tabs2": {
       "issues": "Issue"
     },

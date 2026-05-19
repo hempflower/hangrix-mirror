@@ -431,6 +431,7 @@
     "settings": {
       "title": "Repository settings",
       "general": "General",
+      "members": "Members",
       "danger": "Danger zone",
       "saveGeneral": "Save",
       "saving": "Saving…",
@@ -525,6 +526,20 @@
     },
     "readme": "README",
     "settingsLink": "Settings",
+    "members": {
+      "title": "Members",
+      "subtitle": "Manage who has access to this repository and their role.",
+      "add": "Add member",
+      "addDescription": "Add an existing Hangrix user to this repository.",
+      "addFailed": "Add member failed",
+      "roleRead": "read",
+      "roleWrite": "write",
+      "roleFailed": "Role change failed",
+      "removeFailed": "Remove failed",
+      "loadFailed": "Load failed",
+      "addedAt": "Joined",
+      "role": "Role"
+    },
     "tabs2": {
       "issues": "Issues"
     },
