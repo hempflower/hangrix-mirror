@@ -11,9 +11,10 @@ import (
 
 )
 
-// hostWire mirrors `.hangrix/agents.yml` on the wire. Anything not
-// listed here is rejected by KnownFields(true). The wire type is
-// private so domain stays free of yaml struct tags.
+// hostWire mirrors `.hangrix/agents.yml` on the wire. Unknown keys are
+// silently dropped (forward-compatibility: hosts MAY ship newer fields
+// against an older agent server without bricking the parser). The wire
+// type is private so domain stays free of yaml struct tags.
 type hostWire struct {
 	Version   int                       `yaml:"version"`
 	Container *containerWire            `yaml:"container"`
@@ -64,9 +65,12 @@ type roleWire struct {
 	LLM        *llmWire   `yaml:"llm"`
 }
 
-// commentFilterWire is the strict-decode shape for the per-comment
-// trigger filter block. Unknown keys (typos like `from_user:` for
-// `from_users:`) are rejected by KnownFields(true).
+// commentFilterWire is the per-comment trigger filter block. Unknown
+// keys are silently dropped; the parser only validates the keys it
+// recognises. A typo like `from_user:` instead of `from_users:` will
+// therefore leave the filter empty rather than fail at parse time —
+// authors SHOULD diff the canonical key names if a trigger fires more
+// or less often than expected.
 type commentFilterWire struct {
 	MentionedOnly bool     `yaml:"mentioned_only"`
 	FromRoles     []string `yaml:"from_roles"`
@@ -91,23 +95,21 @@ type scopeWire struct {
 // 'collaborators' explicitly" apart from "user wrote nothing" if they
 // ever need to.
 func ParseHostConfig(body []byte) (*HostConfig, error) {
-	// Duplicate role-key scan first. yaml.v3 KnownFields(true) also
-	// rejects duplicates but does so with a generic "mapping key X
-	// already defined" message; promoting the role-key case to its
-	// own sentinel lets handlers surface "did you accidentally
-	// declare backend twice?" instead of a yaml-internal string.
+	// Duplicate role-key scan first. yaml.v3 silently keeps the last
+	// value for a duplicate mapping key, which would let a copy-paste
+	// drift undetected — we explicitly reject that one case so the
+	// operator sees "did you accidentally declare backend twice?".
 	if err := rejectDuplicateRoleKeys(body); err != nil {
 		return nil, err
 	}
 
 	var wire hostWire
 	dec := yaml.NewDecoder(bytes.NewReader(body))
-	dec.KnownFields(true)
 	if err := dec.Decode(&wire); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf(".hangrix/agents.yml is empty")
 		}
-		return nil, fmt.Errorf("%w: %s", ErrUnknownField, err.Error())
+		return nil, fmt.Errorf("decode .hangrix/agents.yml: %s", err.Error())
 	}
 
 	if wire.Version != 1 {
@@ -369,7 +371,7 @@ func buildTriggerSpec(roleKey string, t Trigger, value *yaml.Node) (*TriggerSpec
 			return nil, fmt.Errorf("roles.%s.triggers.%s: %w (filter must be a mapping)", roleKey, t, ErrInvalidTriggerSpec)
 		}
 		var cw commentFilterWire
-		if err := decodeKnown(value, &cw); err != nil {
+		if err := value.Decode(&cw); err != nil {
 			return nil, fmt.Errorf("roles.%s.triggers.%s: %w: %s", roleKey, t, ErrInvalidTriggerSpec, err.Error())
 		}
 		return &TriggerSpec{Comment: &CommentFilter{
@@ -386,7 +388,7 @@ func buildTriggerSpec(roleKey string, t Trigger, value *yaml.Node) (*TriggerSpec
 			return nil, fmt.Errorf("roles.%s.triggers.%s: %w (filter must be a mapping)", roleKey, t, ErrInvalidTriggerSpec)
 		}
 		var pw pushFilterWire
-		if err := decodeKnown(value, &pw); err != nil {
+		if err := value.Decode(&pw); err != nil {
 			return nil, fmt.Errorf("roles.%s.triggers.%s: %w: %s", roleKey, t, ErrInvalidTriggerSpec, err.Error())
 		}
 		return &TriggerSpec{Push: &PushFilter{
@@ -403,23 +405,6 @@ func buildTriggerSpec(roleKey string, t Trigger, value *yaml.Node) (*TriggerSpec
 		}
 		return &TriggerSpec{}, nil
 	}
-}
-
-// decodeKnown re-encodes a yaml.Node and re-decodes it with
-// KnownFields(true) so unknown keys inside the trigger filter block
-// surface as errors. yaml.v3's Node.Decode does not honour
-// KnownFields on the outer decoder, so we round-trip through Marshal.
-func decodeKnown(n *yaml.Node, into any) error {
-	buf, err := yaml.Marshal(n)
-	if err != nil {
-		return err
-	}
-	dec := yaml.NewDecoder(bytes.NewReader(buf))
-	dec.KnownFields(true)
-	if err := dec.Decode(into); err != nil {
-		return fmt.Errorf("%w: %s", ErrUnknownField, err.Error())
-	}
-	return nil
 }
 
 // isValidRoleKey matches `^[a-z][a-z0-9-]{0,38}$`. Same shape as the

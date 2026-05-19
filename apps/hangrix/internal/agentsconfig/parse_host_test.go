@@ -373,34 +373,6 @@ roles:
 			target: ErrInvalidTriggerSpec,
 		},
 		{
-			name: "comment-trigger-unknown-key",
-			body: `
-version: 1
-container: { image: x }
-roles:
-  r:
-    triggers:
-      issue.comment:
-        mention_only: true
-    prompt: hi
-`,
-			target: ErrInvalidTriggerSpec,
-		},
-		{
-			name: "push-trigger-unknown-key",
-			body: `
-version: 1
-container: { image: x }
-roles:
-  r:
-    triggers:
-      commit.pushed:
-        paths-include: ["apps/**"]
-    prompt: hi
-`,
-			target: ErrInvalidTriggerSpec,
-		},
-		{
 			name: "prompt-and-prompt-file",
 			body: `
 version: 1
@@ -525,30 +497,6 @@ roles:
 			target: ErrInvalidModel,
 		},
 		{
-			name: "unknown-top-level",
-			body: `
-version: 1
-container: { image: x }
-weird: 1
-roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
-`,
-			target: ErrUnknownField,
-		},
-		{
-			name: "unknown-role-field",
-			body: `
-version: 1
-container: { image: x }
-roles:
-  r:
-    triggers:
-      issue.opened: {}
-    prompt: hi
-    weird: 1
-`,
-			target: ErrUnknownField,
-		},
-		{
 			name: "duplicate-role-key",
 			body: "version: 1\ncontainer: { image: x }\nroles:\n  r:\n    triggers: { issue.opened: {} }\n    prompt: hi\n  r:\n    triggers: { issue.opened: {} }\n    prompt: hi\n",
 			target: ErrDuplicateRoleKey,
@@ -565,6 +513,50 @@ roles:
 				t.Fatalf("got %v, want errors.Is %v", err, tc.target)
 			}
 		})
+	}
+}
+
+// TestParseHostConfig_IgnoresUnknownFields pins the forward-compat
+// contract: unknown keys at the top level, inside a role body, and
+// inside a per-trigger filter block are all silently dropped rather
+// than rejected. A typo-by-the-author still fails *behaviourally* (the
+// filter ends up empty), but parsing succeeds so a host shipping
+// newer fields against an older agent server doesn't brick.
+func TestParseHostConfig_IgnoresUnknownFields(t *testing.T) {
+	t.Parallel()
+
+	body := `
+version: 1
+weird_top_level: 42
+container:
+  image: x
+  weird_container_field: ignore-me
+roles:
+  r:
+    triggers:
+      issue.opened: {}
+      issue.comment:
+        mention_only: true        # typo for mentioned_only, silently dropped
+      commit.pushed:
+        paths-include: ["apps/**"] # typo for paths, silently dropped
+    weird_role_field: 1
+    prompt: hi
+`
+	cfg, err := ParseHostConfig([]byte(body))
+	if err != nil {
+		t.Fatalf("unknown fields should be ignored, got err: %v", err)
+	}
+	role := cfg.Roles["r"]
+	if role == nil {
+		t.Fatalf("role r missing")
+	}
+	cmt := role.Triggers[TriggerIssueComment]
+	if cmt == nil || cmt.Comment == nil || cmt.Comment.MentionedOnly {
+		t.Fatalf("typo'd mention_only should leave filter empty: %+v", cmt)
+	}
+	push := role.Triggers[TriggerCommitPushed]
+	if push == nil || push.Push == nil || len(push.Push.Paths) != 0 {
+		t.Fatalf("typo'd paths-include should leave filter empty: %+v", push)
 	}
 }
 

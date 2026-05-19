@@ -2,9 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://hangrix.dev/schemas/agents.schema.json",
   "title": "Hangrix host repo agents.yml",
-  "description": "Schema for .hangrix/agents.yml. Mirrors the strict-decode contract enforced by internal/agentsconfig: unknown keys, duplicate role keys, and out-of-range values are all rejected by the runtime parser.",
+  "description": "Schema for .hangrix/agents.yml. Mirrors the parse contract enforced by internal/agentsconfig. Unknown keys are silently dropped for forward compatibility; duplicate role keys, malformed value types, and out-of-range values are still rejected.",
   "type": "object",
-  "additionalProperties": false,
   "required": ["version", "container", "roles"],
   "properties": {
     "version": {
@@ -27,7 +26,6 @@
   "$defs": {
     "container": {
       "type": "object",
-      "additionalProperties": false,
       "description": "Runtime environment shared by every role. Exactly one of `image` or `build` must be set.",
       "oneOf": [
         {
@@ -47,7 +45,6 @@
         },
         "build": {
           "type": "object",
-          "additionalProperties": false,
           "required": ["dockerfile"],
           "properties": {
             "dockerfile": {
@@ -92,7 +89,6 @@
     },
     "volume": {
       "type": "object",
-      "additionalProperties": false,
       "required": ["name", "mount"],
       "properties": {
         "name": {
@@ -110,7 +106,6 @@
     },
     "llm": {
       "type": "object",
-      "additionalProperties": false,
       "required": ["model"],
       "description": "LLM tuning block. Appears at team level (top-level llm:) and per-role; role-level overrides team, team overrides platform default. The parser refuses an empty model — an llm block with no model is a misconfiguration, not 'use defaults'.",
       "properties": {
@@ -148,7 +143,6 @@
     },
     "role": {
       "type": "object",
-      "additionalProperties": false,
       "required": ["triggers"],
       "description": "One agent role. Must declare at least one trigger and exactly one of `prompt` or `prompt_file`.",
       "oneOf": [
@@ -190,7 +184,6 @@
         },
         "scope": {
           "type": "object",
-          "additionalProperties": false,
           "properties": {
             "paths": {
               "type": "array",
@@ -225,12 +218,11 @@
       ]
     },
     "triggerCommentFilter": {
-      "description": "Filter block for `issue.comment`. All fields default to no-filter; AND-combined when set.",
+      "description": "Filter block for `issue.comment`. All fields default to no-filter; AND-combined when set. Unknown keys are silently dropped, so a typo (e.g. `mention_only:` for `mentioned_only:`) parses cleanly but leaves the filter empty — diff against the canonical keys below if a trigger fires more or less often than expected.",
       "oneOf": [
         { "type": "null" },
         {
           "type": "object",
-          "additionalProperties": false,
           "properties": {
             "mentioned_only": {
               "type": "boolean",
@@ -256,12 +248,11 @@
       ]
     },
     "triggerPushFilter": {
-      "description": "Filter block for `commit.pushed`. AND-combined when both lists are set. Glob semantics mirror GitHub Actions / doublestar.",
+      "description": "Filter block for `commit.pushed`. AND-combined when both lists are set. Glob semantics mirror GitHub Actions / doublestar. Unknown keys are silently dropped — see `triggerCommentFilter` for the same forward-compat note.",
       "oneOf": [
         { "type": "null" },
         {
           "type": "object",
-          "additionalProperties": false,
           "properties": {
             "paths": {
               "type": "array",

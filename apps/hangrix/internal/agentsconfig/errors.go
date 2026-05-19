@@ -13,11 +13,6 @@ var (
 	// not 1. Future schema bumps will widen this to a known-set check.
 	ErrInvalidVersion = errors.New("invalid config version")
 
-	// ErrUnknownField is the canonical wrapper for any yaml.v3
-	// KnownFields(true) rejection — yaml's own message already names
-	// the field, so the sentinel only needs to discriminate this class.
-	ErrUnknownField = errors.New("unknown field in config")
-
 	// ErrUnknownTrigger fires when a role declares a trigger event the
 	// platform does not emit. The allow-list lives in triggers.go.
 	ErrUnknownTrigger = errors.New("unknown trigger event")
@@ -27,8 +22,10 @@ var (
 	ErrEmptyTriggers = errors.New("role must declare at least one trigger")
 
 	// ErrInvalidTriggerSpec fires when the per-trigger filter block is
-	// the wrong shape (not a mapping, unknown filter key, or filters
-	// applied to an event that does not accept them).
+	// the wrong shape (not a mapping, malformed value type, or filters
+	// applied to an event that does not accept them). Unknown filter
+	// keys are silently dropped — see commentFilterWire for the
+	// forward-compat rationale.
 	ErrInvalidTriggerSpec = errors.New("invalid trigger filter spec")
 
 	// ErrPromptMutuallyExclusive fires when a role sets both `prompt`
