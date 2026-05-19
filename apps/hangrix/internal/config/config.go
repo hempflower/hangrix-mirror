@@ -9,13 +9,20 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	Database DatabaseConfig `mapstructure:"database"`
-	Redis    RedisConfig    `mapstructure:"redis"`
-	Auth     AuthConfig     `mapstructure:"auth"`
-	Storage  StorageConfig  `mapstructure:"storage"`
-	LLM      LLMConfig      `mapstructure:"llm"`
-	Runner   RunnerConfig   `mapstructure:"runner"`
+	Server     ServerConfig     `mapstructure:"server"`
+	Database   DatabaseConfig   `mapstructure:"database"`
+	Redis      RedisConfig      `mapstructure:"redis"`
+	Auth       AuthConfig       `mapstructure:"auth"`
+	Storage    StorageConfig    `mapstructure:"storage"`
+	LLM        LLMConfig        `mapstructure:"llm"`
+	Runner     RunnerConfig     `mapstructure:"runner"`
+	Automation AutomationConfig `mapstructure:"automation"`
+}
+
+// AutomationConfig holds background automation settings.
+type AutomationConfig struct {
+	// ScannerInterval is the time between scheduler scans. Default 60s.
+	ScannerInterval time.Duration `mapstructure:"scanner_interval"`
 }
 
 // RunnerConfig holds runner-orchestration settings.
@@ -100,6 +107,7 @@ func NewConfig(path string) (*Config, error) {
 	v.SetDefault("auth.session_ttl", "168h") // 7 days
 	v.SetDefault("storage.repos_path", "./data/repos")
 	v.SetDefault("runner.default_agent_image", "")
+	v.SetDefault("automation.scanner_interval", "60s")
 
 	v.SetEnvPrefix("API")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))

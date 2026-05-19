@@ -1,0 +1,138 @@
+package infra
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation/domain"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation/infra/automationdb"
+)
+
+// PostgresStore implements domain.Store via sqlc-generated queries.
+type PostgresStore struct {
+	q *automationdb.Queries
+}
+
+func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
+	return &PostgresStore{
+		q: automationdb.New(pool),
+	}
+}
+
+func (s *PostgresStore) CreateRun(ctx context.Context, repoID int64, taskName string) (*domain.AutomationRun, error) {
+	row, err := s.q.CreateAutomationRun(ctx, automationdb.CreateAutomationRunParams{
+		RepoID:   repoID,
+		TaskName: taskName,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return toDomain(&row), nil
+}
+
+func (s *PostgresStore) CompleteRun(ctx context.Context, id int64, issueID int64) error {
+	_, err := s.q.CompleteAutomationRun(ctx, automationdb.CompleteAutomationRunParams{
+		ID: id,
+		IssueID: pgtype.Int8{
+			Int64: issueID,
+			Valid: true,
+		},
+	})
+	return err
+}
+
+func (s *PostgresStore) FailRun(ctx context.Context, id int64, errMsg string) error {
+	_, err := s.q.FailAutomationRun(ctx, automationdb.FailAutomationRunParams{
+		ID: id,
+		ErrorMessage: pgtype.Text{
+			String: errMsg,
+			Valid:  true,
+		},
+	})
+	return err
+}
+
+func (s *PostgresStore) LastSuccessfulRun(ctx context.Context, repoID int64, taskName string) (*domain.AutomationRun, error) {
+	row, err := s.q.LastSuccessfulAutomationRun(ctx, automationdb.LastSuccessfulAutomationRunParams{
+		RepoID:   repoID,
+		TaskName: taskName,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return toDomain(&row), nil
+}
+
+func (s *PostgresStore) RecentRunExists(ctx context.Context, repoID int64, taskName string, within time.Duration) (bool, error) {
+	since := time.Now().Add(-within)
+	return s.q.RecentAutomationRunExists(ctx, automationdb.RecentAutomationRunExistsParams{
+		RepoID:   repoID,
+		TaskName: taskName,
+		Since: pgtype.Timestamptz{
+			Time:  since,
+			Valid: true,
+		},
+	})
+}
+
+func (s *PostgresStore) ListRuns(ctx context.Context, repoID int64, taskName string, limit int32) ([]*domain.AutomationRun, error) {
+	params := automationdb.ListAutomationRunsParams{
+		RepoID: repoID,
+		Limit:  limit,
+	}
+	if taskName != "" {
+		params.TaskName = pgtype.Text{String: taskName, Valid: true}
+	}
+	rows, err := s.q.ListAutomationRuns(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*domain.AutomationRun, 0, len(rows))
+	for i := range rows {
+		out = append(out, toDomain(&rows[i]))
+	}
+	return out, nil
+}
+
+func toDomain(row *automationdb.AutomationRun) *domain.AutomationRun {
+	return &domain.AutomationRun{
+		ID:       row.ID,
+		RepoID:   row.RepoID,
+		TaskName: row.TaskName,
+		IssueID:  pgtypeInt8ToPtr(row.IssueID),
+		Status:   domain.Status(row.Status),
+		ErrorMessage: pgtypeTextToPtr(row.ErrorMessage),
+		StartedAt:    row.StartedAt.Time,
+		FinishedAt:   pgtypeTimestamptzToPtr(row.FinishedAt),
+		CreatedAt:    row.CreatedAt.Time,
+	}
+}
+
+func pgtypeInt8ToPtr(v pgtype.Int8) *int64 {
+	if v.Valid {
+		return &v.Int64
+	}
+	return nil
+}
+
+func pgtypeTextToPtr(v pgtype.Text) *string {
+	if v.Valid {
+		return &v.String
+	}
+	return nil
+}
+
+func pgtypeTimestamptzToPtr(v pgtype.Timestamptz) *time.Time {
+	if v.Valid {
+		return &v.Time
+	}
+	return nil
+}
