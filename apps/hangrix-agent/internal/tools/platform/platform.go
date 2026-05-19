@@ -227,6 +227,15 @@ func All(client *Client) []local.Tool {
 			schema:      objectSchema(nil, nil),
 		},
 		{
+			name:        "issue_create",
+			description: "Create a new issue in the current repo. Set `parent: true` to create as a sub-issue of the current issue.",
+			schema: objectSchema(map[string]any{
+				"title":  stringProp("Issue title (1-200 characters)."),
+				"body":   stringProp("Optional issue body (markdown)."),
+				"parent": boolProp("When true, creates the new issue as a sub-issue of the current issue. Default: false."),
+			}, []string{"title"}),
+		},
+		{
 			name:        "issue_comment",
 			description: "Post a comment on the current issue. `body` is markdown; @agent-<role-key> mentions wake other roles.",
 			schema: objectSchema(map[string]any{
@@ -298,4 +307,8 @@ func intProp(desc string) map[string]any {
 
 func enumProp(desc string, values []string) map[string]any {
 	return map[string]any{"type": "string", "description": desc, "enum": values}
+}
+
+func boolProp(desc string) map[string]any {
+	return map[string]any{"type": "boolean", "description": desc}
 }
