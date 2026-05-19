@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -185,6 +186,10 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 	// already in the repo, so observers can resolve new SHAs via go-git.
 	for _, obs := range h.observers {
 		if err := obs.PreReceive(r.Context(), repo, fsPath, refUpdates); err != nil {
+			if errors.Is(err, domain.ErrBranchDiverged) {
+				http.Error(w, "pre-receive: "+err.Error(), http.StatusConflict)
+				return
+			}
 			http.Error(w, "pre-receive: "+err.Error(), http.StatusInternalServerError)
 			return
 		}

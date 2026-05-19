@@ -36,6 +36,11 @@ func NewPushObserver(deps *PushObserverDeps) *PushObserver {
 //
 // Non-issue branches are skipped. Already merged/closed issues are not
 // checked — only open issues gate pushes.
+//
+// When the fast-forward status cannot be determined (mode="unknown"), e.g.
+// because a ref hasn't been created yet or the base branch is unresolvable,
+// the push is allowed through rather than rejected — the git subprocess is
+// the authoritative source of truth for ref updates.
 func (o *PushObserver) PreReceive(ctx context.Context, repo *repodomain.Repo, fsPath string, refUpdates []repodomain.PushRefUpdate) error {
 	for _, u := range refUpdates {
 		refName := u.RefName
@@ -71,12 +76,19 @@ func (o *PushObserver) PreReceive(ctx context.Context, repo *repodomain.Repo, fs
 		if err != nil {
 			return fmt.Errorf("check fast-forward for %s: %w", branch, err)
 		}
-		if !isFF {
-			return fmt.Errorf(
-				"branch has diverged from %s — rebase onto %s first (mode=%s)",
-				iss.BaseBranch, iss.BaseBranch, mode,
-			)
+		if isFF {
+			continue
 		}
+		// mode="unknown" means we couldn't determine ancestry (e.g.
+		// unresolvable ref, branch not yet created). Let git be the
+		// authority — don't reject the push.
+		if mode == "unknown" {
+			continue
+		}
+		// mode="diverged" means the branch has genuinely diverged from
+		// its base. Reject with a sentinel so the handler can map to 409.
+		return fmt.Errorf("%w from %s — rebase onto %s first",
+			repodomain.ErrBranchDiverged, iss.BaseBranch, iss.BaseBranch)
 	}
 	return nil
 }

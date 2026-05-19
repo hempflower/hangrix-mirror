@@ -81,3 +81,9 @@ type PushObserver interface {
 	PreReceive(ctx context.Context, repo *Repo, fsPath string, refUpdates []PushRefUpdate) error
 	PostReceive(ctx context.Context, repo *Repo, fsPath string, pusher Pusher) error
 }
+
+// ErrBranchDiverged is returned by PreReceive observers when a push is
+// rejected because the branch has diverged from its base (non-fast-forward).
+// Handlers map this to HTTP 409 Conflict rather than 500.
+var ErrBranchDiverged = errors.New("branch has diverged from its base branch")
+
