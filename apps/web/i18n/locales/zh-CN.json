@@ -594,7 +594,7 @@
     "new": "新建 issue",
     "newTitle": "新建 issue",
     "newSubtitle": "一个 issue 把你的需求、对应的分支、围绕它的讨论打包到一起。",
-    "branchAutoNote": "提交后系统会为此 issue 分配工作分支（issue/N），无需手动选择。",
+    "branchAutoNote": "每个 issue 都会自动获得专属工作分支，无需手动选择。",
     "fields": {
       "title": "标题",
       "titleHint": "简短具体，1–200 字符。",

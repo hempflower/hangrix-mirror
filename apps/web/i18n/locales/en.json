@@ -594,7 +594,7 @@
     "new": "New issue",
     "newTitle": "Open an issue",
     "newSubtitle": "An issue bundles your request, its branch, and the conversation around it.",
-    "branchAutoNote": "A working branch (issue/N) will be assigned to this issue when you submit — you don't need to pick one.",
+    "branchAutoNote": "Each issue gets its own working branch automatically — you don't need to pick one.",
     "fields": {
       "title": "Title",
       "titleHint": "Short and specific. 1–200 characters.",
