@@ -1240,6 +1240,44 @@ func writeSubtree(repo *git.Repository, prefix string, flat map[string]flatTreeE
 	return repo.Storer.SetEncodedObject(obj)
 }
 
+// DiffMergeBase computes the diff from the merge-base of base and topic to
+// topic itself — the equivalent of `git diff base...topic`. When the merge-base
+// cannot be determined (no common history, empty repo), the result is empty.
+func (g *GoGit) DiffMergeBase(path, base, topic string) ([]*domain.FileDiff, error) {
+	repo, err := openRepo(path)
+	if err != nil {
+		return nil, err
+	}
+	baseHash, err := resolveRef(repo, base)
+	if err != nil {
+		return nil, err
+	}
+	topicHash, err := resolveRef(repo, topic)
+	if err != nil {
+		return nil, err
+	}
+	baseCommit, err := repo.CommitObject(baseHash)
+	if err != nil {
+		return nil, fmt.Errorf("diff merge-base: base commit: %w", err)
+	}
+	topicCommit, err := repo.CommitObject(topicHash)
+	if err != nil {
+		return nil, fmt.Errorf("diff merge-base: topic commit: %w", err)
+	}
+
+	// MergeBase returns a slice — the first is the best common ancestor.
+	bases, err := baseCommit.MergeBase(topicCommit)
+	if err != nil || len(bases) == 0 {
+		// No common history → no diff to show.
+		return []*domain.FileDiff{}, nil
+	}
+	patch, err := bases[0].Patch(topicCommit)
+	if err != nil {
+		return nil, fmt.Errorf("diff merge-base: patch: %w", err)
+	}
+	return patchToFileDiffs(patch), nil
+}
+
 // DiffRefs computes the changes going from from to to. Either side may be
 // a branch, tag, or SHA.
 func (g *GoGit) DiffRefs(path, from, to string) ([]*domain.FileDiff, error) {

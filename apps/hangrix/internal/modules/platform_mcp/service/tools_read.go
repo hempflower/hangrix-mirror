@@ -66,7 +66,8 @@ func (r *Registry) issueReadTool() *platformmcpdomain.Tool {
 }
 
 // issueDiffTool returns the file-level unified diff between the issue
-// branch and its base. Empty list when the issue has no commits yet —
+// branch and its base (using merge-base diff, equivalent to
+// `git diff base...branch`). Empty list when the issue has no commits yet —
 // matching the web UI's behaviour.
 func (r *Registry) issueDiffTool() *platformmcpdomain.Tool {
 	return &platformmcpdomain.Tool{
@@ -84,7 +85,7 @@ func (r *Registry) issueDiffTool() *platformmcpdomain.Tool {
 			if scope.issue.HeadSHA == "" {
 				return textResult(map[string]any{"files": []any{}}), nil
 			}
-			diffs, err := r.deps.Git.DiffRefs(scope.fsPath, scope.issue.BaseBranch, scope.issue.BranchName)
+			diffs, err := r.deps.Git.DiffMergeBase(scope.fsPath, scope.issue.BaseBranch, scope.issue.BranchName)
 			if err != nil {
 				if errors.Is(err, gitdomain.ErrRefNotFound) {
 					return textResult(map[string]any{"files": []any{}}), nil

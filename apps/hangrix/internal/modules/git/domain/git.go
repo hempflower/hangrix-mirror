@@ -62,6 +62,13 @@ type Git interface {
 	// from to to). Both arguments may be branches, tags, or SHAs.
 	DiffRefs(path, from, to string) ([]*FileDiff, error)
 
+	// DiffMergeBase computes the diff from the merge-base of base and topic
+	// to topic itself — i.e. what changed on topic since it diverged from
+	// base. This is the equivalent of `git diff base...topic` (three-dot
+	// diff) and ensures only the topic's own changes appear, even when
+	// base has moved forward with unrelated work.
+	DiffMergeBase(path, base, topic string) ([]*FileDiff, error)
+
 	// ---- Write operations (M3) ----
 
 	// CreateBranch points branchName at startRef. Returns ErrBranchExists

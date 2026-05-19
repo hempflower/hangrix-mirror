@@ -155,6 +155,9 @@ func (g *stubGit) Blob(string, string, string) ([]byte, bool, error) { panic("Bl
 func (g *stubGit) DiffRefs(string, string, string) ([]*gitdomain.FileDiff, error) {
 	panic("DiffRefs not stubbed")
 }
+func (g *stubGit) DiffMergeBase(string, string, string) ([]*gitdomain.FileDiff, error) {
+	panic("DiffMergeBase not stubbed")
+}
 func (g *stubGit) CreateBranch(string, string, string) error { panic("CreateBranch not stubbed") }
 func (g *stubGit) DeleteBranch(string, string) error         { panic("DeleteBranch not stubbed") }
 func (g *stubGit) SetHEAD(string, string) error              { panic("SetHEAD not stubbed") }
