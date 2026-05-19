@@ -168,3 +168,68 @@ func mapKeys(m map[string]*agentsconfig.Role) []string {
 	}
 	return out
 }
+
+// TestMergeTreeSortHyphenVsDir reproduces the "encode tree: entries in
+// tree are not sorted" bug caused by sorting tree entries by name alone
+// instead of using git's directory-with-trailing-slash convention.
+//
+// When a merge produces a tree that has both a directory named "X" and a
+// file named "X-something" at the same level, the plain string sort
+// places "X" (dir) before "X-something" (file), but git expects
+// "X-something" (file) before "X/" (dir) because '-' (0x2D) < '/' (0x2F).
+func TestMergeTreeSortHyphenVsDir(t *testing.T) {
+	dir := t.TempDir()
+	bare := filepath.Join(dir, "host.git")
+
+	g := NewGoGit(&GoGitDeps{})
+	if err := g.Init(bare, "main"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	// Seed with a single file so the repo is not empty.
+	if err := g.SeedInitialCommit(bare, "main", map[string][]byte{
+		"README.md": []byte("hello\n"),
+	}, "Tester", "tester@example.com"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Issue branch adds a file named "server-reviewer.md".
+	work := filepath.Join(dir, "work")
+	runGit(t, "", "clone", bare, work)
+	runGit(t, work, "checkout", "-b", "issue/1")
+	mustWrite(t, filepath.Join(work, "server-reviewer.md"), []byte("# Reviewer\n"))
+	runGit(t, work, "-c", "user.email=t@e", "-c", "user.name=t", "add", ".")
+	runGit(t, work, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-m", "add server-reviewer")
+	runGit(t, work, "push", "origin", "issue/1")
+
+	// Divergent commit on main adds a file inside a directory named
+	// "server/" — when merged, the root tree will have both the file
+	// "server-reviewer.md" and the directory "server/" side by side.
+	work2 := filepath.Join(dir, "work2")
+	runGit(t, "", "clone", bare, work2)
+	mustMkdir(t, filepath.Join(work2, "server"))
+	mustWrite(t, filepath.Join(work2, "server", "config.yml"), []byte("port: 8080\n"))
+	runGit(t, work2, "-c", "user.email=t@e", "-c", "user.name=t", "add", ".")
+	runGit(t, work2, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-m", "add server dir")
+	runGit(t, work2, "push", "origin", "main")
+
+	// Three-way merge — this is the path that exercises mergeTrees +
+	// buildTreeFromFlatMap.
+	mergeSHA, mode, err := g.MergeBranch(bare, "main", "issue/1", "Merge issue 1",
+		domain.Signature{Name: "Tester", Email: "tester@example.com"})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	t.Logf("merge: sha=%s mode=%s", mergeSHA, mode)
+
+	// Both files must be reachable.
+	rev := readBlobOrFail(t, bare, "main", "server-reviewer.md")
+	if string(rev) != "# Reviewer\n" {
+		t.Fatalf("server-reviewer.md content: %q", string(rev))
+	}
+	cfg := readBlobOrFail(t, bare, "main", "server/config.yml")
+	if string(cfg) != "port: 8080\n" {
+		t.Fatalf("server/config.yml content: %q", string(cfg))
+	}
+}
+

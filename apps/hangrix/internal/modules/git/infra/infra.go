@@ -1231,9 +1231,7 @@ func writeSubtree(repo *git.Repository, prefix string, flat map[string]flatTreeE
 		})
 	}
 
-	sort.Slice(tree.Entries, func(i, j int) bool {
-		return tree.Entries[i].Name < tree.Entries[j].Name
-	})
+	sort.Sort(object.TreeEntrySorter(tree.Entries))
 
 	obj := repo.Storer.NewEncodedObject()
 	if err := tree.Encode(obj); err != nil {
