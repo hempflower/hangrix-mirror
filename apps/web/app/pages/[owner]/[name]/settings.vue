@@ -56,7 +56,7 @@ setBreadcrumbs(() => {
 })
 const router = useRouter()
 const { user, refresh: refreshUser } = useCurrentUser()
-const { orgs: myOrgs, refresh: refreshMyOrgs } = useMyOrgs()
+
 
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
@@ -87,18 +87,7 @@ const protectionSubmitting = ref(false)
 
 const branches = computed(() => refs.value?.branches ?? [])
 const fullName = computed(() => `${owner.value}/${name.value}`)
-const canManage = computed(() => {
-  if (!repo.value || !user.value) return false
-  if (user.value.role === 'admin') return true
-  if (repo.value.owner_kind === 'user') {
-    return user.value.id === repo.value.owner_id
-  }
-  // Org-owned: optimistic UI check — show the controls if the repo is
-  // owned by an org the caller belongs to. The server still enforces
-  // owner-role on every mutation, so non-owner members hitting the
-  // buttons just get a 403.
-  return (myOrgs.value ?? []).some(o => o.id === repo.value!.owner_id)
-})
+const canManage = computed(() => repo.value?.viewer_permission === 'manage')
 
 const canManageMembers = computed(() => {
   return canManage.value && repo.value?.owner_kind === 'user'
@@ -220,7 +209,6 @@ async function load() {
   loadError.value = null
   try {
     if (!user.value) await refreshUser()
-    if (!myOrgs.value) await refreshMyOrgs()
     repo.value = await $fetch<PublicRepo>(`/api/repos/${owner.value}/${name.value}`, {
       credentials: 'include',
     })

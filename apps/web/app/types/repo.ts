@@ -12,6 +12,7 @@ export interface PublicRepo {
   name: string
   description: string
   visibility: Visibility
+  viewer_permission: 'manage' | 'write' | 'read' | ''
   default_branch: string
   created_at: string
   updated_at: string

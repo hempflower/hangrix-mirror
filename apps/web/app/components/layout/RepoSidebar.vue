@@ -64,10 +64,7 @@ watch([owner, name], ([o, n]) => {
 
 const repoBase = computed(() => `/${owner.value}/${name.value}`)
 
-const canManage = computed(() => {
-  if (!repo.value || !user.value) return false
-  return user.value.role === 'admin' || user.value.id === repo.value.owner_id
-})
+const canManage = computed(() => repo.value?.viewer_permission === 'manage')
 
 interface NavItem {
   key: string
