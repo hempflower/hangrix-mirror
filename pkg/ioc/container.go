@@ -168,11 +168,10 @@ func (c *Container) constructType(target reflect.Type) reflect.Value {
 				if dep.Kind() == reflect.Slice {
 					elemType := dep.Elem()
 
-					bound, ok := c.bindingMap[elemType]
-					if !ok || len(bound) == 0 {
-						panic("no provider found for type: " + elemType.String())
-					}
-
+					// 空切片依赖是合法的 —— 没有任何模块注册该接口的实现时，
+					// 消费方拿到一个长度为 0 的切片即可。强制 panic 会让
+					// "可选扩展点" 在没人接线时无法启动。
+					bound := c.bindingMap[elemType]
 					for _, impl := range bound {
 						if instanceState[impl] == 1 {
 							panic("circular dependency detected: " + t.String() + " -> " + impl.String())
