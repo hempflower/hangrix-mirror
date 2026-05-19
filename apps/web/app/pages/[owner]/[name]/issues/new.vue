@@ -101,29 +101,35 @@ async function onSubmit(values: any) {
       </p>
     </header>
 
-    <!-- Context strip lives outside the form card so the form itself stays
-         compact: tells the user "what branch will this cut from" without
-         eating padding inside the main composer. -->
-    <div class="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
-      <CornerDownRight v-if="parent" class="size-4 text-muted-foreground" />
-      <GitBranch v-else class="size-4 text-muted-foreground" />
-      <template v-if="parent">
-        <span class="text-muted-foreground">
-          {{ t('issue.subIssueOf') }}
-          <NuxtLink
-            :to="`/${owner}/${name}/issues/${parent.number}`"
-            class="font-medium text-foreground hover:underline"
-          >
-            #{{ parent.number }} {{ parent.title }}
-          </NuxtLink>
-          · {{ t('issue.base') }}:
-        </span>
-        <code class="font-mono text-xs">{{ baseBranchLabel }}</code>
-      </template>
-      <template v-else>
-        <span class="text-muted-foreground">{{ t('issue.base') }}:</span>
-        <code class="font-mono text-xs">{{ baseBranchLabel }}</code>
-      </template>
+    <!-- Context strip tells the user which base branch this issue will
+         be created from. The issue's own working branch (issue/N) does
+         not exist yet — it is assigned by the server on creation. There
+         is no branch dropdown here because there is nothing to pick. -->
+    <div class="space-y-2">
+      <div class="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+        <CornerDownRight v-if="parent" class="size-4 text-muted-foreground" />
+        <GitBranch v-else class="size-4 text-muted-foreground" />
+        <template v-if="parent">
+          <span class="text-muted-foreground">
+            {{ t('issue.subIssueOf') }}
+            <NuxtLink
+              :to="`/${owner}/${name}/issues/${parent.number}`"
+              class="font-medium text-foreground hover:underline"
+            >
+              #{{ parent.number }} {{ parent.title }}
+            </NuxtLink>
+            · {{ t('issue.base') }}:
+          </span>
+          <code class="font-mono text-xs">{{ baseBranchLabel }}</code>
+        </template>
+        <template v-else>
+          <span class="text-muted-foreground">{{ t('issue.base') }}:</span>
+          <code class="font-mono text-xs">{{ baseBranchLabel }}</code>
+        </template>
+      </div>
+      <p class="text-xs text-muted-foreground">
+        {{ t('issue.branchAutoNote') }}
+      </p>
     </div>
 
     <Card class="gap-0 py-0">
