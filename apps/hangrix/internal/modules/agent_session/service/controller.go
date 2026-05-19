@@ -91,7 +91,26 @@ func (c *Controller) Stop(ctx context.Context, sessionID int64, reason string) e
 
 // Resume satisfies domain.Controller. Mints a fresh sealed session
 // token and flips an idle / failed / succeeded row back to 'pending'.
+// Used by the web UI resume button; enqueues a manual.resume event.
 func (c *Controller) Resume(ctx context.Context, sessionID int64) error {
+	return c.resume(ctx, sessionID, "manual.resume", map[string]any{
+		"reason": "user resume",
+	}, "resumed by user")
+}
+
+// Recover satisfies domain.Controller. Same token-mint-and-flip as
+// Resume, but enqueues a manual.recover event whose payload carries
+// the caller's role key so the resumed agent can distinguish
+// agent-initiated recovery from a UI resume.
+func (c *Controller) Recover(ctx context.Context, sessionID int64, recoveredBy string) error {
+	return c.resume(ctx, sessionID, "manual.recover", map[string]any{
+		"recovered_by": recoveredBy,
+		"reason":       "agent-initiated recovery",
+	}, "")
+}
+
+// resume is the shared implementation for Resume and Recover.
+func (c *Controller) resume(ctx context.Context, sessionID int64, event string, payload map[string]any, msg string) error {
 	sess, err := c.runner.GetSessionByID(ctx, sessionID)
 	if err != nil {
 		return err
@@ -122,22 +141,21 @@ func (c *Controller) Resume(ctx context.Context, sessionID int64) error {
 	// The history frame is fetched by the runner from
 	// GET /sessions/{sid}/history at agent boot, so resume only needs to
 	// enqueue the synthetic cause event for the agent to react to.
-	// Synthetic manual cause so the agent has an event to react to.
 	frame, _ := json.Marshal(map[string]any{
-		"kind":  "event",
-		"event": "manual.resume",
-		"payload": map[string]any{
-			"reason": "user resume",
-		},
+		"kind":    "event",
+		"event":   event,
+		"payload": payload,
 	})
 	if _, err := c.runner.EnqueueInput(ctx, sessionID, frame); err != nil {
 		return fmt.Errorf("enqueue cause on resume: %w", err)
 	}
-	_, _ = c.runner.AppendMessage(ctx, &runnerdomain.Message{
-		SessionID: sessionID,
-		Kind:      runnerdomain.MessageKindSystem,
-		Content:   "resumed by user",
-	})
+	if msg != "" {
+		_, _ = c.runner.AppendMessage(ctx, &runnerdomain.Message{
+			SessionID: sessionID,
+			Kind:      runnerdomain.MessageKindSystem,
+			Content:   msg,
+		})
+	}
 	return nil
 }
 

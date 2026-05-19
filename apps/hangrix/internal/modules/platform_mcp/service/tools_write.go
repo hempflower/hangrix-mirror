@@ -305,10 +305,9 @@ func (r *Registry) issueMergeTool() *platformmcpdomain.Tool {
 // is driven by the host yaml `can: [session_recover]` whitelist — the handler
 // checks CanCallTool before dispatch and this tool double-checks the scope.
 //
-// The heavy lifting reuses Controller.Resume() which mints a fresh token,
-// flips the row to pending, and enqueues a resume event. The tool's only
-// additions are the same-issue scope gate and the audit message with the
-// caller's role key.
+// Uses Controller.Recover() (not Resume) so the target session receives a
+// manual.recover event whose payload carries the caller's role key
+// (recovered_by), as required by spec AC 5.
 func (r *Registry) sessionRecoverTool() *platformmcpdomain.Tool {
 	return &platformmcpdomain.Tool{
 		Name:        "session_recover",
@@ -365,11 +364,11 @@ func (r *Registry) sessionRecoverTool() *platformmcpdomain.Tool {
 			if r.deps.Controller == nil {
 				return errorResult("controller not available"), nil
 			}
-			if err := r.deps.Controller.Resume(ctx, req.SessionID); err != nil {
+			if err := r.deps.Controller.Recover(ctx, req.SessionID, sess.RoleKey); err != nil {
 				if errors.Is(err, agentsessiondomain.ErrNotResumable) {
 					return errorResult("session not resumable"), nil
 				}
-				return errorResult("resume: " + err.Error()), nil
+				return errorResult("recover: " + err.Error()), nil
 			}
 
 			// Append audit message with the caller's role key.

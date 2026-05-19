@@ -264,8 +264,16 @@ type Controller interface {
 	// Resume flips an idle / failed / succeeded row back to 'pending'
 	// and re-mints its session token. Returns ErrSessionNotFound for
 	// unknown ids and ErrNotResumable when the row is archived /
-	// already pending.
+	// already pending. Used by the web UI resume button; enqueues a
+	// manual.resume event.
 	Resume(ctx context.Context, sessionID int64) error
+
+	// Recover is the agent-initiated counterpart of Resume. Same token
+	// mint and session flip, but enqueues a manual.recover event whose
+	// payload carries the caller's role key (recovered_by) so the
+	// resumed agent can distinguish agent-initiated recovery from a
+	// user clicking the resume button in the web UI.
+	Recover(ctx context.Context, sessionID int64, recoveredBy string) error
 
 	// Delete hard-removes the session row (and cascades the message
 	// log + inputs queue). Refuses live sessions — the user must Stop
