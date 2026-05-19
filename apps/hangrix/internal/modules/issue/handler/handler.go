@@ -737,6 +737,13 @@ func (h *Handler) preMergeBaseRef(ctx context.Context, fsPath string, iss *domai
 
 // diff returns the diff "base..issue_branch". When the issue branch has not
 // been pushed yet we return an empty list so the UI can show a clean state.
+//
+// Once the issue is merged, base has absorbed the issue branch, so diffing
+// against the live base tip would show nothing (fast-forward) or the inverse
+// changes (merge-commit, where unrelated post-merge work on base would show
+// up as deletions). The merge handler stamps the pre-merge base SHA onto
+// the branch_merged event payload; we read it back via preMergeBaseRef so
+// the diff continues to mean "what the issue introduced".
 func (h *Handler) diff(w http.ResponseWriter, r *http.Request) {
 	rc, ok := h.resolveRepo(w, r)
 	if !ok {
@@ -750,7 +757,13 @@ func (h *Handler) diff(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteJSON(w, http.StatusOK, []*gitdomain.FileDiff{})
 		return
 	}
-	diffs, err := h.git.DiffRefs(rc.fsPath, iss.BaseBranch, iss.BranchName)
+	from := iss.BaseBranch
+	if iss.State == domain.StateMerged {
+		if pre := h.preMergeBaseRef(r.Context(), rc.fsPath, iss); pre != "" {
+			from = pre
+		}
+	}
+	diffs, err := h.git.DiffRefs(rc.fsPath, from, iss.BranchName)
 	if err != nil {
 		if errors.Is(err, gitdomain.ErrRefNotFound) {
 			httpx.WriteJSON(w, http.StatusOK, []*gitdomain.FileDiff{})
