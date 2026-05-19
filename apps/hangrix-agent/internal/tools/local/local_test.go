@@ -696,6 +696,111 @@ func TestGlobRespectsGitignore(t *testing.T) {
 	}
 }
 
+// TestSleepPausesForSpecifiedSeconds is the headline test for the sleep
+// tool: call sleep(seconds=3) and assert the actual wall-clock pause is
+// within 200ms of 3s, and that the result echoes the requested seconds.
+func TestSleepPausesForSpecifiedSeconds(t *testing.T) {
+	t.Parallel()
+	tools := byName(local.All())
+	sleep := tools["sleep"]
+	if sleep == nil {
+		t.Fatal("sleep tool not registered in local.All()")
+	}
+
+	start := time.Now()
+	res, err := sleep.Call(context.Background(), mustJSON(map[string]any{"seconds": 3}))
+	if err != nil {
+		t.Fatalf("sleep(seconds=3): %v", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed < 2800*time.Millisecond || elapsed > 3200*time.Millisecond {
+		t.Errorf("sleep(seconds=3) took %v, want ~3s (±200ms)", elapsed)
+	}
+
+	var fields struct {
+		Seconds int    `json:"seconds"`
+		Reason  string `json:"reason"`
+	}
+	if err := json.Unmarshal(mustReJSON(res), &fields); err != nil {
+		t.Fatalf("decode sleep result: %v", err)
+	}
+	if fields.Seconds != 3 {
+		t.Errorf("seconds = %d, want 3", fields.Seconds)
+	}
+}
+
+// TestSleepRejectsExcessivelyLargeSeconds pins the upper-bound guard:
+// the LLM must get an actionable error (max 300, suggestion to poll)
+// rather than a silent truncation or a 5-minute-plus hang.
+func TestSleepRejectsExcessivelyLargeSeconds(t *testing.T) {
+	t.Parallel()
+	tools := byName(local.All())
+	sleep := tools["sleep"]
+
+	_, err := sleep.Call(context.Background(), mustJSON(map[string]any{"seconds": 500}))
+	if err == nil {
+		t.Fatal("expected error for seconds=500")
+	}
+	msg := err.Error()
+	for _, want := range []string{"maximum", "300", "500"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error should contain %q; got: %s", want, msg)
+		}
+	}
+}
+
+// TestSleepRejectsZeroSeconds pins the lower-bound guard: seconds=0
+// must fail with a message naming the minimum and suggesting alternatives.
+func TestSleepRejectsZeroSeconds(t *testing.T) {
+	t.Parallel()
+	tools := byName(local.All())
+	sleep := tools["sleep"]
+
+	_, err := sleep.Call(context.Background(), mustJSON(map[string]any{"seconds": 0}))
+	if err == nil {
+		t.Fatal("expected error for seconds=0")
+	}
+	msg := err.Error()
+	for _, want := range []string{"at least 1", "0"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error should contain %q; got: %s", want, msg)
+		}
+	}
+}
+
+// TestSleepRespectsContextCancellation pins that a cancelled context
+// wakes the sleep within 500ms rather than blocking for the full
+// requested duration. This is a liveness guard — without it, a
+// control:shutdown during a long sleep stalls agent teardown.
+func TestSleepRespectsContextCancellation(t *testing.T) {
+	t.Parallel()
+	tools := byName(local.All())
+	sleep := tools["sleep"]
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Cancel almost immediately, then assert the call returns promptly.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := sleep.Call(ctx, mustJSON(map[string]any{"seconds": 60}))
+	if err == nil {
+		t.Fatal("expected an error from cancelled context")
+	}
+	elapsed := time.Since(start)
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("sleep with cancelled context took %v, want <500ms", elapsed)
+	}
+	// The error should surface context.Canceled so the LLM knows the
+	// sleep was interrupted rather than rejected.
+	if !strings.Contains(err.Error(), "cancel") && !strings.Contains(err.Error(), "interrupted") {
+		t.Errorf("error should mention the cancellation reason; got: %v", err)
+	}
+}
+
 func byName(ts []local.Tool) map[string]local.Tool {
 	m := map[string]local.Tool{}
 	for _, t := range ts {
