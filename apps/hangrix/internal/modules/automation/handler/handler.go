@@ -84,11 +84,17 @@ type configResponse struct {
 }
 
 type publicTask struct {
-	Name     string   `json:"name"`
-	Schedule string   `json:"schedule"`
-	Title    string   `json:"title"`
-	Roles    []string `json:"roles"`
-	Enabled  bool     `json:"enabled"`
+	Name     string        `json:"name"`
+	Schedule string        `json:"schedule"`
+	Issue    publicIssue   `json:"issue"`
+	Roles    []string      `json:"roles"`
+	Enabled  bool          `json:"enabled"`
+}
+
+type publicIssue struct {
+	Title  string   `json:"title"`
+	Body   string   `json:"body"`
+	Labels []string `json:"labels"`
 }
 
 type publicRun struct {
@@ -133,9 +139,13 @@ func (h *Handler) getConfig(w http.ResponseWriter, r *http.Request) {
 				tasks = append(tasks, publicTask{
 					Name:     t.Name,
 					Schedule: t.Schedule,
-					Title:    t.Issue.Title,
-					Roles:    t.Roles,
-					Enabled:  t.Enabled,
+					Issue: publicIssue{
+						Title:  t.Issue.Title,
+						Body:   t.Issue.Body,
+						Labels: t.Issue.Labels,
+					},
+					Roles:   t.Roles,
+					Enabled: t.Enabled,
 				})
 			}
 		}
@@ -207,7 +217,7 @@ func (h *Handler) putConfig(w http.ResponseWriter, r *http.Request) {
 // ---- POST /api/repos/{owner}/{name}/automation/{taskName}/trigger ----
 
 func (h *Handler) trigger(w http.ResponseWriter, r *http.Request) {
-	repo, ok := h.resolveRepoForRead(w, r)
+	repo, ok := h.resolveRepoForWrite(w, r)
 	if !ok {
 		return
 	}
