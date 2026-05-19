@@ -41,6 +41,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -207,6 +208,10 @@ func (o *DockerOrchestrator) Start(ctx context.Context, t Task) (Handle, error) 
 		return nil, fmt.Errorf("ensure workdir %s: %w", t.HostWorkdir, err)
 	}
 
+	if err := o.ensureImage(ctx, t); err != nil {
+		return nil, err
+	}
+
 	containerID, err := o.resolveContainer(ctx, t)
 	if err != nil {
 		return nil, err
@@ -314,6 +319,86 @@ func (o *DockerOrchestrator) createContainer(ctx context.Context, t Task) (strin
 		return "", fmt.Errorf("docker start %s: %w", id, err)
 	}
 	return id, nil
+}
+
+// ensureImage materialises Task.Image when Task.Build is set. The
+// no-Build path is a no-op: the regular `docker create` further down
+// will pull (or surface a missing-image error) on its own.
+//
+// With Build set we cache by tag: a `docker image inspect <tag>` probe
+// short-circuits when the image is already present locally. The tag
+// itself is computed by the spawner — deterministic on (repo id +
+// Dockerfile path + build args), so two sessions with the same build
+// spec hit the cache, and a spec change yields a fresh tag.
+//
+// On cache miss we shell out to `docker build` with BuildKit enabled
+// (the project's Dockerfiles use `# syntax=docker/dockerfile:1.7`
+// heredocs which legacy build can't parse). The Dockerfile path and
+// the build context are resolved against HostWorkdir — the cloned
+// repo on disk — and then run through the path map so the docker
+// daemon sees the host's view, not the runner-container's view.
+//
+// Build stderr is captured and surfaced verbatim; build failures
+// turn into a SessionStatusFailed with the docker error preserved so
+// the operator can fix their Dockerfile without digging through
+// runner logs.
+func (o *DockerOrchestrator) ensureImage(ctx context.Context, t Task) error {
+	if t.Build == nil {
+		return nil
+	}
+	if t.Build.Dockerfile == "" {
+		return fmt.Errorf("build.dockerfile is required")
+	}
+	if t.Image == "" {
+		return fmt.Errorf("build set but Image (the target tag) is empty")
+	}
+
+	// Cache hit?
+	probe := exec.CommandContext(ctx, o.bin, "image", "inspect", "--format={{.Id}}", t.Image)
+	probe.Stdout = io.Discard
+	probe.Stderr = io.Discard
+	if probe.Run() == nil {
+		return nil
+	}
+
+	dockerfilePath := filepath.Join(t.HostWorkdir, t.Build.Dockerfile)
+	if _, err := os.Stat(dockerfilePath); err != nil {
+		return fmt.Errorf("dockerfile not found at %s: %w", dockerfilePath, err)
+	}
+	contextDir := t.HostWorkdir
+	if t.Build.Context != "" && t.Build.Context != "." {
+		contextDir = filepath.Join(t.HostWorkdir, t.Build.Context)
+	}
+	if _, err := os.Stat(contextDir); err != nil {
+		return fmt.Errorf("build context not found at %s: %w", contextDir, err)
+	}
+
+	args := []string{
+		"build",
+		"-t", t.Image,
+		"-f", o.remapHostPath(dockerfilePath),
+	}
+	// Sorted args keeps the docker invocation stable for the same
+	// spec — easier to diff in logs when a build flakes.
+	keys := make([]string, 0, len(t.Build.Args))
+	for k := range t.Build.Args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		args = append(args, "--build-arg", k+"="+t.Build.Args[k])
+	}
+	args = append(args, o.remapHostPath(contextDir))
+
+	cmd := exec.CommandContext(ctx, o.bin, args...)
+	cmd.Env = append(os.Environ(), "DOCKER_BUILDKIT=1")
+	var stderr bytes.Buffer
+	cmd.Stdout = io.Discard
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker build %s: %w (stderr: %s)", t.Image, err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
 }
 
 // dockerEntrypoint folds host-supplied Task.Entrypoint into the pair

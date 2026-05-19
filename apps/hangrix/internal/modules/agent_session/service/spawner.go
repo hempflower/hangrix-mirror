@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 
 	"github.com/bmatcuk/doublestar/v4"
 
@@ -399,11 +402,13 @@ func (s *Spawner) spawnRole(
 	roleKey string,
 	repoSHA string,
 ) (domain.SpawnedSession, error) {
-	// Container image: only pre-built `container.image` is supported.
-	// `container.build` is parsed by agentsconfig but the runner doesn't
-	// build images yet — fail loudly so an operator sees the gap.
-	if hostCfg.Container.Image == "" {
-		return domain.SpawnedSession{}, fmt.Errorf("host yaml: container.image is required (build: not yet supported)")
+	// Resolve the docker image tag. Either container.image (pre-built,
+	// pulled by the runner) or container.build (a Dockerfile inside the
+	// host repo that the runner builds on demand). The parser guarantees
+	// exactly one is set; this just dispatches.
+	image, err := resolveImageTag(hostRepo.ID, hostCfg.Container)
+	if err != nil {
+		return domain.SpawnedSession{}, err
 	}
 
 	// Resolve effective LLM: per-field merge of host.LLM (team) and
@@ -430,7 +435,7 @@ func (s *Spawner) spawnRole(
 	// resolution), can list, scope, llm, container — so the audit row
 	// can reproduce exactly what the agent saw without re-parsing host
 	// yaml at the snapshot sha.
-	snapshot, err := buildRoleSnapshot(role, hostCfg, addendum, model, effective)
+	snapshot, err := buildRoleSnapshot(role, hostCfg, addendum, model, effective, image)
 	if err != nil {
 		return domain.SpawnedSession{}, err
 	}
@@ -491,7 +496,7 @@ func (s *Spawner) spawnRole(
 		IssueNumber:        &in.IssueNumber,
 		Role:               roleKey,
 		Model:              model,
-		AgentImage:         hostCfg.Container.Image,
+		AgentImage:         image,
 		WorkingBranch:      issueBranchName(in.IssueNumber),
 		BaseBranch:         hostRepo.DefaultBranch,
 		HostAddendum:       addendum,
@@ -783,7 +788,13 @@ func issueBranchName(n int32) string {
 // ,omitempty + zero on nil) so the audit row carries the resolved
 // scalar values an operator expects to see, without re-running the
 // inheritance to read it back.
-func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, addendum, model string, effective *agentsconfig.LLMConfig) ([]byte, error) {
+//
+// resolvedImage is the tag the runner will use for `docker create` —
+// either host.Container.Image verbatim or the deterministic build tag
+// from resolveImageTag. The original host.Container.{Image,Build}
+// spec is mirrored verbatim into the snapshot's `container` map so
+// audit consumers can tell whether the runner pulled or built.
+func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, addendum, model string, effective *agentsconfig.LLMConfig, resolvedImage string) ([]byte, error) {
 	type rs struct {
 		Triggers            map[string]any `json:"triggers"`
 		Can                 []string       `json:"can"`
@@ -818,6 +829,24 @@ func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, a
 	snap.Container = map[string]any{
 		"image": host.Container.Image,
 	}
+	if host.Container.Build != nil {
+		build := map[string]any{
+			"dockerfile": host.Container.Build.Dockerfile,
+		}
+		if host.Container.Build.Context != "" {
+			build["context"] = host.Container.Build.Context
+		}
+		if len(host.Container.Build.Args) > 0 {
+			build["args"] = host.Container.Build.Args
+		}
+		snap.Container["build"] = build
+	}
+	if resolvedImage != "" && resolvedImage != host.Container.Image {
+		// The runner needs the actual tag it should `docker create`
+		// against; when build is set, this is the deterministic tag
+		// the runner reproduces locally via `docker build -t <tag>`.
+		snap.Container["resolved_image"] = resolvedImage
+	}
 	if len(host.Container.Entrypoint) > 0 {
 		snap.Container["entrypoint"] = host.Container.Entrypoint
 	}
@@ -825,6 +854,44 @@ func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, a
 		snap.Container["secrets"] = host.Container.Secrets
 	}
 	return json.Marshal(snap)
+}
+
+// resolveImageTag picks the docker image tag the runner should use for
+// `docker create`. Either container.image (pulled) or a deterministic
+// tag the runner will materialise via `docker build`.
+//
+// The build tag is namespaced by repo id (so two host repos that ship
+// the same Dockerfile don't collide in the runner's local image store)
+// and content-addressed by a sha over (dockerfile path, context,
+// sorted build args). The Dockerfile *contents* are not hashed here —
+// docker's own build cache invalidates per-RUN-layer when the
+// Dockerfile changes, and using the same tag across edits means the
+// last build wins (consistent with how operators expect "rebuild"
+// to work).
+func resolveImageTag(repoID int64, c agentsconfig.Container) (string, error) {
+	if c.Image != "" {
+		return c.Image, nil
+	}
+	if c.Build == nil {
+		return "", fmt.Errorf("host yaml: container.image or container.build is required")
+	}
+	h := sha256.New()
+	h.Write([]byte(c.Build.Dockerfile))
+	h.Write([]byte{0})
+	h.Write([]byte(c.Build.Context))
+	h.Write([]byte{0})
+	keys := make([]string, 0, len(c.Build.Args))
+	for k := range c.Build.Args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		h.Write([]byte(k))
+		h.Write([]byte{'='})
+		h.Write([]byte(c.Build.Args[k]))
+		h.Write([]byte{0})
+	}
+	return fmt.Sprintf("hangrix-agent-r%d:%s", repoID, hex.EncodeToString(h.Sum(nil))[:12]), nil
 }
 
 // serializeTriggers turns a role's Triggers map into an audit-stable

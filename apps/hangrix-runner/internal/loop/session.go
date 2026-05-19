@@ -142,10 +142,19 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 
 	env := buildAgentEnv(task, d.BaseURL)
 
+	var buildSpec *orchestrator.BuildSpec
+	if task.AgentBuild != nil {
+		buildSpec = &orchestrator.BuildSpec{
+			Dockerfile: task.AgentBuild.Dockerfile,
+			Context:    task.AgentBuild.Context,
+			Args:       task.AgentBuild.Args,
+		}
+	}
 	otask := orchestrator.Task{
 		SessionID:        task.SessionID,
 		Image:            task.AgentImage,
 		Entrypoint:       task.AgentEntrypoint,
+		Build:            buildSpec,
 		AgentBinaryPath:  d.AgentBinaryPath,
 		HostAddendumPath: hostAddendumPath,
 		HostWorkdir:      mountPath,

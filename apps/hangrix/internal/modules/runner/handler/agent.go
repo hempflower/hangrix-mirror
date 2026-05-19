@@ -345,10 +345,11 @@ func (h *AgentHandler) heartbeat(w http.ResponseWriter, r *http.Request) {
 // ---- task dispatch ----
 
 type taskResp struct {
-	SessionID     int64             `json:"session_id"`
-	AgentImage    string            `json:"agent_image"`
-	AgentEntrypoint []string        `json:"agent_entrypoint,omitempty"`
-	Role          string            `json:"role"`
+	SessionID       int64             `json:"session_id"`
+	AgentImage      string            `json:"agent_image"`
+	AgentEntrypoint []string          `json:"agent_entrypoint,omitempty"`
+	AgentBuild      *agentBuildSpec   `json:"agent_build,omitempty"`
+	Role            string            `json:"role"`
 	Model         string            `json:"model,omitempty"`
 	WorkingBranch string            `json:"working_branch"`
 	BaseBranch    string            `json:"base_branch"`
@@ -398,6 +399,7 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 				SessionID:       sess.ID,
 				AgentImage:      sess.AgentImage,
 				AgentEntrypoint: extractEntrypoint(sess.RoleConfig),
+				AgentBuild:      extractBuild(sess.RoleConfig),
 				Role:            sess.Role,
 				Model:           sess.Model,
 				WorkingBranch:   sess.WorkingBranch,
@@ -749,6 +751,17 @@ func (h *AgentHandler) markCleanupDone(w http.ResponseWriter, r *http.Request) {
 
 // ---- token + ctx helpers ----
 
+// agentBuildSpec mirrors agentsconfig.Build on the wire. When set on
+// the dispatch response, the runner runs `docker build -f <Dockerfile>
+// -t <agent_image> [--build-arg K=V ...] <context>` before
+// `docker create`, materialising the image on demand. Empty / absent
+// means the runner pulls / uses `agent_image` as-is.
+type agentBuildSpec struct {
+	Dockerfile string            `json:"dockerfile"`
+	Context    string            `json:"context,omitempty"`
+	Args       map[string]string `json:"args,omitempty"`
+}
+
 // extractEntrypoint reads container.entrypoint out of the frozen
 // role_config snapshot. Returns nil on any decode error or missing
 // field — the runner falls back to its built-in `sleep infinity`
@@ -770,6 +783,27 @@ func extractEntrypoint(roleConfig []byte) []string {
 		return nil
 	}
 	return snap.Container.Entrypoint
+}
+
+// extractBuild reads container.build out of the frozen role_config
+// snapshot. Returns nil when the host yaml used container.image
+// (pull-only) rather than container.build (build-on-demand).
+func extractBuild(roleConfig []byte) *agentBuildSpec {
+	if len(roleConfig) == 0 {
+		return nil
+	}
+	var snap struct {
+		Container struct {
+			Build *agentBuildSpec `json:"build"`
+		} `json:"container"`
+	}
+	if err := json.Unmarshal(roleConfig, &snap); err != nil {
+		return nil
+	}
+	if snap.Container.Build == nil || snap.Container.Build.Dockerfile == "" {
+		return nil
+	}
+	return snap.Container.Build
 }
 
 func bearerToken(r *http.Request) (string, error) {

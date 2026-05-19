@@ -28,20 +28,36 @@ import (
 // stays whatever was used at first create — see docs/agent-config.md
 // §"Session 模型".
 type Task struct {
-	SessionID        int64
-	Image            string
+	SessionID int64
+	Image     string
 	// Entrypoint overrides the container's PID 1. First element is
 	// the argv0 passed to docker --entrypoint; subsequent elements
 	// are appended after the image name as CMD args. Empty / nil
 	// falls back to the orchestrator's built-in default
 	// (`/usr/bin/sleep infinity`) so the container stays alive as a
 	// passive docker-exec sandbox.
-	Entrypoint       []string
+	Entrypoint []string
+	// Build, when non-nil, tells the orchestrator to materialise
+	// Image via `docker build` against a Dockerfile inside the host
+	// repo (HostWorkdir/Build.Dockerfile) before `docker create`.
+	// The Image tag is the deterministic name the spawner sends
+	// down; the orchestrator only builds when `docker image inspect
+	// <Image>` reports the tag missing, so re-uses are free.
+	Build            *BuildSpec
 	AgentBinaryPath  string
 	HostAddendumPath string
 	HostWorkdir      string
 	Env              map[string]string
 	ContainerID      string
+}
+
+// BuildSpec describes the docker-build inputs for a Task. Paths are
+// host-repo-relative; the orchestrator joins them with HostWorkdir to
+// reach files on disk.
+type BuildSpec struct {
+	Dockerfile string
+	Context    string
+	Args       map[string]string
 }
 
 // Handle is the running container's stdio + wait surface. Stdin / Stdout

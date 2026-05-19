@@ -128,7 +128,12 @@ type Task struct {
 	// image bakes in a supervisor (e.g. s6-overlay /init) that
 	// should auto-start background services.
 	AgentEntrypoint []string `json:"agent_entrypoint,omitempty"`
-	Role            string   `json:"role"`
+	// AgentBuild, when set, tells the orchestrator to materialise
+	// AgentImage via `docker build` from a Dockerfile inside the
+	// host repo before `docker create`. Empty means AgentImage is
+	// a pre-built registry tag the runner pulls.
+	AgentBuild *BuildSpec `json:"agent_build,omitempty"`
+	Role       string     `json:"role"`
 	// Model is the resolved LLM model name the spawner picked for this
 	// session (role.llm.model > host.llm.model). Surfaced into the
 	// container as HANGRIX_LLM_MODEL so the agent's LLM client knows
@@ -144,6 +149,15 @@ type Task struct {
 	// reap). The orchestrator reuses it via `docker exec` when set; it
 	// falls back to creating a fresh container if the id is stale.
 	ContainerID string `json:"container_id,omitempty"`
+}
+
+// BuildSpec mirrors agentsconfig.Build on the wire. Paths are
+// repo-relative; the orchestrator resolves them against HostWorkdir
+// (the cloned host-repo checkout) at build time.
+type BuildSpec struct {
+	Dockerfile string            `json:"dockerfile"`
+	Context    string            `json:"context,omitempty"`
+	Args       map[string]string `json:"args,omitempty"`
 }
 
 // PollTasks returns (task, true, nil) on a real assignment, (nil, false, nil)

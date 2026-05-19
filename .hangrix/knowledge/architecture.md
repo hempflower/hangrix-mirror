@@ -10,3 +10,7 @@ Three Go binaries plus one frontend, all in one monorepo:
 Shared libs under `pkg/{common,cryptobox,ioc}/`. `go.work` ties the four Go modules together so cross-module imports work without `replace` directives.
 
 The platform that this repo defines (agent config schema, runner protocol, llm proxy, agent identity) is documented under `docs/` — `agent-config.md`, `runner-protocol.md`, `llm-proxy.md`, `agent-identity.md`, `tech-stack.md`.
+
+## Container image lifecycle
+
+A host repo declares either `container.image:` (pull-only) or `container.build:` (Dockerfile in the repo) — the spawner computes a deterministic docker tag (auto-derived from repo id + dockerfile path + build args when build is used) and ships it to the runner. The runner's `ensureImage` in [apps/hangrix-runner/internal/orchestrator/docker.go](apps/hangrix-runner/internal/orchestrator/docker.go) probes `docker image inspect <tag>` first and only invokes `docker build` on miss, so reuses are free. BuildKit is forced on via `DOCKER_BUILDKIT=1`.
