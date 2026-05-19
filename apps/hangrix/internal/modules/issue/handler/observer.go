@@ -65,7 +65,10 @@ func (o *PushObserver) PreReceive(ctx context.Context, repo *repodomain.Repo, fs
 			continue
 		}
 
-		isFF, mode, err := o.h.git.CheckFastForward(fsPath, iss.BaseBranch, branch)
+		// Use the new SHA from the push (not the current branch ref) so that
+		// a rebased branch whose old tip had diverged is still accepted. The
+		// branch ref on disk hasn't been updated yet at PreReceive time.
+		isFF, mode, err := o.h.git.CheckFastForward(fsPath, iss.BaseBranch, u.NewSHA)
 		if err != nil {
 			return fmt.Errorf("check fast-forward for %s: %w", branch, err)
 		}
