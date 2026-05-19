@@ -59,6 +59,10 @@ func (r *Registry) issueCommentTool() *platformmcpdomain.Tool {
 			body := strings.TrimSpace(req.Body)
 			if body == "" {
 				return errorResult("body is required"), nil
+		if agentsconfig.HasBacktickWrappedMention(body) {
+			return errorResult("body contains an @agent-<role> mention wrapped in backticks — remove the backticks around the mention so the parser can see it, or omit the mention entirely"), nil
+		}
+
 			}
 			if agentsconfig.HasBacktickWrappedMention(body) {
 				return errorResult("body contains an @agent-<role> mention wrapped in backticks — remove the backticks around the mention so the parser can see it, or omit the mention entirely"), nil
@@ -441,7 +445,7 @@ func (r *Registry) issueCreateTool() *platformmcpdomain.Tool {
 				parentNumber = scope.issue.Number
 			}
 
-			iss, err := r.deps.Issues.Create(ctx, scope.repo.ID, 0, title, req.Body, baseBranch, parentID, parentNumber)
+			iss, err := r.deps.Issues.Create(ctx, scope.repo.ID, 0, title, req.Body, baseBranch, sess.RoleKey, parentID, parentNumber)
 			if err != nil {
 				return errorResult("create issue: " + err.Error()), nil
 			}

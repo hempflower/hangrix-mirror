@@ -55,7 +55,7 @@ func NewPostgresStore(deps *PostgresStoreDeps) *PostgresStore {
 // parentID is non-zero the child's parent_id / parent_number columns are
 // populated and the caller is expected to have already pointed
 // baseBranch at the parent's issue branch.
-func (s *PostgresStore) Create(ctx context.Context, repoID, authorID int64, title, body, baseBranch string, parentID, parentNumber int64) (*domain.Issue, error) {
+func (s *PostgresStore) Create(ctx context.Context, repoID, authorID int64, title, body, baseBranch string, agentRole string, parentID, parentNumber int64) (*domain.Issue, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -68,6 +68,15 @@ func (s *PostgresStore) Create(ctx context.Context, repoID, authorID int64, titl
 		return nil, fmt.Errorf("issue: bump counter: %w", err)
 	}
 
+	// Map the two authorship paths into the DB's mutually exclusive
+	// author_id / agent_role columns:
+	//   Human: author_id = user ID, agent_role = ""
+	//   Agent: author_id = NULL,      agent_role = role key
+	var authorArg pgtype.Int8
+	if authorID > 0 {
+		authorArg = pgtype.Int8{Int64: authorID, Valid: true}
+	}
+
 	var parentArg pgtype.Int8
 	if parentID > 0 {
 		parentArg = pgtype.Int8{Int64: parentID, Valid: true}
@@ -75,7 +84,8 @@ func (s *PostgresStore) Create(ctx context.Context, repoID, authorID int64, titl
 	if _, err := qtx.CreateIssue(ctx, issuedb.CreateIssueParams{
 		RepoID:       repoID,
 		Number:       number,
-		AuthorID:     authorID,
+		AuthorID:     authorArg,
+		AgentRole:    agentRole,
 		Title:        title,
 		Body:         body,
 		BranchName:   fmt.Sprintf("issue/%d", number),
@@ -333,7 +343,8 @@ func issueFromGet(r issuedb.GetIssueByNumberRow) *domain.Issue {
 		RepoID:         r.RepoID,
 		Number:         r.Number,
 		AuthorID:       r.AuthorID,
-		AuthorName:     r.Username,
+		AuthorName:     r.AuthorName,
+		AgentRole:      r.AgentRole,
 		Title:          r.Title,
 		Body:           r.Body,
 		State:          domain.State(r.State),
@@ -359,7 +370,8 @@ func issueFromList(r issuedb.ListIssuesRow) *domain.Issue {
 		RepoID:         r.RepoID,
 		Number:         r.Number,
 		AuthorID:       r.AuthorID,
-		AuthorName:     r.Username,
+		AuthorName:     r.AuthorName,
+		AgentRole:      r.AgentRole,
 		Title:          r.Title,
 		Body:           r.Body,
 		State:          domain.State(r.State),
@@ -385,7 +397,8 @@ func issueFromChildren(r issuedb.ListIssueChildrenRow) *domain.Issue {
 		RepoID:         r.RepoID,
 		Number:         r.Number,
 		AuthorID:       r.AuthorID,
-		AuthorName:     r.Username,
+		AuthorName:     r.AuthorName,
+		AgentRole:      r.AgentRole,
 		Title:          r.Title,
 		Body:           r.Body,
 		State:          domain.State(r.State),

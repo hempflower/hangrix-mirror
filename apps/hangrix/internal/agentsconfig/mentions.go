@@ -207,6 +207,101 @@ func hasBacktickWrappedMentionInLine(line string) bool {
 	return false
 }
 
+// HasBacktickWrappedMention reports whether body contains an @agent-<role>
+// mention inside inline code spans (backtick-delimited runs). The parser
+// intentionally ignores mentions inside backtick runs, so a comment whose
+// only mentions are backtick-wrapped will never wake the target role.
+// The check follows the same fencing / indent / quote skip rules as
+// ParseMentions so a mention inside a fenced code block that is also inside
+// backticks does not trigger a false positive.
+func HasBacktickWrappedMention(body string) bool {
+	if body == "" {
+		return false
+	}
+	var (
+		inFence   bool
+		fenceMark byte
+	)
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimLeft(line, " ")
+		if isFenceLine(trimmed) {
+			mark := trimmed[0]
+			if !inFence {
+				inFence = true
+				fenceMark = mark
+				continue
+			}
+			if mark == fenceMark {
+				inFence = false
+				fenceMark = 0
+			}
+			continue
+		}
+		if inFence {
+			continue
+		}
+		if strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "    ") {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimLeft(line, " "), ">") {
+			continue
+		}
+		if hasBacktickWrappedMentionInLine(line) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasBacktickWrappedMentionInLine scans a single line for inline code
+// spans (backtick-delimited runs) whose content contains "@agent-".
+// The backtick-matching logic mirrors stripInlineCode: runs of 1+
+// backticks are matched against a closing run of equal length.
+func hasBacktickWrappedMentionInLine(line string) bool {
+	if !strings.ContainsRune(line, '`') {
+		return false
+	}
+	i := 0
+	for i < len(line) {
+		if line[i] != '`' {
+			i++
+			continue
+		}
+		run := 1
+		for i+run < len(line) && line[i+run] == '`' {
+			run++
+		}
+		j := i + run
+		closeStart := -1
+		for j < len(line) {
+			if line[j] != '`' {
+				j++
+				continue
+			}
+			cr := 1
+			for j+cr < len(line) && line[j+cr] == '`' {
+				cr++
+			}
+			if cr == run {
+				closeStart = j
+				break
+			}
+			j += cr
+		}
+		if closeStart < 0 {
+			i += run
+			continue
+		}
+		content := line[i+run : closeStart]
+		if strings.Contains(content, "@agent-") {
+			return true
+		}
+		i = closeStart + run
+	}
+	return false
+}
+
+
 func isFenceLine(line string) bool {
 	if len(line) < 3 {
 		return false

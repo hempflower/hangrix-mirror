@@ -86,6 +86,9 @@ type Issue struct {
 	Number         int64
 	AuthorID       int64
 	AuthorName     string
+	// AgentRole is set on agent-created issues. Empty for human-created
+	// issues. Mirrors the same field on Comment and Event.
+	AgentRole      string
 	Title          string
 	Body           string
 	State          State
@@ -209,7 +212,7 @@ type ListFilter struct {
 // Store is the persistence abstraction. The Postgres impl lives under
 // internal/modules/issue/infra.
 type Store interface {
-	Create(ctx context.Context, repoID, authorID int64, title, body, baseBranch string, parentID, parentNumber int64) (*Issue, error)
+	Create(ctx context.Context, repoID, authorID int64, title, body, baseBranch string, agentRole string, parentID, parentNumber int64) (*Issue, error)
 	GetByNumber(ctx context.Context, repoID, number int64) (*Issue, error)
 	List(ctx context.Context, repoID int64, f ListFilter) ([]*Issue, int64, error)
 	ListChildren(ctx context.Context, parentID int64) ([]*Issue, error)
