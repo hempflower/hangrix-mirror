@@ -299,6 +299,97 @@ func (r *Registry) issueMergeTool() *platformmcpdomain.Tool {
 	}
 }
 
+// sessionRecoverTool recovers a failed / succeeded / cancelled / idle session
+// on the same issue back to pending so a runner picks it up again. Scope is
+// constrained to the caller's issue; cross-issue recovery is rejected. ACL
+// is driven by the host yaml `can: [session_recover]` whitelist — the handler
+// checks CanCallTool before dispatch and this tool double-checks the scope.
+//
+// The heavy lifting reuses Controller.Resume() which mints a fresh token,
+// flips the row to pending, and enqueues a resume event. The tool's only
+// additions are the same-issue scope gate and the audit message with the
+// caller's role key.
+func (r *Registry) sessionRecoverTool() *platformmcpdomain.Tool {
+	return &platformmcpdomain.Tool{
+		Name:        "session_recover",
+		Description: "Recover a failed / succeeded / cancelled / idle agent session on the current issue back to pending so a runner picks it up again. `session_id` is required. Only sessions on the same issue can be recovered; cross-issue and archived sessions are rejected. Requires `session_recover` in the role's `can:` whitelist.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]any{
+					"type":        "integer",
+					"description": "Target session ID to recover.",
+				},
+			},
+			"required": []string{"session_id"},
+		},
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
+			scope, err := r.loadScope(ctx, sess)
+			if err != nil {
+				return errorResult(err.Error()), nil
+			}
+			var req struct {
+				SessionID int64 `json:"session_id"`
+			}
+			if err := unmarshalArgs(args, &req); err != nil {
+				return errorResult("invalid arguments: " + err.Error()), nil
+			}
+			if req.SessionID <= 0 {
+				return errorResult("session_id is required and must be positive"), nil
+			}
+
+			target, err := r.deps.Runner.GetSessionByID(ctx, req.SessionID)
+			if err != nil {
+				return errorResult("load session: " + err.Error()), nil
+			}
+
+			// Same-issue gate: target repo and issue must match the caller.
+			if target.RepoID == nil || *target.RepoID != scope.repo.ID {
+				return errorResult("target session not in same repo"), nil
+			}
+			if target.IssueNumber == nil || *target.IssueNumber != int32(*sess.IssueNumber) {
+				return errorResult("target session not in same issue"), nil
+			}
+
+			// Status gate: only terminal-or-idle rows are recoverable.
+			switch target.Status {
+			case runnerdomain.SessionStatusArchived:
+				return errorResult("session is archived, not resumable"), nil
+			case runnerdomain.SessionStatusPending,
+				runnerdomain.SessionStatusClaimed,
+				runnerdomain.SessionStatusRunning:
+				return errorResult("session is already live"), nil
+			}
+			// allowed: failed, succeeded, cancelled, idle
+
+			if r.deps.Controller == nil {
+				return errorResult("controller not available"), nil
+			}
+			if err := r.deps.Controller.Resume(ctx, req.SessionID); err != nil {
+				if errors.Is(err, agentsessiondomain.ErrNotResumable) {
+					return errorResult("session not resumable"), nil
+				}
+				return errorResult("resume: " + err.Error()), nil
+			}
+
+			// Append audit message with the caller's role key.
+			msg := fmt.Sprintf("recovered by agent %s", sess.RoleKey)
+			_, _ = r.deps.Runner.AppendMessage(ctx, &runnerdomain.Message{
+				SessionID: req.SessionID,
+				Kind:      runnerdomain.MessageKindSystem,
+				Content:   msg,
+			})
+
+			return textResult(map[string]any{
+				"session_id": req.SessionID,
+				"status":     string(runnerdomain.SessionStatusPending),
+				"recovered":  true,
+			}), nil
+		},
+	}
+}
+
+
 // unmarshalArgs accepts an empty body as the empty object — LLMs
 // occasionally emit `""` for no-arg tools and we don't want that to
 // reject the call.
