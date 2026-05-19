@@ -127,3 +127,30 @@ RETURNING *;
 
 -- name: DeleteBranchProtection :execrows
 DELETE FROM branch_protections WHERE id = $1 AND repo_id = $2;
+
+-- name: AddRepoMember :exec
+INSERT INTO repo_members (repo_id, user_id, role, added_by)
+VALUES ($1, $2, $3, $4);
+
+-- name: UpdateRepoMemberRole :execrows
+UPDATE repo_members
+SET role = $3
+WHERE repo_id = $1 AND user_id = $2;
+
+-- name: RemoveRepoMember :execrows
+DELETE FROM repo_members
+WHERE repo_id = $1 AND user_id = $2;
+
+-- name: GetRepoMember :one
+SELECT m.repo_id, m.user_id, u.username, m.role, m.added_by, m.added_at
+FROM repo_members m
+JOIN users u ON u.id = m.user_id
+WHERE m.repo_id = $1 AND m.user_id = $2;
+
+-- name: ListRepoMembers :many
+SELECT m.repo_id, m.user_id, u.username, m.role, m.added_by, m.added_at
+FROM repo_members m
+JOIN users u ON u.id = m.user_id
+WHERE m.repo_id = $1
+ORDER BY m.role DESC, u.username ASC;
+

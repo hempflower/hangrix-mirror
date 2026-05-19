@@ -21,6 +21,8 @@ func Module() *ioc.Module {
 	// Expose the path resolver as a narrow domain interface so cross-module
 	// callers (platform_mcp tools, agent_session spawner) can compute
 	// fsPaths without taking a hard dep on the concrete *infra.Storage.
+	m.Provide(infra.NewPostgresMemberStore).ToInterface(new(domain.MemberStore))
+
 	storage.ToInterface(new(domain.PathResolver))
 	m.Provide(handler.NewHandler).ToInterface(new(server.RouteProvider))
 	return m

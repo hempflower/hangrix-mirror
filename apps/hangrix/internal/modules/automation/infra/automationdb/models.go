@@ -63,6 +63,14 @@ type Repo struct {
 	OwnerOrgID    pgtype.Int8
 }
 
+type RepoMember struct {
+	RepoID  int64
+	UserID  int64
+	Role    string
+	AddedBy int64
+	AddedAt pgtype.Timestamptz
+}
+
 type User struct {
 	ID           int64
 	Username     string

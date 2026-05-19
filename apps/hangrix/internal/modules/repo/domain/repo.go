@@ -55,6 +55,48 @@ type Repo struct {
 	UpdatedAt     time.Time
 }
 
+// MemberRole is the per-repo role of a single user. Two-tier:
+// write (can push, write content) / read (can view only).
+// owner does not appear in repo_members — they are expressed
+// via repos.owner_user_id / owner_org_id and implicitly have
+// maximum permission.
+type MemberRole string
+
+const (
+	MemberRoleWrite MemberRole = "write"
+	MemberRoleRead  MemberRole = "read"
+)
+
+func (r MemberRole) Valid() bool { return r == MemberRoleWrite || r == MemberRoleRead }
+
+// RepoMember is one row in repo_members. Role is the user's role
+// within the repo. AddedBy records which user issued the add (for audit).
+type RepoMember struct {
+	RepoID   int64
+	UserID   int64
+	Username string
+	Role     MemberRole
+	AddedBy  int64
+	AddedAt  time.Time
+}
+
+// Errors for repo_members operations.
+var (
+	ErrRepoMemberNotFound  = errors.New("repo member not found")
+	ErrRepoMemberConflict  = errors.New("user is already a repo member")
+	ErrOrgRepoNotSupported = errors.New("repo members are not supported on org-owned repos")
+)
+
+// MemberStore is the persistence abstraction for repo_members.
+type MemberStore interface {
+	AddMember(ctx context.Context, repoID, userID, addedBy int64, role MemberRole) error
+	UpdateMemberRole(ctx context.Context, repoID, userID int64, role MemberRole) error
+	RemoveMember(ctx context.Context, repoID, userID int64) error
+	ListMembers(ctx context.Context, repoID int64) ([]*RepoMember, error)
+	GetMember(ctx context.Context, repoID, userID int64) (*RepoMember, error)
+}
+
+
 // ErrRepoNotFound is returned by Store lookups when no row matches.
 var ErrRepoNotFound = errors.New("repo not found")
 
