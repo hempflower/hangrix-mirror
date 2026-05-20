@@ -53,6 +53,9 @@ type StorageConfig struct {
 	// ReposPath is the directory under which bare repositories live, as
 	// `<ReposPath>/<owner>/<name>.git`. Created on demand at first use.
 	ReposPath string `mapstructure:"repos_path"`
+	// AssetsPath is the directory under which custom release assets are
+	// stored, keyed by release ID. Created on demand.
+	AssetsPath string `mapstructure:"assets_path"`
 }
 
 type ServerConfig struct {
@@ -106,6 +109,7 @@ func NewConfig(path string) (*Config, error) {
 	v.SetDefault("auth.cookie_secure", false)
 	v.SetDefault("auth.session_ttl", "168h") // 7 days
 	v.SetDefault("storage.repos_path", "./data/repos")
+	v.SetDefault("storage.assets_path", "./data/assets")
 	v.SetDefault("runner.default_agent_image", "")
 	v.SetDefault("automation.scanner_interval", "60s")
 

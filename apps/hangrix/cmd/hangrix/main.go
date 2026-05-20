@@ -18,6 +18,7 @@ import (
 	llmproxy "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_proxy"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/org"
 	platformmcp "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_mcp"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/release"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/token"
@@ -43,6 +44,7 @@ func main() {
 		git.Module(),
 		org.Module(),
 		repo.Module(),
+		release.Module(),
 		issue.Module(),
 		llmprovider.Module(),
 		llmproxy.Module(),

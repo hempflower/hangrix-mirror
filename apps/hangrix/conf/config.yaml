@@ -28,6 +28,7 @@ auth:
 
 storage:
   repos_path: "./data/repos"
+  assets_path: "./data/assets"
 
 llm:
   encryption_key: "wAO53V1ifCfBbm5ZVmjR9haeymmvhIobK4b99+D4Eq8="

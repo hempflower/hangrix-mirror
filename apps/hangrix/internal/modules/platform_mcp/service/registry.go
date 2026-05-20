@@ -13,6 +13,7 @@ import (
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	platformmcpdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_mcp/domain"
+	releasedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
@@ -27,14 +28,16 @@ type Registry struct {
 }
 
 type RegistryDeps struct {
-	Issues     issuedomain.Store
-	Repos      repodomain.Store
-	Storage    repodomain.PathResolver
-	Git        gitdomain.Git
-	Runner     runnerdomain.Repo
-	Spawner    agentsessiondomain.Spawner
-	Archiver   agentsessiondomain.Archiver
-	Controller agentsessiondomain.Controller
+	Issues        issuedomain.Store
+	Repos         repodomain.Store
+	Storage       repodomain.PathResolver
+	Git           gitdomain.Git
+	Runner        runnerdomain.Repo
+	Spawner       agentsessiondomain.Spawner
+	Archiver      agentsessiondomain.Archiver
+	Controller    agentsessiondomain.Controller
+	Releases      releasedomain.Store
+	ReleaseAssets releasedomain.AssetStore
 }
 
 // NewRegistry assembles the tool catalogue at startup. Tools share the
@@ -58,6 +61,11 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 		r.issueCloseTool(),
 		r.issueMergeTool(),
 		r.sessionRecoverTool(),
+		r.releaseCreateTool(),
+		r.releaseUploadAssetTool(),
+		r.releasePublishTool(),
+		r.releaseUpdateTool(),
+		r.releaseDeleteTool(),
 	}
 	return r
 }

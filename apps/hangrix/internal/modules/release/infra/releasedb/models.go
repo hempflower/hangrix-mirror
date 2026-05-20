@@ -2,23 +2,11 @@
 // versions:
 //   sqlc v1.30.0
 
-package automationdb
+package releasedb
 
 import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
-
-type AutomationRun struct {
-	ID           int64
-	RepoID       int64
-	TaskName     string
-	IssueID      pgtype.Int8
-	Status       string
-	ErrorMessage pgtype.Text
-	StartedAt    pgtype.Timestamptz
-	FinishedAt   pgtype.Timestamptz
-	CreatedAt    pgtype.Timestamptz
-}
 
 type BranchProtection struct {
 	ID               int64
@@ -49,6 +37,29 @@ type OrganizationMember struct {
 	Role    string
 	AddedBy int64
 	AddedAt pgtype.Timestamptz
+}
+
+type Release struct {
+	ID              int64
+	RepoID          int64
+	TagName         string
+	TargetCommitSha string
+	Title           string
+	Notes           string
+	IsDraft         bool
+	PublishedAt     pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+}
+
+type ReleaseAsset struct {
+	ID          int64
+	ReleaseID   int64
+	Name        string
+	ContentType string
+	SizeBytes   int64
+	StorageKey  string
+	CreatedAt   pgtype.Timestamptz
 }
 
 type Repo struct {
