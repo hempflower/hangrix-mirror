@@ -59,9 +59,9 @@ func (r *Registry) issueCommentTool() *platformmcpdomain.Tool {
 			body := strings.TrimSpace(req.Body)
 			if body == "" {
 				return errorResult("body is required"), nil
-		if agentsconfig.HasBacktickWrappedMention(body) {
-			return errorResult("body contains an @agent-<role> mention wrapped in backticks — remove the backticks around the mention so the parser can see it, or omit the mention entirely"), nil
-		}
+				if agentsconfig.HasBacktickWrappedMention(body) {
+					return errorResult("body contains an @agent-<role> mention wrapped in backticks — remove the backticks around the mention so the parser can see it, or omit the mention entirely"), nil
+				}
 
 			}
 			if agentsconfig.HasBacktickWrappedMention(body) {
@@ -138,10 +138,10 @@ func (r *Registry) issueReviewVoteTool() *platformmcpdomain.Tool {
 			// Fan out review_vote.posted so maintainer wakes.
 			if r.deps.Spawner != nil {
 				triggerPayload, _ := json.Marshal(map[string]any{
-					"event_id":   evt.ID,
-					"role_key":   sess.RoleKey,
-					"value":      string(value),
-					"reason":     req.Reason,
+					"event_id": evt.ID,
+					"role_key": sess.RoleKey,
+					"value":    string(value),
+					"reason":   req.Reason,
 				})
 				_, _ = r.deps.Spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
 					Trigger:     agentsconfig.TriggerReviewVotePosted,
@@ -185,8 +185,8 @@ func (r *Registry) issueCloseTool() *platformmcpdomain.Tool {
 			}
 			if scope.issue.State != issuedomain.StateOpen {
 				return textResult(map[string]any{
-					"state":    string(scope.issue.State),
-					"changed":  false,
+					"state":   string(scope.issue.State),
+					"changed": false,
 				}), nil
 			}
 			var req struct {
@@ -392,7 +392,6 @@ func (r *Registry) sessionRecoverTool() *platformmcpdomain.Tool {
 	}
 }
 
-
 // issueCreateTool creates a new issue (optionally as a child of the
 // current issue). When parent=true the new issue's base_branch is set
 // to the current issue's branch so merging a child fast-forwards into
@@ -471,7 +470,6 @@ func (r *Registry) issueCreateTool() *platformmcpdomain.Tool {
 		},
 	}
 }
-
 
 // unmarshalArgs accepts an empty body as the empty object — LLMs
 // occasionally emit `""` for no-arg tools and we don't want that to

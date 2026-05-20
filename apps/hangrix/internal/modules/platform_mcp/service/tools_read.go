@@ -36,17 +36,17 @@ func (r *Registry) issueReadTool() *platformmcpdomain.Tool {
 				return errorResult("list events: " + err.Error()), nil
 			}
 			out := struct {
-				Number    int64           `json:"number"`
-				Title     string          `json:"title"`
-				Body      string          `json:"body"`
-				State     string          `json:"state"`
-				Base      string          `json:"base_branch"`
-				Branch    string          `json:"branch_name"`
-				HeadSHA   string          `json:"head_sha"`
-				Author    string          `json:"author_username"`
-				CreatedAt string          `json:"created_at"`
-				Comments  []commentDTO    `json:"comments"`
-				Events    []eventDTO      `json:"events"`
+				Number    int64        `json:"number"`
+				Title     string       `json:"title"`
+				Body      string       `json:"body"`
+				State     string       `json:"state"`
+				Base      string       `json:"base_branch"`
+				Branch    string       `json:"branch_name"`
+				HeadSHA   string       `json:"head_sha"`
+				Author    string       `json:"author_username"`
+				CreatedAt string       `json:"created_at"`
+				Comments  []commentDTO `json:"comments"`
+				Events    []eventDTO   `json:"events"`
 			}{
 				Number:    scope.issue.Number,
 				Title:     scope.issue.Title,
@@ -182,13 +182,13 @@ func (r *Registry) rosterListTool() *platformmcpdomain.Tool {
 // ---- DTOs ----
 
 type commentDTO struct {
-	ID         int64  `json:"id"`
-	Author     string `json:"author"`
-	AgentRole  string `json:"agent_role,omitempty"`
-	Body       string `json:"body"`
-	FilePath   string `json:"file_path,omitempty"`
-	Line       int    `json:"line,omitempty"`
-	CreatedAt  string `json:"created_at"`
+	ID        int64  `json:"id"`
+	Author    string `json:"author"`
+	AgentRole string `json:"agent_role,omitempty"`
+	Body      string `json:"body"`
+	FilePath  string `json:"file_path,omitempty"`
+	Line      int    `json:"line,omitempty"`
+	CreatedAt string `json:"created_at"`
 }
 
 func commentsToDTO(in []*issuedomain.Comment) []commentDTO {
@@ -252,7 +252,6 @@ type mergeableResult struct {
 	Hint       string `json:"hint"`
 }
 
-
 // issueMergeableTool returns mergeable status for the current issue's branch
 // vs its base. A no-parameter read-only tool — the scope is determined from
 // the session's repo+issue. Agents call this before issue_merge to avoid a
@@ -310,4 +309,3 @@ func (r *Registry) issueMergeableTool() *platformmcpdomain.Tool {
 		},
 	}
 }
-

@@ -136,6 +136,10 @@ func (r *Registry) releaseUploadAssetTool() *platformmcpdomain.Tool {
 			if req.Name == "" {
 				return errorResult("name is required"), nil
 			}
+			if !isSafeAssetName(req.Name) {
+				return errorResult("invalid asset name: must not contain path separators or '..'"), nil
+			}
+
 			if req.Content == "" {
 				return errorResult("content is required"), nil
 			}
@@ -373,10 +377,13 @@ func (r *Registry) releaseDeleteTool() *platformmcpdomain.Tool {
 				return errorResult("release not in this repo"), nil
 			}
 
-			// Clean up assets from DB if asset store is available.
+			// Clean up asset files from disk and DB records.
 			if r.deps.ReleaseAssets != nil {
 				assets, _ := r.deps.ReleaseAssets.ListByRelease(ctx, req.ReleaseID)
 				for _, a := range assets {
+					if r.deps.AssetStorage != nil {
+						_ = r.deps.AssetStorage.Remove(a.StorageKey)
+					}
 					_ = r.deps.ReleaseAssets.Delete(ctx, a.ID)
 				}
 			}
@@ -389,4 +396,16 @@ func (r *Registry) releaseDeleteTool() *platformmcpdomain.Tool {
 			}), nil
 		},
 	}
+}
+
+// isSafeAssetName rejects names that contain path separators, .., or other
+// characters that could allow path traversal in AssetStorage paths.
+func isSafeAssetName(name string) bool {
+	if len(name) > 200 {
+		return false
+	}
+	if strings.Contains(name, "..") || strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		return false
+	}
+	return true
 }
