@@ -253,7 +253,11 @@ func (q *Queries) ListProviders(ctx context.Context) ([]LlmProvider, error) {
 }
 
 const listUsage = `-- name: ListUsage :many
-SELECT u.id, u.session_id, u.provider_id, u.model, u.prompt_tokens, u.completion_tokens, u.total_tokens, u.latency_ms, u.status_code, u.error_message, u.request_path, u.created_at, u.request_body, u.response_body, p.name AS provider_name
+SELECT u.id, u.session_id, u.provider_id, u.model,
+       u.prompt_tokens, u.completion_tokens, u.total_tokens,
+       u.latency_ms, u.status_code, u.error_message, u.request_path,
+       u.created_at,
+       p.name AS provider_name
 FROM llm_usage_log u
 JOIN llm_providers p ON p.id = u.provider_id
 WHERE ($1::BIGINT IS NULL OR u.provider_id = $1)
@@ -283,11 +287,12 @@ type ListUsageRow struct {
 	ErrorMessage     string
 	RequestPath      string
 	CreatedAt        pgtype.Timestamptz
-	RequestBody      string
-	ResponseBody     string
 	ProviderName     string
 }
 
+// Explicit column list excludes request_body/response_body so the list
+// query stays fast — the detail endpoint (GetUsageByID) carries the large
+// body columns on a single row.
 func (q *Queries) ListUsage(ctx context.Context, arg ListUsageParams) ([]ListUsageRow, error) {
 	rows, err := q.db.Query(ctx, listUsage,
 		arg.ProviderID,
@@ -315,8 +320,6 @@ func (q *Queries) ListUsage(ctx context.Context, arg ListUsageParams) ([]ListUsa
 			&i.ErrorMessage,
 			&i.RequestPath,
 			&i.CreatedAt,
-			&i.RequestBody,
-			&i.ResponseBody,
 			&i.ProviderName,
 		); err != nil {
 			return nil, err

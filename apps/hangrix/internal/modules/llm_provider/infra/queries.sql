@@ -79,7 +79,14 @@ INSERT INTO llm_usage_log (
 );
 
 -- name: ListUsage :many
-SELECT u.*, p.name AS provider_name
+-- Explicit column list excludes request_body/response_body so the list
+-- query stays fast — the detail endpoint (GetUsageByID) carries the large
+-- body columns on a single row.
+SELECT u.id, u.session_id, u.provider_id, u.model,
+       u.prompt_tokens, u.completion_tokens, u.total_tokens,
+       u.latency_ms, u.status_code, u.error_message, u.request_path,
+       u.created_at,
+       p.name AS provider_name
 FROM llm_usage_log u
 JOIN llm_providers p ON p.id = u.provider_id
 WHERE (sqlc.narg('provider_id')::BIGINT IS NULL OR u.provider_id = sqlc.narg('provider_id'))
