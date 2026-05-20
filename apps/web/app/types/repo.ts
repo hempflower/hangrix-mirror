@@ -35,6 +35,12 @@ export interface RepoRefs {
   tags: RepoRef[]
 }
 
+export interface RefListResp {
+  items: RepoRef[]
+  total: number
+}
+
+
 export interface Signature {
   name: string
   email: string
