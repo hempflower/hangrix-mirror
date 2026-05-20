@@ -5,6 +5,7 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -129,17 +130,44 @@ type Git interface {
 	// branch on it. ErrRefNotFound when the ref does not exist at all.
 	ResolveCommit(path, ref string) (string, error)
 
-// MergeBranch merges fromRef into intoBranch. Behavior:
+	// MergeBranch merges fromRef into intoBranch using a rebase-first strategy:
 	//   - intoBranch is unborn → intoBranch is created pointing at fromRef
 	//     (mode "fast-forward").
 	//   - intoBranch == fromRef commit → no-op (mode "up-to-date").
+	//   - fromRef is an ancestor of intoBranch → no-op (mode "up-to-date").
 	//   - intoBranch is an ancestor of fromRef → intoBranch is advanced to
 	//     fromRef (mode "fast-forward").
-	//   - otherwise → a merge commit is written joining both sides; conflict
-	//     between trees yields ErrMergeConflict.
+	//   - otherwise → the commits on fromRef since the merge-base are replayed
+	//     (cherry-picked) onto intoBranch. If any step conflicts,
+	//     ErrRebaseConflict (wrapping ErrMergeConflict) is returned. On
+	//     success, both the issue branch ref (fromRef) and the base branch
+	//     ref (intoBranch) are updated to the final rebased commit
+	//     (mode "rebase-fast-forward").
 	//
-	// Returns the resulting commit SHA on intoBranch and the mode.
+	// Returns the resulting commit SHA on intoBranch, the mode, and any error.
 	MergeBranch(path, intoBranch, fromRef, message string, author Signature) (sha, mode string, err error)
+	
+	// CheckAutoMerge evaluates whether headRef can be merged into baseRef
+	// under the rebase-first strategy, without modifying any refs. Returns:
+	//
+	//   - mergeable=true, mode="fast-forward": baseRef is an ancestor of
+	//     headRef (direct fast-forward possible).
+	//   - mergeable=true, mode="up-to-date": headRef is already reachable
+	//     from baseRef (nothing to merge).
+	//   - mergeable=true, mode="rebase-fast-forward": branches have diverged
+	//     but the issue branch commits can be auto-rebased onto baseRef
+	//     without conflicts.
+	//   - mergeable=false, mode="conflicted": rebase would produce conflicts
+	//     that require manual resolution.
+	//   - mergeable=false, mode="unknown": one or both refs cannot be
+	//     resolved, or headRef is empty.
+	//
+	// The hint provides a human-readable explanation of the result.
+	// This is the shared pre-flight check used by both issue_mergeable
+	// and issue_merge.
+	// The old merge-commit path is removed — the rebase-first strategy always
+	// produces a linear history.
+	CheckAutoMerge(path, baseRef, headRef string) (mergeable bool, mode string, hint string, err error)
 }
 
 // JSON tags are intentionally on these domain types because the repo handler
@@ -251,4 +279,7 @@ var (
 	ErrCannotDeleteHEAD = errors.New("git: cannot delete current HEAD branch")
 	ErrInvalidRefName   = errors.New("git: invalid ref name")
 	ErrMergeConflict    = errors.New("git: merge conflict")
+	// ErrRebaseConflict wraps ErrMergeConflict — returned by MergeBranch when
+	// the rebase-first strategy cannot auto-rebase without conflicts.
+	ErrRebaseConflict = fmt.Errorf("%w: rebase conflict", ErrMergeConflict)
 )
