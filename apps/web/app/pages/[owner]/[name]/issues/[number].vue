@@ -550,7 +550,7 @@ onUnmounted(stopRefreshTimer)
       <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div class="min-w-0 space-y-4">
           <Tabs v-model="tab">
-            <div class="sticky top-16 z-10 bg-background pb-2">
+            <div class="sticky top-16 z-10 bg-background/75 backdrop-blur-sm pb-2 border-b border-border">
             <TabsList>
               <TabsTrigger value="conversation">
                 <MessageSquare class="size-4" />
