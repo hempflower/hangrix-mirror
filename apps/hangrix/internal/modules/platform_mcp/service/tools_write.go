@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	b64 "encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -390,23 +389,17 @@ func (r *Registry) sessionRecoverTool() *platformmcpdomain.Tool {
 }
 
 
-// issueAttachmentUploadTool uploads a file as an issue attachment.
-// The agent reads the file from its workspace, base64-encodes it, and
-// sends the encoded bytes as `data` together with the original `name`.
-// The server decodes the base64, validates, hashes, stores the file,
-// and returns attachment metadata including an attachment_id and
-// markdown_snippet the agent can insert into a subsequent issue_comment.
+// issueAttachmentUploadTool declares the issue_attachment_upload tool.
+// File bytes arrive via multipart/form-data (handled by the HTTP handler,
+// which calls Registry.UploadAttachment). The JSON code path returns a
+// clear error directing callers to use multipart.
 func (r *Registry) issueAttachmentUploadTool() *platformmcpdomain.Tool {
 	return &platformmcpdomain.Tool{
 		Name:        "issue_attachment_upload",
-		Description: "Upload a file from the workspace as an issue attachment. Returns attachment metadata including an `attachment_id` and `markdown_snippet` — use `issue_comment` to insert the snippet into a comment body. `data` must be the base64-encoded file bytes; `name` is the original filename (e.g. \"screenshot.png\"). Set `inline` to true for images/videos you want rendered inline (produces `![attachment:N]` syntax); false / omitted produces `[attachment:N]` link syntax.",
+		Description: "Upload a file from the workspace as an issue attachment. Use multipart/form-data with parts: `file` (binary, required), `display_name` (optional), `inline` (boolean, default false), `comment_id` (optional). Returns attachment metadata including an `attachment_id` and `markdown_snippet` — use `issue_comment` to insert the snippet into a comment body.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"data": map[string]any{
-					"type":        "string",
-					"description": "Base64-encoded file bytes. Required.",
-				},
 				"name": map[string]any{
 					"type":        "string",
 					"description": "Original filename (e.g. 'screenshot.png'). Required.",
@@ -424,79 +417,62 @@ func (r *Registry) issueAttachmentUploadTool() *platformmcpdomain.Tool {
 					"description": "Optional comment ID to bind the attachment to an existing comment.",
 				},
 			},
-			"required": []string{"data", "name"},
+			"required": []string{"name"},
 		},
 		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
-			scope, err := r.loadScope(ctx, sess)
-			if err != nil {
-				return errorResult(err.Error()), nil
-			}
-			var req struct {
-				Data        string `json:"data"`
-				Name        string `json:"name"`
-				DisplayName string `json:"display_name"`
-				Inline      bool   `json:"inline"`
-				CommentID   int64  `json:"comment_id"`
-			}
-			if err := unmarshalArgs(args, &req); err != nil {
-				return errorResult("invalid arguments: " + err.Error()), nil
-			}
-			req.Data = strings.TrimSpace(req.Data)
-			req.Name = strings.TrimSpace(req.Name)
-			if req.Data == "" || req.Name == "" {
-				return errorResult("data and name are required"), nil
-			}
-
-			fileBytes, err := b64Decode(req.Data)
-			if err != nil {
-				return errorResult("decode base64 data: " + err.Error()), nil
-			}
-
-			displayName := strings.TrimSpace(req.DisplayName)
-			if displayName == "" {
-				displayName = req.Name
-			}
-
-			att, err := r.deps.Attachments.UploadAttachment(ctx, &issuedomain.AttachmentUploadParams{
-				RepoID:      scope.repo.ID,
-				IssueID:     scope.issue.ID,
-				Data:        fileBytes,
-				Name:        req.Name,
-				DisplayName: displayName,
-				Inline:      req.Inline,
-				CommentID:   req.CommentID,
-				AgentRole:   sess.RoleKey,
-			})
-			if err != nil {
-				return errorResult("upload attachment: " + err.Error()), nil
-			}
-
-			return textResult(map[string]any{
-				"attachment_id":    att.ID,
-				"display_name":     displayName,
-				"original_name":    att.OriginalName,
-				"size_bytes":       att.SizeBytes,
-				"mime_type":        att.DetectedMimeType,
-				"kind":             string(att.Kind),
-				"markdown_snippet": attachmentMarkdownSnippet(att.ID, att.Kind, req.Inline),
-			}), nil
+			return errorResult("issue_attachment_upload requires multipart/form-data — send file bytes as a `file` part, not JSON"), nil
 		},
 	}
 }
 
-// b64Decode decodes standard base64 (with optional padding). It rejects
-// data-url prefixes ("data:...;base64,") so the agent must send raw base64.
-func b64Decode(s string) ([]byte, error) {
-	raw := s
-	// Strip any data-url prefix the agent might accidentally include.
-	if idx := strings.Index(s, ";base64,"); idx >= 0 {
-		raw = s[idx+8:]
-	}
-	dec, err := b64.StdEncoding.DecodeString(raw)
+// UploadAttachment handles multipart file upload for the
+// issue_attachment_upload tool. Called from the HTTP handler after
+// parsing the multipart form. It loads the session scope, delegates to
+// the attachment service, and returns the tool result.
+func (r *Registry) UploadAttachment(
+	ctx context.Context,
+	sess *runnerdomain.AgentSession,
+	fileBytes []byte,
+	name, displayName string,
+	inline bool,
+	commentID int64,
+) (platformmcpdomain.Result, error) {
+	scope, err := r.loadScope(ctx, sess)
 	if err != nil {
-		return nil, err
+		return errorResult(err.Error()), nil
 	}
-	return dec, nil
+
+	if len(fileBytes) == 0 || name == "" {
+		return errorResult("file and name are required"), nil
+	}
+
+	if displayName == "" {
+		displayName = name
+	}
+
+	att, err := r.deps.Attachments.UploadAttachment(ctx, &issuedomain.AttachmentUploadParams{
+		RepoID:      scope.repo.ID,
+		IssueID:     scope.issue.ID,
+		Data:        fileBytes,
+		Name:        name,
+		DisplayName: displayName,
+		Inline:      inline,
+		CommentID:   commentID,
+		AgentRole:   sess.RoleKey,
+	})
+	if err != nil {
+		return errorResult("upload attachment: " + err.Error()), nil
+	}
+
+	return textResult(map[string]any{
+		"attachment_id":    att.ID,
+		"display_name":     displayName,
+		"original_name":    att.OriginalName,
+		"size_bytes":       att.SizeBytes,
+		"mime_type":        att.DetectedMimeType,
+		"kind":             string(att.Kind),
+		"markdown_snippet": attachmentMarkdownSnippet(att.ID, att.Kind, inline),
+	}), nil
 }
 
 // attachmentMarkdownSnippet returns the markdown token for an attachment.
