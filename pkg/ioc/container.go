@@ -104,24 +104,30 @@ func (c *Container) Provide(constructor any) *ProviderBinder {
 	}
 	if constructorType.NumIn() == 1 {
 		paramType := constructorType.In(0)
-		if paramType.Kind() != reflect.Pointer || paramType.Elem().Kind() != reflect.Struct {
-			panic("constructor parameter must be a pointer to a struct, current type: " + paramType.String())
-		}
-		// 解析结构体字段，记录依赖关系
-		for i := 0; i < paramType.Elem().NumField(); i++ {
-			field := paramType.Elem().Field(i)
-			// 接口
-			if field.Type.Kind() == reflect.Interface {
-				dependencies = append(dependencies, field.Type)
-				// 结构体指针
-			} else if field.Type.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.Struct {
-				dependencies = append(dependencies, field.Type)
-				// 接口切片
-			} else if field.Type.Kind() == reflect.Slice && field.Type.Elem().Kind() == reflect.Interface {
-				dependencies = append(dependencies, field.Type)
-			} else {
-				panic("constructor parameter fields must be pointers to structs or interfaces")
+		if paramType.Kind() == reflect.Interface {
+			// Accept an interface parameter — the interface itself is the
+			// dependency. Useful when a constructor takes a third-party
+			// interface type directly (e.g. redis.UniversalClient).
+			dependencies = append(dependencies, paramType)
+		} else if paramType.Kind() == reflect.Pointer && paramType.Elem().Kind() == reflect.Struct {
+			// 解析结构体字段，记录依赖关系
+			for i := 0; i < paramType.Elem().NumField(); i++ {
+				field := paramType.Elem().Field(i)
+				// 接口
+				if field.Type.Kind() == reflect.Interface {
+					dependencies = append(dependencies, field.Type)
+					// 结构体指针
+				} else if field.Type.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.Struct {
+					dependencies = append(dependencies, field.Type)
+					// 接口切片
+				} else if field.Type.Kind() == reflect.Slice && field.Type.Elem().Kind() == reflect.Interface {
+					dependencies = append(dependencies, field.Type)
+				} else {
+					panic("constructor parameter fields must be pointers to structs or interfaces")
+				}
 			}
+		} else {
+			panic("constructor parameter must be a pointer to a struct or an interface, current type: " + paramType.String())
 		}
 	}
 	c.providers[returnType] = &serviceProvider{
@@ -223,27 +229,36 @@ func (c *Container) constructType(target reflect.Type) reflect.Value {
 		constructorType := provider.constructor.Type()
 		if constructorType.NumIn() == 1 {
 			paramType := constructorType.In(0)
-			paramValue := reflect.New(paramType.Elem())
-			for i := 0; i < paramType.Elem().NumField(); i++ {
-				field := paramType.Elem().Field(i)
-				depType := field.Type
+			if paramType.Kind() == reflect.Interface {
+				// Direct interface parameter — resolve from local cache.
+				depImplType := c.bindingMap[paramType][0]
+				instance := localInstanceCache[depImplType]
+				args = append(args, instance)
+			} else {
+				// Pointer-to-struct parameter (Deps pattern) — create the struct
+				// and populate its fields from the cache.
+				paramValue := reflect.New(paramType.Elem())
+				for i := 0; i < paramType.Elem().NumField(); i++ {
+					field := paramType.Elem().Field(i)
+					depType := field.Type
 
-				// 处理接口切片依赖
-				if depType.Kind() == reflect.Slice && depType.Elem().Kind() == reflect.Interface {
-					bound := c.bindingMap[depType.Elem()]
-					slice := reflect.MakeSlice(depType, 0, len(bound))
-					for _, impl := range bound {
-						instance := localInstanceCache[impl]
-						slice = reflect.Append(slice, instance)
+					// 处理接口切片依赖
+					if depType.Kind() == reflect.Slice && depType.Elem().Kind() == reflect.Interface {
+						bound := c.bindingMap[depType.Elem()]
+						slice := reflect.MakeSlice(depType, 0, len(bound))
+						for _, impl := range bound {
+							instance := localInstanceCache[impl]
+							slice = reflect.Append(slice, instance)
+						}
+						paramValue.Elem().Field(i).Set(slice)
+					} else {
+						depImplType := c.bindingMap[depType][0]
+						instance := localInstanceCache[depImplType]
+						paramValue.Elem().Field(i).Set(instance)
 					}
-					paramValue.Elem().Field(i).Set(slice)
-				} else {
-					depImplType := c.bindingMap[depType][0]
-					instance := localInstanceCache[depImplType]
-					paramValue.Elem().Field(i).Set(instance)
 				}
+				args = append(args, paramValue)
 			}
-			args = append(args, paramValue)
 		}
 
 		instance := provider.constructor.Call(args)[0]

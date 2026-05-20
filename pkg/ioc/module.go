@@ -75,20 +75,26 @@ func (m *Module) Provide(constructor any) *ModuleProviderBinder {
 	}
 	if constructorType.NumIn() == 1 {
 		paramType := constructorType.In(0)
-		if paramType.Kind() != reflect.Pointer || paramType.Elem().Kind() != reflect.Struct {
-			panic("constructor parameter must be a pointer to a struct, current type: " + paramType.String())
-		}
-		for i := 0; i < paramType.Elem().NumField(); i++ {
-			field := paramType.Elem().Field(i)
-			if field.Type.Kind() == reflect.Interface {
-				dependencies = append(dependencies, field.Type)
-			} else if field.Type.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.Struct {
-				dependencies = append(dependencies, field.Type)
-			} else if field.Type.Kind() == reflect.Slice && field.Type.Elem().Kind() == reflect.Interface {
-				dependencies = append(dependencies, field.Type)
-			} else {
-				panic("constructor parameter fields must be pointers to structs or interfaces")
+		if paramType.Kind() == reflect.Interface {
+			// Accept an interface parameter — the interface itself is the
+			// dependency. Useful when a constructor takes a third-party
+			// interface type directly (e.g. redis.UniversalClient).
+			dependencies = append(dependencies, paramType)
+		} else if paramType.Kind() == reflect.Pointer && paramType.Elem().Kind() == reflect.Struct {
+			for i := 0; i < paramType.Elem().NumField(); i++ {
+				field := paramType.Elem().Field(i)
+				if field.Type.Kind() == reflect.Interface {
+					dependencies = append(dependencies, field.Type)
+				} else if field.Type.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.Struct {
+					dependencies = append(dependencies, field.Type)
+				} else if field.Type.Kind() == reflect.Slice && field.Type.Elem().Kind() == reflect.Interface {
+					dependencies = append(dependencies, field.Type)
+				} else {
+					panic("constructor parameter fields must be pointers to structs or interfaces")
+				}
 			}
+		} else {
+			panic("constructor parameter must be a pointer to a struct or an interface, current type: " + paramType.String())
 		}
 	}
 

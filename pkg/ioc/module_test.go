@@ -168,6 +168,24 @@ func TestContainer_Load_WithDependencies(t *testing.T) {
 	}
 }
 
+// TestModule_Provide_InterfaceParam verifies that a constructor accepting an
+// interface directly (without a *Deps struct) can be registered in a Module.
+func TestModule_Provide_InterfaceParam(t *testing.T) {
+	m := NewModule()
+	m.Provide(func() *TestServiceA { return &TestServiceA{Name: "mod-a"} }).ToInterface(new(TestInterface))
+	m.Provide(func(iface TestInterface) *TestServiceB {
+		return &TestServiceB{ServiceA: iface, Name: "mod-b"}
+	}).ToSelf()
+
+	c := NewContainer()
+	c.Load(m)
+
+	svc := Get[*TestServiceB](c)
+	if svc.GetName() != "mod-a-mod-b" {
+		t.Errorf("Expected 'mod-a-mod-b', got '%s'", svc.GetName())
+	}
+}
+
 // TestContainer_Load_MixedWithDirectProvide verifies that Load can be combined
 // with direct Container.Provide calls.
 func TestContainer_Load_MixedWithDirectProvide(t *testing.T) {

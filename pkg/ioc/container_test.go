@@ -595,3 +595,23 @@ func TestInterfaceSliceDependencyWithStruct(t *testing.T) {
 	}
 
 }
+
+// TestProvide_InterfaceParam verifies that a constructor can accept an interface
+// type directly as its parameter (without wrapping it in a *Deps struct).
+func TestProvide_InterfaceParam(t *testing.T) {
+	c := NewContainer()
+
+	// Register a constructor that returns a concrete impl bound to an interface.
+	c.Provide(func() *TestServiceA { return &TestServiceA{Name: "foo"} }).ToInterface(new(TestInterface))
+
+	// Another constructor that takes the interface directly as its parameter.
+	c.Provide(func(iface TestInterface) *TestServiceB {
+		return &TestServiceB{ServiceA: iface, Name: "bar"}
+	}).ToSelf()
+
+	svc := Get[*TestServiceB](c)
+
+	if svc.GetName() != "foo-bar" {
+		t.Errorf("Expected 'foo-bar', got '%s'", svc.GetName())
+	}
+}
