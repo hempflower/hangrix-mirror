@@ -31,14 +31,16 @@ func NewPushObserver(deps *PushObserverDeps) *PushObserver {
 }
 
 // PreReceive runs fast-forward checks on each `issue/<n>` branch touched by
-// the push. A push is rejected when any open issue's branch has diverged
-// from its base (i.e. the base tip is not an ancestor of the new issue head).
+// the push. A push is rejected when the update is not a fast-forward
+// relative to the branch's existing tip (i.e. OldSHA is not an ancestor of
+// NewSHA). This prevents force-pushes while allowing normal work when the
+// base branch has moved forward.
 //
 // Non-issue branches are skipped. Already merged/closed issues are not
 // checked — only open issues gate pushes.
 //
 // When the fast-forward status cannot be determined (mode="unknown"), e.g.
-// because a ref hasn't been created yet or the base branch is unresolvable,
+// because a ref hasn't been created yet or the old tip is unresolvable,
 // the push is allowed through rather than rejected — the git subprocess is
 // the authoritative source of truth for ref updates.
 func (o *PushObserver) PreReceive(ctx context.Context, repo *repodomain.Repo, fsPath string, refUpdates []repodomain.PushRefUpdate) error {
@@ -72,7 +74,7 @@ func (o *PushObserver) PreReceive(ctx context.Context, repo *repodomain.Repo, fs
 		// Use the new SHA from the push. The pack objects have already
 		// been extracted into the repo before PreReceive runs, so the
 		// SHA is resolvable by go-git.
-		isFF, mode, err := o.h.git.CheckFastForward(fsPath, iss.BaseBranch, u.NewSHA)
+		isFF, mode, err := o.h.git.CheckFastForward(fsPath, u.OldSHA, u.NewSHA)
 		if err != nil {
 			return fmt.Errorf("check fast-forward for %s: %w", branch, err)
 		}
@@ -87,8 +89,8 @@ func (o *PushObserver) PreReceive(ctx context.Context, repo *repodomain.Repo, fs
 		}
 		// mode="diverged" means the branch has genuinely diverged from
 		// its base. Reject with a sentinel so the handler can map to 409.
-		return fmt.Errorf("%w from %s — rebase onto %s first",
-			repodomain.ErrBranchDiverged, iss.BaseBranch, iss.BaseBranch)
+		return fmt.Errorf("%w: push to %s is not fast-forward",
+			repodomain.ErrBranchDiverged, branch)
 	}
 	return nil
 }

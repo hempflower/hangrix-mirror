@@ -11,5 +11,6 @@ require (
 require (
 	github.com/JohannesKaufmann/dom v0.2.0 // indirect
 	github.com/danwakefield/fnmatch v0.0.0-20160403171240-cbb64ac3d964 // indirect
+	github.com/mark3labs/mcp-go v0.54.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 )
