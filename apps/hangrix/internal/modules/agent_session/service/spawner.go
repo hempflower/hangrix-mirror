@@ -284,9 +284,14 @@ func (s *Spawner) rewakeRole(ctx context.Context, in domain.TriggerInput, existi
 	if err != nil {
 		return domain.SpawnedSession{}, err
 	}
-	if err := s.runner.ResumeSession(ctx, existing.ID, tok); err != nil {
-		return domain.SpawnedSession{}, fmt.Errorf("resume session: %w", err)
-	}
+
+	// Enqueue the cause event and the audit message BEFORE flipping the
+	// session status. If either of these DB writes fails, the session
+	// stays idle — a retry on the next trigger is safe. The previous
+	// ordering (resume first, then enqueue) could leave the session in
+	// 'pending' with no input events if enqueue failed, causing the
+	// runner to claim it, boot the agent, and the agent to wait forever
+	// at 'ready' for an event that was never enqueued.
 	frame, err := buildCauseFrame(in)
 	if err != nil {
 		return domain.SpawnedSession{}, fmt.Errorf("build cause frame: %w", err)
@@ -294,12 +299,21 @@ func (s *Spawner) rewakeRole(ctx context.Context, in domain.TriggerInput, existi
 	if _, err := s.runner.EnqueueInput(ctx, existing.ID, frame); err != nil {
 		return domain.SpawnedSession{}, fmt.Errorf("enqueue cause on rewake: %w", err)
 	}
+	// Best-effort audit log before resume; a failure here is non-fatal
+	// (the input is already enqueued, which is what drives the agent).
 	_, _ = s.runner.AppendMessage(ctx, &runnerdomain.Message{
 		SessionID: existing.ID,
 		Kind:      runnerdomain.MessageKindEvent,
 		EventName: string(in.Trigger),
 		Payload:   frame,
 	})
+
+	// Only now flip the session to 'pending' — the runner will claim it
+	// and the agent will find the event already waiting on /inputs.
+	if err := s.runner.ResumeSession(ctx, existing.ID, tok); err != nil {
+		return domain.SpawnedSession{}, fmt.Errorf("resume session: %w", err)
+	}
+
 	return domain.SpawnedSession{
 		SessionID: existing.ID,
 		RoleKey:   existing.RoleKey,
@@ -511,6 +525,14 @@ func (s *Spawner) spawnRole(
 		CauseID:            in.CauseID,
 		RoleConfig:         snapshot,
 	}
+	// Build the cause frame before touching the DB — if payload
+	// unmarshalling fails, nothing has changed and the caller can
+	// retry safely. (Same guard used in rewakeRole.)
+	causeFrame, err := buildCauseFrame(in)
+	if err != nil {
+		return domain.SpawnedSession{}, fmt.Errorf("build cause frame: %w", err)
+	}
+
 	sess, err := s.runner.CreateSession(ctx, createIn)
 	if err != nil {
 		return domain.SpawnedSession{}, fmt.Errorf("create session row: %w", err)
@@ -522,10 +544,6 @@ func (s *Spawner) spawnRole(
 	// boot — keeping it off the inputs queue means the agent's first-frame
 	// invariant survives crash-and-respawn paths that previously left a
 	// stale cause at the head of the queue.
-	causeFrame, err := buildCauseFrame(in)
-	if err != nil {
-		return domain.SpawnedSession{}, fmt.Errorf("build cause frame: %w", err)
-	}
 	if _, err := s.runner.EnqueueInput(ctx, sess.ID, causeFrame); err != nil {
 		return domain.SpawnedSession{}, fmt.Errorf("enqueue cause: %w", err)
 	}

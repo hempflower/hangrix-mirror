@@ -668,3 +668,148 @@ func TestLoopNotificationDrivesIdleTurn(t *testing.T) {
 		t.Errorf("expected 2 LLM calls (one per round); got %d", got)
 	}
 }
+
+// TestLoopEventArrivesAfterReady is the regression for the rewake scenario:
+// an idle container is re-attached, the agent boots and emits ready, and
+// THEN the event frame arrives via shipStdin (which had to poll /inputs
+// first). The delay between history and event simulates the real world:
+// the runner writes history, then shipStdin polls /inputs (network RTT),
+// then writes the event. The event must still be processed — a done + idle
+// frame must appear. Regress this and rewoken sessions hang at ready.
+func TestLoopEventArrivesAfterReady(t *testing.T) {
+	t.Parallel()
+
+	var llmCount atomic.Int32
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		llmCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "r",
+			"output": []map[string]any{
+				{"type": "message", "role": "assistant",
+					"content": []map[string]any{{"type": "output_text", "text": "ack"}}},
+			},
+			"usage": map[string]any{},
+		})
+	}))
+	t.Cleanup(llmServer.Close)
+
+	llmClient := llm.New(llmServer.URL, "test-token")
+	bundle := local.Build()
+	registry := tools.Build(bundle.Tools, nil, nil, nil)
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdoutR.Close()
+
+	loop := runtime.NewLoop(
+		ipc.NewReader(stdinR),
+		ipc.NewWriter(stdoutW),
+		llmClient,
+		"gpt-4o-mini",
+		registry,
+		"system prompt",
+		bundle.Bash,
+		0,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	loopErr := make(chan error, 1)
+	go func() {
+		loopErr <- loop.Run(ctx)
+		stdoutW.Close()
+	}()
+
+	// io.Pipe is synchronous — writes block until a corresponding read.
+	// In production, Docker pipes have kernel buffers (≥64KB) so the
+	// agent never blocks on stdout writes. In tests we MUST drain stdout
+	// concurrently, otherwise the agent's Status("ready") write blocks
+	// before it reaches pumpFrames, and everything deadlocks.
+	//
+	// Strategy: collect frames in the background via a goroutine that
+	// decodes into a channel. After the loop finishes and stdoutW is
+	// closed, we gather the collected frames for assertions.
+	framesCh := make(chan ipc.Outbound, 64)
+	var frames []ipc.Outbound
+	framesDone := make(chan struct{})
+	go func() {
+		defer close(framesDone)
+		dec := json.NewDecoder(stdoutR)
+		for {
+			var f ipc.Outbound
+			if err := dec.Decode(&f); err != nil {
+				return
+			}
+			framesCh <- f
+		}
+	}()
+
+	// Step 1: write history frame (blocks until the agent reads it).
+	_, _ = stdinW.Write([]byte(`{"kind":"history","messages":[]}` + "\n"))
+
+	// Step 2: wait for the agent to emit "ready" before shipping the
+	// event. This is the key property of the rewake scenario — the event
+	// arrives AFTER the agent has already booted and is parked on the
+	// inbox select. We poll framesCh with a timeout.
+	readySeen := false
+waitReady:
+	for {
+		select {
+		case f := <-framesCh:
+			frames = append(frames, f)
+			if f.Kind == "status" && f.Phase == "ready" {
+				readySeen = true
+				break waitReady
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("agent never emitted ready after history frame")
+		}
+	}
+	if !readySeen {
+		t.Fatal("ready not seen in frame loop")
+	}
+
+	// Step 3: ship the event frame — this is the rewake cause event
+	// that shipStdin pulled off /inputs.
+	_, _ = stdinW.Write([]byte(`{"kind":"event","event":"issue.comment.mentioned","payload":{"comment_id":1344}}` + "\n"))
+
+	// Step 4: wait for the event turn to complete, then shut down.
+	time.Sleep(300 * time.Millisecond)
+	_, _ = stdinW.Write([]byte(`{"kind":"control","op":"shutdown"}` + "\n"))
+	stdinW.Close()
+
+	if err := <-loopErr; err != nil {
+		t.Fatalf("loop: %v", err)
+	}
+
+	// Collect remaining frames.
+	<-framesDone
+	close(framesCh)
+	for f := range framesCh {
+		frames = append(frames, f)
+	}
+
+	// Assertions: one event processed = one done + one idle.
+	var doneCount, idleCount int
+	for _, f := range frames {
+		switch f.Kind {
+		case "done":
+			doneCount++
+		case "idle":
+			idleCount++
+		}
+	}
+	if doneCount != 1 {
+		t.Errorf("expected exactly 1 done frame; got %d", doneCount)
+	}
+	if idleCount != 1 {
+		t.Errorf("expected exactly 1 idle frame; got %d", idleCount)
+	}
+	if got := llmCount.Load(); got != 1 {
+		t.Errorf("expected 1 LLM call; got %d", got)
+	}
+}
+
