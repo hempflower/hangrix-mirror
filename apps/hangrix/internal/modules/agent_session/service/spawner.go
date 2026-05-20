@@ -850,6 +850,13 @@ func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, a
 	if len(host.Container.Entrypoint) > 0 {
 		snap.Container["entrypoint"] = host.Container.Entrypoint
 	}
+	if len(host.Container.Volumes) > 0 {
+		vols := make([]map[string]string, len(host.Container.Volumes))
+		for i, v := range host.Container.Volumes {
+			vols[i] = map[string]string{"name": v.Name, "mount": v.Mount}
+		}
+		snap.Container["volumes"] = vols
+	}
 	return json.Marshal(snap)
 }
 

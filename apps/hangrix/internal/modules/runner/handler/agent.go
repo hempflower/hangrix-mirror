@@ -379,6 +379,10 @@ type taskResp struct {
 	// server supports expansion but the repo has no variables, so any
 	// ${...} reference in task.Env fails the session explicitly.
 	RepoVariables map[string]string `json:"repo_variables"`
+	// Volumes carries the named volume cache mounts from the host repo's
+	// agents.yml container block. The runner adds each as a `-v` bind
+	// mount at `docker create` time. Nil/empty means no volumes.
+	Volumes []volumeDTO `json:"volumes,omitempty"`
 }
 
 // pollTasks blocks up to pollWait waiting for a pending session pinned to
@@ -444,6 +448,7 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 				SessionToken:    plaintext,
 				ContainerID:     sess.ContainerID,
 				RepoVariables:   repoVars,
+				Volumes:         extractVolumes(sess.RoleConfig),
 			})
 			return
 		}
@@ -798,6 +803,12 @@ type agentBuildSpec struct {
 	Args       map[string]string `json:"args,omitempty"`
 }
 
+// volumeDTO mirrors agentsconfig.Volume on the wire.
+type volumeDTO struct {
+	Name  string `json:"name"`
+	Mount string `json:"mount"`
+}
+
 // extractEntrypoint reads container.entrypoint out of the frozen
 // role_config snapshot. Returns nil on any decode error or missing
 // field — the runner falls back to its built-in `sleep infinity`
@@ -819,6 +830,23 @@ func extractEntrypoint(roleConfig []byte) []string {
 		return nil
 	}
 	return snap.Container.Entrypoint
+}
+
+// extractVolumes reads container.volumes out of the frozen role_config
+// snapshot. Returns nil when the host yaml has no volumes defined.
+func extractVolumes(roleConfig []byte) []volumeDTO {
+	if len(roleConfig) == 0 {
+		return nil
+	}
+	var snap struct {
+		Container struct {
+			Volumes []volumeDTO `json:"volumes"`
+		} `json:"container"`
+	}
+	if err := json.Unmarshal(roleConfig, &snap); err != nil {
+		return nil
+	}
+	return snap.Container.Volumes
 }
 
 // extractBuild reads container.build out of the frozen role_config
