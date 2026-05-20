@@ -23,7 +23,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import FileDiffList from '@/components/repo/FileDiffList.vue'
-import MarkdownBody from '@/components/MarkdownBody.vue'
+import FoldableBody from '@/components/issue/FoldableBody.vue'
 import MentionTextarea from '@/components/issue/MentionTextarea.vue'
 import type { Issue, IssueState, IssueTimeline, IssueMergeResp, ReviewVotePayload, ReviewVoteValue } from '~/types/issue'
 import type { Commit, FileDiff } from '~/types/repo'
@@ -599,7 +599,7 @@ onUnmounted(stopRefreshTimer)
                     </span>
                   </div>
                   <div class="px-4 py-3 text-sm">
-                    <MarkdownBody v-if="issue.body" :source="issue.body" />
+                    <FoldableBody v-if="issue.body" :source="issue.body" />
                     <p v-else class="text-muted-foreground">—</p>
                   </div>
                 </CardContent>
@@ -629,7 +629,7 @@ onUnmounted(stopRefreshTimer)
                       </span>
                     </div>
                     <div class="px-4 py-3 text-sm">
-                      <MarkdownBody :source="it.data.body" />
+                      <FoldableBody :source="it.data.body" />
                     </div>
                   </CardContent>
                 </Card>
@@ -665,7 +665,7 @@ onUnmounted(stopRefreshTimer)
                       </span>
                     </div>
                     <div class="px-4 py-3 text-sm">
-                      <MarkdownBody v-if="it.data.payload?.reason" :source="it.data.payload.reason" />
+                      <FoldableBody v-if="it.data.payload?.reason" :source="it.data.payload.reason" />
                       <p v-else class="text-muted-foreground">{{ t('issue.review.noReason') }}</p>
                     </div>
                   </CardContent>

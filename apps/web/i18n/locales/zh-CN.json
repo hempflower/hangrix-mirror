@@ -691,6 +691,8 @@
     "diffStats": "变更",
     "filesChanged": "{n} 个文件",
     "diffLoadFailed": "Diff 加载失败",
+    "expand": "展开",
+    "collapse": "收起",
     "timeline": {
       "commitPushed": "{name} 推送了 {n} 个 commit",
       "branchMerged": "{name} 把 {from} 合并到了 {into}（{mode}）",
