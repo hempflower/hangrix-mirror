@@ -45,6 +45,7 @@ roles:
       - issue_checks
       - issue_merge
       - issue_close
+      - issue_attachment_upload
       - roster_list
     prompt_file: .hangrix/prompts/maintainer.md
     llm:
@@ -90,6 +91,7 @@ roles:
       - issue_mergeable
       - issue_comment
       - issue_create
+      - issue_attachment_upload
       - roster_list
     prompt_file: .hangrix/prompts/server.md
 
@@ -124,6 +126,7 @@ roles:
       - issue_mergeable
       - issue_comment
       - issue_create
+      - issue_attachment_upload
       - roster_list
     prompt_file: .hangrix/prompts/runtime.md
 
@@ -153,6 +156,7 @@ roles:
       - issue_diff
       - issue_comment
       - issue_create
+      - issue_attachment_upload
       - roster_list
     prompt_file: .hangrix/prompts/web.md
 

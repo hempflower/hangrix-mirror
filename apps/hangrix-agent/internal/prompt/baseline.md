@@ -154,6 +154,9 @@ Mutating tools (clearly warrant each call; they appear on the issue timeline):
 - `issue_review_vote` — Casts a structured review vote. Required `value` ∈ {`approve`, `request_changes`, `abstain`}; `reason` is optional but **SHOULD** be supplied even for `approve`. Reviewer-role only — implementers and other roles **MUST NOT** approve their own work.
 - `issue_close` — Closes the issue without merging and archives every active agent session on it. Optional `reason` is recorded on the timeline. Destructive; warrant it explicitly and confirm via the task that closing (not merging) is the intent.
 - `issue_merge` — Merges the issue branch into its base. Fails if there are no commits or if the merge would conflict. Optional `message` overrides the default merge commit message. Destructive; only call when the task explicitly asks for a merge and review has settled.
+- `issue_attachment_upload` — Uploads a file from the workspace as an issue attachment. Accepts `path` (required), `display_name` (optional), `inline` (optional bool, default false), and `comment_id` (optional). Returns attachment metadata with `attachment_id` and `markdown_snippet`. Call this FIRST, then insert the returned snippet into an `issue_comment` body — do not try to embed large file content directly into comments. Set `inline=true` for images/videos to get `![attachment:N]` syntax; omit for `[attachment:N]` download-link syntax.
+
+
 
 ### Web (`webfetch`)
 

@@ -279,6 +279,17 @@ func All(client *Client) []local.Tool {
 				"session_id": intProp("The session ID to recover. Must be on the same issue as the caller."),
 			}, []string{"session_id"}),
 		},
+		{
+			name:        "issue_attachment_upload",
+			description: "Upload a file from the workspace as an issue attachment. Returns attachment metadata including an `attachment_id` and `markdown_snippet` — use `issue_comment` to insert the snippet into a comment body. `path` must be a workspace-relative or absolute path to an existing file. Set `inline` to true for images/videos you want rendered inline (produces `![attachment:N]` syntax); false / omitted produces `[attachment:N]` link syntax.",
+			schema: objectSchema(map[string]any{
+				"path":         stringProp("Workspace-relative or absolute path to the file to upload. Required."),
+				"display_name": stringProp("Optional display name for the attachment. Defaults to the file's basename."),
+				"inline":       boolProp("When true, produces inline syntax `![attachment:N]` for images/videos. Default false."),
+				"comment_id":   intProp("Optional comment ID to bind the attachment to an existing comment."),
+			}, []string{"path"}),
+		},
+
 	}
 	out := make([]local.Tool, 0, len(descriptors))
 	for _, d := range descriptors {

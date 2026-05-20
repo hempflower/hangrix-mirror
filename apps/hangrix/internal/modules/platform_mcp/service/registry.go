@@ -27,14 +27,15 @@ type Registry struct {
 }
 
 type RegistryDeps struct {
-	Issues     issuedomain.Store
-	Repos      repodomain.Store
-	Storage    repodomain.PathResolver
-	Git        gitdomain.Git
-	Runner     runnerdomain.Repo
-	Spawner    agentsessiondomain.Spawner
-	Archiver   agentsessiondomain.Archiver
-	Controller agentsessiondomain.Controller
+	Issues      issuedomain.Store
+	Repos       repodomain.Store
+	Storage     repodomain.PathResolver
+	Git         gitdomain.Git
+	Runner      runnerdomain.Repo
+	Spawner     agentsessiondomain.Spawner
+	Archiver    agentsessiondomain.Archiver
+	Controller  agentsessiondomain.Controller
+	Attachments AttachmentUploader
 }
 
 // NewRegistry assembles the tool catalogue at startup. Tools share the
@@ -54,6 +55,7 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 		r.rosterListTool(),
 		r.issueCreateTool(),
 		r.issueCommentTool(),
+		r.issueAttachmentUploadTool(),
 		r.issueReviewVoteTool(),
 		r.issueCloseTool(),
 		r.issueMergeTool(),

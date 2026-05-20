@@ -2,9 +2,14 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -391,6 +396,224 @@ func (r *Registry) sessionRecoverTool() *platformmcpdomain.Tool {
 		},
 	}
 }
+
+
+// issueAttachmentUploadTool uploads a workspace file as an issue attachment.
+// The agent passes a workspace-relative or absolute `path`; the handler reads
+// the file from the server's repo clone, detects MIME type, and uploads it
+// to the issue attachments API.
+//
+// Returns attachment metadata including an attachment_id and markdown_snippet
+// the agent can insert into a subsequent issue_comment call.
+func (r *Registry) issueAttachmentUploadTool() *platformmcpdomain.Tool {
+	return &platformmcpdomain.Tool{
+		Name:        "issue_attachment_upload",
+		Description: "Upload a file from the workspace as an issue attachment. Returns attachment metadata including an `attachment_id` and `markdown_snippet` — use `issue_comment` to insert the snippet into a comment body. `path` must be a workspace-relative or absolute path to an existing file. Set `inline` to true for images/videos you want rendered inline (produces `![attachment:N]` syntax); false / omitted produces `[attachment:N]` link syntax.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Workspace-relative or absolute path to the file to upload. Required.",
+				},
+				"display_name": map[string]any{
+					"type":        "string",
+					"description": "Optional display name for the attachment. Defaults to the file's basename.",
+				},
+				"inline": map[string]any{
+					"type":        "boolean",
+					"description": "When true, produces inline syntax `![attachment:N]` for images/videos. Default false.",
+				},
+				"comment_id": map[string]any{
+					"type":        "integer",
+					"description": "Optional comment ID to bind the attachment to an existing comment.",
+				},
+			},
+			"required": []string{"path"},
+		},
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
+			scope, err := r.loadScope(ctx, sess)
+			if err != nil {
+				return errorResult(err.Error()), nil
+			}
+			var req struct {
+				Path        string `json:"path"`
+				DisplayName string `json:"display_name"`
+				Inline      bool   `json:"inline"`
+				CommentID   int64  `json:"comment_id"`
+			}
+			if err := unmarshalArgs(args, &req); err != nil {
+				return errorResult("invalid arguments: " + err.Error()), nil
+			}
+			req.Path = strings.TrimSpace(req.Path)
+			if req.Path == "" {
+				return errorResult("path is required"), nil
+			}
+
+			cleanPath, absPath, err := resolveAttachmentPath(scope.fsPath, req.Path)
+			if err != nil {
+				return errorResult("resolve path: " + err.Error()), nil
+			}
+
+			fi, err := os.Stat(absPath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return errorResult(fmt.Sprintf("file not found: %s", cleanPath)), nil
+				}
+				return errorResult("stat file: " + err.Error()), nil
+			}
+			if fi.IsDir() {
+				return errorResult(fmt.Sprintf("path is a directory, not a file: %s", cleanPath)), nil
+			}
+
+			mimeType, err := detectMimeType(absPath)
+			if err != nil {
+				return errorResult("detect MIME type: " + err.Error()), nil
+			}
+
+			sha256Hex, err := sha256File(absPath)
+			if err != nil {
+				return errorResult("sha256: " + err.Error()), nil
+			}
+
+			displayName := strings.TrimSpace(req.DisplayName)
+			if displayName == "" {
+				displayName = filepath.Base(cleanPath)
+			}
+
+			// When the attachment module lands (server work, issue #38),
+			// the upload path below will be used. Until then, return
+			// file metadata so the agent knows the file was found.
+			if r.deps.Attachments == nil {
+				return textResult(map[string]any{
+					"staged":       true,
+					"path":         cleanPath,
+					"display_name": displayName,
+					"size_bytes":   fi.Size(),
+					"mime_type":    mimeType,
+					"sha256":       sha256Hex,
+					"inline":       req.Inline,
+					"note":         "attachment backend not yet available — file validated, pending server module",
+				}), nil
+			}
+
+			// When the attachment module is ready, this path uploads the file:
+			att, err := r.deps.Attachments.Upload(ctx, AttachmentUploadParams{
+				RepoID:      scope.repo.ID,
+				IssueID:     scope.issue.ID,
+				FilePath:    absPath,
+				DisplayName: displayName,
+				Inline:      req.Inline,
+				CommentID:   req.CommentID,
+				AgentRole:   sess.RoleKey,
+				SizeBytes:   fi.Size(),
+				MimeType:    mimeType,
+				SHA256:      sha256Hex,
+			})
+			if err != nil {
+				return errorResult("upload attachment: " + err.Error()), nil
+			}
+
+			return textResult(map[string]any{
+				"attachment_id":    att.ID,
+				"display_name":     att.DisplayName,
+				"size_bytes":       att.SizeBytes,
+				"mime_type":        att.MimeType,
+				"download_url":     att.DownloadURL,
+				"preview_url":      att.PreviewURL,
+				"markdown_snippet": att.MarkdownSnippet,
+			}), nil
+		},
+	}
+}
+
+// ---- attachment helpers ----
+
+// AttachmentUploader is the seam between the platform_mcp tool and the
+// attachment module. The attachment module (being built in issue #38)
+// will provide an implementation bound via ioc. nil means the module is
+// not yet available and the tool returns a "staged" response.
+type AttachmentUploader interface {
+	Upload(ctx context.Context, params AttachmentUploadParams) (*AttachmentResult, error)
+}
+
+// AttachmentUploadParams carries everything the attachment module needs
+// to store the file and create the DB row.
+type AttachmentUploadParams struct {
+	RepoID      int64
+	IssueID     int64
+	FilePath    string // absolute path to the temp source file
+	DisplayName string
+	Inline      bool
+	CommentID   int64
+	AgentRole   string
+	SizeBytes   int64
+	MimeType    string
+	SHA256      string
+}
+
+// AttachmentResult is the subset of the attachment row the tool returns
+// to the agent.
+type AttachmentResult struct {
+	ID              int64
+	DisplayName     string
+	SizeBytes       int64
+	MimeType        string
+	DownloadURL     string
+	PreviewURL      string
+	MarkdownSnippet string
+}
+
+// resolveAttachmentPath normalises the agent-supplied path relative to
+// the repo's filesystem root (scope.fsPath). Rejects paths that escape
+// the repo root (e.g. ../../etc/passwd).
+func resolveAttachmentPath(repoRoot, agentPath string) (cleanRel, abs string, err error) {
+	p := filepath.Clean(agentPath)
+	if filepath.IsAbs(p) {
+		// Absolute path: strip the leading slash and join with repo root.
+		// The path must still be within the repo after resolution.
+		p = p[1:] // strip leading /
+	}
+	abs = filepath.Join(repoRoot, p)
+	// Double-check the resolved path is still within repoRoot.
+	rel, err := filepath.Rel(repoRoot, abs)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", "", fmt.Errorf("path escapes repository root: %s", agentPath)
+	}
+	return rel, abs, nil
+}
+
+// detectMimeType reads the first 512 bytes and uses net/http to sniff
+// the content type. Falls back to "application/octet-stream".
+func detectMimeType(absPath string) (string, error) {
+	f, err := os.Open(absPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	buf := make([]byte, 512)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return "", err
+	}
+	return http.DetectContentType(buf[:n]), nil
+}
+
+// sha256File computes the hex-encoded SHA-256 digest of the file.
+func sha256File(absPath string) (string, error) {
+	f, err := os.Open(absPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+
 
 
 // issueCreateTool creates a new issue (optionally as a child of the
