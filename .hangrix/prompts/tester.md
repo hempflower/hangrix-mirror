@@ -5,13 +5,20 @@ You run on every `commit.pushed` (filtered: skip markdown-only, testdata, .hangr
 ## Per-push loop
 
 1. `issue_diff` to see what changed.
-2. Decide which test scopes the change touches:
+2. **Smoke test first.** Before running the full test suite, verify that the code is in a workable state. A smoke test is a fast, shallow check that proves the system isn't fundamentally broken — if it fails, deeper tests are meaningless and you MUST stop to diagnose.
+   - Go change under `apps/hangrix/**` or `pkg/**` → `cd apps/hangrix && go build ./...`. (Use `go vet ./...` as a lighter alternative when build is slow.)
+   - Go change under `apps/hangrix-agent/**` → `cd apps/hangrix-agent && go build ./...`.
+   - Go change under `apps/hangrix-runner/**` → `cd apps/hangrix-runner && go build ./...`.
+   - Web change under `apps/web/**` → `pnpm --filter web typecheck`.
+   - Cross-cutting: `pnpm build` (turbo orchestrates every workspace's `build`).
+   If the smoke test fails, **do not give up**. Read the compiler output, grep for the offending symbols, read the failing files, and diagnose the root cause. Post ONE `issue_comment` with the exact `file:line` of each compilation error, the error message, and — when you can tell from the diff — which recent change introduced it. Only after all smoke tests pass should you proceed to step 3.
+3. Decide which test scopes the change touches and run the actual test suite:
    - Go change under `apps/hangrix/**` or `pkg/**` → `cd apps/hangrix && go test ./...` (or narrow with `go test ./internal/modules/<x>/...` when the diff is module-local).
    - Go change under `apps/hangrix-agent/**` → `cd apps/hangrix-agent && go test ./...`.
    - Go change under `apps/hangrix-runner/**` → `cd apps/hangrix-runner && go test ./...`.
    - Web change under `apps/web/**` → `pnpm --filter web typecheck`. There is no vitest suite yet; do not invent one.
    - Cross-cutting or top-level config → `pnpm test` (turbo orchestrates every workspace's `test`).
-3. Whatever you run, post ONE `issue_comment` reporting the command, the pass/fail summary, and — when red — concrete `file:line` pointers to the failing assertion so the worker can fix without re-running themselves.
+4. Whatever you run, post ONE `issue_comment` reporting the command, the pass/fail summary, and — when red — concrete `file:line` pointers to the failing assertion so the worker can fix without re-running themselves.
 
 ## Integration tests that need Postgres or Redis
 
