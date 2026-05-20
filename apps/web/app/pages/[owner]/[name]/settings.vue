@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { toTypedSchema } from '@vee-validate/zod'
 import * as z from 'zod'
-import { AlertTriangle, Clock, Plus, Settings, Shield, Trash2, Users } from 'lucide-vue-next'
+import { AlertTriangle, Clock, Key, Plus, Settings, Shield, Trash2, Users } from 'lucide-vue-next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/table'
 import type { BranchProtection, PublicRepo, RepoMember, RepoMemberListResp, RepoRefs } from '~/types/repo'
 import AutomationSettings from '@/components/repo/AutomationSettings.vue'
+import VariableSettings from '@/components/repo/VariableSettings.vue'
 
 definePageMeta({ layout: 'repo' })
 
@@ -409,6 +410,10 @@ onMounted(load)
         <TabsTrigger value="automation">
           <Clock class="size-4" />
           <span class="ml-1.5">{{ t('repo.automation.tabLabel') }}</span>
+        </TabsTrigger>
+        <TabsTrigger value="variables">
+          <Key class="size-4" />
+          <span class="ml-1.5">{{ t('repo.variables.tabLabel') }}</span>
         </TabsTrigger>
       </TabsList>
 
@@ -831,6 +836,10 @@ onMounted(load)
 
       <TabsContent value="automation" class="mt-0">
         <AutomationSettings :owner="owner" :name="name" />
+      </TabsContent>
+
+      <TabsContent value="variables" class="mt-0">
+        <VariableSettings :owner="owner" :name="name" />
       </TabsContent>
     </Tabs>
   </div>

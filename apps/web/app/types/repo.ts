@@ -120,3 +120,36 @@ export interface RepoMember {
 export interface RepoMemberListResp {
   items: RepoMember[]
 }
+
+export type VariableKind = 'plain' | 'secret'
+
+export interface RepoVariable {
+  name: string
+  value: string
+  created_at: string
+  updated_at: string
+}
+
+export interface RepoSecretMeta {
+  name: string
+  created_at: string
+  updated_at: string
+}
+
+export interface RepoVariableListResp {
+  variables: RepoVariable[]
+  secrets: RepoSecretMeta[]
+}
+
+export interface RepoVariableCreateReq {
+  name: string
+  value: string
+  kind: VariableKind
+}
+
+export interface RepoVariableUpdateReq {
+  name?: string
+  value?: string
+  kind?: VariableKind
+}
+
