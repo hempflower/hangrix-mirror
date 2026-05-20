@@ -26,6 +26,7 @@ func TestAssemble_BothLayers(t *testing.T) {
 		Role:             "dispatcher",
 		HostRepo:         "alice/repo",
 		IssueNumber:      "7",
+		PlatformBaseURL:  "http://platform.invalid",
 	})
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
@@ -44,6 +45,9 @@ func TestAssemble_BothLayers(t *testing.T) {
 	}
 	if !strings.Contains(a.Prompt, "role: dispatcher") {
 		t.Errorf("runtime context not surfaced: %s", a.Prompt[:200])
+	}
+	if !strings.Contains(a.Prompt, "platform_base_url: http://platform.invalid") {
+		t.Errorf("platform_base_url not surfaced in runtime context")
 	}
 }
 

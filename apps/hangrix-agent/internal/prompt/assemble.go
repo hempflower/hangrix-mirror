@@ -33,12 +33,13 @@ type Inputs struct {
 	// excludes runner internals (LLM / MCP endpoints, credential
 	// material) — the agent reaches those services through pre-wired
 	// clients and does not need their addresses to operate.
-	Role          string
-	HostRepo      string
-	IssueNumber   string
-	WorkingBranch string
-	BaseBranch    string
-	SessionID     string
+	Role             string
+	HostRepo         string
+	IssueNumber      string
+	WorkingBranch    string
+	BaseBranch       string
+	SessionID        string
+	PlatformBaseURL  string
 }
 
 // Assembled bundles the final prompt with debug provenance the runtime
@@ -68,6 +69,7 @@ func Assemble(in Inputs) (*Assembled, error) {
 	writeKV(&buf, "issue_number", in.IssueNumber)
 	writeKV(&buf, "base_branch", in.BaseBranch)
 	writeKV(&buf, "working_branch", in.WorkingBranch)
+	writeKV(&buf, "platform_base_url", in.PlatformBaseURL)
 	buf.WriteString("\n")
 
 	// (2) Baseline. Always present; it's compiled in.

@@ -29,6 +29,7 @@ func NewProvider(deps *Deps) *Assembled {
 		WorkingBranch:    deps.Cfg.WorkingBranch,
 		BaseBranch:       deps.Cfg.BaseBranch,
 		SessionID:        deps.Cfg.SessionID,
+		PlatformBaseURL:  deps.Cfg.PlatformBaseURL,
 	})
 	if err != nil {
 		panic(fmt.Errorf("prompt: assemble: %w", err))
