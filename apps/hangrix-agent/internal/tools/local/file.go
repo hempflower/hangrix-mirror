@@ -163,13 +163,15 @@ func (writeTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 // than a discriminated union because the field set per mode is small and
 // the LLM does better with one tool than three near-identical tools.
 type editArgs struct {
-	Path    string `json:"path"`
-	Mode    string `json:"mode"`     // "replace" | "insert" | "delete"
-	Find    string `json:"find"`     // replace + delete: text to locate
-	Replace string `json:"replace"`  // replace: replacement text
-	After   int    `json:"after"`    // insert: 1-based line number to insert after (0 = top)
-	Text    string `json:"text"`     // insert: content to insert
-	All     bool   `json:"all"`      // replace: replace every occurrence (default first only)
+	Path         string `json:"path"`
+	Mode         string `json:"mode"`          // "replace" | "insert" | "delete"
+	Find         string `json:"find"`          // replace + delete: text to locate
+	Replace      string `json:"replace"`       // replace: replacement text
+	After        int    `json:"after"`         // insert: 1-based line number to insert after (0 = top)
+	Text         string `json:"text"`          // insert: content to insert
+	All          bool   `json:"all"`           // replace: replace every occurrence (default first only)
+	Anchor       string `json:"anchor"`        // optional: text to locate as a proximity anchor; search for 'find' within ±anchor_radius lines
+	AnchorRadius int    `json:"anchor_radius"` // default 80; lines to search on each side of the anchor
 }
 
 type editTool struct{ tracker *ReadTracker }
@@ -184,13 +186,15 @@ func (editTool) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"path":    map[string]any{"type": "string"},
-			"mode":    map[string]any{"type": "string", "enum": []string{"replace", "insert", "delete"}},
-			"find":    map[string]any{"type": "string", "description": "replace/delete: text to locate. Must match exactly (whitespace-sensitive)."},
-			"replace": map[string]any{"type": "string", "description": "replace: replacement text."},
-			"after":   map[string]any{"type": "integer", "description": "insert: 1-based line number; new text appears after this line. Use 0 to prepend."},
-			"text":    map[string]any{"type": "string", "description": "insert: content to insert."},
-			"all":     map[string]any{"type": "boolean", "description": "replace: replace every occurrence; default false (first only)."},
+			"path":          map[string]any{"type": "string"},
+			"mode":          map[string]any{"type": "string", "enum": []string{"replace", "insert", "delete"}},
+			"find":          map[string]any{"type": "string", "description": "replace/delete: text to locate. Match is whitespace-tolerant: indentation (tabs/spaces) and line endings (CRLF/LF) are normalised before comparison."},
+			"replace":       map[string]any{"type": "string", "description": "replace: replacement text. Leading whitespace is auto-adapted to match the source file's indentation style."},
+			"after":         map[string]any{"type": "integer", "description": "insert: 1-based line number; new text appears after this line. Use 0 to prepend."},
+			"text":          map[string]any{"type": "string", "description": "insert: content to insert. Leading whitespace is auto-adapted to match the source file's indentation style."},
+			"all":           map[string]any{"type": "boolean", "description": "replace: replace every occurrence; default false (first only)."},
+			"anchor":        map[string]any{"type": "string", "description": "optional: nearby text that unambiguously identifies the region. When set, 'find' is only searched within ±anchor_radius lines of the anchor — tolerates minor indentation drift from a recent `read`."},
+			"anchor_radius": map[string]any{"type": "integer", "description": "lines to search on each side of the anchor. Default 80."},
 		},
 		"required": []string{"path", "mode"},
 	}
@@ -215,14 +219,28 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("edit: cannot read %q: %w", a.Path, err)
 	}
 	original := string(body)
+	fileLines := strings.Split(original, "\n")
+
+	// Detect the file's indentation style once, then reuse for matching
+	// and for adapting replacement/inserted text.
+	indent := detectIndent(original)
+
+	// Default anchor radius.
+	if a.Anchor != "" && a.AnchorRadius <= 0 {
+		a.AnchorRadius = 80
+	}
 
 	var updated string
 	var changed int
 	switch a.Mode {
 	case "replace":
 		if a.Find == "" {
-			return nil, errors.New("edit (replace): 'find' is empty. Replace mode locates an exact substring and swaps it for 'replace' — set 'find' to the text you want to change (whitespace-sensitive, copy it verbatim from the file you read).")
+			return nil, errors.New("edit (replace): 'find' is empty. Replace mode locates an exact substring and swaps it for 'replace' — set 'find' to the text you want to change (copy it verbatim from the file you read).")
 		}
+
+		// First attempt: exact substring match (original behaviour,
+		// First attempt: exact substring match (original behaviour,
+		// handles partial-line matches like "hello" → "hi" in "hello world").
 		if a.All {
 			updated = strings.ReplaceAll(original, a.Find, a.Replace)
 			changed = strings.Count(original, a.Find)
@@ -232,29 +250,95 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 				changed = 1
 			}
 		}
-		if changed == 0 {
-			return nil, fmt.Errorf("edit (replace): 'find' did not match any content in %q. The match is exact and whitespace-sensitive (indentation, tabs vs spaces, trailing newlines all matter). Re-read the file and copy the target text verbatim, including surrounding context if needed to make it unique.", a.Path)
+
+		// When the exact match succeeds and the replacement indentation
+		// differs from the file's style, redo with adapted indentation.
+		if changed > 0 {
+			adapted := adaptIndent(a.Replace, a.Find, indent)
+			if adapted != a.Replace {
+				if a.All {
+					updated = strings.ReplaceAll(original, a.Find, adapted)
+					changed = strings.Count(original, a.Find)
+				} else {
+					updated = strings.Replace(original, a.Find, adapted, 1)
+				}
+			}
 		}
+		if changed == 0 {
+			// Exact match failed — try whitespace-tolerant line-based
+			// matching. Narrow to the anchor region if one was supplied.
+			searchStart, searchEnd := 0, len(fileLines)
+			if a.Anchor != "" {
+				anchorStart, _ := findLinesNormalized(fileLines, 0, len(fileLines), a.Anchor, indent)
+				if anchorStart < 0 {
+					return nil, matchFailureError(fileLines, a.Anchor, a.Path, "anchor",
+						"Re-read the file with 'read' and copy the anchor text verbatim — it must uniquely identify a region in the file.")
+				}
+				searchStart = max(0, anchorStart-a.AnchorRadius)
+				searchEnd = min(len(fileLines), anchorStart+a.AnchorRadius+1)
+			}
+
+			matchStart, matchEnd := findLinesNormalized(fileLines, searchStart, searchEnd, a.Find, indent)
+			if matchStart < 0 {
+				region := fileLines[searchStart:searchEnd]
+				return nil, matchFailureError(region, a.Find, a.Path, "find",
+					"Re-read the file with 'read' and copy the target text verbatim, including a line or two of surrounding context to make it unambiguous.")
+			}
+
+			// The matched lines in the *original* file — these are what we
+			// actually replace.
+			originalFind := strings.Join(fileLines[matchStart:matchEnd], "\n")
+
+			// Adapt the replacement text's indentation to match the
+			// source file's style, then apply.
+			adaptedReplace := adaptIndent(a.Replace, originalFind, indent)
+			if a.All {
+				updated = strings.ReplaceAll(original, originalFind, adaptedReplace)
+				changed = strings.Count(original, originalFind)
+			} else {
+				updated = strings.Replace(original, originalFind, adaptedReplace, 1)
+				if updated != original {
+					changed = 1
+				}
+			}
+		}
+		if changed == 0 {
+			return nil, matchFailureError(fileLines, a.Find, a.Path, "find",
+				"Re-read the file with 'read' and copy the target text verbatim.")
+		}
+
 	case "insert":
-		lines := strings.Split(original, "\n")
+		lines := fileLines
 		if a.After < 0 || a.After > len(lines) {
 			return nil, fmt.Errorf("edit (insert): 'after'=%d is outside the file's line range [0, %d]. Use 0 to prepend at the top, a 1-based line number to insert immediately after that line, or %d to append at the end.", a.After, len(lines), len(lines))
 		}
+		// Adapt inserted text indentation to match the file's style.
+		adaptedText := adaptInsertIndent(a.Text, original, a.After, indent)
 		head := append([]string{}, lines[:a.After]...)
 		tail := append([]string{}, lines[a.After:]...)
-		head = append(head, a.Text)
+		head = append(head, adaptedText)
 		head = append(head, tail...)
 		updated = strings.Join(head, "\n")
 		changed = 1
+
 	case "delete":
 		if a.Find == "" {
-			return nil, errors.New("edit (delete): 'find' is empty. Delete mode removes the first exact match of 'find' from the file — set it to the text you want to remove (whitespace-sensitive, copy it verbatim from the file).")
+			return nil, errors.New("edit (delete): 'find' is empty. Delete mode removes the first exact match of 'find' from the file — set it to the text you want to remove (copy it verbatim from the file).")
 		}
-		if !strings.Contains(original, a.Find) {
-			return nil, fmt.Errorf("edit (delete): 'find' did not match any content in %q. The match is exact and whitespace-sensitive. Re-read the file and copy the target text verbatim.", a.Path)
+		// Try exact first, then normalised.
+		found := strings.Contains(original, a.Find)
+		originalFind := a.Find
+		if !found {
+			matchStart, matchEnd := findLinesNormalized(fileLines, 0, len(fileLines), a.Find, indent)
+			if matchStart < 0 {
+				return nil, matchFailureError(fileLines, a.Find, a.Path, "find",
+					"Re-read the file with 'read' and copy the target text verbatim.")
+			}
+			originalFind = strings.Join(fileLines[matchStart:matchEnd], "\n")
 		}
-		updated = strings.Replace(original, a.Find, "", 1)
+		updated = strings.Replace(original, originalFind, "", 1)
 		changed = 1
+
 	default:
 		return nil, fmt.Errorf("edit: unknown mode %q. Supported modes are 'replace' (find/replace text), 'insert' (add text at/after a line number), and 'delete' (remove a piece of text). Set 'mode' to one of those.", a.Mode)
 	}
@@ -270,6 +354,363 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 		"bytes_after":     len(updated),
 	}, nil
 }
+
+// ----- edit helpers -----------------------------------------------------------
+
+// indentStyle captures the dominant indentation convention in a source file.
+type indentStyle struct {
+	useTabs bool // true = tabs, false = spaces
+	width   int  // number of spaces per indent level (meaningful only when !useTabs)
+}
+
+// detectIndent scans the first 500 non-empty lines and returns the dominant
+// indentation style. Tabs win when at least 30% of indented lines use them;
+// otherwise we measure the most common space-indent depth. The thresholds
+// are chosen to give a clear signal on typical source files without being
+// thrown off by a handful of alignment-only spaces.
+func detectIndent(content string) indentStyle {
+	lines := strings.Split(content, "\n")
+	tabCount := 0
+	spaceWidths := map[int]int{} // indent width → count
+	indented := 0
+	scanned := 0
+	for _, line := range lines {
+		if scanned >= 500 {
+			break
+		}
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		scanned++
+		leading := leadingWhitespace(line)
+		if leading == 0 {
+			continue
+		}
+		indented++
+		if line[0] == '\t' {
+			tabCount++
+		} else {
+			// Count only lines whose leading space count is a reasonable
+			// indent (≤ 16) — deeper indentation is more likely alignment.
+			if leading >= 1 && leading <= 16 {
+				spaceWidths[leading]++
+			}
+		}
+	}
+	if indented == 0 {
+		return indentStyle{useTabs: false, width: 4} // safe default
+	}
+	// Tabs win when they appear on ≥ 30% of indented lines.
+	if float64(tabCount)/float64(indented) >= 0.3 {
+		return indentStyle{useTabs: true}
+	}
+	// Pick the most common space width.
+	bestW, bestN := 0, 0
+	for w, n := range spaceWidths {
+		if n > bestN || (n == bestN && w < bestW) {
+			bestW, bestN = w, n
+		}
+	}
+	if bestW == 0 {
+		bestW = 4
+	}
+	return indentStyle{useTabs: false, width: bestW}
+}
+
+// leadingWhitespace returns the number of leading whitespace characters
+// (tabs + spaces) in s.
+func leadingWhitespace(s string) int {
+	for i, ch := range s {
+		if ch != ' ' && ch != '\t' {
+			return i
+		}
+	}
+	return len(s)
+}
+
+// normalizeLineForMatch collapses the leading whitespace of a line into an
+// indent-level marker so matching is tolerant of tab/space and indent-width
+// drift. The marker format uses \x00 delimiters that won't collide with
+// real source text.
+func normalizeLineForMatch(s string, st indentStyle) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.TrimRight(s, " \t")
+	if strings.TrimSpace(s) == "" {
+		return s
+	}
+	vis := countVisualSpaces(s, st)
+	unit := st.width
+	if unit <= 0 {
+		unit = 4
+	}
+	// Round visual width to the nearest indent level. The half-unit bias
+	// means a 2-space indent rounds to level 1 when unit=4 (2+2>=4),
+	// which is the cross-indent-width tolerance we want.
+	level := (vis + unit/2) / unit
+	trimmed := strings.TrimLeft(s, " \t")
+	return fmt.Sprintf("\x00%d\x00%s", level, trimmed)
+}
+
+// normalizeLinesForMatch applies normalizeLineForMatch to every line.
+func normalizeLinesForMatch(lines []string, st indentStyle) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = normalizeLineForMatch(l, st)
+	}
+	return out
+}
+
+// findLinesNormalized searches for needle in haystack[searchStart:searchEnd]
+// using whitespace-tolerant, indent-level-based matching. Both sides are
+// normalised using their own detected indent styles so a 2-space find can
+// match 4-space (or tab-indented) file content. Returns (startLine, endLine)
+// or (-1, -1).
+func findLinesNormalized(haystack []string, searchStart, searchEnd int, needle string, fileIndent indentStyle) (int, int) {
+	needleLines := strings.Split(needle, "\n")
+	needleIndent := detectIndent(needle)
+
+	normNeedle := normalizeLinesForMatch(needleLines, needleIndent)
+	normHaystack := normalizeLinesForMatch(haystack, fileIndent)
+
+	for i := searchStart; i <= searchEnd-len(normNeedle); i++ {
+		match := true
+		for j := range normNeedle {
+			if normHaystack[i+j] != normNeedle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i, i + len(normNeedle)
+		}
+	}
+	return -1, -1
+}
+// matchFailureError builds an actionable error message when a find/anchor
+// search fails. It includes a preview of the searched region so the LLM can
+// see what's actually in the file without an extra round-trip.
+func matchFailureError(lines []string, find, path, kind string, advice string) error {
+	// Build a preview: first 8 lines of the search region.
+	previewN := len(lines)
+	if previewN > 8 {
+		previewN = 8
+	}
+	var preview strings.Builder
+	for _, l := range lines[:previewN] {
+		fmt.Fprintf(&preview, "  %s\n", l)
+	}
+	if len(lines) > previewN {
+		preview.WriteString(fmt.Sprintf("  … (%d more lines)\n", len(lines)-previewN))
+	}
+
+	return fmt.Errorf(
+		"edit (%s): %q did not match any content in %q.\n"+
+			"The match is whitespace-tolerant — indentation (tabs/spaces) and trailing whitespace are normalised. "+
+			"Still, the text must be a verbatim copy of what you want to locate.\n"+
+			"Searched region (first %d lines):\n%s\n%s",
+		kind, find, path, previewN, preview.String(), advice,
+	)
+}
+
+// adaptIndent converts the leading whitespace of each line in `replacement`
+// to match the source file's indentation style. It uses the original matched
+// text's leading whitespace as a baseline to deduce the relative indent
+// level of each replacement line.
+// adaptIndent converts the leading whitespace of each line in `replacement`
+// to match the source file's indentation style. It uses indent levels
+// (rounded visual-width / indent-unit) so that e.g. a 2-space-indented
+// replacement correctly maps to a 4-space or tab-indented file.
+func adaptIndent(replacement, originalFind string, st indentStyle) string {
+	repLines := strings.Split(replacement, "\n")
+	origLines := strings.Split(originalFind, "\n")
+
+	// Detect the replacement's own indent style for accurate level computation.
+	repIndent := detectIndent(replacement)
+
+	// Find the first non-empty line in the original matched text, and its indent level.
+	origBase := ""
+	for _, l := range origLines {
+		if strings.TrimSpace(l) != "" {
+			origBase = l
+			break
+		}
+	}
+	if origBase == "" {
+		return convertIndentStyle(replacement, st)
+	}
+	origLevel := indentLevel(origBase, repIndent)
+
+	// Find the first non-empty line in the replacement, and its indent level.
+	var firstNonEmpty string
+	for _, l := range repLines {
+		if strings.TrimSpace(l) != "" {
+			firstNonEmpty = l
+			break
+		}
+	}
+	if firstNonEmpty == "" {
+		return replacement
+	}
+	repLevel := indentLevel(firstNonEmpty, repIndent)
+
+	// Delta in indent levels: positive means the replacement is deeper.
+	delta := repLevel - origLevel
+	targetLevel := origLevel + delta
+	if targetLevel < 0 {
+		targetLevel = 0
+	}
+
+	// Rebuild each replacement line with adapted indentation.
+	unit := st.width
+	if unit <= 0 {
+		unit = 4
+	}
+	var out []string
+	for _, l := range repLines {
+		if strings.TrimSpace(l) == "" {
+			out = append(out, l)
+			continue
+		}
+		lineLevel := indentLevel(l, repIndent)
+		newLevel := targetLevel + (lineLevel - repLevel)
+		if newLevel < 0 {
+			newLevel = 0
+		}
+		newVisual := newLevel * unit
+		newLeading := makeIndent(newVisual, st)
+		trimmed := strings.TrimLeft(l, " \t")
+		out = append(out, newLeading+trimmed)
+	}
+	return strings.Join(out, "\n")
+}
+
+func adaptInsertIndent(text, original string, after int, st indentStyle) string {
+	fileLines := strings.Split(original, "\n")
+
+	// Find the indent level at the insertion point: use the line at `after`
+	// if it's non-empty, otherwise scan backwards.
+	refIndent := 0
+	if after > 0 && after <= len(fileLines) {
+		refLine := fileLines[after-1]
+		refIndent = countVisualSpaces(refLine, st)
+	}
+	// Also check the next line for context (e.g. inserting between two
+	// indented blocks).
+	if after < len(fileLines) {
+		nextLine := fileLines[after]
+		if strings.TrimSpace(nextLine) != "" {
+			nextIndent := countVisualSpaces(nextLine, st)
+			if nextIndent < refIndent || refIndent == 0 {
+				refIndent = nextIndent
+			}
+		}
+	}
+
+	insertLines := strings.Split(text, "\n")
+	// Find the minimum indentation among non-empty lines in the inserted
+	// text — this is the "base" indent we'll use as the delta origin.
+	minIndent := -1
+	for _, l := range insertLines {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		vis := countVisualSpaces(l, st)
+		if minIndent < 0 || vis < minIndent {
+			minIndent = vis
+		}
+	}
+	if minIndent < 0 {
+		minIndent = 0
+	}
+
+	delta := refIndent - minIndent
+	var out []string
+	for _, l := range insertLines {
+		if strings.TrimSpace(l) == "" {
+			out = append(out, l)
+			continue
+		}
+		vis := countVisualSpaces(l, st)
+		newIndent := vis + delta
+		if newIndent < 0 {
+			newIndent = 0
+		}
+		newLeading := makeIndent(newIndent, st)
+		trimmed := strings.TrimLeft(l, " \t")
+		out = append(out, newLeading+trimmed)
+	}
+	return strings.Join(out, "\n")
+}
+
+// countVisualSpaces computes the visual width of the leading whitespace
+// in s given the indent style. Tabs count as st.width spaces.
+func countVisualSpaces(s string, st indentStyle) int {
+	w := 0
+	tabW := st.width
+	if tabW <= 0 {
+		tabW = 4
+	}
+	for _, ch := range s {
+		switch ch {
+		case ' ':
+			w++
+		case '\t':
+			w += tabW
+		default:
+			return w
+		}
+	}
+	return w
+}
+
+// makeIndent produces a leading-whitespace string of visualWidth spaces,
+// using the file's preferred style (tabs or spaces).
+func makeIndent(visualWidth int, st indentStyle) string {
+	if st.useTabs {
+		tabW := st.width
+		if tabW <= 0 {
+			tabW = 4
+		}
+		tabs := visualWidth / tabW
+		spaces := visualWidth % tabW
+		return strings.Repeat("\t", tabs) + strings.Repeat(" ", spaces)
+	}
+	return strings.Repeat(" ", visualWidth)
+}
+
+// indentLevel computes the indent level of a line: visual indent width
+// divided by the indent unit, rounded to the nearest integer.
+func indentLevel(s string, st indentStyle) int {
+	vis := countVisualSpaces(s, st)
+	unit := st.width
+	if unit <= 0 {
+		unit = 4
+	}
+	return (vis + unit/2) / unit
+}
+
+
+
+// convertIndentStyle converts all leading whitespace in s to the target
+// style without adjusting the relative indent depth. Used as a fallback
+// when the original matched text has no non-empty lines.
+func convertIndentStyle(s string, st indentStyle) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		vis := countVisualSpaces(l, indentStyle{useTabs: false, width: 4}) // measure assuming 4-space tabs
+		// Re-measure with the actual style
+		vis = countVisualSpaces(l, st)
+		trimmed := strings.TrimLeft(l, " \t")
+		lines[i] = makeIndent(vis, st) + trimmed
+	}
+	return strings.Join(lines, "\n")
+}
+
+// ----- glob -----
+
 
 // ----- glob -----
 
