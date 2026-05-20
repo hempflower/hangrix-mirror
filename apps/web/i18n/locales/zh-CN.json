@@ -474,10 +474,12 @@
       "monthsAgo": "{n} 个月前",
       "yearsAgo": "{n} 年前"
     },
-    "commits": {
+      "commits": {
       "title": "提交记录",
-      "none": "暂无提交"
-    },
+      "none": "暂无提交",
+      "loadMore": "加载更多",
+      "loadingMore": "加载中..."
+      },
     "commit": {
       "title": "提交详情",
       "files": "文件变更",

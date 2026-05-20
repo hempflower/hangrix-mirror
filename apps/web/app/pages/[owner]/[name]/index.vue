@@ -77,6 +77,10 @@ const treeLoading = ref(false)
 const commits = ref<Commit[]>([])
 const commitsLoading = ref(false)
 const commitsError = ref<string | null>(null)
+const commitsOffset = ref(0)
+const hasMoreCommits = ref(false)
+const loadingMoreCommits = ref(false)
+
 
 const copied = ref(false)
 const copiedKey = ref<string | null>(null)
@@ -164,28 +168,50 @@ async function loadTreeView() {
   }
 }
 
-async function loadCommits() {
+async function loadCommits(append = false) {
   if (emptyRepo.value) {
-    commits.value = []
-    return
+  commits.value = []
+  hasMoreCommits.value = false
+  return
   }
+  const offset = append ? commits.value.length : 0
+  const limit = 50
+  if (append) {
+  loadingMoreCommits.value = true
+  } else {
+  commitsOffset.value = 0
   commitsLoading.value = true
+  }
   commitsError.value = null
   try {
-    const data = await $fetch<Commit[]>(
-      `/api/repos/${owner.value}/${name.value}/commits`,
-      {
-        credentials: 'include',
-        query: { ref: currentRef.value || undefined, limit: 50 },
-      },
-    )
+  const data = await $fetch<Commit[]>(
+    `/api/repos/${owner.value}/${name.value}/commits`,
+    {
+    credentials: 'include',
+    query: {
+      ref: currentRef.value || undefined,
+      offset,
+      limit,
+    },
+    },
+  )
+  if (append) {
+    commits.value = commits.value.concat(data ?? [])
+  } else {
     commits.value = data ?? []
-  } catch (e: any) {
-    commitsError.value = e?.data?.error ?? t('repo.loadFailed')
-    commits.value = []
-  } finally {
-    commitsLoading.value = false
   }
+  hasMoreCommits.value = (data?.length ?? 0) >= limit
+  } catch (e: any) {
+  commitsError.value = e?.data?.error ?? t('repo.loadFailed')
+  if (!append) commits.value = []
+  } finally {
+  commitsLoading.value = false
+  loadingMoreCommits.value = false
+  }
+}
+
+async function loadMoreCommits() {
+  await loadCommits(true)
 }
 
 function onSelectRef(v: any) {
@@ -683,10 +709,21 @@ onMounted(async () => {
                     <code class="hidden font-mono text-xs text-muted-foreground sm:inline">{{ shortSha(c.sha) }}</code>
                   </NuxtLink>
                 </li>
-              </ul>
-            </CardContent>
-          </Card>
-        </TabsContent>
+  </ul>
+  <div v-if="!commitsLoading && hasMoreCommits" class="border-t px-4 py-2">
+  <Button
+  variant="ghost"
+  size="sm"
+  class="w-full"
+  :disabled="loadingMoreCommits"
+  @click="loadMoreCommits"
+  >
+  {{ loadingMoreCommits ? t('repo.commits.loadingMore') : t('repo.commits.loadMore') }}
+  </Button>
+  </div>
+  </CardContent>
+  </Card>
+  </TabsContent>
       </Tabs>
     </template>
   </div>
