@@ -61,7 +61,6 @@ const name = computed(() => String(route.params.name ?? ''))
 useHead({ title: () => `${t('repo.tags.title')} · ${owner.value}/${name.value} - ${t('app.name')}` })
 
 const repo = ref<PublicRepo | null>(null)
-const refs = ref<RepoRefs | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
 
@@ -79,9 +78,9 @@ const canManage = computed(() => {
   return user.value.role === 'admin' || user.value.id === repo.value.owner_id
 })
 
-const branches = computed(() => refs.value?.branches ?? [])
-const tags = computed(() => refs.value?.tags ?? [])
-const defaultBranch = computed(() => refs.value?.default_branch ?? '')
+const dialogBranches = ref<RepoRef[]>([])
+const dialogTags = ref<RepoRef[]>([])
+const defaultBranch = computed(() => repo.value?.default_branch ?? '')
 
 const schema = computed(() => toTypedSchema(z.object({
   name: z.string().min(1).max(100),
@@ -121,9 +120,6 @@ async function load() {
     repo.value = await $fetch<PublicRepo>(`/api/repos/${owner.value}/${name.value}`, {
       credentials: 'include',
     })
-    refs.value = await $fetch<RepoRefs>(`/api/repos/${owner.value}/${name.value}/refs`, {
-      credentials: 'include',
-    })
     await loadTags()
   } catch (e: any) {
     error.value = e?.data?.error ?? t('repo.loadFailed')
@@ -131,6 +127,18 @@ async function load() {
     loading.value = false
   }
 }
+async function openCreateDialog() {
+  try {
+    const data = await $fetch<RepoRefs>(`/api/repos/${owner.value}/${name.value}/refs`, {
+      credentials: 'include',
+    })
+    dialogBranches.value = data.branches ?? []
+    dialogTags.value = data.tags ?? []
+  } catch { /* ignore */ }
+  createOpen.value = true
+}
+
+
 
 function onTagPage(offset: number) {
   tagOffset.value = offset
@@ -203,7 +211,7 @@ onMounted(load)
             {{ t('repo.tags.subtitle') }}
           </p>
         </div>
-        <Button v-if="canManage" @click="createOpen = true">
+        <Button v-if="canManage" @click="openCreateDialog()">
           <Plus class="size-4" />
           {{ t('repo.tags.create') }}
         </Button>
@@ -312,15 +320,15 @@ onMounted(load)
                       <SelectValue :placeholder="t('repo.tags.ref')" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectGroup v-if="branches.length > 0">
+                      <SelectGroup v-if="dialogBranches.length > 0">
                         <SelectLabel>{{ t('repo.branches.title') }}</SelectLabel>
-                        <SelectItem v-for="b in branches" :key="`b-${b.name}`" :value="b.name">
+                        <SelectItem v-for="b in dialogBranches" :key="`b-${b.name}`" :value="b.name">
                           {{ b.name }}
                         </SelectItem>
                       </SelectGroup>
-                      <SelectGroup v-if="tags.length > 0">
+                      <SelectGroup v-if="dialogTags.length > 0">
                         <SelectLabel>{{ t('repo.tags.title') }}</SelectLabel>
-                        <SelectItem v-for="tg in tags" :key="`t-${tg.name}`" :value="tg.name">
+                        <SelectItem v-for="tg in dialogTags" :key="`t-${tg.name}`" :value="tg.name">
                           {{ tg.name }}
                         </SelectItem>
                       </SelectGroup>
