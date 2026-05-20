@@ -879,6 +879,18 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Scan the comment body for [attachment:N] / ![attachment:N] tokens
+	// and transition matching attachments from uploaded → attached.
+	// Best-effort — a missing or already-deleted attachment is not an error.
+	if h.attachments != nil {
+		re := regexp.MustCompile(`!?\[attachment:(\d+)\]`)
+		for _, m := range re.FindAllStringSubmatch(body, -1) {
+			if attID, err := strconv.ParseInt(m[1], 10, 64); err == nil {
+				_ = h.attachments.MarkAttached(r.Context(), attID, c.ID)
+			}
+		}
+	}
 	// Fan the comment out to any subscribing roles. Best-effort — a
 	// host-yaml hiccup must not block the comment write itself.
 	h.fireCommentTriggers(r, rc, iss, c)

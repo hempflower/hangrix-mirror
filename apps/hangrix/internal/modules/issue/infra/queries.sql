@@ -198,8 +198,8 @@ ORDER BY e.created_at, e.id;
 -- Agent path: author_id=NULL (omit), agent_role with the role key.
 INSERT INTO issue_attachments (
     repo_id, issue_id, author_id, agent_role, storage_key,
-    original_name, size_bytes, mime_type, detected_mime_type,
-    sha256, kind, status
+    original_name, display_name, size_bytes, mime_type, detected_mime_type,
+    sha256, kind, inline, status
 )
 VALUES (
     sqlc.arg('repo_id'),
@@ -208,12 +208,14 @@ VALUES (
     sqlc.arg('agent_role'),
     sqlc.arg('storage_key'),
     sqlc.arg('original_name'),
+    sqlc.arg('display_name'),
     sqlc.arg('size_bytes'),
     sqlc.arg('mime_type'),
     sqlc.arg('detected_mime_type'),
     sqlc.arg('sha256'),
     sqlc.arg('kind'),
-    'uploaded'
+    sqlc.arg('inline'),
+    sqlc.arg('status')
 )
 RETURNING id, created_at;
 
@@ -222,8 +224,8 @@ SELECT a.id, a.repo_id, a.issue_id,
        COALESCE(a.comment_id, 0)::BIGINT AS comment_id,
        COALESCE(a.author_id, 0)::BIGINT   AS author_id,
        a.agent_role, a.storage_key, a.original_name,
-       a.size_bytes, a.mime_type, a.detected_mime_type,
-       a.sha256, a.kind, a.status,
+       a.display_name, a.size_bytes, a.mime_type, a.detected_mime_type,
+       a.sha256, a.kind, a.inline, a.status,
        a.created_at, a.deleted_at
 FROM issue_attachments a
 WHERE a.id = sqlc.arg('id');
@@ -233,12 +235,11 @@ SELECT a.id, a.repo_id, a.issue_id,
        COALESCE(a.comment_id, 0)::BIGINT AS comment_id,
        COALESCE(a.author_id, 0)::BIGINT   AS author_id,
        a.agent_role, a.storage_key, a.original_name,
-       a.size_bytes, a.mime_type, a.detected_mime_type,
-       a.sha256, a.kind, a.status,
+       a.display_name, a.size_bytes, a.mime_type, a.detected_mime_type,
+       a.sha256, a.kind, a.inline, a.status,
        a.created_at, a.deleted_at
 FROM issue_attachments a
 WHERE a.issue_id = sqlc.arg('issue_id')
-  AND a.status <> 'deleted'
   AND (sqlc.narg('comment_id')::BIGINT IS NULL OR a.comment_id = sqlc.narg('comment_id'))
 ORDER BY a.created_at, a.id;
 

@@ -173,7 +173,7 @@ func (s *AttachmentService) Upload(
 
 	// Now create the DB row with the storage key.
 	attachment, err := s.store.CreateAttachment(ctx, repoID, issueID, authorID,
-		agentRole, storageKey, originalName, totalBytes, clientMime, detectedMime, sha256Sum, kind)
+		agentRole, storageKey, originalName, "", totalBytes, clientMime, detectedMime, sha256Sum, kind, false)
 	if err != nil {
 		// Best-effort cleanup of the already-written file.
 		_ = os.Remove(targetPath)
@@ -272,13 +272,23 @@ func (s *AttachmentService) UploadAttachment(
 
 	// Create the DB row. authorID is always 0 for agent uploads.
 	attachment, err := s.store.CreateAttachment(ctx, params.RepoID, params.IssueID, 0,
-		params.AgentRole, storageKey, params.Name, int64(len(params.Data)),
-		clientMime, detectedMime, sha256Sum, kind)
+		params.AgentRole, storageKey, params.Name, params.DisplayName, int64(len(params.Data)),
+		clientMime, detectedMime, sha256Sum, kind, params.Inline)
 	if err != nil {
 		_ = os.Remove(targetPath)
 		return nil, fmt.Errorf("create attachment row: %w", err)
 	}
 
+
+	// If the caller specified a comment, transition directly to attached.
+	if params.CommentID > 0 {
+		if err := s.store.MarkAttached(ctx, attachment.ID, params.CommentID); err != nil {
+			_ = os.Remove(targetPath)
+			return nil, fmt.Errorf("mark attached: %w", err)
+		}
+		attachment.CommentID = params.CommentID
+		attachment.Status = domain.AttachmentStatusAttached
+	}
 	return attachment, nil
 }
 

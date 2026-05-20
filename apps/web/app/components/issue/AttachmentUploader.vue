@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import {
   Paperclip,
   X,
@@ -21,6 +21,7 @@ const props = defineProps<{
   owner: string
   name: string
   issueNumber: number
+  existingAttachments?: IssueAttachment[]
 }>()
 
 const emit = defineEmits<{
@@ -31,6 +32,24 @@ const emit = defineEmits<{
 const uploading = ref(false)
 const uploadError = ref<string | null>(null)
 const attachments = ref<IssueAttachment[]>([])
+
+// Merge existing attachments (loaded from API) into the local list so the
+// uploader shows them after page refresh. Deduplicates by id so locally
+// uploaded items are not overwritten.
+watch(
+  () => props.existingAttachments,
+  (existing) => {
+    if (!existing || existing.length === 0) return
+    const existingIds = new Set(attachments.value.map((a) => a.id))
+    for (const att of existing) {
+      if (!existingIds.has(att.id)) {
+        attachments.value.push(att)
+        existingIds.add(att.id)
+      }
+    }
+  },
+  { immediate: true },
+)
 
 // Hidden file input for triggering native picker
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -71,7 +90,10 @@ async function onFileSelected(e: Event) {
   }
 }
 
+const deleting = ref<Set<number>>(new Set())
+
 async function removeAttachment(att: IssueAttachment) {
+  deleting.value.add(att.id)
   try {
     await $fetch(
       `/api/repos/${props.owner}/${props.name}/issues/${props.issueNumber}/attachments/${att.id}`,
@@ -79,7 +101,9 @@ async function removeAttachment(att: IssueAttachment) {
     )
     attachments.value = attachments.value.filter((a) => a.id !== att.id)
   } catch {
-    // Silently ignore deletion errors — the item may already be gone
+    // Keep the attachment in the list — server may have rejected the delete
+  } finally {
+    deleting.value.delete(att.id)
   }
 }
 
@@ -156,9 +180,11 @@ function formatSize(bytes: number): string {
           size="icon"
           class="size-6 text-muted-foreground hover:text-destructive"
           :title="t('issue.attachment.remove')"
+          :disabled="deleting.has(att.id)"
           @click="removeAttachment(att)"
         >
-          <X class="size-3.5" />
+          <Loader2 v-if="deleting.has(att.id)" class="size-3.5 animate-spin" />
+          <X v-else class="size-3.5" />
         </Button>
       </li>
     </ul>

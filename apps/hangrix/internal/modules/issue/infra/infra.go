@@ -449,7 +449,7 @@ func eventFromGet(r issuedb.GetEventByIDRow) *domain.Event {
 
 // --- domain.AttachmentStore implementation ---
 
-func (s *PostgresStore) CreateAttachment(ctx context.Context, repoID, issueID, authorID int64, agentRole, storageKey, originalName string, sizeBytes int64, mimeType, detectedMimeType, sha256 string, kind domain.AttachmentKind) (*domain.Attachment, error) {
+func (s *PostgresStore) CreateAttachment(ctx context.Context, repoID, issueID, authorID int64, agentRole, storageKey, originalName, displayName string, sizeBytes int64, mimeType, detectedMimeType, sha256 string, kind domain.AttachmentKind, inline bool) (*domain.Attachment, error) {
 	var authorArg pgtype.Int8
 	if authorID > 0 {
 		authorArg = pgtype.Int8{Int64: authorID, Valid: true}
@@ -461,11 +461,14 @@ func (s *PostgresStore) CreateAttachment(ctx context.Context, repoID, issueID, a
 		AgentRole:        agentRole,
 		StorageKey:       storageKey,
 		OriginalName:     originalName,
+		DisplayName:      displayName,
 		SizeBytes:        sizeBytes,
 		MimeType:         mimeType,
 		DetectedMimeType: detectedMimeType,
 		Sha256:           sha256,
 		Kind:             string(kind),
+		Inline:           inline,
+		Status:           string(domain.AttachmentStatusUploaded),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create attachment: %w", err)
@@ -524,11 +527,13 @@ func attachmentFromRow(r issuedb.GetAttachmentRow) *domain.Attachment {
 		AgentRole:        r.AgentRole,
 		StorageKey:       r.StorageKey,
 		OriginalName:     r.OriginalName,
+		DisplayName:      r.DisplayName,
 		SizeBytes:        r.SizeBytes,
 		MimeType:         r.MimeType,
 		DetectedMimeType: r.DetectedMimeType,
 		SHA256:           r.Sha256,
 		Kind:             domain.AttachmentKind(r.Kind),
+		Inline:           r.Inline,
 		Status:           domain.AttachmentStatus(r.Status),
 		CreatedAt:        r.CreatedAt.Time,
 	}
@@ -549,11 +554,13 @@ func attachmentFromList(r issuedb.ListAttachmentsRow) *domain.Attachment {
 		AgentRole:        r.AgentRole,
 		StorageKey:       r.StorageKey,
 		OriginalName:     r.OriginalName,
+		DisplayName:      r.DisplayName,
 		SizeBytes:        r.SizeBytes,
 		MimeType:         r.MimeType,
 		DetectedMimeType: r.DetectedMimeType,
 		SHA256:           r.Sha256,
 		Kind:             domain.AttachmentKind(r.Kind),
+		Inline:           r.Inline,
 		Status:           domain.AttachmentStatus(r.Status),
 		CreatedAt:        r.CreatedAt.Time,
 	}
