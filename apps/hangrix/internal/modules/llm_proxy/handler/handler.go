@@ -179,7 +179,7 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request) {
 	}
 	if stream {
 		httpx.WriteError(w, http.StatusNotImplemented, "streaming not supported by this proxy")
-		h.recordUsage(r.Context(), sess, 0, upReq.Model, upstream.Usage{}, http.StatusNotImplemented, "stream not supported", r.URL.Path, time.Since(start))
+		h.recordUsage(r.Context(), sess, 0, upReq.Model, upstream.Usage{}, http.StatusNotImplemented, "stream not supported", r.URL.Path, time.Since(start), string(body), "")
 		return
 	}
 	if upReq.Model == "" {
@@ -204,7 +204,7 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		msg := fmt.Sprintf("unsupported provider type: %s", prov.Type)
 		httpx.WriteError(w, http.StatusNotImplemented, msg)
-		h.recordUsage(r.Context(), sess, prov.ID, upReq.Model, upstream.Usage{}, http.StatusNotImplemented, msg, r.URL.Path, time.Since(start))
+		h.recordUsage(r.Context(), sess, prov.ID, upReq.Model, upstream.Usage{}, http.StatusNotImplemented, msg, r.URL.Path, time.Since(start), string(body), "")
 		return
 	}
 
@@ -224,7 +224,7 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request) {
 	if dispatchErr != nil {
 		status, msg := dispatchStatusFor(dispatchErr)
 		httpx.WriteError(w, status, msg)
-		h.recordUsage(r.Context(), sess, prov.ID, upReq.Model, upstream.Usage{}, int32(status), msg, r.URL.Path, time.Since(start))
+		h.recordUsage(r.Context(), sess, prov.ID, upReq.Model, upstream.Usage{}, int32(status), msg, r.URL.Path, time.Since(start), string(body), "")
 		return
 	}
 
@@ -232,18 +232,18 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request) {
 	outBody, err := upstream.MarshalResponsesAPIResponse(upResp)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "failed to encode response")
-		h.recordUsage(r.Context(), sess, prov.ID, upReq.Model, upResp.Usage, http.StatusInternalServerError, err.Error(), r.URL.Path, time.Since(start))
+		h.recordUsage(r.Context(), sess, prov.ID, upReq.Model, upResp.Usage, http.StatusInternalServerError, err.Error(), r.URL.Path, time.Since(start), string(body), "")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(outBody); err != nil {
-		h.recordUsage(r.Context(), sess, prov.ID, upReq.Model, upResp.Usage, http.StatusOK, err.Error(), r.URL.Path, time.Since(start))
+		h.recordUsage(r.Context(), sess, prov.ID, upReq.Model, upResp.Usage, http.StatusOK, err.Error(), r.URL.Path, time.Since(start), string(body), string(outBody))
 		return
 	}
 
 	h.recordUsage(r.Context(), sess, prov.ID, upReq.Model, upResp.Usage,
-		http.StatusOK, "", r.URL.Path, time.Since(start))
+		http.StatusOK, "", r.URL.Path, time.Since(start), string(body), string(outBody))
 }
 
 // dispatchStatusFor maps adapter-level errors onto HTTP statuses + a
@@ -278,6 +278,8 @@ func (h *Handler) recordUsage(
 	errMessage string,
 	path string,
 	latency time.Duration,
+	requestBody string,
+	responseBody string,
 ) {
 	rec := &llmdomain.UsageRecord{
 		ProviderID:       providerID,
@@ -289,6 +291,8 @@ func (h *Handler) recordUsage(
 		StatusCode:       status,
 		ErrorMessage:     errMessage,
 		RequestPath:      path,
+		RequestBody:      requestBody,
+		ResponseBody:     responseBody,
 	}
 	if sess != nil {
 		rec.SessionID = &sess.ID

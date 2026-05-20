@@ -61,7 +61,8 @@ LIMIT 1;
 INSERT INTO llm_usage_log (
     session_id, provider_id, model,
     prompt_tokens, completion_tokens, total_tokens,
-    latency_ms, status_code, error_message, request_path
+    latency_ms, status_code, error_message, request_path,
+    request_body, response_body
 ) VALUES (
     sqlc.narg('session_id'),
     sqlc.arg('provider_id'),
@@ -72,7 +73,9 @@ INSERT INTO llm_usage_log (
     sqlc.arg('latency_ms'),
     sqlc.arg('status_code'),
     sqlc.arg('error_message'),
-    sqlc.arg('request_path')
+    sqlc.arg('request_path'),
+    sqlc.arg('request_body'),
+    sqlc.arg('response_body')
 );
 
 -- name: ListUsage :many
@@ -92,3 +95,12 @@ SELECT COUNT(*)::BIGINT
 FROM llm_usage_log u
 WHERE (sqlc.narg('provider_id')::BIGINT IS NULL OR u.provider_id = sqlc.narg('provider_id'))
   AND (sqlc.narg('since')::TIMESTAMPTZ IS NULL OR u.created_at >= sqlc.narg('since'));
+
+-- name: GetUsageByID :one
+-- Single-row detail query that includes the large body columns the list
+-- endpoint deliberately omits. Used by the admin detail popup.
+SELECT u.*, p.name AS provider_name
+FROM llm_usage_log u
+JOIN llm_providers p ON p.id = u.provider_id
+WHERE u.id = sqlc.arg('id');
+

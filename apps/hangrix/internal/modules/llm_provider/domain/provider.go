@@ -94,6 +94,8 @@ type UsageRecord struct {
 	StatusCode       int32
 	ErrorMessage     string
 	RequestPath      string
+	RequestBody      string
+	ResponseBody     string
 }
 
 // Errors.

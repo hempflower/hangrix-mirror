@@ -167,6 +167,56 @@ func (q *Queries) GetProviderByName(ctx context.Context, name string) (LlmProvid
 	return i, err
 }
 
+const getUsageByID = `-- name: GetUsageByID :one
+SELECT u.id, u.session_id, u.provider_id, u.model, u.prompt_tokens, u.completion_tokens, u.total_tokens, u.latency_ms, u.status_code, u.error_message, u.request_path, u.created_at, u.request_body, u.response_body, p.name AS provider_name
+FROM llm_usage_log u
+JOIN llm_providers p ON p.id = u.provider_id
+WHERE u.id = $1
+`
+
+type GetUsageByIDRow struct {
+	ID               int64
+	SessionID        pgtype.Int8
+	ProviderID       int64
+	Model            string
+	PromptTokens     int32
+	CompletionTokens int32
+	TotalTokens      int32
+	LatencyMs        int32
+	StatusCode       int32
+	ErrorMessage     string
+	RequestPath      string
+	CreatedAt        pgtype.Timestamptz
+	RequestBody      string
+	ResponseBody     string
+	ProviderName     string
+}
+
+// Single-row detail query that includes the large body columns the list
+// endpoint deliberately omits. Used by the admin detail popup.
+func (q *Queries) GetUsageByID(ctx context.Context, id int64) (GetUsageByIDRow, error) {
+	row := q.db.QueryRow(ctx, getUsageByID, id)
+	var i GetUsageByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.ProviderID,
+		&i.Model,
+		&i.PromptTokens,
+		&i.CompletionTokens,
+		&i.TotalTokens,
+		&i.LatencyMs,
+		&i.StatusCode,
+		&i.ErrorMessage,
+		&i.RequestPath,
+		&i.CreatedAt,
+		&i.RequestBody,
+		&i.ResponseBody,
+		&i.ProviderName,
+	)
+	return i, err
+}
+
 const listProviders = `-- name: ListProviders :many
 SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled FROM llm_providers ORDER BY name ASC
 `
@@ -203,7 +253,7 @@ func (q *Queries) ListProviders(ctx context.Context) ([]LlmProvider, error) {
 }
 
 const listUsage = `-- name: ListUsage :many
-SELECT u.id, u.session_id, u.provider_id, u.model, u.prompt_tokens, u.completion_tokens, u.total_tokens, u.latency_ms, u.status_code, u.error_message, u.request_path, u.created_at, p.name AS provider_name
+SELECT u.id, u.session_id, u.provider_id, u.model, u.prompt_tokens, u.completion_tokens, u.total_tokens, u.latency_ms, u.status_code, u.error_message, u.request_path, u.created_at, u.request_body, u.response_body, p.name AS provider_name
 FROM llm_usage_log u
 JOIN llm_providers p ON p.id = u.provider_id
 WHERE ($1::BIGINT IS NULL OR u.provider_id = $1)
@@ -233,6 +283,8 @@ type ListUsageRow struct {
 	ErrorMessage     string
 	RequestPath      string
 	CreatedAt        pgtype.Timestamptz
+	RequestBody      string
+	ResponseBody     string
 	ProviderName     string
 }
 
@@ -263,6 +315,8 @@ func (q *Queries) ListUsage(ctx context.Context, arg ListUsageParams) ([]ListUsa
 			&i.ErrorMessage,
 			&i.RequestPath,
 			&i.CreatedAt,
+			&i.RequestBody,
+			&i.ResponseBody,
 			&i.ProviderName,
 		); err != nil {
 			return nil, err
@@ -279,7 +333,8 @@ const recordUsage = `-- name: RecordUsage :exec
 INSERT INTO llm_usage_log (
     session_id, provider_id, model,
     prompt_tokens, completion_tokens, total_tokens,
-    latency_ms, status_code, error_message, request_path
+    latency_ms, status_code, error_message, request_path,
+    request_body, response_body
 ) VALUES (
     $1,
     $2,
@@ -290,7 +345,9 @@ INSERT INTO llm_usage_log (
     $7,
     $8,
     $9,
-    $10
+    $10,
+    $11,
+    $12
 )
 `
 
@@ -305,6 +362,8 @@ type RecordUsageParams struct {
 	StatusCode       int32
 	ErrorMessage     string
 	RequestPath      string
+	RequestBody      string
+	ResponseBody     string
 }
 
 func (q *Queries) RecordUsage(ctx context.Context, arg RecordUsageParams) error {
@@ -319,6 +378,8 @@ func (q *Queries) RecordUsage(ctx context.Context, arg RecordUsageParams) error 
 		arg.StatusCode,
 		arg.ErrorMessage,
 		arg.RequestPath,
+		arg.RequestBody,
+		arg.ResponseBody,
 	)
 	return err
 }
