@@ -234,6 +234,7 @@
       "neverHeartbeat": "never",
       "offline": "offline",
       "remove": "Remove",
+      "removeFailed": "Remove failed",
       "removeConfirm": "Permanently remove runner \"{name}\"? Historical sessions stay but lose their runner pointer. This cannot be undone.",
       "removeFailed": "Remove failed",
       "enrollTitle": "Enrollment token (shown once)",

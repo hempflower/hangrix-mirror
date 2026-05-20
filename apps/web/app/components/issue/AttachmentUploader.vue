@@ -91,6 +91,7 @@ async function onFileSelected(e: Event) {
 }
 
 const deleting = ref<Set<number>>(new Set())
+const deleteErrors = ref<Record<number, string>>({})
 
 async function removeAttachment(att: IssueAttachment) {
   deleting.value.add(att.id)
@@ -99,9 +100,12 @@ async function removeAttachment(att: IssueAttachment) {
       `/api/repos/${props.owner}/${props.name}/issues/${props.issueNumber}/attachments/${att.id}`,
       { method: 'DELETE', credentials: 'include' },
     )
-    attachments.value = attachments.value.filter((a) => a.id !== att.id)
-  } catch {
-    // Keep the attachment in the list — server may have rejected the delete
+  attachments.value = attachments.value.filter((a) => a.id !== att.id)
+  delete deleteErrors.value[att.id]
+  } catch (e: any) {
+    // Keep the attachment in the list — server rejected the delete
+    deleteErrors.value[att.id] =
+      e?.data?.error ?? t('issue.attachment.removeFailed')
   } finally {
     deleting.value.delete(att.id)
   }
@@ -158,35 +162,44 @@ function formatSize(bytes: number): string {
 
     <!-- Uploaded attachments list -->
     <ul v-if="attachments.length > 0" class="space-y-1">
-      <li
-        v-for="att in attachments"
-        :key="att.id"
-        class="flex items-center gap-2 rounded border bg-muted/30 px-2.5 py-1.5 text-xs"
-      >
-        <component :is="kindIcon(att.kind)" class="size-3.5 shrink-0 text-muted-foreground" />
-        <span class="min-w-0 flex-1 truncate font-mono">{{ att.original_name }}</span>
-        <span class="shrink-0 text-muted-foreground">{{ formatSize(att.size_bytes) }}</span>
-        <Button
-          variant="ghost"
-          size="icon"
-          class="size-6 text-muted-foreground hover:text-foreground"
-          :title="t('issue.attachment.insert')"
-          @click="insertAttachment(att)"
-        >
-          <Plus class="size-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          class="size-6 text-muted-foreground hover:text-destructive"
-          :title="t('issue.attachment.remove')"
-          :disabled="deleting.has(att.id)"
-          @click="removeAttachment(att)"
-        >
-          <Loader2 v-if="deleting.has(att.id)" class="size-3.5 animate-spin" />
-          <X v-else class="size-3.5" />
-        </Button>
-      </li>
+  <li
+  v-for="att in attachments"
+  :key="att.id"
+  class="rounded border bg-muted/30 px-2.5 py-1.5 text-xs"
+  >
+  <div class="flex items-center gap-2">
+  <component :is="kindIcon(att.kind)" class="size-3.5 shrink-0 text-muted-foreground" />
+  <span class="min-w-0 flex-1 truncate font-mono">{{ att.original_name }}</span>
+  <span class="shrink-0 text-muted-foreground">{{ formatSize(att.size_bytes) }}</span>
+  <Button
+  variant="ghost"
+  size="icon"
+  class="size-6 text-muted-foreground hover:text-foreground"
+  :title="t('issue.attachment.insert')"
+  @click="insertAttachment(att)"
+  >
+  <Plus class="size-3.5" />
+  </Button>
+  <Button
+  variant="ghost"
+  size="icon"
+  class="size-6 text-muted-foreground hover:text-destructive"
+  :title="t('issue.attachment.remove')"
+  :disabled="deleting.has(att.id)"
+  @click="removeAttachment(att)"
+  >
+  <Loader2 v-if="deleting.has(att.id)" class="size-3.5 animate-spin" />
+  <X v-else class="size-3.5" />
+  </Button>
+  </div>
+  <p
+  v-if="deleteErrors[att.id]"
+  class="mt-1 flex items-center gap-1 text-destructive"
+  >
+  <AlertCircle class="size-3" />
+  {{ deleteErrors[att.id] }}
+  </p>
+  </li>
     </ul>
   </div>
 </template>
