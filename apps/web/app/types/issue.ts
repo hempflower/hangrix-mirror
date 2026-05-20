@@ -117,6 +117,9 @@ export interface IssueAttachment {
   author_id: number | null
   agent_role: string
   original_name: string
+  display_name: string
+  inline: boolean
+
   size_bytes: number
   mime_type: string
   detected_mime_type: string
