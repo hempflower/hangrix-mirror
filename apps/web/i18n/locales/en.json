@@ -13,6 +13,7 @@
     "llmProviders": "LLM providers",
     "runners": "Runners",
     "llmUsage": "LLM usage",
+    "dashboard": "Dashboard",
     "agentSessions": "Agent sessions",
     "logout": "Logout",
     "toggleSidebar": "Toggle sidebar",
@@ -320,6 +321,49 @@
         "created": "Created",
         "duration": "Duration",
         "error": "Error"
+      }
+    },
+    "dashboard": {
+      "title": "Dashboard",
+      "subtitle": "At-a-glance platform metrics: calls, tokens, sessions, and runner health.",
+      "loadFailed": "Failed to load dashboard data",
+      "applyFilters": "Apply filters",
+      "empty": "No data for the selected range",
+      "emptyHint": "Try a different time range or provider filter.",
+      "emptyChart": "No chart data",
+      "emptyProviders": "No provider data",
+      "emptyFailures": "No recent failures",
+      "range7d": "Last 7 days",
+      "range30d": "Last 30 days",
+      "rangeCustom": "Custom range",
+      "kpiCalls": "Total calls",
+      "kpiTokens": "Total tokens",
+      "kpiSessions": "Active sessions",
+      "kpiRunners": "Runners online",
+      "chartCallsTitle": "Daily calls",
+      "chartCalls": "Calls",
+      "chartTokensTitle": "Daily token usage",
+      "chartTotalTokens": "Total tokens",
+      "chartPromptTokens": "Prompt tokens",
+      "chartCompletionTokens": "Completion tokens",
+      "providerRanking": "Provider ranking",
+      "runnerHealth": "Runner health",
+      "healthOnline": "Online",
+      "healthOffline": "Offline",
+      "healthDisabled": "Disabled",
+      "healthLiveSessions": "Live sessions",
+      "recentFailures": "Recent failures",
+      "filters": {
+        "range": "Time range",
+        "since": "Since",
+        "until": "Until",
+        "provider": "Provider",
+        "providerAny": "Any provider"
+      },
+      "cols": {
+        "provider": "Provider",
+        "calls": "Calls",
+        "tokens": "Tokens"
       }
     }
   },
