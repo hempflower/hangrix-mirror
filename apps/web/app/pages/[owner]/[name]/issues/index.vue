@@ -39,7 +39,7 @@ function parseTab(s: string | undefined): TabValue {
 }
 function parsePage(p: string | undefined): number {
   const n = Number(p)
-  return Number.isInteger(n) && n >= 1 ? n : 1
+  return Number.isFinite(n) && n >= 1 ? n : 1
 }
 
 // URL is the source of truth for state and page
