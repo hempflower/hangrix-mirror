@@ -32,7 +32,11 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -133,6 +137,68 @@ func (c *Client) Call(ctx context.Context, name string, args json.RawMessage) (t
 	return "", false, lastErr
 }
 
+// PostMultipart POSTs a raw body (with the given Content-Type) to
+// <base>/<name>. Used for multipart file uploads where the body is not
+// JSON. The body is small enough to buffer in memory (max 64 MiB + form
+// overhead) so retries are cheap — we re-create the reader from the
+// byte slice each attempt.
+//
+// Retry policy mirrors Call: 3-attempt exponential backoff on transport
+// errors and 5xx. 4xx is terminal.
+func (c *Client) PostMultipart(ctx context.Context, name string, body []byte, contentType string) (text string, isError bool, err error) {
+	url := c.baseURL + "/" + name
+
+	const maxAttempts = 3
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			delay := time.Duration(math.Pow(2, float64(attempt-1))*500) * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return "", false, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return "", false, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.token)
+		req.Header.Set("Content-Type", contentType)
+		req.Header.Set("Accept", "application/json")
+		resp, err := c.http.Do(req)
+		if err != nil {
+			lastErr = err
+			if ctx.Err() != nil {
+				return "", false, ctx.Err()
+			}
+			continue
+		}
+		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if resp.StatusCode >= 500 {
+			lastErr = fmt.Errorf("platform tool %q: http %d: %s", name, resp.StatusCode, truncate(respBody, 256))
+			continue
+		}
+		if resp.StatusCode >= 400 {
+			return "", false, fmt.Errorf("platform tool %q: http %d: %s", name, resp.StatusCode, truncate(respBody, 512))
+		}
+		var out callResponse
+		if err := json.Unmarshal(respBody, &out); err != nil {
+			return "", false, fmt.Errorf("platform tool %q: decode response: %w", name, err)
+		}
+		return out.Text, out.IsError, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("platform tool: exhausted retries")
+	}
+	return "", false, lastErr
+}
+
 func truncate(b []byte, n int) string {
 	if len(b) <= n {
 		return string(b)
@@ -175,6 +241,131 @@ func (t *Tool) Call(ctx context.Context, args json.RawMessage) (any, error) {
 	// it parses, forward the structured value so the LLM sees nice
 	// nested JSON rather than an escaped string. Plain-text payloads
 	// (rare — issue_close returns one) fall through as a string.
+	var parsed any
+	if err := json.Unmarshal([]byte(text), &parsed); err == nil {
+		return parsed, nil
+	}
+	return text, nil
+}
+
+// attachmentTool is like Tool but reads the file from the local workspace
+// and sends it as multipart/form-data (real file upload — no base64
+// encoding) to the server. The server-side handler receives the file
+// bytes as a "file" form part plus metadata fields.
+//
+// Paths are resolved against the workspace root (/workspace) with
+// symlink-target containment — any path that resolves outside the
+// workspace (including via symlink) is rejected to prevent secret
+// exfiltration.
+//
+// The LLM-facing descriptor is identical to a plain Tool — the agent
+// only knows it passes a "path" and gets back attachment metadata.
+type attachmentTool struct {
+	name        string
+	description string
+	schema      map[string]any
+	client      *Client
+}
+
+func (t *attachmentTool) Name() string           { return t.name }
+func (t *attachmentTool) Description() string    { return t.description }
+func (t *attachmentTool) Schema() map[string]any { return t.schema }
+
+// maxAttachmentBytes is the maximum file size the agent will read and
+// upload (64 MiB, matching the server-side limit).
+const maxAttachmentBytes = 64 << 20
+
+// workspaceRoot is the agent container's working tree mount point.
+const workspaceRoot = "/workspace"
+
+// resolveWorkspacePath resolves a user-supplied path (relative or
+// absolute) to a real, symlink-resolved absolute path that MUST fall
+// within workspaceRoot.  Returns an error if the path is outside the
+// workspace, is a symlink that escapes, or cannot be resolved.
+func resolveWorkspacePath(p string) (string, error) {
+	p = filepath.Clean(p)
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(workspaceRoot, p)
+	}
+
+	// Ensure the original path (before symlink resolution) is within workspace.
+	if !strings.HasPrefix(p, workspaceRoot+"/") && p != workspaceRoot {
+		return "", fmt.Errorf("path %q is outside workspace", p)
+	}
+	// Resolve symlinks to get the real on-disk target.
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return "", fmt.Errorf("resolve path %q: %w", p, err)
+	}
+	// Containment: the resolved path must be inside workspaceRoot.
+	rel, err := filepath.Rel(workspaceRoot, resolved)
+	if err != nil {
+		return "", fmt.Errorf("path %q resolves outside workspace", p)
+	}
+	if strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("path %q resolves outside workspace", p)
+	}
+	return resolved, nil
+}
+
+func (t *attachmentTool) Call(ctx context.Context, args json.RawMessage) (any, error) {
+	var req struct {
+		Path        string `json:"path"`
+		DisplayName string `json:"display_name"`
+		Inline      bool   `json:"inline"`
+		CommentID   int64  `json:"comment_id"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, fmt.Errorf("issue_attachment_upload: parse arguments: %w. Pass a JSON object with at least \"path\".", err)
+	}
+	req.Path = strings.TrimSpace(req.Path)
+	if req.Path == "" {
+		return nil, fmt.Errorf("issue_attachment_upload: path is required. Provide a workspace-relative or absolute path to the file to upload.")
+	}
+
+	safePath, err := resolveWorkspacePath(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("issue_attachment_upload: %w. Only files inside the workspace can be uploaded.", err)
+	}
+
+	data, err := os.ReadFile(safePath)
+	if err != nil {
+		return nil, fmt.Errorf("issue_attachment_upload: cannot read file %q: %w. Check that the path exists and is a regular file in the workspace.", req.Path, err)
+	}
+	if len(data) > maxAttachmentBytes {
+		return nil, fmt.Errorf("issue_attachment_upload: file %q is %d bytes, exceeds the %d MiB limit. Consider compressing or splitting the file before uploading.", req.Path, len(data), maxAttachmentBytes>>20)
+	}
+
+	// Build multipart/form-data body with the file bytes and metadata.
+	// This is a real binary file upload — no base64 overhead.
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+
+	fw, err := w.CreateFormFile("file", filepath.Base(req.Path))
+	if err != nil {
+		return nil, fmt.Errorf("issue_attachment_upload: build multipart form: %w", err)
+	}
+	if _, err := fw.Write(data); err != nil {
+		return nil, fmt.Errorf("issue_attachment_upload: write file part: %w", err)
+	}
+	if req.DisplayName != "" {
+		_ = w.WriteField("display_name", req.DisplayName)
+	}
+	_ = w.WriteField("inline", strconv.FormatBool(req.Inline))
+	if req.CommentID != 0 {
+		_ = w.WriteField("comment_id", strconv.FormatInt(req.CommentID, 10))
+	}
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("issue_attachment_upload: close multipart writer: %w", err)
+	}
+
+	text, isError, err := t.client.PostMultipart(ctx, t.name, body.Bytes(), w.FormDataContentType())
+	if err != nil {
+		return nil, err
+	}
+	if isError {
+		return map[string]any{"is_error": true, "text": text}, nil
+	}
 	var parsed any
 	if err := json.Unmarshal([]byte(text), &parsed); err == nil {
 		return parsed, nil
@@ -280,58 +471,34 @@ func All(client *Client) []local.Tool {
 			}, []string{"session_id"}),
 		},
 		{
-			name:        "release_create",
-			description: "Create a new release in draft state from an existing git tag. The tag must already exist in the repo.",
+			name:        "issue_attachment_upload",
+			description: "Upload a file from the workspace as an issue attachment. Returns attachment metadata including an `attachment_id` and `markdown_snippet` — use `issue_comment` to insert the snippet into a comment body. `path` must be a workspace-relative or absolute path to an existing file. Set `inline` to true for images/videos you want rendered inline (produces `![attachment:N]` syntax); false / omitted produces `[attachment:N]` link syntax.",
 			schema: objectSchema(map[string]any{
-				"tag_name": stringProp("The existing git tag to create the release from (required)."),
-				"title":    stringProp("Optional release title. Defaults to the tag name if omitted."),
-				"notes":    stringProp("Optional release notes (markdown)."),
-			}, []string{"tag_name"}),
-		},
-		{
-			name:        "release_upload_asset",
-			description: "Upload a custom asset to a release. The file content must be base64-encoded.",
-			schema: objectSchema(map[string]any{
-				"release_id":   intProp("The release ID to attach the asset to (required)."),
-				"name":         stringProp("Asset file name (required)."),
-				"content":      stringProp("Base64-encoded file content (required)."),
-				"content_type": stringProp("Optional MIME type. Defaults to application/octet-stream."),
-			}, []string{"release_id", "name", "content"}),
-		},
-		{
-			name:        "release_publish",
-			description: "Publish a draft release, making it visible as an official release with a published_at timestamp.",
-			schema: objectSchema(map[string]any{
-				"release_id": intProp("The release ID to publish (required)."),
-			}, []string{"release_id"}),
-		},
-		{
-			name:        "release_update",
-			description: "Edit an existing release's metadata (title, notes). The tag_name can only be changed while the release is still a draft.",
-			schema: objectSchema(map[string]any{
-				"release_id": intProp("The release ID to update (required)."),
-				"title":      stringProp("Optional new release title."),
-				"notes":      stringProp("Optional new release notes (markdown)."),
-				"tag_name":   stringProp("Optional new tag name. Only mutable when the release is still a draft."),
-			}, []string{"release_id"}),
-		},
-		{
-			name:        "release_delete",
-			description: "Delete a release and all of its custom assets. Derived source archives (zip/tar.gz) are not separately stored and do not need cleanup.",
-			schema: objectSchema(map[string]any{
-				"release_id": intProp("The release ID to delete (required)."),
-			}, []string{"release_id"}),
+				"path":         stringProp("Workspace-relative or absolute path to the file to upload. Required."),
+				"display_name": stringProp("Optional display name for the attachment. Defaults to the file's basename."),
+				"inline":       boolProp("When true, produces inline syntax `![attachment:N]` for images/videos. Default false."),
+				"comment_id":   intProp("Optional comment ID to bind the attachment to an existing comment."),
+			}, []string{"path"}),
 		},
 
 	}
 	out := make([]local.Tool, 0, len(descriptors))
 	for _, d := range descriptors {
-		out = append(out, &Tool{
-			name:        d.name,
-			description: d.description,
-			schema:      d.schema,
-			client:      client,
-		})
+		if d.name == "issue_attachment_upload" {
+			out = append(out, &attachmentTool{
+				name:        d.name,
+				description: d.description,
+				schema:      d.schema,
+				client:      client,
+			})
+		} else {
+			out = append(out, &Tool{
+				name:        d.name,
+				description: d.description,
+				schema:      d.schema,
+				client:      client,
+			})
+		}
 	}
 	return out
 }

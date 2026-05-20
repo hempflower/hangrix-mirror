@@ -34,6 +34,7 @@ import (
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
+	issueservice "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/service"
 	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	repoinfra "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/infra"
@@ -57,6 +58,7 @@ type Handler struct {
 	archiver   agentsessiondomain.Archiver
 	auditor    agentsessiondomain.Auditor
 	controller agentsessiondomain.Controller
+	attachments *issueservice.AttachmentService
 }
 
 type HandlerDeps struct {
@@ -76,6 +78,8 @@ type HandlerDeps struct {
 	Archiver   agentsessiondomain.Archiver
 	Auditor    agentsessiondomain.Auditor
 	Controller agentsessiondomain.Controller
+	// Attachments is the attachment service (validation, hashing, storage).
+	Attachments *issueservice.AttachmentService
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
@@ -92,6 +96,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		archiver:   deps.Archiver,
 		auditor:    deps.Auditor,
 		controller: deps.Controller,
+		attachments: deps.Attachments,
 	}
 }
 
@@ -122,6 +127,12 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		// Per-session controls. Stop/resume need the issue's manage
 		// permission so any repo reader can't kill another user's
 		// running agent; the existing canManage gate is the same one
+		// Attachments (upload, list, download, delete).
+		r.Post("/{number}/attachments", h.createAttachment)
+		r.Get("/{number}/attachments", h.listAttachments)
+		r.Get("/{number}/attachments/{id}", h.getAttachment)
+		r.Delete("/{number}/attachments/{id}", h.deleteAttachment)
+
 		// merge uses.
 		r.Post("/{number}/agent-sessions/{sid}/stop", h.stopAgentSession)
 		r.Post("/{number}/agent-sessions/{sid}/resume", h.resumeAgentSession)

@@ -108,3 +108,26 @@ export interface TitleChangedPayload {
   from: string
   to: string
 }
+
+export interface IssueAttachment {
+  id: number
+  repo_id: number
+  issue_id: number
+  comment_id: number | null
+  author_id: number | null
+  agent_role: string
+  storage_key: string
+  original_name: string
+  size_bytes: number
+  mime_type: string
+  detected_mime_type: string
+  sha256: string
+  kind: 'image' | 'video' | 'archive' | 'text' | 'binary'
+  status: 'uploaded' | 'attached' | 'deleted'
+  created_at: string
+  deleted_at: string | null
+  download_url: string
+  preview_url: string
+  markdown_snippet: string
+}
+

@@ -729,6 +729,17 @@
         "requestChanges": "{n} requested changes",
         "abstain": "{n} abstained"
       }
+    },
+    "attachment": {
+      "attachFile": "Attach file",
+      "uploading": "Uploading…",
+      "uploadFailed": "Upload failed",
+      "insert": "Insert into comment",
+      "remove": "Remove",
+      "deleted": "Attachment \"{name}\" has been deleted",
+      "unknown": "Unknown attachment #{id}",
+      "insertBtn": "Attach",
+      "download": "Download"
     }
   },
   "release": {

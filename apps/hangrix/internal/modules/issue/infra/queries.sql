@@ -190,3 +190,65 @@ FROM issue_events e
 LEFT JOIN users u ON u.id = e.actor_id
 WHERE e.issue_id = sqlc.arg('issue_id')
 ORDER BY e.created_at, e.id;
+
+-- ---- issue_attachments ----
+
+-- name: CreateAttachment :one
+-- Human path: sqlc.narg('author_id'), agent_role=''
+-- Agent path: author_id=NULL (omit), agent_role with the role key.
+INSERT INTO issue_attachments (
+    repo_id, issue_id, author_id, agent_role, storage_key,
+    original_name, size_bytes, mime_type, detected_mime_type,
+    sha256, kind, status
+)
+VALUES (
+    sqlc.arg('repo_id'),
+    sqlc.arg('issue_id'),
+    sqlc.narg('author_id'),
+    sqlc.arg('agent_role'),
+    sqlc.arg('storage_key'),
+    sqlc.arg('original_name'),
+    sqlc.arg('size_bytes'),
+    sqlc.arg('mime_type'),
+    sqlc.arg('detected_mime_type'),
+    sqlc.arg('sha256'),
+    sqlc.arg('kind'),
+    'uploaded'
+)
+RETURNING id, created_at;
+
+-- name: GetAttachment :one
+SELECT a.id, a.repo_id, a.issue_id,
+       COALESCE(a.comment_id, 0)::BIGINT AS comment_id,
+       COALESCE(a.author_id, 0)::BIGINT   AS author_id,
+       a.agent_role, a.storage_key, a.original_name,
+       a.size_bytes, a.mime_type, a.detected_mime_type,
+       a.sha256, a.kind, a.status,
+       a.created_at, a.deleted_at
+FROM issue_attachments a
+WHERE a.id = sqlc.arg('id');
+
+-- name: ListAttachments :many
+SELECT a.id, a.repo_id, a.issue_id,
+       COALESCE(a.comment_id, 0)::BIGINT AS comment_id,
+       COALESCE(a.author_id, 0)::BIGINT   AS author_id,
+       a.agent_role, a.storage_key, a.original_name,
+       a.size_bytes, a.mime_type, a.detected_mime_type,
+       a.sha256, a.kind, a.status,
+       a.created_at, a.deleted_at
+FROM issue_attachments a
+WHERE a.issue_id = sqlc.arg('issue_id')
+  AND a.status <> 'deleted'
+  AND (sqlc.narg('comment_id')::BIGINT IS NULL OR a.comment_id = sqlc.narg('comment_id'))
+ORDER BY a.created_at, a.id;
+
+-- name: MarkAttachmentAttached :exec
+UPDATE issue_attachments
+SET status = 'attached', comment_id = sqlc.arg('comment_id')
+WHERE id = sqlc.arg('id') AND status = 'uploaded';
+
+-- name: SoftDeleteAttachment :exec
+UPDATE issue_attachments
+SET status = 'deleted', deleted_at = NOW()
+WHERE id = sqlc.arg('id') AND status <> 'deleted';
+

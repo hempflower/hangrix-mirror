@@ -29,6 +29,71 @@ func (q *Queries) CountIssues(ctx context.Context, arg CountIssuesParams) (int64
 	return count, err
 }
 
+const createAttachment = `-- name: CreateAttachment :one
+
+INSERT INTO issue_attachments (
+    repo_id, issue_id, author_id, agent_role, storage_key,
+    original_name, size_bytes, mime_type, detected_mime_type,
+    sha256, kind, status
+)
+VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    $10,
+    $11,
+    'uploaded'
+)
+RETURNING id, created_at
+`
+
+type CreateAttachmentParams struct {
+	RepoID           int64
+	IssueID          int64
+	AuthorID         pgtype.Int8
+	AgentRole        string
+	StorageKey       string
+	OriginalName     string
+	SizeBytes        int64
+	MimeType         string
+	DetectedMimeType string
+	Sha256           string
+	Kind             string
+}
+
+type CreateAttachmentRow struct {
+	ID        int64
+	CreatedAt pgtype.Timestamptz
+}
+
+// ---- issue_attachments ----
+// Human path: sqlc.narg('author_id'), agent_role=”
+// Agent path: author_id=NULL (omit), agent_role with the role key.
+func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentParams) (CreateAttachmentRow, error) {
+	row := q.db.QueryRow(ctx, createAttachment,
+		arg.RepoID,
+		arg.IssueID,
+		arg.AuthorID,
+		arg.AgentRole,
+		arg.StorageKey,
+		arg.OriginalName,
+		arg.SizeBytes,
+		arg.MimeType,
+		arg.DetectedMimeType,
+		arg.Sha256,
+		arg.Kind,
+	)
+	var i CreateAttachmentRow
+	err := row.Scan(&i.ID, &i.CreatedAt)
+	return i, err
+}
+
 const createComment = `-- name: CreateComment :one
 
 INSERT INTO issue_comments (
@@ -192,6 +257,61 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Creat
 	return i, err
 }
 
+const getAttachment = `-- name: GetAttachment :one
+SELECT a.id, a.repo_id, a.issue_id,
+       COALESCE(a.comment_id, 0)::BIGINT AS comment_id,
+       COALESCE(a.author_id, 0)::BIGINT   AS author_id,
+       a.agent_role, a.storage_key, a.original_name,
+       a.size_bytes, a.mime_type, a.detected_mime_type,
+       a.sha256, a.kind, a.status,
+       a.created_at, a.deleted_at
+FROM issue_attachments a
+WHERE a.id = $1
+`
+
+type GetAttachmentRow struct {
+	ID               int64
+	RepoID           int64
+	IssueID          int64
+	CommentID        int64
+	AuthorID         int64
+	AgentRole        string
+	StorageKey       string
+	OriginalName     string
+	SizeBytes        int64
+	MimeType         string
+	DetectedMimeType string
+	Sha256           string
+	Kind             string
+	Status           string
+	CreatedAt        pgtype.Timestamptz
+	DeletedAt        pgtype.Timestamptz
+}
+
+func (q *Queries) GetAttachment(ctx context.Context, id int64) (GetAttachmentRow, error) {
+	row := q.db.QueryRow(ctx, getAttachment, id)
+	var i GetAttachmentRow
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.IssueID,
+		&i.CommentID,
+		&i.AuthorID,
+		&i.AgentRole,
+		&i.StorageKey,
+		&i.OriginalName,
+		&i.SizeBytes,
+		&i.MimeType,
+		&i.DetectedMimeType,
+		&i.Sha256,
+		&i.Kind,
+		&i.Status,
+		&i.CreatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getCommentByID = `-- name: GetCommentByID :one
 SELECT c.id, c.issue_id,
        COALESCE(c.author_id, 0)::BIGINT AS author_id,
@@ -335,6 +455,82 @@ func (q *Queries) GetIssueByNumber(ctx context.Context, arg GetIssueByNumberPara
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listAttachments = `-- name: ListAttachments :many
+SELECT a.id, a.repo_id, a.issue_id,
+       COALESCE(a.comment_id, 0)::BIGINT AS comment_id,
+       COALESCE(a.author_id, 0)::BIGINT   AS author_id,
+       a.agent_role, a.storage_key, a.original_name,
+       a.size_bytes, a.mime_type, a.detected_mime_type,
+       a.sha256, a.kind, a.status,
+       a.created_at, a.deleted_at
+FROM issue_attachments a
+WHERE a.issue_id = $1
+  AND a.status <> 'deleted'
+  AND ($2::BIGINT IS NULL OR a.comment_id = $2)
+ORDER BY a.created_at, a.id
+`
+
+type ListAttachmentsParams struct {
+	IssueID   int64
+	CommentID pgtype.Int8
+}
+
+type ListAttachmentsRow struct {
+	ID               int64
+	RepoID           int64
+	IssueID          int64
+	CommentID        int64
+	AuthorID         int64
+	AgentRole        string
+	StorageKey       string
+	OriginalName     string
+	SizeBytes        int64
+	MimeType         string
+	DetectedMimeType string
+	Sha256           string
+	Kind             string
+	Status           string
+	CreatedAt        pgtype.Timestamptz
+	DeletedAt        pgtype.Timestamptz
+}
+
+func (q *Queries) ListAttachments(ctx context.Context, arg ListAttachmentsParams) ([]ListAttachmentsRow, error) {
+	rows, err := q.db.Query(ctx, listAttachments, arg.IssueID, arg.CommentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAttachmentsRow{}
+	for rows.Next() {
+		var i ListAttachmentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepoID,
+			&i.IssueID,
+			&i.CommentID,
+			&i.AuthorID,
+			&i.AgentRole,
+			&i.StorageKey,
+			&i.OriginalName,
+			&i.SizeBytes,
+			&i.MimeType,
+			&i.DetectedMimeType,
+			&i.Sha256,
+			&i.Kind,
+			&i.Status,
+			&i.CreatedAt,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listComments = `-- name: ListComments :many
@@ -635,6 +831,22 @@ func (q *Queries) ListOpenIssueNumbers(ctx context.Context, repoID int64) ([]int
 	return items, nil
 }
 
+const markAttachmentAttached = `-- name: MarkAttachmentAttached :exec
+UPDATE issue_attachments
+SET status = 'attached', comment_id = $1
+WHERE id = $2 AND status = 'uploaded'
+`
+
+type MarkAttachmentAttachedParams struct {
+	CommentID pgtype.Int8
+	ID        int64
+}
+
+func (q *Queries) MarkAttachmentAttached(ctx context.Context, arg MarkAttachmentAttachedParams) error {
+	_, err := q.db.Exec(ctx, markAttachmentAttached, arg.CommentID, arg.ID)
+	return err
+}
+
 const nextIssueNumber = `-- name: NextIssueNumber :one
 
 INSERT INTO issue_counters (repo_id, next)
@@ -653,6 +865,17 @@ func (q *Queries) NextIssueNumber(ctx context.Context, repoID int64) (int64, err
 	var number int64
 	err := row.Scan(&number)
 	return number, err
+}
+
+const softDeleteAttachment = `-- name: SoftDeleteAttachment :exec
+UPDATE issue_attachments
+SET status = 'deleted', deleted_at = NOW()
+WHERE id = $1 AND status <> 'deleted'
+`
+
+func (q *Queries) SoftDeleteAttachment(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, softDeleteAttachment, id)
+	return err
 }
 
 const updateIssueHeadSHA = `-- name: UpdateIssueHeadSHA :exec

@@ -445,3 +445,122 @@ func eventFromGet(r issuedb.GetEventByIDRow) *domain.Event {
 		CreatedAt: r.CreatedAt.Time,
 	}
 }
+
+
+// --- domain.AttachmentStore implementation ---
+
+func (s *PostgresStore) CreateAttachment(ctx context.Context, repoID, issueID, authorID int64, agentRole, storageKey, originalName string, sizeBytes int64, mimeType, detectedMimeType, sha256 string, kind domain.AttachmentKind) (*domain.Attachment, error) {
+	var authorArg pgtype.Int8
+	if authorID > 0 {
+		authorArg = pgtype.Int8{Int64: authorID, Valid: true}
+	}
+	row, err := s.q.CreateAttachment(ctx, issuedb.CreateAttachmentParams{
+		RepoID:           repoID,
+		IssueID:          issueID,
+		AuthorID:         authorArg,
+		AgentRole:        agentRole,
+		StorageKey:       storageKey,
+		OriginalName:     originalName,
+		SizeBytes:        sizeBytes,
+		MimeType:         mimeType,
+		DetectedMimeType: detectedMimeType,
+		Sha256:           sha256,
+		Kind:             string(kind),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create attachment: %w", err)
+	}
+	return s.GetAttachment(ctx, row.ID)
+}
+
+func (s *PostgresStore) GetAttachment(ctx context.Context, id int64) (*domain.Attachment, error) {
+	row, err := s.q.GetAttachment(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrAttachmentNotFound
+		}
+		return nil, err
+	}
+	return attachmentFromRow(row), nil
+}
+
+func (s *PostgresStore) ListAttachments(ctx context.Context, issueID, commentID int64) ([]*domain.Attachment, error) {
+	var cid pgtype.Int8
+	if commentID > 0 {
+		cid = pgtype.Int8{Int64: commentID, Valid: true}
+	}
+	rows, err := s.q.ListAttachments(ctx, issuedb.ListAttachmentsParams{
+		IssueID:   issueID,
+		CommentID: cid,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*domain.Attachment, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, attachmentFromList(r))
+	}
+	return out, nil
+}
+
+func (s *PostgresStore) MarkAttached(ctx context.Context, id int64, commentID int64) error {
+	return s.q.MarkAttachmentAttached(ctx, issuedb.MarkAttachmentAttachedParams{
+		ID:        id,
+		CommentID: pgtype.Int8{Int64: commentID, Valid: true},
+	})
+}
+
+func (s *PostgresStore) SoftDeleteAttachment(ctx context.Context, id int64) error {
+	return s.q.SoftDeleteAttachment(ctx, id)
+}
+
+func attachmentFromRow(r issuedb.GetAttachmentRow) *domain.Attachment {
+	a := &domain.Attachment{
+		ID:               r.ID,
+		RepoID:           r.RepoID,
+		IssueID:          r.IssueID,
+		CommentID:        r.CommentID,
+		AuthorID:         r.AuthorID,
+		AgentRole:        r.AgentRole,
+		StorageKey:       r.StorageKey,
+		OriginalName:     r.OriginalName,
+		SizeBytes:        r.SizeBytes,
+		MimeType:         r.MimeType,
+		DetectedMimeType: r.DetectedMimeType,
+		SHA256:           r.Sha256,
+		Kind:             domain.AttachmentKind(r.Kind),
+		Status:           domain.AttachmentStatus(r.Status),
+		CreatedAt:        r.CreatedAt.Time,
+	}
+	if r.DeletedAt.Valid {
+		t := r.DeletedAt.Time
+		a.DeletedAt = &t
+	}
+	return a
+}
+
+func attachmentFromList(r issuedb.ListAttachmentsRow) *domain.Attachment {
+	a := &domain.Attachment{
+		ID:               r.ID,
+		RepoID:           r.RepoID,
+		IssueID:          r.IssueID,
+		CommentID:        r.CommentID,
+		AuthorID:         r.AuthorID,
+		AgentRole:        r.AgentRole,
+		StorageKey:       r.StorageKey,
+		OriginalName:     r.OriginalName,
+		SizeBytes:        r.SizeBytes,
+		MimeType:         r.MimeType,
+		DetectedMimeType: r.DetectedMimeType,
+		SHA256:           r.Sha256,
+		Kind:             domain.AttachmentKind(r.Kind),
+		Status:           domain.AttachmentStatus(r.Status),
+		CreatedAt:        r.CreatedAt.Time,
+	}
+	if r.DeletedAt.Valid {
+		t := r.DeletedAt.Time
+		a.DeletedAt = &t
+	}
+	return a
+}
+

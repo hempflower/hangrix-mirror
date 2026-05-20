@@ -39,6 +39,25 @@ type Issue struct {
 	AgentRole      string
 }
 
+type IssueAttachment struct {
+	ID               int64
+	RepoID           int64
+	IssueID          int64
+	CommentID        pgtype.Int8
+	AuthorID         pgtype.Int8
+	AgentRole        string
+	StorageKey       string
+	OriginalName     string
+	SizeBytes        int64
+	MimeType         string
+	DetectedMimeType string
+	Sha256           string
+	Kind             string
+	Status           string
+	CreatedAt        pgtype.Timestamptz
+	DeletedAt        pgtype.Timestamptz
+}
+
 type IssueComment struct {
 	ID        int64
 	IssueID   int64

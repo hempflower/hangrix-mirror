@@ -48,8 +48,9 @@ import (
 // outer envelope so a stuck tool doesn't pin a session thread.
 const callTimeout = 60 * time.Second
 
-// maxRequestBody bounds the JSON arg payload. The biggest expected case
-// is a `issue_comment` with a long body; 1 MiB is generous.
+// maxRequestBody bounds the JSON arg payload for non-multipart tools.
+// Multipart file uploads (issue_attachment_upload) use ParseMultipartForm
+// with their own budget and are not constrained by this limit.
 const maxRequestBody = 1 << 20
 
 // Registry is the subset of *service.Registry the handler needs.
@@ -59,6 +60,11 @@ const maxRequestBody = 1 << 20
 type Registry interface {
 	ByName(name string) *platformmcpdomain.Tool
 	FilterForSession(sess *runnerdomain.AgentSession) []*platformmcpdomain.Tool
+	// UploadAttachment handles multipart file upload for the
+	// issue_attachment_upload tool. It receives the raw file bytes and
+	// metadata parsed from the multipart form, loads the session scope,
+	// and delegates to the attachment service.
+	UploadAttachment(ctx context.Context, sess *runnerdomain.AgentSession, fileBytes []byte, name, displayName string, inline bool, commentID int64) (platformmcpdomain.Result, error)
 }
 
 type Handler struct {
@@ -175,22 +181,6 @@ func (h *Handler) call(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "tool name required")
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBody+1))
-	if err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, "read body: "+err.Error())
-		return
-	}
-	if int64(len(body)) > maxRequestBody {
-		httpx.WriteError(w, http.StatusRequestEntityTooLarge, "request body too large")
-		return
-	}
-	// Empty body and whitespace-only body both map to "no args". The tool
-	// impls themselves accept `{}` for the no-arg case (see unmarshalArgs
-	// in service/tools_write.go).
-	args := json.RawMessage(body)
-	if len(args) == 0 || strings.TrimSpace(string(args)) == "" {
-		args = json.RawMessage(`{}`)
-	}
 
 	if !service.CanCallTool(sess, name) {
 		httpx.WriteJSON(w, http.StatusOK, callResponse{
@@ -210,6 +200,36 @@ func (h *Handler) call(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), callTimeout)
 	defer cancel()
+
+	// issue_attachment_upload with multipart/form-data: parse the file
+	// part and metadata fields, then call the attachment upload directly.
+	// This bypasses JSON tool args entirely — no base64 encoding/decoding.
+	if name == "issue_attachment_upload" && strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		res := h.handleMultipartUpload(ctx, sess, r)
+		httpx.WriteJSON(w, http.StatusOK, callResponse{
+			IsError: res.IsError,
+			Text:    res.Text,
+		})
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBody+1))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "read body: "+err.Error())
+		return
+	}
+	if int64(len(body)) > maxRequestBody {
+		httpx.WriteError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		return
+	}
+	// Empty body and whitespace-only body both map to "no args". The tool
+	// impls themselves accept `{}` for the no-arg case (see unmarshalArgs
+	// in service/tools_write.go).
+	args := json.RawMessage(body)
+	if len(args) == 0 || strings.TrimSpace(string(args)) == "" {
+		args = json.RawMessage(`{}`)
+	}
+
 	res, err := tool.Call(ctx, sess, args)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
@@ -219,4 +239,57 @@ func (h *Handler) call(w http.ResponseWriter, r *http.Request) {
 		IsError: res.IsError,
 		Text:    res.Text,
 	})
+}
+
+// handleMultipartUpload parses a multipart/form-data request for
+// issue_attachment_upload. Expected parts: file (binary, required),
+// display_name, inline, comment_id. Delegates to the registry's
+// UploadAttachment which handles scope loading and service call.
+func (h *Handler) handleMultipartUpload(ctx context.Context, sess *runnerdomain.AgentSession, r *http.Request) platformmcpdomain.Result {
+	// 1 MiB for metadata fields; the file part may spill to disk.
+	if err := r.ParseMultipartForm(1 << 20); err != nil {
+		return platformmcpdomain.Result{
+			IsError: true,
+			Text:    "issue_attachment_upload: parse multipart form: " + err.Error(),
+		}
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		return platformmcpdomain.Result{
+			IsError: true,
+			Text:    "issue_attachment_upload: missing or invalid 'file' part: " + err.Error(),
+		}
+	}
+	defer file.Close()
+
+	fileBytes, err := io.ReadAll(file)
+	if err != nil {
+		return platformmcpdomain.Result{
+			IsError: true,
+			Text:    "issue_attachment_upload: read file: " + err.Error(),
+		}
+	}
+
+	name := header.Filename
+	displayName := strings.TrimSpace(r.FormValue("display_name"))
+	inline := strings.TrimSpace(r.FormValue("inline")) == "true"
+	commentID := int64(0)
+	if raw := strings.TrimSpace(r.FormValue("comment_id")); raw != "" {
+		if n, err := fmt.Sscanf(raw, "%d", &commentID); err != nil || n != 1 {
+			return platformmcpdomain.Result{
+				IsError: true,
+				Text:    "issue_attachment_upload: invalid comment_id: " + raw,
+			}
+		}
+	}
+
+	res, err := h.registry.UploadAttachment(ctx, sess, fileBytes, name, displayName, inline, commentID)
+	if err != nil {
+		return platformmcpdomain.Result{
+			IsError: true,
+			Text:    "issue_attachment_upload: " + err.Error(),
+		}
+	}
+	return res
 }

@@ -50,6 +50,10 @@ func (s *stubRegistry) FilterForSession(_ *runnerdomain.AgentSession) []*platfor
 	return out
 }
 
+func (s *stubRegistry) UploadAttachment(_ context.Context, _ *runnerdomain.AgentSession, _ []byte, _, _ string, _ bool, _ int64) (platformmcpdomain.Result, error) {
+	return platformmcpdomain.Result{Text: `{"uploaded":true}`}, nil
+}
+
 func newTestRouter(h *Handler) http.Handler {
 	r := chi.NewRouter()
 	h.RegisterRoutes(r)

@@ -59,10 +59,6 @@ func (r *Registry) issueCommentTool() *platformmcpdomain.Tool {
 			body := strings.TrimSpace(req.Body)
 			if body == "" {
 				return errorResult("body is required"), nil
-				if agentsconfig.HasBacktickWrappedMention(body) {
-					return errorResult("body contains an @agent-<role> mention wrapped in backticks — remove the backticks around the mention so the parser can see it, or omit the mention entirely"), nil
-				}
-
 			}
 			if agentsconfig.HasBacktickWrappedMention(body) {
 				return errorResult("body contains an @agent-<role> mention wrapped in backticks — remove the backticks around the mention so the parser can see it, or omit the mention entirely"), nil
@@ -391,6 +387,104 @@ func (r *Registry) sessionRecoverTool() *platformmcpdomain.Tool {
 		},
 	}
 }
+
+
+// issueAttachmentUploadTool declares the issue_attachment_upload tool.
+// File bytes arrive via multipart/form-data (handled by the HTTP handler,
+// which calls Registry.UploadAttachment). The JSON code path returns a
+// clear error directing callers to use multipart.
+func (r *Registry) issueAttachmentUploadTool() *platformmcpdomain.Tool {
+	return &platformmcpdomain.Tool{
+		Name:        "issue_attachment_upload",
+		Description: "Upload a file from the workspace as an issue attachment. Use multipart/form-data with parts: `file` (binary, required), `display_name` (optional), `inline` (boolean, default false), `comment_id` (optional). Returns attachment metadata including an `attachment_id` and `markdown_snippet` — use `issue_comment` to insert the snippet into a comment body.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Original filename (e.g. 'screenshot.png'). Required.",
+				},
+				"display_name": map[string]any{
+					"type":        "string",
+					"description": "Optional display name for the attachment. Defaults to `name`.",
+				},
+				"inline": map[string]any{
+					"type":        "boolean",
+					"description": "When true, produces inline syntax `![attachment:N]` for images/videos. Default false.",
+				},
+				"comment_id": map[string]any{
+					"type":        "integer",
+					"description": "Optional comment ID to bind the attachment to an existing comment.",
+				},
+			},
+			"required": []string{"name"},
+		},
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
+			return errorResult("issue_attachment_upload requires multipart/form-data — send file bytes as a `file` part, not JSON"), nil
+		},
+	}
+}
+
+// UploadAttachment handles multipart file upload for the
+// issue_attachment_upload tool. Called from the HTTP handler after
+// parsing the multipart form. It loads the session scope, delegates to
+// the attachment service, and returns the tool result.
+func (r *Registry) UploadAttachment(
+	ctx context.Context,
+	sess *runnerdomain.AgentSession,
+	fileBytes []byte,
+	name, displayName string,
+	inline bool,
+	commentID int64,
+) (platformmcpdomain.Result, error) {
+	scope, err := r.loadScope(ctx, sess)
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	if len(fileBytes) == 0 || name == "" {
+		return errorResult("file and name are required"), nil
+	}
+
+	if displayName == "" {
+		displayName = name
+	}
+
+	att, err := r.deps.Attachments.UploadAttachment(ctx, &issuedomain.AttachmentUploadParams{
+		RepoID:      scope.repo.ID,
+		IssueID:     scope.issue.ID,
+		Data:        fileBytes,
+		Name:        name,
+		DisplayName: displayName,
+		Inline:      inline,
+		CommentID:   commentID,
+		AgentRole:   sess.RoleKey,
+	})
+	if err != nil {
+		return errorResult("upload attachment: " + err.Error()), nil
+	}
+
+	return textResult(map[string]any{
+		"attachment_id":    att.ID,
+		"display_name":     displayName,
+		"original_name":    att.OriginalName,
+		"size_bytes":       att.SizeBytes,
+		"mime_type":        att.DetectedMimeType,
+		"kind":             string(att.Kind),
+		"markdown_snippet": attachmentMarkdownSnippet(att.ID, att.Kind, inline),
+	}), nil
+}
+
+// attachmentMarkdownSnippet returns the markdown token for an attachment.
+func attachmentMarkdownSnippet(id int64, kind issuedomain.AttachmentKind, inline bool) string {
+	if inline && (kind == issuedomain.AttachmentKindImage || kind == issuedomain.AttachmentKindVideo) {
+		return fmt.Sprintf("![attachment:%d]", id)
+	}
+	return fmt.Sprintf("[attachment:%d]", id)
+}
+
+
+
 
 // issueCreateTool creates a new issue (optionally as a child of the
 // current issue). When parent=true the new issue's base_branch is set
