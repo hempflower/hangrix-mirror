@@ -27,14 +27,16 @@ package platform
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -135,6 +137,68 @@ func (c *Client) Call(ctx context.Context, name string, args json.RawMessage) (t
 	return "", false, lastErr
 }
 
+// PostMultipart POSTs a raw body (with the given Content-Type) to
+// <base>/<name>. Used for multipart file uploads where the body is not
+// JSON. The body is small enough to buffer in memory (max 64 MiB + form
+// overhead) so retries are cheap — we re-create the reader from the
+// byte slice each attempt.
+//
+// Retry policy mirrors Call: 3-attempt exponential backoff on transport
+// errors and 5xx. 4xx is terminal.
+func (c *Client) PostMultipart(ctx context.Context, name string, body []byte, contentType string) (text string, isError bool, err error) {
+	url := c.baseURL + "/" + name
+
+	const maxAttempts = 3
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			delay := time.Duration(math.Pow(2, float64(attempt-1))*500) * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return "", false, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return "", false, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.token)
+		req.Header.Set("Content-Type", contentType)
+		req.Header.Set("Accept", "application/json")
+		resp, err := c.http.Do(req)
+		if err != nil {
+			lastErr = err
+			if ctx.Err() != nil {
+				return "", false, ctx.Err()
+			}
+			continue
+		}
+		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if resp.StatusCode >= 500 {
+			lastErr = fmt.Errorf("platform tool %q: http %d: %s", name, resp.StatusCode, truncate(respBody, 256))
+			continue
+		}
+		if resp.StatusCode >= 400 {
+			return "", false, fmt.Errorf("platform tool %q: http %d: %s", name, resp.StatusCode, truncate(respBody, 512))
+		}
+		var out callResponse
+		if err := json.Unmarshal(respBody, &out); err != nil {
+			return "", false, fmt.Errorf("platform tool %q: decode response: %w", name, err)
+		}
+		return out.Text, out.IsError, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("platform tool: exhausted retries")
+	}
+	return "", false, lastErr
+}
+
 func truncate(b []byte, n int) string {
 	if len(b) <= n {
 		return string(b)
@@ -185,11 +249,11 @@ func (t *Tool) Call(ctx context.Context, args json.RawMessage) (any, error) {
 }
 
 // attachmentTool is like Tool but reads the file from the local workspace
-// before POSTing to the server. The server-side handler receives file
-// bytes (base64-encoded in the "data" field) rather than a path string,
-// so it can store files from agent containers it has no filesystem access
-// to. The LLM-facing descriptor is identical to a plain Tool — the agent
-// only knows it passes a "path" and gets back attachment metadata.
+// and sends it as multipart/form-data (real file upload — no base64
+// encoding) to the server. The server-side handler receives the file
+// bytes as a "file" form part plus metadata fields. The LLM-facing
+// descriptor is identical to a plain Tool — the agent only knows it
+// passes a "path" and gets back attachment metadata.
 type attachmentTool struct {
 	name        string
 	description string
@@ -202,7 +266,7 @@ func (t *attachmentTool) Description() string    { return t.description }
 func (t *attachmentTool) Schema() map[string]any { return t.schema }
 
 // maxAttachmentBytes is the maximum file size the agent will read and
-// encode for upload (64 MiB, matching the server-side limit).
+// upload (64 MiB, matching the server-side limit).
 const maxAttachmentBytes = 64 << 20
 
 func (t *attachmentTool) Call(ctx context.Context, args json.RawMessage) (any, error) {
@@ -228,24 +292,30 @@ func (t *attachmentTool) Call(ctx context.Context, args json.RawMessage) (any, e
 		return nil, fmt.Errorf("issue_attachment_upload: file %q is %d bytes, exceeds the %d MiB limit. Consider compressing or splitting the file before uploading.", req.Path, len(data), maxAttachmentBytes>>20)
 	}
 
-	// Build enriched args with base64-encoded file content. The server
-	// handler uses the "data" field for the file bytes and still receives
-	// "path" / "display_name" / "inline" / "comment_id" for metadata.
-	enriched := map[string]any{
-		"path":         req.Path,
-		"data":         base64.StdEncoding.EncodeToString(data),
-		"display_name": req.DisplayName,
-		"inline":       req.Inline,
-	}
-	if req.CommentID != 0 {
-		enriched["comment_id"] = req.CommentID
-	}
-	enrichedJSON, err := json.Marshal(enriched)
+	// Build multipart/form-data body with the file bytes and metadata.
+	// This is a real binary file upload — no base64 overhead.
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+
+	fw, err := w.CreateFormFile("file", filepath.Base(req.Path))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("issue_attachment_upload: build multipart form: %w", err)
+	}
+	if _, err := fw.Write(data); err != nil {
+		return nil, fmt.Errorf("issue_attachment_upload: write file part: %w", err)
+	}
+	if req.DisplayName != "" {
+		_ = w.WriteField("display_name", req.DisplayName)
+	}
+	_ = w.WriteField("inline", strconv.FormatBool(req.Inline))
+	if req.CommentID != 0 {
+		_ = w.WriteField("comment_id", strconv.FormatInt(req.CommentID, 10))
+	}
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("issue_attachment_upload: close multipart writer: %w", err)
 	}
 
-	text, isError, err := t.client.Call(ctx, t.name, enrichedJSON)
+	text, isError, err := t.client.PostMultipart(ctx, t.name, body.Bytes(), w.FormDataContentType())
 	if err != nil {
 		return nil, err
 	}
