@@ -509,12 +509,15 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := domain.State(strings.TrimSpace(r.URL.Query().Get("state")))
+	if state == "all" {
+		state = ""
+	}
 	if state != "" && !state.Valid() {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid state")
 		return
 	}
 	offset := parseInt32(r.URL.Query().Get("offset"), 0)
-	limit := parseInt32(r.URL.Query().Get("limit"), 50)
+	limit := parseInt32(r.URL.Query().Get("limit"), 20)
 
 	list, total, err := h.issues.List(r.Context(), rc.repo.ID, domain.ListFilter{
 		State:  state,
@@ -966,10 +969,11 @@ type mergeReq struct {
 	Message string `json:"message,omitempty"`
 }
 
-// merge runs MergeBranch on the bare repo. Only owner or admin may merge.
-// On success the issue transitions to State=merged, timeline events are
-// written, sessions are archived, and the issue branch is deleted (unless
-// the host config disables it or branch protections forbid it).
+// merge runs MergeBranch (rebase-first strategy) on the bare repo. Only
+// owner or admin may merge. On success the issue transitions to State=merged,
+// timeline events are written, sessions are archived, and the issue branch
+// is deleted (unless the host config disables it or branch protections
+// forbid it).
 func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	rc, ok := h.resolveRepo(w, r)
 	if !ok {

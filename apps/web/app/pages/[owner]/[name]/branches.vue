@@ -34,7 +34,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import type { PublicRepo, RepoRefs } from '~/types/repo'
+import type { PublicRepo, RefListResp, RepoRef, RepoRefs } from '~/types/repo'
+import Pagination from '@/components/ui/pagination/Pagination.vue'
 
 definePageMeta({ layout: 'repo' })
 
@@ -58,9 +59,14 @@ const name = computed(() => String(route.params.name ?? ''))
 useHead({ title: () => `${t('repo.branches.title')} · ${owner.value}/${name.value} - ${t('app.name')}` })
 
 const repo = ref<PublicRepo | null>(null)
-const refs = ref<RepoRefs | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
+
+// ---- paginated branches ----
+const branchItems = ref<RepoRef[]>([])
+const branchTotal = ref(0)
+const branchOffset = ref(0)
+const branchLimit = 50
 
 const createOpen = ref(false)
 const createError = ref<string | null>(null)
@@ -70,9 +76,9 @@ const canManage = computed(() => {
   return user.value.role === 'admin' || user.value.id === repo.value.owner_id
 })
 
-const branches = computed(() => refs.value?.branches ?? [])
-const tags = computed(() => refs.value?.tags ?? [])
-const defaultBranch = computed(() => refs.value?.default_branch ?? '')
+const dialogBranches = ref<RepoRef[]>([])
+const dialogTags = ref<RepoRef[]>([])
+const defaultBranch = computed(() => repo.value?.default_branch ?? '')
 
 const schema = computed(() => toTypedSchema(z.object({
   name: z.string().min(1).max(100),
@@ -81,6 +87,20 @@ const schema = computed(() => toTypedSchema(z.object({
 
 const initial = computed(() => ({ name: '', start_ref: defaultBranch.value || '' }))
 
+async function loadBranches() {
+  try {
+    const res = await $fetch<RefListResp>(`/api/repos/${owner.value}/${name.value}/refs`, {
+      credentials: 'include',
+      query: { type: 'branches', offset: branchOffset.value, limit: branchLimit },
+    })
+    branchItems.value = res.items ?? []
+    branchTotal.value = res.total
+  } catch (e: any) {
+    error.value = e?.data?.error ?? t('repo.loadFailed')
+    branchItems.value = []
+  }
+}
+
 async function load() {
   loading.value = true
   error.value = null
@@ -88,14 +108,29 @@ async function load() {
     repo.value = await $fetch<PublicRepo>(`/api/repos/${owner.value}/${name.value}`, {
       credentials: 'include',
     })
-    refs.value = await $fetch<RepoRefs>(`/api/repos/${owner.value}/${name.value}/refs`, {
-      credentials: 'include',
-    })
+    await loadBranches()
   } catch (e: any) {
     error.value = e?.data?.error ?? t('repo.loadFailed')
   } finally {
     loading.value = false
   }
+}
+async function openCreateDialog() {
+  try {
+    const data = await $fetch<RepoRefs>(`/api/repos/${owner.value}/${name.value}/refs`, {
+      credentials: 'include',
+    })
+    dialogBranches.value = data.branches ?? []
+    dialogTags.value = data.tags ?? []
+  } catch { /* ignore */ }
+  createOpen.value = true
+}
+
+
+
+function onBranchPage(offset: number) {
+  branchOffset.value = offset
+  loadBranches()
 }
 
 function shortSha(s: string) { return s.slice(0, 7) }
@@ -110,6 +145,7 @@ async function onCreate(values: any, ctx: any) {
     })
     createOpen.value = false
     ctx?.resetForm?.({ values: initial.value })
+    branchOffset.value = 0
     await load()
   } catch (e: any) {
     createError.value = e?.data?.error ?? t('repo.branches.deleteFailed')
@@ -123,6 +159,7 @@ async function setDefault(branchName: string) {
       credentials: 'include',
       body: { default_branch: branchName },
     })
+    branchOffset.value = 0
     await load()
   } catch (e: any) {
     error.value = e?.data?.error ?? t('repo.branches.setDefaultFailed')
@@ -141,6 +178,7 @@ async function onDelete(branchName: string) {
       method: 'DELETE',
       credentials: 'include',
     })
+    branchOffset.value = 0
     await load()
   } catch (e: any) {
     error.value = e?.data?.error ?? t('repo.branches.deleteFailed')
@@ -169,7 +207,7 @@ onMounted(load)
             {{ t('repo.branches.subtitle') }}
           </p>
         </div>
-        <Button v-if="canManage" @click="createOpen = true">
+        <Button v-if="canManage" @click="openCreateDialog()">
           <Plus class="size-4" />
           {{ t('repo.branches.create') }}
         </Button>
@@ -183,7 +221,7 @@ onMounted(load)
     <Card class="gap-0 py-0">
       <CardHeader class="rounded-t-xl border-b bg-muted/40 px-4 py-2">
         <CardTitle class="text-sm font-medium">
-          {{ t('repo.branches.title') }} · {{ branches.length }}
+          {{ t('repo.branches.title') }} · {{ branchTotal }}
         </CardTitle>
         <CardDescription v-if="defaultBranch">
           {{ t('repo.defaultBranch') }}: <code class="font-mono">{{ defaultBranch }}</code>
@@ -193,7 +231,7 @@ onMounted(load)
         <p v-if="loading" class="p-3 text-sm text-muted-foreground">
           {{ t('common.loading') }}
         </p>
-        <p v-else-if="branches.length === 0" class="p-6 text-center text-sm text-muted-foreground">
+        <p v-else-if="branchItems.length === 0" class="p-6 text-center text-sm text-muted-foreground">
           {{ t('repo.branches.empty') }}
         </p>
         <Table v-else>
@@ -206,7 +244,7 @@ onMounted(load)
             </TableRow>
           </TableHeader>
           <TableBody>
-            <TableRow v-for="b in branches" :key="b.name">
+            <TableRow v-for="b in branchItems" :key="b.name">
               <TableCell class="font-medium">
                 <span class="inline-flex items-center gap-2">
                   <GitBranch class="size-3.5 text-muted-foreground" />
@@ -254,6 +292,14 @@ onMounted(load)
       </CardContent>
     </Card>
 
+    <Pagination
+      v-if="branchTotal > branchLimit"
+      :total="branchTotal"
+      :offset="branchOffset"
+      :limit="branchLimit"
+      @update:offset="onBranchPage"
+    />
+
     <Dialog v-model:open="createOpen">
       <DialogContent>
         <DialogHeader>
@@ -290,15 +336,15 @@ onMounted(load)
                       <SelectValue :placeholder="t('repo.branches.startRef')" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectGroup v-if="branches.length > 0">
+                      <SelectGroup v-if="dialogBranches.length > 0">
                         <SelectLabel>{{ t('repo.branches.title') }}</SelectLabel>
-                        <SelectItem v-for="b in branches" :key="`b-${b.name}`" :value="b.name">
+                        <SelectItem v-for="b in dialogBranches" :key="`b-${b.name}`" :value="b.name">
                           {{ b.name }}
                         </SelectItem>
                       </SelectGroup>
-                      <SelectGroup v-if="tags.length > 0">
+                      <SelectGroup v-if="dialogTags.length > 0">
                         <SelectLabel>{{ t('repo.tags.title') }}</SelectLabel>
-                        <SelectItem v-for="tg in tags" :key="`t-${tg.name}`" :value="tg.name">
+                        <SelectItem v-for="tg in dialogTags" :key="`t-${tg.name}`" :value="tg.name">
                           {{ tg.name }}
                         </SelectItem>
                       </SelectGroup>

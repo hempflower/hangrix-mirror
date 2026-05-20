@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import Pagination from '@/components/ui/pagination/Pagination.vue'
 import type { Release, ReleaseListResp } from '~/types/release'
 import { relativeTime } from '~/utils/time'
 
@@ -32,6 +33,8 @@ type TabValue = typeof tabValues[number]
 const tab = ref<TabValue>('all')
 const items = ref<Release[]>([])
 const total = ref(0)
+const offset = ref(0)
+const limit = 50
 const loading = ref(false)
 const error = ref<string | null>(null)
 
@@ -39,7 +42,7 @@ async function load() {
   loading.value = true
   error.value = null
   try {
-    const query: Record<string, any> = { limit: 50 }
+    const query: Record<string, any> = { limit, offset: offset.value }
     if (tab.value !== 'all') {
       query.draft = tab.value === 'draft'
     }
@@ -57,7 +60,7 @@ async function load() {
   }
 }
 
-watch(tab, () => { load() })
+watch(tab, () => { offset.value = 0; load() })
 
 onMounted(load)
 
@@ -66,6 +69,11 @@ function rel(s?: string | null) {
 }
 
 function shortSha(s: string) { return s.slice(0, 7) }
+
+function onPage(v: number) {
+  offset.value = v
+  load()
+}
 </script>
 
 <template>
@@ -140,6 +148,14 @@ function shortSha(s: string) { return s.slice(0, 7) }
           </ul>
         </CardContent>
       </Card>
+
+      <Pagination
+        v-if="total > limit"
+        :total="total"
+        :offset="offset"
+        :limit="limit"
+        @update:offset="onPage"
+      />
     </Tabs>
   </div>
 </template>

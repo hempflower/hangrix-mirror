@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { CircleDot, GitMerge, Lock, Plus } from 'lucide-vue-next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import Pagination from '@/components/ui/pagination/Pagination.vue'
 import type { Issue, IssueListResp, IssueState } from '~/types/issue'
 import { relativeTime } from '~/utils/time'
 
@@ -27,10 +28,39 @@ setBreadcrumbs(() => {
   ]
 })
 
+const PER_PAGE = 20
+
 const tabValues = ['all', 'open', 'merged', 'closed'] as const
 type TabValue = typeof tabValues[number]
 
-const tab = ref<TabValue>('open')
+function parseTab(s: string | undefined): TabValue {
+  if (s && (tabValues as readonly string[]).includes(s)) return s as TabValue
+  return 'open'
+}
+function parsePage(p: string | undefined): number {
+  const n = Number(p)
+  return Number.isInteger(n) && n >= 1 ? n : 1
+}
+
+// URL is the source of truth for state and page
+const tab = computed<TabValue>(() => parseTab(String(route.query.state ?? '')))
+const page = computed(() => parsePage(String(route.query.page ?? '')))
+const offset = computed(() => (page.value - 1) * PER_PAGE)
+
+function setTab(v: string | number) {
+  const parsed = parseTab(String(v))
+  const query: Record<string, any> = {}
+  if (parsed !== 'open') query.state = parsed
+  router.replace({ query })
+}
+function setOffset(newOffset: number) {
+  const newPage = Math.floor(newOffset / PER_PAGE) + 1
+  const query: Record<string, any> = {}
+  if (tab.value !== 'open') query.state = tab.value
+  if (newPage > 1) query.page = String(newPage)
+  router.replace({ query })
+}
+
 const items = ref<Issue[]>([])
 const total = ref(0)
 const loading = ref(false)
@@ -40,7 +70,7 @@ async function load() {
   loading.value = true
   error.value = null
   try {
-    const query: Record<string, any> = { limit: 50 }
+    const query: Record<string, any> = { limit: PER_PAGE, offset: offset.value }
     if (tab.value !== 'all') query.state = tab.value
     const res = await $fetch<IssueListResp>(`/api/repos/${owner.value}/${name.value}/issues`, {
       credentials: 'include',
@@ -48,6 +78,11 @@ async function load() {
     })
     items.value = res.items ?? []
     total.value = res.total
+
+    // Out-of-bounds page: redirect to page 1
+    if (items.value.length === 0 && total.value > 0 && page.value > 1) {
+      router.replace({ query: tab.value !== 'open' ? { state: tab.value } : {} })
+    }
   } catch (e: any) {
     error.value = e?.data?.error ?? t('issue.listFailed')
     items.value = []
@@ -56,9 +91,7 @@ async function load() {
   }
 }
 
-watch(tab, () => { load() })
-
-onMounted(load)
+watch([tab, page], () => { load() }, { immediate: true })
 
 function badgeIcon(state: IssueState) {
   if (state === 'merged') return GitMerge
@@ -100,7 +133,7 @@ function gotoNew() {
       </Button>
     </header>
 
-    <Tabs v-model="tab" class="space-y-4">
+    <Tabs :model-value="tab" @update:model-value="setTab" class="space-y-4">
       <TabsList>
         <TabsTrigger value="open">
           {{ t('issue.filters.open') }}
@@ -158,6 +191,13 @@ function gotoNew() {
           </ul>
         </CardContent>
       </Card>
+      <Pagination
+        v-if="!loading && total > 0"
+        :total="total"
+        :offset="offset"
+        :limit="PER_PAGE"
+        @update:offset="setOffset"
+      />
     </Tabs>
   </div>
 </template>

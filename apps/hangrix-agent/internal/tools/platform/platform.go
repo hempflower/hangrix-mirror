@@ -404,7 +404,7 @@ func All(client *Client) []local.Tool {
 		},
 		{
 			name:        "issue_mergeable",
-			description: "Check whether the issue branch is fast-forward mergeable into its base. Returns mergeable status, mode, and hint.",
+			description: "Check whether the issue branch can be merged into its base — tries fast-forward first, then checks whether auto-rebase would succeed. mergeable=true means issue_merge is expected to succeed. Returns mergeable, mode, base_branch, base_sha, head_sha, and hint.",
 			schema:      objectSchema(nil, nil),
 		},
 
@@ -458,9 +458,9 @@ func All(client *Client) []local.Tool {
 		},
 		{
 			name:        "issue_merge",
-			description: "Merge the issue branch into its base. Fails if there are no commits or the merge would conflict.",
+			description: "Merge the issue branch into its base — tries fast-forward first, falls back to auto-rebase. Fails if there are no commits or a rebase conflict.",
 			schema: objectSchema(map[string]any{
-				"message": stringProp("Optional merge commit message. Defaults to 'Merge issue #N: <title>'."),
+				"message": stringProp("Optional merge message."),
 			}, nil),
 		},
 		{
