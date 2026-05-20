@@ -279,6 +279,50 @@ func All(client *Client) []local.Tool {
 				"session_id": intProp("The session ID to recover. Must be on the same issue as the caller."),
 			}, []string{"session_id"}),
 		},
+		{
+			name:        "release_create",
+			description: "Create a new release in draft state from an existing git tag. The tag must already exist in the repo.",
+			schema: objectSchema(map[string]any{
+				"tag_name": stringProp("The existing git tag to create the release from (required)."),
+				"title":    stringProp("Optional release title. Defaults to the tag name if omitted."),
+				"notes":    stringProp("Optional release notes (markdown)."),
+			}, []string{"tag_name"}),
+		},
+		{
+			name:        "release_upload_asset",
+			description: "Upload a custom asset file to an existing release. The file is read from the agent's workspace.",
+			schema: objectSchema(map[string]any{
+				"release_id":   intProp("The release ID to attach the asset to (required)."),
+				"name":         stringProp("The filename for the asset (required)."),
+				"content_type": stringProp("Optional MIME type. Guessed from the filename extension if omitted."),
+				"file_path":    stringProp("Absolute or workspace-relative path to the file to upload (required)."),
+			}, []string{"release_id", "name", "file_path"}),
+		},
+		{
+			name:        "release_publish",
+			description: "Publish a draft release, making it visible as an official release with a published_at timestamp.",
+			schema: objectSchema(map[string]any{
+				"release_id": intProp("The release ID to publish (required)."),
+			}, []string{"release_id"}),
+		},
+		{
+			name:        "release_update",
+			description: "Edit an existing release's metadata (title, notes). The tag_name can only be changed while the release is still a draft.",
+			schema: objectSchema(map[string]any{
+				"release_id": intProp("The release ID to update (required)."),
+				"title":      stringProp("Optional new release title."),
+				"notes":      stringProp("Optional new release notes (markdown)."),
+				"tag_name":   stringProp("Optional new tag name. Only mutable when the release is still a draft."),
+			}, []string{"release_id"}),
+		},
+		{
+			name:        "release_delete",
+			description: "Delete a release and all of its custom assets. Derived source archives (zip/tar.gz) are not separately stored and do not need cleanup.",
+			schema: objectSchema(map[string]any{
+				"release_id": intProp("The release ID to delete (required)."),
+			}, []string{"release_id"}),
+		},
+
 	}
 	out := make([]local.Tool, 0, len(descriptors))
 	for _, d := range descriptors {

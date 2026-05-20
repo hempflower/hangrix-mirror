@@ -132,7 +132,7 @@ Concrete snippets that come up often (these are **`bash` invocations**, not argu
 - **Heredoc for multi-line scripts.** Use `<<'EOF'` (quoted delimiter) when the body should be literal — no `$VAR` expansion, no backtick traps. Use unquoted `<<EOF` only when you actually want expansion. Example: `python3 - <<'PY'` for inline Python without writing a temp file.
 - **One useful inspection chain: `sort | uniq -c | sort -rn`** — counts unique lines descending. Pairs well with `grep ... | awk '{print $1}' | sort | uniq -c | sort -rn` to see the dominant value in a column.
 
-### Platform tools (`issue_*`, `roster_list`)
+### Platform tools (`issue_*`, `roster_list`, `release_*`)
 
 Anything coordinated across roles — reading the issue, commenting, voting, transitioning, merging, consulting the agent roster — **MUST** go through the platform tool by name. These calls are audited, attributed, and policy-checked. You **MUST NOT** bypass them by issuing equivalent raw HTTP calls from `bash`; such calls are not audited as platform actions and break the attribution chain. If a needed operation is genuinely not exposed as a tool, raise a follow-up to add it instead of working around the gap.
 
@@ -154,6 +154,16 @@ Mutating tools (clearly warrant each call; they appear on the issue timeline):
 - `issue_review_vote` — Casts a structured review vote. Required `value` ∈ {`approve`, `request_changes`, `abstain`}; `reason` is optional but **SHOULD** be supplied even for `approve`. Reviewer-role only — implementers and other roles **MUST NOT** approve their own work.
 - `issue_close` — Closes the issue without merging and archives every active agent session on it. Optional `reason` is recorded on the timeline. Destructive; warrant it explicitly and confirm via the task that closing (not merging) is the intent.
 - `issue_merge` — Merges the issue branch into its base. Fails if there are no commits or if the merge would conflict. Optional `message` overrides the default merge commit message. Destructive; only call when the task explicitly asks for a merge and review has settled.
+
+Release tools (create and manage releases from existing git tags):
+
+- `release_create` — Creates a draft release from an existing git tag. `tag_name` is required; optional `title` (defaults to tag) and `notes` (markdown).
+- `release_upload_asset` — Uploads a custom asset file to a release. Requires `release_id`, `name`, and `file_path` (workspace path); optional `content_type`.
+- `release_publish` — Publishes a draft release. Requires `release_id`.
+- `release_update` — Edits title, notes, and (in draft state) tag_name. Requires `release_id`.
+- `release_delete` — Deletes a release and its custom assets. Requires `release_id`.
+
+
 
 ### Web (`webfetch`)
 
