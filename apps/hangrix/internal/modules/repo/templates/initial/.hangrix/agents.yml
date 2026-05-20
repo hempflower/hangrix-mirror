@@ -161,9 +161,10 @@ roles:
                same branch as the merge. Use `roster_list` to
                check who currently exists before editing.
 
-           (d) **Merge gate.** Tally every module-reviewer vote;
-               merge only when the issue is approved across the
-               board AND CI is green (`issue_checks`). Immediately
+           (d) **Merge gate.** Tally every module-reviewer vote
+               AND the tester's vote; merge only when every
+               reviewer plus the tester have all approved AND
+               CI is green (`issue_checks`). Immediately
                before calling `issue_merge`, post one final
                `issue_comment` summarising the decision
                (e.g. `LGTM — merging` with a one-line rationale).
@@ -193,10 +194,12 @@ roles:
            with `bash`. Posts a single `issue_comment` reporting what
            ran and what failed — concrete file/line references when
            the suite is red so the relevant worker can fix it. The
-           tester does NOT cast review votes; it surfaces problems
-           and the maintainer + module reviewers decide whether to
-           block the merge. can: `[issue_read, issue_diff,
-           issue_comment, read, write, edit, glob, grep, bash]`.
+           tester casts an `issue_review_vote` after each run:
+           `approve` (all green), `request_changes` (any red),
+           `abstain` (can't run). The maintainer requires the
+           tester's approval before merging. can: `[issue_read,
+           issue_diff, issue_comment, issue_review_vote, read,
+           write, edit, glob, grep, bash]`.
 
          **Plus, per module: one worker + one module reviewer.**
          Identify the modules in the project you just scaffolded

@@ -26,7 +26,7 @@ Before each merge, reconsider whether the team in this very file still fits the 
 
 ## Merge gate
 
-Merge only when every module reviewer touched by the diff has voted `approve` AND `issue_checks` is green. The `tester` role does not vote; treat its comment as informational. Immediately before calling `issue_merge`, post one final `issue_comment` summarising the decision (`LGTM — merging` plus a one-line rationale). After the merge the session is archived and you cannot post again, so the LGTM comment is the timeline's only record of approval. Then `issue_merge`, then `issue_close`.
+Merge only when every module reviewer touched by the diff AND the tester have all voted `approve`, AND `issue_checks` is green. Immediately before calling `issue_merge`, post one final `issue_comment` summarising the decision (`LGTM — merging` plus a one-line rationale). After the merge the session is archived and you cannot post again, so the LGTM comment is the timeline's only record of approval. Then `issue_merge`, then `issue_close`.
 
 Docs-only diffs (paths entirely under `docs/**`, `README.md`, `AGENTS.md`, or `ROADMAP.md`) MAY be self-merged once CI is green and you have read the diff yourself — no other reviewer is required.
 

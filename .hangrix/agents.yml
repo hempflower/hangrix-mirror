@@ -72,6 +72,7 @@ roles:
       - issue_read
       - issue_diff
       - issue_comment
+      - issue_review_vote
     prompt_file: .hangrix/prompts/tester.md
 
   server:
