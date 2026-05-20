@@ -33,6 +33,7 @@ type Source string
 const (
 	SourceLocal    Source = "local"
 	SourcePlatform Source = "platform"
+	SourceMCP      Source = "mcp"
 )
 
 // Registry is the single dispatch point. Built once at startup;
@@ -41,6 +42,7 @@ type Registry struct {
 	descriptors      []llm.ToolDescriptor
 	byName           map[string]local.Tool
 	platformByName   map[string]struct{} // set of names sourced from platform
+	mcpByName        map[string]struct{} // set of names sourced from MCP servers
 }
 
 // CallResult is what the runtime persists. ResultJSON is what gets fed
@@ -57,35 +59,32 @@ type CallResult struct {
 // platform connection — useful in offline tests). The catalogue order
 // is local first then platform; within each group the supplied order
 // is preserved.
-func Build(localTools, platformTools []local.Tool, allow []string) *Registry {
+func Build(localTools, platformTools, mcpTools []local.Tool, allow []string) *Registry {
 	allowSet := buildAllowSet(allow)
 	r := &Registry{
 		byName:         map[string]local.Tool{},
 		platformByName: map[string]struct{}{},
+		mcpByName:      map[string]struct{}{},
 	}
-	for _, t := range localTools {
-		if !allowSet.permit(t.Name()) {
-			continue
+	register := func(tools []local.Tool, mark func(string)) {
+		for _, t := range tools {
+			if !allowSet.permit(t.Name()) {
+				continue
+			}
+			r.byName[t.Name()] = t
+			if mark != nil {
+				mark(t.Name())
+			}
+			r.descriptors = append(r.descriptors, llm.ToolDescriptor{
+				Name:        t.Name(),
+				Description: t.Description(),
+				Parameters:  t.Schema(),
+			})
 		}
-		r.byName[t.Name()] = t
-		r.descriptors = append(r.descriptors, llm.ToolDescriptor{
-			Name:        t.Name(),
-			Description: t.Description(),
-			Parameters:  t.Schema(),
-		})
 	}
-	for _, t := range platformTools {
-		if !allowSet.permit(t.Name()) {
-			continue
-		}
-		r.byName[t.Name()] = t
-		r.platformByName[t.Name()] = struct{}{}
-		r.descriptors = append(r.descriptors, llm.ToolDescriptor{
-			Name:        t.Name(),
-			Description: t.Description(),
-			Parameters:  t.Schema(),
-		})
-	}
+	register(localTools, nil)
+	register(platformTools, func(n string) { r.platformByName[n] = struct{}{} })
+	register(mcpTools, func(n string) { r.mcpByName[n] = struct{}{} })
 	return r
 }
 
@@ -109,6 +108,9 @@ func (r *Registry) Call(ctx context.Context, name string, args json.RawMessage) 
 	src := SourceLocal
 	if _, isPlatform := r.platformByName[name]; isPlatform {
 		src = SourcePlatform
+	}
+	if _, isMCP := r.mcpByName[name]; isMCP {
+		src = SourceMCP
 	}
 	out, err := t.Call(ctx, args)
 	return r.makeResult(src, out, err)
