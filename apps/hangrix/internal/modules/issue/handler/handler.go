@@ -60,6 +60,9 @@ type Handler struct {
 	auditor    agentsessiondomain.Auditor
 	controller agentsessiondomain.Controller
 	attachments *issueservice.AttachmentService
+	// guards are BranchWriteGuard implementations. When nil (tests
+	// without the repo module) the handler skips guard checks.
+	guards []repodomain.BranchWriteGuard
 }
 
 type HandlerDeps struct {
@@ -86,6 +89,9 @@ type HandlerDeps struct {
 	Controller agentsessiondomain.Controller
 	// Attachments is the attachment service (validation, hashing, storage).
 	Attachments *issueservice.AttachmentService
+	// Guards are BranchWriteGuard implementations. When nil (tests
+	// without the repo module) the handler skips guard checks.
+	Guards []repodomain.BranchWriteGuard
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
@@ -103,6 +109,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		auditor:    deps.Auditor,
 		controller: deps.Controller,
 		attachments: deps.Attachments,
+		guards:      deps.Guards,
 	}
 }
 
