@@ -22,6 +22,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
+	repoDomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/binaries"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 	"github.com/hangrix/hangrix/pkg/cryptobox"
@@ -40,6 +41,7 @@ type AgentHandler struct {
 	enrollValidator domain.EnrollValidator
 	box             *cryptobox.Box
 	cfg             *config.Config
+	variables       repoDomain.VariableStore
 }
 
 type AgentHandlerDeps struct {
@@ -47,6 +49,7 @@ type AgentHandlerDeps struct {
 	AgentValidator  domain.AgentValidator
 	EnrollValidator domain.EnrollValidator
 	Config          *config.Config
+	Variables       repoDomain.VariableStore
 }
 
 func NewAgentHandler(deps *AgentHandlerDeps) *AgentHandler {
@@ -60,6 +63,7 @@ func NewAgentHandler(deps *AgentHandlerDeps) *AgentHandler {
 		enrollValidator: deps.EnrollValidator,
 		box:             box,
 		cfg:             deps.Config,
+		variables:       deps.Variables,
 	}
 }
 
@@ -364,6 +368,17 @@ type taskResp struct {
 	// 7-day idle reaper cleared it). When set, the orchestrator reuses
 	// it via `docker exec`; container state survives across triggers.
 	ContainerID string `json:"container_id,omitempty"`
+	// RepoVariables carries the repo-level variable and secret values
+	// (secrets already decrypted server-side) available for ${VAR_NAME}
+	// expansion in the session's Env values. Keys are variable names;
+	// values are the plaintext.
+	//
+	// Nil means the server has not been upgraded to support repo variable
+	// expansion — the runner treats this as a backward-compat no-op and
+	// leaves ${...} references unexpanded.  An empty non-nil map means the
+	// server supports expansion but the repo has no variables, so any
+	// ${...} reference in task.Env fails the session explicitly.
+	RepoVariables map[string]string `json:"repo_variables"`
 }
 
 // pollTasks blocks up to pollWait waiting for a pending session pinned to
@@ -395,6 +410,19 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 			if len(sess.Env) > 0 {
 				_ = json.Unmarshal(sess.Env, &env)
 			}
+			// Fetch repo-level variables/secrets for ${VAR_NAME} expansion.
+			var repoVars map[string]string
+			if sess.RepoID != nil {
+				vars, err := h.variables.List(r.Context(), *sess.RepoID)
+				if err != nil {
+					httpx.WriteError(w, http.StatusInternalServerError, "list repo variables: "+err.Error())
+					return
+				}
+				repoVars = make(map[string]string, len(vars))
+				for _, v := range vars {
+					repoVars[v.Name] = v.Value
+				}
+			}
 			httpx.WriteJSON(w, http.StatusOK, taskResp{
 				SessionID:       sess.ID,
 				AgentImage:      sess.AgentImage,
@@ -408,6 +436,7 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 				Env:             env,
 				SessionToken:    plaintext,
 				ContainerID:     sess.ContainerID,
+				RepoVariables:   repoVars,
 			})
 			return
 		}

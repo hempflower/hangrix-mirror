@@ -222,7 +222,8 @@ var (
 	ErrVariableNameEmpty   = errors.New("variable name must not be empty")
 	ErrVariableNameInvalid = errors.New("variable name must match [A-Z_][A-Z0-9_]*")
 	ErrVariableConflict    = errors.New("a variable with that name already exists")
-	ErrVariableKindInvalid = errors.New("variable kind must be 'plain' or 'secret'")
+	ErrVariableKindInvalid       = errors.New("variable kind must be 'plain' or 'secret'")
+	ErrVariableDecryptionFailed = errors.New("variable decryption failed")
 )
 
 // VariableStore is the persistence abstraction for repo_variables.

@@ -383,7 +383,11 @@ func (s *PostgresVariableStore) List(ctx context.Context, repoID int64) ([]*doma
 	}
 	out := make([]*domain.RepoVariable, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, s.rowToDomain(&r))
+		v, err := s.rowToDomain(&r)
+		if err != nil {
+			continue // skip variables whose ciphertext cannot be decrypted
+		}
+		out = append(out, v)
 	}
 	return out, nil
 }
@@ -396,7 +400,7 @@ func (s *PostgresVariableStore) Get(ctx context.Context, id, repoID int64) (*dom
 		}
 		return nil, err
 	}
-	return s.rowToDomain(&row), nil
+	return s.rowToDomain(&row)
 }
 
 func (s *PostgresVariableStore) Create(ctx context.Context, repoID int64, name, value string, kind domain.VariableKind) (*domain.RepoVariable, error) {
@@ -431,7 +435,7 @@ func (s *PostgresVariableStore) Create(ctx context.Context, repoID int64, name, 
 		}
 		return nil, err
 	}
-	return s.rowToDomain(&row), nil
+	return s.rowToDomain(&row)
 }
 
 func (s *PostgresVariableStore) Update(ctx context.Context, id, repoID int64, name, value string, kind domain.VariableKind) (*domain.RepoVariable, error) {
@@ -470,7 +474,7 @@ func (s *PostgresVariableStore) Update(ctx context.Context, id, repoID int64, na
 		}
 		return nil, err
 	}
-	return s.rowToDomain(&row), nil
+	return s.rowToDomain(&row)
 }
 
 func (s *PostgresVariableStore) Delete(ctx context.Context, id, repoID int64) error {
@@ -485,18 +489,17 @@ func (s *PostgresVariableStore) Delete(ctx context.Context, id, repoID int64) er
 }
 
 // rowToDomain decrypts secret values and returns a plaintext domain object.
-func (s *PostgresVariableStore) rowToDomain(r *repodb.RepoVariable) *domain.RepoVariable {
+// On decryption failure (key rotation, corrupted ciphertext) it returns
+// ErrVariableDecryptionFailed so callers can decide whether to skip or fail.
+func (s *PostgresVariableStore) rowToDomain(r *repodb.RepoVariable) (*domain.RepoVariable, error) {
 	value := r.Value
 	kind := domain.VariableKind(r.Kind)
 	if kind == domain.VariableKindSecret && value != "" {
 		plain, err := s.box.Decrypt(value)
 		if err != nil {
-			// A corrupted or key-rotated ciphertext: treat as empty so
-			// the caller can still see metadata and delete/re-seed it.
-			value = ""
-		} else {
-			value = plain
+			return nil, domain.ErrVariableDecryptionFailed
 		}
+		value = plain
 	}
 	return &domain.RepoVariable{
 		ID:        r.ID,
@@ -506,7 +509,7 @@ func (s *PostgresVariableStore) rowToDomain(r *repodb.RepoVariable) *domain.Repo
 		Kind:      kind,
 		CreatedAt: r.CreatedAt.Time,
 		UpdatedAt: r.UpdatedAt.Time,
-	}
+	}, nil
 }
 
 // isValidVariableName enforces the same env-key shape as agents.yml
