@@ -28,6 +28,7 @@ auth:
 
 storage:
   repos_path: "./data/repos"
+  assets_path: "./data/assets"
   attachments_path: "./data/attachments"
 
 llm:

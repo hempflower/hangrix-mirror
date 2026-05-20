@@ -35,9 +35,12 @@ type RegistryDeps struct {
 	Git         gitdomain.Git
 	Runner      runnerdomain.Repo
 	Spawner     agentsessiondomain.Spawner
-	Archiver    agentsessiondomain.Archiver
-	Controller  agentsessiondomain.Controller
-	Attachments issuedomain.AttachmentUploader
+	Archiver      agentsessiondomain.Archiver
+	Controller    agentsessiondomain.Controller
+	Releases      releasedomain.Store
+	ReleaseAssets releasedomain.AssetStore
+	AssetStorage  *releaseinfra.AssetStorage
+	Attachments   issuedomain.AttachmentUploader
 }
 
 // NewRegistry assembles the tool catalogue at startup. Tools share the
