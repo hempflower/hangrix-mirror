@@ -259,7 +259,7 @@ type mergeableResult struct {
 func (r *Registry) issueMergeableTool() *platformmcpdomain.Tool {
 	return &platformmcpdomain.Tool{
 		Name:        "issue_mergeable",
-		Description: "Check whether the issue branch is fast-forward mergeable into its base. Returns mergeable status, mode, and hint.",
+		Description: "Check whether the issue branch can be merged into its base — tries fast-forward first, then checks whether auto-rebase would succeed. mergeable=true means issue_merge is expected to succeed. Returns mergeable, mode, base_branch, base_sha, head_sha, and hint.",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -291,19 +291,17 @@ func (r *Registry) issueMergeableTool() *platformmcpdomain.Tool {
 				}
 				return errorResult("resolve base: " + err.Error()), nil
 			}
-			isFF, mode, err := r.deps.Git.CheckFastForward(scope.fsPath, iss.BaseBranch, iss.HeadSHA)
+			mergeable, mode, hint, err := r.deps.Git.CheckAutoMerge(scope.fsPath, iss.BaseBranch, iss.HeadSHA)
 			if err != nil {
-				return errorResult("check fast-forward: " + err.Error()), nil
+				return errorResult("check auto-merge: " + err.Error()), nil
 			}
 			result := mergeableResult{
-				Mergeable:  isFF,
+				Mergeable:  mergeable,
 				Mode:       mode,
 				BaseBranch: iss.BaseBranch,
 				BaseSHA:    baseSHA,
 				HeadSHA:    iss.HeadSHA,
-			}
-			if !isFF {
-				result.Hint = "branch has diverged from " + iss.BaseBranch + " — rebase onto " + iss.BaseBranch + " first"
+				Hint:       hint,
 			}
 			return textResult(result), nil
 		},

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Activity, ArrowLeft, Bot, LogOut, Server, Shield, Sparkles, User, Users } from 'lucide-vue-next'
+import { Activity, ArrowLeft, BarChart3, Bot, LogOut, Server, Shield, Sparkles, User, Users } from 'lucide-vue-next'
 import {
   Sidebar,
   SidebarContent,
@@ -44,6 +44,7 @@ async function onLogout() {
 
 const manageItems = computed<NavItem[]>(() => [
   { key: 'users', to: '/admin/users', icon: Users, label: t('nav.users') },
+  { key: 'dashboard', to: '/admin/dashboard', icon: BarChart3, label: t('nav.dashboard') },
   { key: 'llm', to: '/admin/llm', icon: Sparkles, label: t('nav.llmProviders') },
   { key: 'runners', to: '/admin/runners', icon: Server, label: t('nav.runners') },
   { key: 'usage', to: '/admin/llm-usage', icon: Activity, label: t('nav.llmUsage') },

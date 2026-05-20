@@ -13,6 +13,7 @@
     "llmProviders": "LLM Provider",
     "runners": "Runner",
     "llmUsage": "LLM 用量",
+    "dashboard": "仪表盘",
     "agentSessions": "Agent 会话",
     "logout": "退出登录",
     "toggleSidebar": "切换侧边栏",
@@ -334,6 +335,49 @@
         "created": "创建时间",
         "duration": "时长",
         "error": "错误"
+      }
+    },
+    "dashboard": {
+      "title": "仪表盘",
+      "subtitle": "平台关键指标一览：调用量、Token 用量、会话数与 Runner 健康度。",
+      "loadFailed": "加载仪表盘数据失败",
+      "applyFilters": "应用筛选",
+      "empty": "所选范围内暂无数据",
+      "emptyHint": "尝试切换时间范围或 Provider 筛选条件。",
+      "emptyChart": "暂无图表数据",
+      "emptyProviders": "暂无 Provider 数据",
+      "emptyFailures": "暂无失败记录",
+      "range7d": "最近 7 天",
+      "range30d": "最近 30 天",
+      "rangeCustom": "自定义范围",
+      "kpiCalls": "总调用次数",
+      "kpiTokens": "总 Token 数",
+      "kpiSessions": "活跃会话",
+      "kpiRunners": "在线 Runner",
+      "chartCallsTitle": "每日调用量",
+      "chartCalls": "调用次数",
+      "chartTokensTitle": "每日 Token 用量",
+      "chartTotalTokens": "Token 总数",
+      "chartPromptTokens": "Prompt Token",
+      "chartCompletionTokens": "Completion Token",
+      "providerRanking": "Provider 排行",
+      "runnerHealth": "Runner 健康",
+      "healthOnline": "在线",
+      "healthOffline": "离线",
+      "healthDisabled": "已禁用",
+      "healthLiveSessions": "活跃会话",
+      "recentFailures": "近期失败",
+      "filters": {
+        "range": "时间范围",
+        "since": "起始",
+        "until": "截止",
+        "provider": "Provider",
+        "providerAny": "任意 Provider"
+      },
+      "cols": {
+        "provider": "Provider",
+        "calls": "调用数",
+        "tokens": "Token 数"
       }
     }
   },
