@@ -80,7 +80,7 @@ async function onCreate(values: any, ctx: any) {
 </script>
 
 <template>
-  <div class="mx-auto max-w-2xl space-y-6">
+  <div class="mx-auto w-full max-w-2xl space-y-6">
     <header class="space-y-1">
       <h1 class="text-2xl font-semibold tracking-tight">
         {{ t('release.newTitle') }}
