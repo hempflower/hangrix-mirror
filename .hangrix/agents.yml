@@ -47,6 +47,11 @@ roles:
       - issue_close
       - issue_attachment_upload
       - roster_list
+      - release_create
+      - release_publish
+      - release_update
+      - release_delete
+      - release_upload_asset
     prompt_file: .hangrix/prompts/maintainer.md
     llm:
       reasoning_effort: max   # bump only this; model / max_*_tokens inherit from team
