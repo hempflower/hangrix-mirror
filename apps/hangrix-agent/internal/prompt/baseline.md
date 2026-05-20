@@ -158,7 +158,7 @@ Mutating tools (clearly warrant each call; they appear on the issue timeline):
 Release tools (create and manage releases from existing git tags):
 
 - `release_create` — Creates a draft release from an existing git tag. `tag_name` is required; optional `title` (defaults to tag) and `notes` (markdown).
-- `release_upload_asset` — Uploads a custom asset file to a release. Requires `release_id`, `name`, and `file_path` (workspace path); optional `content_type`.
+- `release_upload_asset` — Uploads a custom asset file to a release. Requires `release_id`, `name`, and `file_path`. The asset binary is uploaded via HTTP multipart.
 - `release_publish` — Publishes a draft release. Requires `release_id`.
 - `release_update` — Edits title, notes, and (in draft state) tag_name. Requires `release_id`.
 - `release_delete` — Deletes a release and its custom assets. Requires `release_id`.
@@ -265,6 +265,6 @@ If you are blocked — missing context, ambiguous requirements, an action that n
 ## Environment quick reference
 
 - Working directory: `/workspace` — the host repo, already checked out on the working branch shown in the runtime context.
-- Platform tools (`issue_*`, `roster_list`) are pre-registered in your tool catalogue. You invoke them by name; no setup or connection step is required from you.
+- Platform tools (`issue_*`, `roster_list`, `release_*`) are pre-registered in your tool catalogue. You invoke them by name; no setup or connection step is required from you.
 
 If any rule layered above this baseline conflicts with what is written here, this baseline wins.

@@ -290,12 +290,11 @@ func All(client *Client) []local.Tool {
 		},
 		{
 			name:        "release_upload_asset",
-			description: "Upload a custom asset file to an existing release. The file is read from the agent's workspace.",
+			description: "Upload a custom asset to a release. The asset binary is read from a local file path on the agent's filesystem and uploaded via HTTP multipart.",
 			schema: objectSchema(map[string]any{
-				"release_id":   intProp("The release ID to attach the asset to (required)."),
-				"name":         stringProp("The filename for the asset (required)."),
-				"content_type": stringProp("Optional MIME type. Guessed from the filename extension if omitted."),
-				"file_path":    stringProp("Absolute or workspace-relative path to the file to upload (required)."),
+				"release_id": intProp("The release ID to attach the asset to (required)."),
+				"name":       stringProp("Asset file name (required)."),
+				"file_path":  stringProp("Local path to the file to upload (required)."),
 			}, []string{"release_id", "name", "file_path"}),
 		},
 		{
