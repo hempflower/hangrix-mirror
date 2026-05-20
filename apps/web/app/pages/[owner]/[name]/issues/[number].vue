@@ -746,6 +746,7 @@ onUnmounted(stopRefreshTimer)
                       :owner="owner"
                       :name="name"
                       :issue-number="Number(number)"
+                      :existing-attachments="attachments"
                       @insert="(snippet: string) => mentionTextareaRef?.insertAtCursor(snippet)"
                       @uploaded="(att: IssueAttachment) => attachments.push(att)"
                     />

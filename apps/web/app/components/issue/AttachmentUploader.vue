@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import {
   Paperclip,
   X,
@@ -21,6 +21,7 @@ const props = defineProps<{
   owner: string
   name: string
   issueNumber: number
+  existingAttachments?: IssueAttachment[]
 }>()
 
 const emit = defineEmits<{
@@ -31,6 +32,24 @@ const emit = defineEmits<{
 const uploading = ref(false)
 const uploadError = ref<string | null>(null)
 const attachments = ref<IssueAttachment[]>([])
+
+// Merge existing attachments (loaded from API) into the local list so the
+// uploader shows them after page refresh. Deduplicates by id so locally
+// uploaded items are not overwritten.
+watch(
+  () => props.existingAttachments,
+  (existing) => {
+    if (!existing || existing.length === 0) return
+    const existingIds = new Set(attachments.value.map((a) => a.id))
+    for (const att of existing) {
+      if (!existingIds.has(att.id)) {
+        attachments.value.push(att)
+        existingIds.add(att.id)
+      }
+    }
+  },
+  { immediate: true },
+)
 
 // Hidden file input for triggering native picker
 const fileInput = ref<HTMLInputElement | null>(null)
