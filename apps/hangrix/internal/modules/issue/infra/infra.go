@@ -121,7 +121,7 @@ func (s *PostgresStore) GetByNumber(ctx context.Context, repoID, number int64) (
 func (s *PostgresStore) List(ctx context.Context, repoID int64, f domain.ListFilter) ([]*domain.Issue, int64, error) {
 	limit := f.Limit
 	if limit <= 0 {
-		limit = 50
+		limit = 20
 	}
 	offset := f.Offset
 	if offset < 0 {

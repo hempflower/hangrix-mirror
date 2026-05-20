@@ -509,12 +509,15 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := domain.State(strings.TrimSpace(r.URL.Query().Get("state")))
+	if state == "all" {
+		state = ""
+	}
 	if state != "" && !state.Valid() {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid state")
 		return
 	}
 	offset := parseInt32(r.URL.Query().Get("offset"), 0)
-	limit := parseInt32(r.URL.Query().Get("limit"), 50)
+	limit := parseInt32(r.URL.Query().Get("limit"), 20)
 
 	list, total, err := h.issues.List(r.Context(), rc.repo.ID, domain.ListFilter{
 		State:  state,
