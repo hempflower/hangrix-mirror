@@ -27,12 +27,14 @@ package platform
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -182,6 +184,81 @@ func (t *Tool) Call(ctx context.Context, args json.RawMessage) (any, error) {
 	return text, nil
 }
 
+// attachmentTool is like Tool but reads the file from the local workspace
+// before POSTing to the server. The server-side handler receives file
+// bytes (base64-encoded in the "data" field) rather than a path string,
+// so it can store files from agent containers it has no filesystem access
+// to. The LLM-facing descriptor is identical to a plain Tool — the agent
+// only knows it passes a "path" and gets back attachment metadata.
+type attachmentTool struct {
+	name        string
+	description string
+	schema      map[string]any
+	client      *Client
+}
+
+func (t *attachmentTool) Name() string           { return t.name }
+func (t *attachmentTool) Description() string    { return t.description }
+func (t *attachmentTool) Schema() map[string]any { return t.schema }
+
+// maxAttachmentBytes is the maximum file size the agent will read and
+// encode for upload (64 MiB, matching the server-side limit).
+const maxAttachmentBytes = 64 << 20
+
+func (t *attachmentTool) Call(ctx context.Context, args json.RawMessage) (any, error) {
+	var req struct {
+		Path        string `json:"path"`
+		DisplayName string `json:"display_name"`
+		Inline      bool   `json:"inline"`
+		CommentID   int64  `json:"comment_id"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, fmt.Errorf("issue_attachment_upload: parse arguments: %w. Pass a JSON object with at least \"path\".", err)
+	}
+	req.Path = strings.TrimSpace(req.Path)
+	if req.Path == "" {
+		return nil, fmt.Errorf("issue_attachment_upload: path is required. Provide a workspace-relative or absolute path to the file to upload.")
+	}
+
+	data, err := os.ReadFile(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("issue_attachment_upload: cannot read file %q: %w. Check that the path exists and is a regular file in the workspace.", req.Path, err)
+	}
+	if len(data) > maxAttachmentBytes {
+		return nil, fmt.Errorf("issue_attachment_upload: file %q is %d bytes, exceeds the %d MiB limit. Consider compressing or splitting the file before uploading.", req.Path, len(data), maxAttachmentBytes>>20)
+	}
+
+	// Build enriched args with base64-encoded file content. The server
+	// handler uses the "data" field for the file bytes and still receives
+	// "path" / "display_name" / "inline" / "comment_id" for metadata.
+	enriched := map[string]any{
+		"path":         req.Path,
+		"data":         base64.StdEncoding.EncodeToString(data),
+		"display_name": req.DisplayName,
+		"inline":       req.Inline,
+	}
+	if req.CommentID != 0 {
+		enriched["comment_id"] = req.CommentID
+	}
+	enrichedJSON, err := json.Marshal(enriched)
+	if err != nil {
+		return nil, err
+	}
+
+	text, isError, err := t.client.Call(ctx, t.name, enrichedJSON)
+	if err != nil {
+		return nil, err
+	}
+	if isError {
+		return map[string]any{"is_error": true, "text": text}, nil
+	}
+	var parsed any
+	if err := json.Unmarshal([]byte(text), &parsed); err == nil {
+		return parsed, nil
+	}
+	return text, nil
+}
+
 // All returns every platform tool the agent ships with, bound to the
 // supplied HTTP client. Order matters for catalogue stability — keep
 // read-only tools first then mutating ones, mirroring the order the
@@ -293,12 +370,21 @@ func All(client *Client) []local.Tool {
 	}
 	out := make([]local.Tool, 0, len(descriptors))
 	for _, d := range descriptors {
-		out = append(out, &Tool{
-			name:        d.name,
-			description: d.description,
-			schema:      d.schema,
-			client:      client,
-		})
+		if d.name == "issue_attachment_upload" {
+			out = append(out, &attachmentTool{
+				name:        d.name,
+				description: d.description,
+				schema:      d.schema,
+				client:      client,
+			})
+		} else {
+			out = append(out, &Tool{
+				name:        d.name,
+				description: d.description,
+				schema:      d.schema,
+				client:      client,
+			})
+		}
 	}
 	return out
 }
