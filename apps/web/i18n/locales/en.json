@@ -541,7 +541,8 @@
       "role": "Role"
     },
     "tabs2": {
-      "issues": "Issues"
+      "issues": "Issues",
+      "releases": "Releases"
     },
     "automation": {
       "tabLabel": "Automation",
@@ -727,6 +728,64 @@
         "abstain": "{n} abstained"
       }
     }
+  },
+  "release": {
+    "title": "Releases",
+    "subtitle": "Package and publish tagged versions of this repository.",
+    "new": "New release",
+    "newTitle": "Create release",
+    "newSubtitle": "Create a release from an existing tag.",
+    "editTitle": "Edit release",
+    "listFailed": "Load failed",
+    "loadFailed": "Release not found or access denied",
+    "empty": "No releases yet",
+    "emptyHint": "Create a release to package a tagged version.",
+    "draft": "Draft",
+    "published": "Published",
+    "publish": "Publish",
+    "publishConfirm": "Publish this release? It will become publicly visible (for public repos).",
+    "publishing": "Publishing…",
+    "publishFailed": "Publish failed",
+    "delete": "Delete",
+    "deleteConfirm": "Delete release \"{title}\"? This also removes all uploaded assets.",
+    "deleteFailed": "Delete failed",
+    "edit": "Edit",
+    "save": "Save",
+    "saving": "Saving…",
+    "saveFailed": "Save failed",
+    "create": "Create release",
+    "creating": "Creating…",
+    "createFailed": "Create failed",
+    "fields": {
+      "tag": "Tag",
+      "tagHint": "Pick an existing tag for this release.",
+      "tagRequired": "A tag is required.",
+      "title": "Title",
+      "titleHint": "Optional. Defaults to the tag name.",
+      "notes": "Release notes",
+      "notesHint": "Markdown supported."
+    },
+    "assets": {
+      "title": "Assets",
+      "source": "Source code",
+      "custom": "Custom assets",
+      "upload": "Upload asset",
+      "uploading": "Uploading…",
+      "uploadFailed": "Upload failed",
+      "deleteConfirm": "Delete asset \"{name}\"?",
+      "deleteFailed": "Delete failed",
+      "noAssets": "No custom assets yet.",
+      "size": "{n} bytes",
+      "download": "Download"
+    },
+    "tabs": {
+      "all": "All",
+      "draft": "Draft",
+      "published": "Published"
+    },
+    "tag": "Tag",
+    "commit": "Commit",
+    "status": "Status"
   },
   "pat": {
     "title": "Personal Access Tokens",

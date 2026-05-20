@@ -541,7 +541,8 @@
       "role": "角色"
     },
     "tabs2": {
-      "issues": "Issue"
+      "issues": "Issue",
+      "releases": "Release"
     },
     "automation": {
       "tabLabel": "自动化",
@@ -727,6 +728,64 @@
         "abstain": "{n} 个弃权"
       }
     }
+  },
+  "release": {
+    "title": "Release",
+    "subtitle": "为仓库的标签版本打包发布。",
+    "new": "新建 Release",
+    "newTitle": "创建 Release",
+    "newSubtitle": "基于已有 tag 创建一个 Release。",
+    "editTitle": "编辑 Release",
+    "listFailed": "加载失败",
+    "loadFailed": "Release 未找到或无权访问",
+    "empty": "暂无 Release",
+    "emptyHint": "创建一个 Release 来打包标签版本。",
+    "draft": "草稿",
+    "published": "已发布",
+    "publish": "发布",
+    "publishConfirm": "确定发布此 Release？公开仓库中发布后将对外可见。",
+    "publishing": "发布中…",
+    "publishFailed": "发布失败",
+    "delete": "删除",
+    "deleteConfirm": "确定删除 Release \"{title}\"？所有已上传的附件也将一并删除。",
+    "deleteFailed": "删除失败",
+    "edit": "编辑",
+    "save": "保存",
+    "saving": "保存中…",
+    "saveFailed": "保存失败",
+    "create": "创建 Release",
+    "creating": "创建中…",
+    "createFailed": "创建失败",
+    "fields": {
+      "tag": "Tag",
+      "tagHint": "选择一个已有 tag 作为此 Release 的基础。",
+      "tagRequired": "必须选择一个 tag。",
+      "title": "标题",
+      "titleHint": "可选，默认使用 tag 名称。",
+      "notes": "Release 说明",
+      "notesHint": "支持 Markdown。"
+    },
+    "assets": {
+      "title": "附件",
+      "source": "源代码",
+      "custom": "自定义附件",
+      "upload": "上传附件",
+      "uploading": "上传中…",
+      "uploadFailed": "上传失败",
+      "deleteConfirm": "确定删除附件 \"{name}\"？",
+      "deleteFailed": "删除失败",
+      "noAssets": "暂无自定义附件。",
+      "size": "{n} 字节",
+      "download": "下载"
+    },
+    "tabs": {
+      "all": "全部",
+      "draft": "草稿",
+      "published": "已发布"
+    },
+    "tag": "Tag",
+    "commit": "提交",
+    "status": "状态"
   },
   "pat": {
     "title": "Personal Access Tokens",

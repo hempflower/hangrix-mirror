@@ -8,6 +8,7 @@ import {
   Diff,
   GitBranch,
   LogOut,
+  Rocket,
   Settings,
   Shield,
   Tag,
@@ -91,6 +92,7 @@ const repoItems = computed<NavItem[]>(() => {
   items.push(
     { key: 'branches', to: `${base}/branches`, icon: GitBranch, label: t('repo.tabs.branches') },
     { key: 'tags', to: `${base}/tags`, icon: Tag, label: t('repo.tabs.tags') },
+    { key: 'releases', to: `${base}/releases`, icon: Rocket, label: t('repo.tabs2.releases') },
     { key: 'compare', to: `${base}/compare`, icon: Diff, label: t('repo.tabs.compare') },
   )
   if (canManage.value) {
