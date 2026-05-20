@@ -161,6 +161,17 @@ type Task struct {
 	// server supports expansion but the repo has no variables, so any
 	// ${...} reference in task.Env fails the session explicitly.
 	RepoVariables map[string]string `json:"repo_variables"`
+	// Volumes carries the named volume cache mounts from the host repo's
+	// agents.yml container block. The orchestrator adds each as a `-v`
+	// bind mount at `docker create` time. Nil/empty means no volumes.
+	Volumes []Volume `json:"volumes,omitempty"`
+}
+
+// Volume mirrors agentsconfig.Volume (and server-side volumeDTO) on the
+// wire. Name is the Docker volume name; Mount is the in-container path.
+type Volume struct {
+	Name  string `json:"name"`
+	Mount string `json:"mount"`
 }
 
 // BuildSpec mirrors agentsconfig.Build on the wire. Paths are

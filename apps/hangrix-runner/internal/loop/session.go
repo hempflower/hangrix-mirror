@@ -167,6 +167,7 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 		HostWorkdir:      mountPath,
 		Env:              env,
 		ContainerID:      task.ContainerID,
+		Volumes:          mapVolumes(task.Volumes),
 	}
 	handle, err := d.Orchestrator.Start(ctx, otask)
 	if err != nil {
@@ -752,6 +753,18 @@ func buildAgentEnv(task *client.Task, baseURL string) map[string]string {
 		env["HANGRIX_BASE_BRANCH"] = task.BaseBranch
 	}
 	return env
+}
+
+// mapVolumes converts client.Volume slices to orchestrator.Volume slices.
+func mapVolumes(vols []client.Volume) []orchestrator.Volume {
+	if len(vols) == 0 {
+		return nil
+	}
+	out := make([]orchestrator.Volume, len(vols))
+	for i, v := range vols {
+		out[i] = orchestrator.Volume{Name: v.Name, Mount: v.Mount}
+	}
+	return out
 }
 
 // stderrTailCap bounds how much of the agent's stderr we keep around

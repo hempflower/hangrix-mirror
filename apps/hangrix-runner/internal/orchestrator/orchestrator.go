@@ -49,6 +49,9 @@ type Task struct {
 	HostWorkdir      string
 	Env              map[string]string
 	ContainerID      string
+	// Volumes carries the named volume cache mounts (name + in-
+	// container path) from the server task payload.
+	Volumes []Volume
 }
 
 // BuildSpec describes the docker-build inputs for a Task. Paths are
@@ -58,6 +61,13 @@ type BuildSpec struct {
 	Dockerfile string
 	Context    string
 	Args       map[string]string
+}
+
+// Volume is a named Docker volume mount requested by the host repo
+// agents.yml. Name is the volume name; Mount is the in-container path.
+type Volume struct {
+	Name  string
+	Mount string
 }
 
 // Handle is the running container's stdio + wait surface. Stdin / Stdout

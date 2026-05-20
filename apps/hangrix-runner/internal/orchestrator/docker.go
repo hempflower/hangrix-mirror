@@ -297,6 +297,9 @@ func (o *DockerOrchestrator) createContainer(ctx context.Context, t Task) (strin
 	if t.HostAddendumPath != "" {
 		args = append(args, "-v", o.absMount(t.HostAddendumPath, "/opt/hangrix/host_addendum.md", true))
 	}
+		for _, vol := range t.Volumes {
+			args = append(args, "-v", vol.Name+":"+vol.Mount)
+		}
 	args = append(args, t.Image)
 	args = append(args, cmdArgs...)
 
