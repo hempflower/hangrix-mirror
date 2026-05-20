@@ -57,7 +57,7 @@ type StorageConfig struct {
 	// stored, keyed by release ID. Created on demand.
 	AssetsPath string `mapstructure:"assets_path"`
 	// AttachmentsPath is the directory under which issue attachments live,
-	// as `<AttachmentsPath>/<repo_id>/<issue_id>/<attachment_id>/<sha256>`.
+	// as `<AttachmentsPath>/<repo_id>/<issue_id>/<dirComp>/<sha256>`.
 	// Created on demand at first upload.
 	AttachmentsPath string `mapstructure:"attachments_path"`
 }

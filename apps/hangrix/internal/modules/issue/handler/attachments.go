@@ -227,11 +227,13 @@ type publicAttachment struct {
 	AuthorID         int64      `json:"author_id"`
 	AgentRole        string     `json:"agent_role,omitempty"`
 	OriginalName     string     `json:"original_name"`
+	DisplayName      string     `json:"display_name"`
 	SizeBytes        int64      `json:"size_bytes"`
 	MimeType         string     `json:"mime_type"`
 	DetectedMimeType string     `json:"detected_mime_type"`
 	SHA256           string     `json:"sha256"`
 	Kind             string     `json:"kind"`
+	Inline           bool       `json:"inline"`
 	Status           string     `json:"status"`
 	DownloadURL      string     `json:"download_url"`
 	PreviewURL       string     `json:"preview_url"`
@@ -258,11 +260,13 @@ func toPublicAttachment(owner, repoName string, issueNumber int64, a *domain.Att
 		AuthorID:         a.AuthorID,
 		AgentRole:        a.AgentRole,
 		OriginalName:     a.OriginalName,
+		DisplayName:      a.DisplayName,
 		SizeBytes:        a.SizeBytes,
 		MimeType:         a.MimeType,
 		DetectedMimeType: a.DetectedMimeType,
 		SHA256:           a.SHA256,
 		Kind:             string(a.Kind),
+		Inline:           a.Inline,
 		Status:           string(a.Status),
 		DownloadURL:      downloadURL,
 		PreviewURL:       downloadURL,

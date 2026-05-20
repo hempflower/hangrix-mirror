@@ -33,8 +33,8 @@ const createAttachment = `-- name: CreateAttachment :one
 
 INSERT INTO issue_attachments (
     repo_id, issue_id, author_id, agent_role, storage_key,
-    original_name, size_bytes, mime_type, detected_mime_type,
-    sha256, kind, status
+    original_name, display_name, size_bytes, mime_type, detected_mime_type,
+    sha256, kind, inline, status
 )
 VALUES (
     $1,
@@ -48,7 +48,9 @@ VALUES (
     $9,
     $10,
     $11,
-    'uploaded'
+    $12,
+    $13,
+    $14
 )
 RETURNING id, created_at
 `
@@ -60,11 +62,14 @@ type CreateAttachmentParams struct {
 	AgentRole        string
 	StorageKey       string
 	OriginalName     string
+	DisplayName      string
 	SizeBytes        int64
 	MimeType         string
 	DetectedMimeType string
 	Sha256           string
 	Kind             string
+	Inline           bool
+	Status           string
 }
 
 type CreateAttachmentRow struct {
@@ -83,11 +88,14 @@ func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentPara
 		arg.AgentRole,
 		arg.StorageKey,
 		arg.OriginalName,
+		arg.DisplayName,
 		arg.SizeBytes,
 		arg.MimeType,
 		arg.DetectedMimeType,
 		arg.Sha256,
 		arg.Kind,
+		arg.Inline,
+		arg.Status,
 	)
 	var i CreateAttachmentRow
 	err := row.Scan(&i.ID, &i.CreatedAt)
@@ -262,8 +270,8 @@ SELECT a.id, a.repo_id, a.issue_id,
        COALESCE(a.comment_id, 0)::BIGINT AS comment_id,
        COALESCE(a.author_id, 0)::BIGINT   AS author_id,
        a.agent_role, a.storage_key, a.original_name,
-       a.size_bytes, a.mime_type, a.detected_mime_type,
-       a.sha256, a.kind, a.status,
+       a.display_name, a.size_bytes, a.mime_type, a.detected_mime_type,
+       a.sha256, a.kind, a.inline, a.status,
        a.created_at, a.deleted_at
 FROM issue_attachments a
 WHERE a.id = $1
@@ -278,11 +286,13 @@ type GetAttachmentRow struct {
 	AgentRole        string
 	StorageKey       string
 	OriginalName     string
+	DisplayName      string
 	SizeBytes        int64
 	MimeType         string
 	DetectedMimeType string
 	Sha256           string
 	Kind             string
+	Inline           bool
 	Status           string
 	CreatedAt        pgtype.Timestamptz
 	DeletedAt        pgtype.Timestamptz
@@ -300,11 +310,13 @@ func (q *Queries) GetAttachment(ctx context.Context, id int64) (GetAttachmentRow
 		&i.AgentRole,
 		&i.StorageKey,
 		&i.OriginalName,
+		&i.DisplayName,
 		&i.SizeBytes,
 		&i.MimeType,
 		&i.DetectedMimeType,
 		&i.Sha256,
 		&i.Kind,
+		&i.Inline,
 		&i.Status,
 		&i.CreatedAt,
 		&i.DeletedAt,
@@ -462,12 +474,11 @@ SELECT a.id, a.repo_id, a.issue_id,
        COALESCE(a.comment_id, 0)::BIGINT AS comment_id,
        COALESCE(a.author_id, 0)::BIGINT   AS author_id,
        a.agent_role, a.storage_key, a.original_name,
-       a.size_bytes, a.mime_type, a.detected_mime_type,
-       a.sha256, a.kind, a.status,
+       a.display_name, a.size_bytes, a.mime_type, a.detected_mime_type,
+       a.sha256, a.kind, a.inline, a.status,
        a.created_at, a.deleted_at
 FROM issue_attachments a
 WHERE a.issue_id = $1
-  AND a.status <> 'deleted'
   AND ($2::BIGINT IS NULL OR a.comment_id = $2)
 ORDER BY a.created_at, a.id
 `
@@ -486,11 +497,13 @@ type ListAttachmentsRow struct {
 	AgentRole        string
 	StorageKey       string
 	OriginalName     string
+	DisplayName      string
 	SizeBytes        int64
 	MimeType         string
 	DetectedMimeType string
 	Sha256           string
 	Kind             string
+	Inline           bool
 	Status           string
 	CreatedAt        pgtype.Timestamptz
 	DeletedAt        pgtype.Timestamptz
@@ -514,11 +527,13 @@ func (q *Queries) ListAttachments(ctx context.Context, arg ListAttachmentsParams
 			&i.AgentRole,
 			&i.StorageKey,
 			&i.OriginalName,
+			&i.DisplayName,
 			&i.SizeBytes,
 			&i.MimeType,
 			&i.DetectedMimeType,
 			&i.Sha256,
 			&i.Kind,
+			&i.Inline,
 			&i.Status,
 			&i.CreatedAt,
 			&i.DeletedAt,

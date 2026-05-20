@@ -56,6 +56,8 @@ type IssueAttachment struct {
 	Status           string
 	CreatedAt        pgtype.Timestamptz
 	DeletedAt        pgtype.Timestamptz
+	DisplayName      string
+	Inline           bool
 }
 
 type IssueComment struct {
