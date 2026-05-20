@@ -167,3 +167,25 @@ sql:
         emit_empty_slices: true
 
 
+  - engine: postgresql
+    queries: internal/modules/dashboard/infra/queries.sql
+    # Dashboard queries read llm_usage_log (llm_provider module), agent_sessions,
+    # and runners (runner module). Union all four schemas so sqlc can resolve
+    # every table reference. No migrations live here — the dashboard only reads.
+    schema:
+      - internal/modules/user/infra/migrations
+      - internal/modules/org/infra/migrations
+      - internal/modules/repo/infra/migrations
+      - internal/modules/llm_provider/infra/migrations
+      - internal/modules/runner/infra/migrations
+    gen:
+      go:
+        package: dashboarddb
+        out: internal/modules/dashboard/infra/dashboarddb
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_empty_slices: true
+
