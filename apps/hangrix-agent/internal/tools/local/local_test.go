@@ -330,6 +330,131 @@ func TestEditReplaceIndentationAdaptation(t *testing.T) {
 	}
 }
 
+// TestEditAnchorDisambiguatesExactMatch verifies that when `find` appears
+// identically in multiple places, the anchor selects the right occurrence
+// rather than blindly picking the first one.
+func TestEditAnchorDisambiguatesExactMatch(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	// "duplicate" appears twice — anchor disambiguates.
+	content := "first duplicate\n...\nmarker here\n...\nsecond duplicate\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Replace the SECOND "duplicate" (near "marker here").
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path":    path,
+		"mode":    "replace",
+		"find":    "duplicate",
+		"replace": "changed",
+		"anchor":  "marker here",
+	}))
+	if err != nil {
+		t.Fatalf("edit with anchor for disambiguation: %v", err)
+	}
+
+	body, _ := os.ReadFile(path)
+	got := string(body)
+	if !strings.Contains(got, "first duplicate") {
+		t.Errorf("first 'duplicate' should be unchanged, got: %q", got)
+	}
+	if !strings.Contains(got, "second changed") {
+		t.Errorf("second 'duplicate' should be changed to 'changed', got: %q", got)
+	}
+}
+
+// TestEditDeleteWithAnchor verifies that delete mode respects the anchor
+// for disambiguation when the find text appears multiple times.
+func TestEditDeleteWithAnchor(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "keep me\n...\nunique anchor\n...\ndelete me\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Delete "me" near "unique anchor" — should delete the SECOND "me",
+	// leaving "keep me" intact.
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path":   path,
+		"mode":   "delete",
+		"find":   "me",
+		"anchor": "unique anchor",
+	}))
+	if err != nil {
+		t.Fatalf("delete with anchor: %v", err)
+	}
+
+	body, _ := os.ReadFile(path)
+	got := string(body)
+	if !strings.Contains(got, "keep me") {
+		t.Errorf("first 'me' should be unchanged, got: %q", got)
+	}
+	if strings.Contains(got, "delete me") {
+		t.Errorf("second 'me' should be deleted, got: %q", got)
+	}
+}
+
+// TestEditDeleteAnchorNotFound verifies that delete mode reports a helpful
+// error when the anchor doesn't match.
+func TestEditDeleteAnchorNotFound(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "some content\nhere\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path":   path,
+		"mode":   "delete",
+		"find":   "x",
+		"anchor": "nonexistent",
+	}))
+	if err == nil {
+		t.Fatal("expected error for non-matching anchor in delete mode")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "anchor") {
+		t.Errorf("error should mention 'anchor'; got: %s", msg)
+	}
+	if !strings.Contains(msg, "some content") {
+		t.Errorf("error should show file context; got: %s", msg)
+	}
+}
+
+
 
 
 // TestBashForeground covers the basic (sync) bash path: output capture

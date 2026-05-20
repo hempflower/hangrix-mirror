@@ -238,22 +238,51 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 			return nil, errors.New("edit (replace): 'find' is empty. Replace mode locates an exact substring and swaps it for 'replace' — set 'find' to the text you want to change (copy it verbatim from the file you read).")
 		}
 
-		// First attempt: exact substring match (original behaviour,
-		// First attempt: exact substring match (original behaviour,
-		// handles partial-line matches like "hello" → "hi" in "hello world").
+		// Determine the search region.  When an anchor is supplied we
+		// first locate it, then restrict exact-match and normalised-match
+		// searches to ±anchor_radius around it — this lets the LLM
+		// disambiguate when the same text appears in multiple places.
+		searchStart, searchEnd := 0, len(fileLines)
+		anchorLine := -1
+		if a.Anchor != "" {
+			anchorStart, _ := findLinesNormalized(fileLines, 0, len(fileLines), a.Anchor, indent)
+			if anchorStart < 0 {
+				return nil, matchFailureError(fileLines, a.Anchor, a.Path, "anchor",
+					"Re-read the file with 'read' and copy the anchor text verbatim — it must uniquely identify a region in the file.")
+			}
+			anchorLine = anchorStart
+			searchStart = max(0, anchorStart-a.AnchorRadius)
+			searchEnd = min(len(fileLines), anchorStart+a.AnchorRadius+1)
+		}
+
+		// Exact substring match.
 		if a.All {
+			// All: replace every occurrence in the full file.  Anchor
+			// is irrelevant because we match everywhere.
 			updated = strings.ReplaceAll(original, a.Find, a.Replace)
 			changed = strings.Count(original, a.Find)
+		} else if a.Anchor != "" {
+			// Single hit within the anchor region: find every
+			// occurrence and pick the one closest to the anchor line.
+			matchPos := findOccurrenceInRegion(original, a.Find, searchStart, searchEnd, anchorLine)
+			if matchPos >= 0 {
+				repl := a.Replace
+				if adapted := adaptIndent(a.Replace, a.Find, indent); adapted != a.Replace {
+					repl = adapted
+				}
+				updated = original[:matchPos] + repl + original[matchPos+len(a.Find):]
+				changed = 1
+			}
 		} else {
+			// Full file, first match (legacy path — no anchor).
 			updated = strings.Replace(original, a.Find, a.Replace, 1)
 			if updated != original {
 				changed = 1
 			}
 		}
 
-		// When the exact match succeeds and the replacement indentation
-		// differs from the file's style, redo with adapted indentation.
-		if changed > 0 {
+		// Adapt indentation on the legacy (no-anchor) path.
+		if changed > 0 && a.Anchor == "" {
 			adapted := adaptIndent(a.Replace, a.Find, indent)
 			if adapted != a.Replace {
 				if a.All {
@@ -264,20 +293,10 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 				}
 			}
 		}
+
 		if changed == 0 {
 			// Exact match failed — try whitespace-tolerant line-based
-			// matching. Narrow to the anchor region if one was supplied.
-			searchStart, searchEnd := 0, len(fileLines)
-			if a.Anchor != "" {
-				anchorStart, _ := findLinesNormalized(fileLines, 0, len(fileLines), a.Anchor, indent)
-				if anchorStart < 0 {
-					return nil, matchFailureError(fileLines, a.Anchor, a.Path, "anchor",
-						"Re-read the file with 'read' and copy the anchor text verbatim — it must uniquely identify a region in the file.")
-				}
-				searchStart = max(0, anchorStart-a.AnchorRadius)
-				searchEnd = min(len(fileLines), anchorStart+a.AnchorRadius+1)
-			}
-
+			// matching within the same (possibly anchor-narrowed) region.
 			matchStart, matchEnd := findLinesNormalized(fileLines, searchStart, searchEnd, a.Find, indent)
 			if matchStart < 0 {
 				region := fileLines[searchStart:searchEnd]
@@ -285,12 +304,7 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 					"Re-read the file with 'read' and copy the target text verbatim, including a line or two of surrounding context to make it unambiguous.")
 			}
 
-			// The matched lines in the *original* file — these are what we
-			// actually replace.
 			originalFind := strings.Join(fileLines[matchStart:matchEnd], "\n")
-
-			// Adapt the replacement text's indentation to match the
-			// source file's style, then apply.
 			adaptedReplace := adaptIndent(a.Replace, originalFind, indent)
 			if a.All {
 				updated = strings.ReplaceAll(original, originalFind, adaptedReplace)
@@ -325,18 +339,46 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 		if a.Find == "" {
 			return nil, errors.New("edit (delete): 'find' is empty. Delete mode removes the first exact match of 'find' from the file — set it to the text you want to remove (copy it verbatim from the file).")
 		}
-		// Try exact first, then normalised.
-		found := strings.Contains(original, a.Find)
+
+		// Determine the search region (narrowed by anchor if supplied).
+		searchStart, searchEnd := 0, len(fileLines)
+			anchorLine := -1
+		if a.Anchor != "" {
+			anchorStart, _ := findLinesNormalized(fileLines, 0, len(fileLines), a.Anchor, indent)
+			if anchorStart < 0 {
+				return nil, matchFailureError(fileLines, a.Anchor, a.Path, "anchor",
+					"Re-read the file with 'read' and copy the anchor text verbatim — it must uniquely identify a region in the file.")
+			}
+				anchorLine = anchorStart
+			searchStart = max(0, anchorStart-a.AnchorRadius)
+			searchEnd = min(len(fileLines), anchorStart+a.AnchorRadius+1)
+		}
+
+		// Try exact match within the region (or full file).
 		originalFind := a.Find
+		found := false
+		if a.Anchor != "" {
+			matchPos := findOccurrenceInRegion(original, a.Find, searchStart, searchEnd, anchorLine)
+			if matchPos >= 0 {
+				updated = original[:matchPos] + original[matchPos+len(a.Find):]
+				found = true
+			}
+		} else if strings.Contains(original, a.Find) {
+			updated = strings.Replace(original, a.Find, "", 1)
+			found = true
+		}
+
 		if !found {
-			matchStart, matchEnd := findLinesNormalized(fileLines, 0, len(fileLines), a.Find, indent)
+			// Normalised fallback within the same region.
+			matchStart, matchEnd := findLinesNormalized(fileLines, searchStart, searchEnd, a.Find, indent)
 			if matchStart < 0 {
-				return nil, matchFailureError(fileLines, a.Find, a.Path, "find",
+				region := fileLines[searchStart:searchEnd]
+				return nil, matchFailureError(region, a.Find, a.Path, "find",
 					"Re-read the file with 'read' and copy the target text verbatim.")
 			}
 			originalFind = strings.Join(fileLines[matchStart:matchEnd], "\n")
+			updated = strings.Replace(original, originalFind, "", 1)
 		}
-		updated = strings.Replace(original, originalFind, "", 1)
 		changed = 1
 
 	default:
@@ -486,6 +528,44 @@ func findLinesNormalized(haystack []string, searchStart, searchEnd int, needle s
 	}
 	return -1, -1
 }
+
+// findOccurrenceInRegion returns the byte offset of the occurrence of `find`
+// in `original` that is closest to `anchorLine` among those whose starting
+// line is within [lineStart, lineEnd). When anchorLine is -1 the first
+// match in the region is returned. Returns -1 when find is empty or no
+// occurrence falls within the region.
+func findOccurrenceInRegion(original, find string, lineStart, lineEnd, anchorLine int) int {
+	if find == "" {
+		return -1
+	}
+	bestPos := -1
+	bestDist := -1
+	idx := 0
+	for {
+		pos := strings.Index(original[idx:], find)
+		if pos < 0 {
+			break
+		}
+		absPos := idx + pos
+		lineNo := strings.Count(original[:absPos], "\n")
+		if lineNo >= lineStart && lineNo < lineEnd {
+			// Signed distance: positive = after anchor, negative = before.
+			// When two occurrences are equally distant in absolute terms,
+			// prefer the one at or after the anchor.
+			absDist := lineNo - anchorLine
+			if absDist < 0 {
+				absDist = -absDist
+			}
+			if bestPos < 0 || absDist < bestDist || (absDist == bestDist && lineNo >= anchorLine) {
+				bestPos = absPos
+				bestDist = absDist
+			}
+		}
+		idx = absPos + 1
+	}
+	return bestPos
+}
+
 // matchFailureError builds an actionable error message when a find/anchor
 // search fails. It includes a preview of the searched region so the LLM can
 // see what's actually in the file without an extra round-trip.
