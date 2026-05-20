@@ -113,11 +113,13 @@ export interface IssueAttachment {
   id: number
   repo_id: number
   issue_id: number
-  comment_id: number | null
+  comment_id: number
   author_id: number | null
   agent_role: string
-  storage_key: string
   original_name: string
+  display_name: string
+  inline: boolean
+
   size_bytes: number
   mime_type: string
   detected_mime_type: string

@@ -274,11 +274,13 @@ type Attachment struct {
 	AgentRole        string
 	StorageKey       string
 	OriginalName     string
+	DisplayName      string
 	SizeBytes        int64
 	MimeType         string
 	DetectedMimeType string
 	SHA256           string
 	Kind             AttachmentKind
+	Inline           bool
 	Status           AttachmentStatus
 	CreatedAt        time.Time
 	DeletedAt        *time.Time
@@ -286,7 +288,7 @@ type Attachment struct {
 
 // AttachmentStore is the persistence abstraction for issue attachments.
 type AttachmentStore interface {
-	CreateAttachment(ctx context.Context, repoID, issueID, authorID int64, agentRole, storageKey, originalName string, sizeBytes int64, mimeType, detectedMimeType, sha256 string, kind AttachmentKind) (*Attachment, error)
+	CreateAttachment(ctx context.Context, repoID, issueID, authorID int64, agentRole, storageKey, originalName, displayName string, sizeBytes int64, mimeType, detectedMimeType, sha256 string, kind AttachmentKind, inline bool) (*Attachment, error)
 	GetAttachment(ctx context.Context, id int64) (*Attachment, error)
 	ListAttachments(ctx context.Context, issueID, commentID int64) ([]*Attachment, error)
 	MarkAttached(ctx context.Context, id int64, commentID int64) error
