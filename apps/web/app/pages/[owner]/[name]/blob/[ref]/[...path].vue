@@ -28,6 +28,14 @@ setBreadcrumbs(() => {
 
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
+useHead({ title: () => {
+    const rawPath = route.params.path
+    const segs = Array.isArray(rawPath)
+      ? (rawPath as string[]).filter(Boolean)
+      : String(rawPath ?? '').split('/').filter(Boolean)
+    const filename = segs.length > 0 ? segs[segs.length - 1] : ''
+    return `${filename} · ${owner.value}/${name.value} - ${t('app.name')}`
+  } })
 
 // Ref comes in as a single decoded segment — branches with `/` in the name
 // are encoded as `%2F` on the way in (see entryHref in the index page) and

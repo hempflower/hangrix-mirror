@@ -48,6 +48,7 @@ const router = useRouter()
 const { user, refresh: refreshUser } = useCurrentUser()
 
 const orgName = computed(() => String(route.params.owner ?? ''))
+useHead({ title: () => `${orgName.value} · ${t('org.members.title')} - ${t('app.name')}` })
 
 const org = ref<PublicOrg | null>(null)
 const members = ref<PublicMember[]>([])

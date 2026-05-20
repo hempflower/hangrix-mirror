@@ -24,6 +24,7 @@ import type { Runner, RunnerCreateResp, RunnerListResp } from '~/types/runner'
 definePageMeta({ layout: 'admin' })
 
 const { t } = useI18n()
+useHead({ title: () => `${t('admin.runners.title')} - ${t('admin.section')} - ${t('app.name')}` })
 
 setBreadcrumbs(() => [
   { label: t('admin.section'), to: '/admin/runners' },

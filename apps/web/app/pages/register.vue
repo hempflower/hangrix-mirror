@@ -12,6 +12,7 @@ import type { User } from '~/types/user'
 definePageMeta({ layout: 'auth' })
 
 const { t } = useI18n()
+useHead({ title: () => `${t('register.title')} - ${t('app.name')}` })
 const router = useRouter()
 const { refresh } = useCurrentUser()
 

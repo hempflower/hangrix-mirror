@@ -39,6 +39,12 @@ const { user } = useCurrentUser()
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
 const number = computed(() => Number(route.params.number ?? 0))
+useHead({ title: () => {
+    const issueTitle = issue.value?.title
+    return issueTitle
+      ? `${issueTitle} · #${number.value} · ${owner.value}/${name.value} - ${t('app.name')}`
+      : `#${number.value} · ${owner.value}/${name.value} - ${t('app.name')}`
+  } })
 
 setBreadcrumbs(() => {
   const base = `/${owner.value}/${name.value}`

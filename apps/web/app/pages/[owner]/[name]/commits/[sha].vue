@@ -23,6 +23,7 @@ setBreadcrumbs(() => {
     { label: sha.slice(0, 7) },
   ]
 })
+useHead({ title: () => `${String(route.params.sha ?? '').slice(0, 7)} · ${t('repo.commit.title')} · ${String(route.params.owner ?? '')}/${String(route.params.name ?? '')} - ${t('app.name')}` })
 
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))

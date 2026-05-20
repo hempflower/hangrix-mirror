@@ -50,6 +50,7 @@ const { user } = useCurrentUser()
 
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
+useHead({ title: () => `${owner.value}/${name.value} - ${t('app.name')}` })
 
 setBreadcrumbs(() => [
   { label: owner.value, to: `/${owner.value}/${name.value}` },

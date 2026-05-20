@@ -22,6 +22,7 @@ import type { AdminAgentSession, AdminAgentSessionListResp } from '~/types/agent
 definePageMeta({ layout: 'admin' })
 
 const { t } = useI18n()
+useHead({ title: () => `${t('admin.agentSessions.title')} - ${t('admin.section')} - ${t('app.name')}` })
 
 setBreadcrumbs(() => [
   { label: t('admin.section'), to: '/admin/agent-sessions' },
