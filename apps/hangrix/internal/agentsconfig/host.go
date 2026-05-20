@@ -2,7 +2,7 @@ package agentsconfig
 
 // HostConfig models the parsed `.hangrix/agents.yml`. It is the single
 // source of truth for which roles a host repo runs, in what container,
-// with which secrets, under whose LLM defaults, and with which prompts.
+// under whose LLM defaults, and with which prompts.
 type HostConfig struct {
 	// Version pins the schema. Only `1` is currently accepted.
 	Version int
@@ -47,15 +47,10 @@ type Container struct {
 
 	// Env is the plain-text env-var map injected into every role
 	// container. Keys are uppercase `[A-Z_][A-Z0-9_]*`. Values may
-	// be any string — including JSON / shell-quoted blobs the agent
-	// will parse itself.
+	// be any string — including `${VAR_NAME}` references that the
+	// runner expands from repo-level variables / secrets at session
+	// start time.
 	Env map[string]string
-
-	// Secrets is the name-only list of secrets the platform should
-	// inject from the repo's "secrets" settings page. Values never
-	// appear in this file (or in git); they're fetched at task-
-	// claim time and dropped into the container env.
-	Secrets []string
 
 	// Volumes are repo-scoped named caches the runner binds into
 	// the container. Order matters only for human review — the

@@ -154,3 +154,38 @@ JOIN users u ON u.id = m.user_id
 WHERE m.repo_id = $1
 ORDER BY m.role DESC, u.username ASC;
 
+
+-- name: ListRepoVariables :many
+SELECT *
+FROM repo_variables
+WHERE repo_id = $1
+ORDER BY name;
+
+-- name: GetRepoVariable :one
+SELECT *
+FROM repo_variables
+WHERE id = $1 AND repo_id = $2;
+
+-- name: CreateRepoVariable :one
+INSERT INTO repo_variables (repo_id, name, value, kind)
+VALUES ($1, $2, $3, $4)
+RETURNING *;
+
+-- name: UpdateRepoVariable :one
+UPDATE repo_variables
+SET name       = $3,
+    value      = $4,
+    kind       = $5,
+    updated_at = NOW()
+WHERE id = $1 AND repo_id = $2
+RETURNING *;
+
+-- name: DeleteRepoVariable :execrows
+DELETE FROM repo_variables
+WHERE id = $1 AND repo_id = $2;
+
+-- name: GetRepoVariableByName :one
+SELECT *
+FROM repo_variables
+WHERE repo_id = $1 AND name = $2;
+

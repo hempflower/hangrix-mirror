@@ -59,10 +59,6 @@ var (
 	// chars outside [A-Z0-9_] or starts with a digit.
 	ErrInvalidEnvKey = errors.New("env key must match [A-Z_][A-Z0-9_]*")
 
-	// ErrInvalidSecretName fires for the same shape constraint applied
-	// to entries in the `secrets:` list.
-	ErrInvalidSecretName = errors.New("secret name must match [A-Z_][A-Z0-9_]*")
-
 	// ErrInvalidVolumeMount fires when a volume mount path is not
 	// absolute, contains `..`, or has an empty name.
 	ErrInvalidVolumeMount = errors.New("invalid volume mount")

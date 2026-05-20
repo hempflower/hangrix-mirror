@@ -13,9 +13,6 @@ container:
   env:
     NODE_ENV: development
     GOFLAGS: "-mod=readonly"
-  secrets:
-    - GITHUB_TOKEN
-    - NPM_AUTH_TOKEN
   volumes:
     - { name: pnpm-store, mount: /caches/pnpm }
     - { name: go-mod,    mount: /go/pkg/mod }
@@ -84,9 +81,6 @@ func TestParseHostConfig_Happy(t *testing.T) {
 	}
 	if cfg.Container.Env["NODE_ENV"] != "development" {
 		t.Fatalf("env NODE_ENV: %+v", cfg.Container.Env)
-	}
-	if len(cfg.Container.Secrets) != 2 {
-		t.Fatalf("secrets: %+v", cfg.Container.Secrets)
 	}
 	if len(cfg.Container.Volumes) != 2 || cfg.Container.Volumes[0].Mount != "/caches/pnpm" {
 		t.Fatalf("volumes: %+v", cfg.Container.Volumes)
@@ -289,17 +283,6 @@ container:
 roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrInvalidEnvKey,
-		},
-		{
-			name: "bad-secret-name",
-			body: `
-version: 1
-container:
-  image: x
-  secrets: [github_token]
-roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
-`,
-			target: ErrInvalidSecretName,
 		},
 		{
 			name: "bad-volume-mount-relative",

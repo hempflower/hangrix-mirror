@@ -59,6 +59,16 @@ type RepoMember struct {
 	AddedAt pgtype.Timestamptz
 }
 
+type RepoVariable struct {
+	ID        int64
+	RepoID    int64
+	Name      string
+	Value     string
+	Kind      string
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
 type User struct {
 	ID           int64
 	Username     string

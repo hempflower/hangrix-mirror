@@ -183,6 +183,39 @@ func (q *Queries) CreateRepoForUser(ctx context.Context, arg CreateRepoForUserPa
 	return i, err
 }
 
+const createRepoVariable = `-- name: CreateRepoVariable :one
+INSERT INTO repo_variables (repo_id, name, value, kind)
+VALUES ($1, $2, $3, $4)
+RETURNING id, repo_id, name, value, kind, created_at, updated_at
+`
+
+type CreateRepoVariableParams struct {
+	RepoID int64
+	Name   string
+	Value  string
+	Kind   string
+}
+
+func (q *Queries) CreateRepoVariable(ctx context.Context, arg CreateRepoVariableParams) (RepoVariable, error) {
+	row := q.db.QueryRow(ctx, createRepoVariable,
+		arg.RepoID,
+		arg.Name,
+		arg.Value,
+		arg.Kind,
+	)
+	var i RepoVariable
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.Name,
+		&i.Value,
+		&i.Kind,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const deleteBranchProtection = `-- name: DeleteBranchProtection :execrows
 DELETE FROM branch_protections WHERE id = $1 AND repo_id = $2
 `
@@ -206,6 +239,24 @@ DELETE FROM repos WHERE id = $1
 
 func (q *Queries) DeleteRepo(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteRepo, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteRepoVariable = `-- name: DeleteRepoVariable :execrows
+DELETE FROM repo_variables
+WHERE id = $1 AND repo_id = $2
+`
+
+type DeleteRepoVariableParams struct {
+	ID     int64
+	RepoID int64
+}
+
+func (q *Queries) DeleteRepoVariable(ctx context.Context, arg DeleteRepoVariableParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteRepoVariable, arg.ID, arg.RepoID)
 	if err != nil {
 		return 0, err
 	}
@@ -414,6 +465,58 @@ func (q *Queries) GetRepoMember(ctx context.Context, arg GetRepoMemberParams) (G
 	return i, err
 }
 
+const getRepoVariable = `-- name: GetRepoVariable :one
+SELECT id, repo_id, name, value, kind, created_at, updated_at
+FROM repo_variables
+WHERE id = $1 AND repo_id = $2
+`
+
+type GetRepoVariableParams struct {
+	ID     int64
+	RepoID int64
+}
+
+func (q *Queries) GetRepoVariable(ctx context.Context, arg GetRepoVariableParams) (RepoVariable, error) {
+	row := q.db.QueryRow(ctx, getRepoVariable, arg.ID, arg.RepoID)
+	var i RepoVariable
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.Name,
+		&i.Value,
+		&i.Kind,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getRepoVariableByName = `-- name: GetRepoVariableByName :one
+SELECT id, repo_id, name, value, kind, created_at, updated_at
+FROM repo_variables
+WHERE repo_id = $1 AND name = $2
+`
+
+type GetRepoVariableByNameParams struct {
+	RepoID int64
+	Name   string
+}
+
+func (q *Queries) GetRepoVariableByName(ctx context.Context, arg GetRepoVariableByNameParams) (RepoVariable, error) {
+	row := q.db.QueryRow(ctx, getRepoVariableByName, arg.RepoID, arg.Name)
+	var i RepoVariable
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.Name,
+		&i.Value,
+		&i.Kind,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listBranchProtectionsByRepo = `-- name: ListBranchProtectionsByRepo :many
 SELECT id, repo_id, pattern, forbid_force_push, forbid_delete, forbid_direct_push, created_at, updated_at
 FROM branch_protections
@@ -483,6 +586,41 @@ func (q *Queries) ListRepoMembers(ctx context.Context, repoID int64) ([]ListRepo
 			&i.Role,
 			&i.AddedBy,
 			&i.AddedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRepoVariables = `-- name: ListRepoVariables :many
+SELECT id, repo_id, name, value, kind, created_at, updated_at
+FROM repo_variables
+WHERE repo_id = $1
+ORDER BY name
+`
+
+func (q *Queries) ListRepoVariables(ctx context.Context, repoID int64) ([]RepoVariable, error) {
+	rows, err := q.db.Query(ctx, listRepoVariables, repoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RepoVariable{}
+	for rows.Next() {
+		var i RepoVariable
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepoID,
+			&i.Name,
+			&i.Value,
+			&i.Kind,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -793,6 +931,45 @@ func (q *Queries) UpdateRepoMeta(ctx context.Context, arg UpdateRepoMetaParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.OwnerOrgID,
+	)
+	return i, err
+}
+
+const updateRepoVariable = `-- name: UpdateRepoVariable :one
+UPDATE repo_variables
+SET name       = $3,
+    value      = $4,
+    kind       = $5,
+    updated_at = NOW()
+WHERE id = $1 AND repo_id = $2
+RETURNING id, repo_id, name, value, kind, created_at, updated_at
+`
+
+type UpdateRepoVariableParams struct {
+	ID     int64
+	RepoID int64
+	Name   string
+	Value  string
+	Kind   string
+}
+
+func (q *Queries) UpdateRepoVariable(ctx context.Context, arg UpdateRepoVariableParams) (RepoVariable, error) {
+	row := q.db.QueryRow(ctx, updateRepoVariable,
+		arg.ID,
+		arg.RepoID,
+		arg.Name,
+		arg.Value,
+		arg.Kind,
+	)
+	var i RepoVariable
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.Name,
+		&i.Value,
+		&i.Kind,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

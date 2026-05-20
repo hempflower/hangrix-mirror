@@ -22,6 +22,7 @@ func Module() *ioc.Module {
 	// callers (platform_mcp tools, agent_session spawner) can compute
 	// fsPaths without taking a hard dep on the concrete *infra.Storage.
 	m.Provide(infra.NewPostgresMemberStore).ToInterface(new(domain.MemberStore))
+	m.Provide(infra.NewPostgresVariableStore).ToInterface(new(domain.VariableStore))
 
 	storage.ToInterface(new(domain.PathResolver))
 	m.Provide(handler.NewHandler).ToInterface(new(server.RouteProvider))

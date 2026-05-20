@@ -17,10 +17,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
 	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/infra/repodb"
+	"github.com/hangrix/hangrix/pkg/cryptobox"
 )
 
 //go:embed migrations/*.sql
@@ -346,3 +348,184 @@ func orgListRowToRepo(r repodb.ListReposByOrgOwnerRow) *domain.Repo {
 	}
 	return out
 }
+
+// ---- Repo variables ----
+
+// PostgresVariableStore implements domain.VariableStore, backed by the
+// sqlc-generated repodb queries. Secret values are encrypted with
+// AES-256-GCM using the platform's encryption key before storage and
+// decrypted on read; callers always deal in plaintext.
+type PostgresVariableStore struct {
+	q   *repodb.Queries
+	box *cryptobox.Box
+}
+
+type PostgresVariableStoreDeps struct {
+	Pool   *pgxpool.Pool
+	Config *config.Config
+}
+
+func NewPostgresVariableStore(deps *PostgresVariableStoreDeps) *PostgresVariableStore {
+	box, err := cryptobox.New(deps.Config.LLM.EncryptionKey)
+	if err != nil {
+		panic(fmt.Errorf("repo variable store: init encryption: %w", err))
+	}
+	return &PostgresVariableStore{
+		q:   repodb.New(deps.Pool),
+		box: box,
+	}
+}
+
+func (s *PostgresVariableStore) List(ctx context.Context, repoID int64) ([]*domain.RepoVariable, error) {
+	rows, err := s.q.ListRepoVariables(ctx, repoID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*domain.RepoVariable, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, s.rowToDomain(&r))
+	}
+	return out, nil
+}
+
+func (s *PostgresVariableStore) Get(ctx context.Context, id, repoID int64) (*domain.RepoVariable, error) {
+	row, err := s.q.GetRepoVariable(ctx, repodb.GetRepoVariableParams{ID: id, RepoID: repoID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrVariableNotFound
+		}
+		return nil, err
+	}
+	return s.rowToDomain(&row), nil
+}
+
+func (s *PostgresVariableStore) Create(ctx context.Context, repoID int64, name, value string, kind domain.VariableKind) (*domain.RepoVariable, error) {
+	if !kind.Valid() {
+		return nil, domain.ErrVariableKindInvalid
+	}
+	if name == "" {
+		return nil, domain.ErrVariableNameEmpty
+	}
+	if !isValidVariableName(name) {
+		return nil, domain.ErrVariableNameInvalid
+	}
+
+	storedValue := value
+	if kind == domain.VariableKindSecret {
+		sealed, err := s.box.Encrypt(value)
+		if err != nil {
+			return nil, fmt.Errorf("encrypt variable: %w", err)
+		}
+		storedValue = sealed
+	}
+
+	row, err := s.q.CreateRepoVariable(ctx, repodb.CreateRepoVariableParams{
+		RepoID: repoID,
+		Name:   name,
+		Value:  storedValue,
+		Kind:   string(kind),
+	})
+	if err != nil {
+		if database.IsUniqueViolation(err) {
+			return nil, domain.ErrVariableConflict
+		}
+		return nil, err
+	}
+	return s.rowToDomain(&row), nil
+}
+
+func (s *PostgresVariableStore) Update(ctx context.Context, id, repoID int64, name, value string, kind domain.VariableKind) (*domain.RepoVariable, error) {
+	if !kind.Valid() {
+		return nil, domain.ErrVariableKindInvalid
+	}
+	if name == "" {
+		return nil, domain.ErrVariableNameEmpty
+	}
+	if !isValidVariableName(name) {
+		return nil, domain.ErrVariableNameInvalid
+	}
+
+	storedValue := value
+	if kind == domain.VariableKindSecret {
+		sealed, err := s.box.Encrypt(value)
+		if err != nil {
+			return nil, fmt.Errorf("encrypt variable: %w", err)
+		}
+		storedValue = sealed
+	}
+
+	row, err := s.q.UpdateRepoVariable(ctx, repodb.UpdateRepoVariableParams{
+		ID:    id,
+		RepoID: repoID,
+		Name:   name,
+		Value:  storedValue,
+		Kind:   string(kind),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrVariableNotFound
+		}
+		if database.IsUniqueViolation(err) {
+			return nil, domain.ErrVariableConflict
+		}
+		return nil, err
+	}
+	return s.rowToDomain(&row), nil
+}
+
+func (s *PostgresVariableStore) Delete(ctx context.Context, id, repoID int64) error {
+	n, err := s.q.DeleteRepoVariable(ctx, repodb.DeleteRepoVariableParams{ID: id, RepoID: repoID})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrVariableNotFound
+	}
+	return nil
+}
+
+// rowToDomain decrypts secret values and returns a plaintext domain object.
+func (s *PostgresVariableStore) rowToDomain(r *repodb.RepoVariable) *domain.RepoVariable {
+	value := r.Value
+	kind := domain.VariableKind(r.Kind)
+	if kind == domain.VariableKindSecret && value != "" {
+		plain, err := s.box.Decrypt(value)
+		if err != nil {
+			// A corrupted or key-rotated ciphertext: treat as empty so
+			// the caller can still see metadata and delete/re-seed it.
+			value = ""
+		} else {
+			value = plain
+		}
+	}
+	return &domain.RepoVariable{
+		ID:        r.ID,
+		RepoID:    r.RepoID,
+		Name:      r.Name,
+		Value:     value,
+		Kind:      kind,
+		CreatedAt: r.CreatedAt.Time,
+		UpdatedAt: r.UpdatedAt.Time,
+	}
+}
+
+// isValidVariableName enforces the same env-key shape as agents.yml
+// container.env: uppercase, `[A-Z_][A-Z0-9_]*`. Shared with
+// agentsconfig.isValidEnvKey in spirit; duplicated here to avoid a
+// cross-module import.
+func isValidVariableName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z':
+		case r == '_':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+

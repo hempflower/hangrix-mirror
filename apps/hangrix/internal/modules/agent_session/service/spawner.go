@@ -850,9 +850,6 @@ func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, a
 	if len(host.Container.Entrypoint) > 0 {
 		snap.Container["entrypoint"] = host.Container.Entrypoint
 	}
-	if len(host.Container.Secrets) > 0 {
-		snap.Container["secrets"] = host.Container.Secrets
-	}
 	return json.Marshal(snap)
 }
 

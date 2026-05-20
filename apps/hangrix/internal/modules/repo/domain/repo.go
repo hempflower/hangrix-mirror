@@ -181,3 +181,58 @@ type Store interface {
 	UpdateMeta(ctx context.Context, id int64, description, defaultBranch string, visibility Visibility) (*Repo, error)
 	Transfer(ctx context.Context, id int64, newOwnerKind OwnerKind, newOwnerID int64) (*Repo, error)
 }
+
+// VariableKind distinguishes plain variables (readable by anyone with
+// manage access) from secret variables (write-only after creation).
+type VariableKind string
+
+const (
+	VariableKindPlain  VariableKind = "plain"
+	VariableKindSecret VariableKind = "secret"
+)
+
+func (k VariableKind) Valid() bool { return k == VariableKindPlain || k == VariableKindSecret }
+
+// RepoVariable is one row in repo_variables.
+type RepoVariable struct {
+	ID        int64
+	RepoID    int64
+	Name      string
+	Value     string // ciphertext when kind=secret; plaintext when kind=plain
+	Kind      VariableKind
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// RepoVariablePublic is the API-safe projection. For secret variables,
+// Value is always empty; the caller must re-submit a plaintext to update.
+type RepoVariablePublic struct {
+	ID        int64        `json:"id"`
+	RepoID    int64        `json:"repo_id"`
+	Name      string       `json:"name"`
+	Value     string       `json:"value,omitempty"`
+	Kind      VariableKind `json:"kind"`
+	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt time.Time    `json:"updated_at"`
+}
+
+// Errors for repo_variables operations.
+var (
+	ErrVariableNotFound    = errors.New("repo variable not found")
+	ErrVariableNameEmpty   = errors.New("variable name must not be empty")
+	ErrVariableNameInvalid = errors.New("variable name must match [A-Z_][A-Z0-9_]*")
+	ErrVariableConflict    = errors.New("a variable with that name already exists")
+	ErrVariableKindInvalid = errors.New("variable kind must be 'plain' or 'secret'")
+)
+
+// VariableStore is the persistence abstraction for repo_variables.
+// Secret values are encrypted/decrypted by the infra layer; the domain
+// contract is plaintext in, plaintext out — callers never see ciphertext.
+type VariableStore interface {
+	List(ctx context.Context, repoID int64) ([]*RepoVariable, error)
+	Get(ctx context.Context, id, repoID int64) (*RepoVariable, error)
+	Create(ctx context.Context, repoID int64, name, value string, kind VariableKind) (*RepoVariable, error)
+	Update(ctx context.Context, id, repoID int64, name, value string, kind VariableKind) (*RepoVariable, error)
+	Delete(ctx context.Context, id, repoID int64) error
+}
+

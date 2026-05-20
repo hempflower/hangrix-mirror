@@ -27,7 +27,6 @@ type containerWire struct {
 	Build      *buildWire         `yaml:"build"`
 	Entrypoint []string           `yaml:"entrypoint"`
 	Env        map[string]string  `yaml:"env"`
-	Secrets    []string           `yaml:"secrets"`
 	Volumes    []volumeWire       `yaml:"volumes"`
 }
 
@@ -168,7 +167,7 @@ func ParseHostConfig(body []byte) (*HostConfig, error) {
 // buildContainer validates and lifts the container block.
 //
 // image/build is a mutual-exclusive pair: exactly one set. The other
-// fields (env, secrets, volumes) are each independently validated.
+// fields (env, volumes) are each independently validated.
 func buildContainer(w *containerWire) (Container, error) {
 	var c Container
 
@@ -205,13 +204,6 @@ func buildContainer(w *containerWire) (Container, error) {
 		}
 	}
 	c.Env = w.Env
-
-	for _, name := range w.Secrets {
-		if !isValidEnvKey(name) {
-			return c, fmt.Errorf("%w: %q", ErrInvalidSecretName, name)
-		}
-	}
-	c.Secrets = w.Secrets
 
 	c.Volumes = make([]Volume, 0, len(w.Volumes))
 	for i, v := range w.Volumes {

@@ -59,6 +59,7 @@ type Handler struct {
 	store       domain.Store
 	protections domain.ProtectionStore
 	members     domain.MemberStore
+	variables   domain.VariableStore
 	storage     *infra.Storage
 	git         gitdomain.Git
 	users       userdomain.Repo
@@ -79,6 +80,7 @@ type HandlerDeps struct {
 	Store       domain.Store
 	Protections domain.ProtectionStore
 	Members     domain.MemberStore
+	Variables   domain.VariableStore
 	Storage     *infra.Storage
 	Git         gitdomain.Git
 	Users       userdomain.Repo
@@ -112,6 +114,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		store:       deps.Store,
 		protections: deps.Protections,
 		members:     deps.Members,
+		variables:   deps.Variables,
 		storage:     deps.Storage,
 		git:         deps.Git,
 		users:       deps.Users,
@@ -174,6 +177,13 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Post("/{owner}/{name}/members", h.addMember)
 		r.Patch("/{owner}/{name}/members/{username}", h.patchMember)
 		r.Delete("/{owner}/{name}/members/{username}", h.removeMember)
+
+		// Repo variables and secrets. Manage-only: only owner/admin
+		// can create/update/delete/list.
+		r.Get("/{owner}/{name}/variables", h.listVariables)
+		r.Post("/{owner}/{name}/variables", h.createVariable)
+		r.Patch("/{owner}/{name}/variables/{varName}", h.updateVariable)
+		r.Delete("/{owner}/{name}/variables/{varName}", h.deleteVariable)
 	})
 
 	r.Route("/api/users/{username}/repos", func(r chi.Router) {
@@ -2054,3 +2064,232 @@ func (h *Handler) loadMemberUser(w http.ResponseWriter, r *http.Request) (*userd
 	}
 	return u, true
 }
+
+// ---- Repo variables ----
+
+type publicRepoVariable struct {
+	ID        int64              `json:"id"`
+	RepoID    int64              `json:"repo_id"`
+	Name      string             `json:"name"`
+	Value     string             `json:"value,omitempty"`
+	Kind      domain.VariableKind `json:"kind"`
+	CreatedAt time.Time          `json:"created_at"`
+	UpdatedAt time.Time          `json:"updated_at"`
+}
+
+func toPublicVariable(v *domain.RepoVariable) publicRepoVariable {
+	pr := publicRepoVariable{
+		ID:        v.ID,
+		RepoID:    v.RepoID,
+		Name:      v.Name,
+		Kind:      v.Kind,
+		CreatedAt: v.CreatedAt,
+		UpdatedAt: v.UpdatedAt,
+	}
+	if v.Kind == domain.VariableKindPlain {
+		pr.Value = v.Value
+	}
+	// Secret values are never returned to the client.
+	return pr
+}
+
+type variableListResp struct {
+	Items []publicRepoVariable `json:"items"`
+}
+
+func (h *Handler) listVariables(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForManage(w, r)
+	if !ok {
+		return
+	}
+	vars, err := h.variables.List(r.Context(), repo.ID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]publicRepoVariable, 0, len(vars))
+	for _, v := range vars {
+		out = append(out, toPublicVariable(v))
+	}
+	httpx.WriteJSON(w, http.StatusOK, variableListResp{Items: out})
+}
+
+type variableCreateReq struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	Kind  string `json:"kind"` // "plain" or "secret"
+}
+
+func (h *Handler) createVariable(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForManage(w, r)
+	if !ok {
+		return
+	}
+
+	var req variableCreateReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Value = strings.TrimSpace(req.Value)
+	kind := domain.VariableKind(strings.TrimSpace(req.Kind))
+	if kind == "" {
+		kind = domain.VariableKindPlain
+	}
+	if req.Name == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if req.Value == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "value is required")
+		return
+	}
+
+	vr, err := h.variables.Create(r.Context(), repo.ID, req.Name, req.Value, kind)
+	if err != nil {
+		if errors.Is(err, domain.ErrVariableConflict) {
+			httpx.WriteError(w, http.StatusConflict, "variable already exists")
+			return
+		}
+		if errors.Is(err, domain.ErrVariableNameInvalid) || errors.Is(err, domain.ErrVariableNameEmpty) {
+			httpx.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, domain.ErrVariableKindInvalid) {
+			httpx.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, toPublicVariable(vr))
+}
+
+type variableUpdateReq struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	Kind  string `json:"kind"`
+}
+
+func (h *Handler) updateVariable(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForManage(w, r)
+	if !ok {
+		return
+	}
+	varName := chi.URLParam(r, "varName")
+	if varName == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "missing variable name")
+		return
+	}
+
+	// Lookup existing variable by name to get its ID.
+	vars, err := h.variables.List(r.Context(), repo.ID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var existing *domain.RepoVariable
+	for _, v := range vars {
+		if v.Name == varName {
+			existing = v
+			break
+		}
+	}
+	if existing == nil {
+		httpx.WriteError(w, http.StatusNotFound, "variable not found")
+		return
+	}
+
+	var req variableUpdateReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+
+	newName := strings.TrimSpace(req.Name)
+	if newName == "" {
+		newName = existing.Name
+	}
+	newValue := strings.TrimSpace(req.Value)
+	newKind := existing.Kind
+	if k := domain.VariableKind(strings.TrimSpace(req.Kind)); k.Valid() {
+		newKind = k
+	}
+
+	// For secrets: an empty value means "keep current encrypted value".
+	// We must re-encrypt, so we need the plaintext. The variable store's
+	// Get returns plaintext, which we can re-encrypt.
+	if newKind == domain.VariableKindSecret && newValue == "" {
+		// Re-fetch the current plaintext value.
+		current, err := h.variables.Get(r.Context(), existing.ID, repo.ID)
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		newValue = current.Value
+	}
+
+	vr, err := h.variables.Update(r.Context(), existing.ID, repo.ID, newName, newValue, newKind)
+	if err != nil {
+		if errors.Is(err, domain.ErrVariableNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "variable not found")
+			return
+		}
+		if errors.Is(err, domain.ErrVariableConflict) {
+			httpx.WriteError(w, http.StatusConflict, "variable already exists")
+			return
+		}
+		if errors.Is(err, domain.ErrVariableNameInvalid) || errors.Is(err, domain.ErrVariableNameEmpty) {
+			httpx.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, domain.ErrVariableKindInvalid) {
+			httpx.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, toPublicVariable(vr))
+}
+
+func (h *Handler) deleteVariable(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForManage(w, r)
+	if !ok {
+		return
+	}
+	varName := chi.URLParam(r, "varName")
+	if varName == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "missing variable name")
+		return
+	}
+
+	vars, err := h.variables.List(r.Context(), repo.ID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var targetID int64
+	for _, v := range vars {
+		if v.Name == varName {
+			targetID = v.ID
+			break
+		}
+	}
+	if targetID == 0 {
+		httpx.WriteError(w, http.StatusNotFound, "variable not found")
+		return
+	}
+
+	if err := h.variables.Delete(r.Context(), targetID, repo.ID); err != nil {
+		if errors.Is(err, domain.ErrVariableNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "variable not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+

@@ -24,6 +24,12 @@
 #      (see docs/agent-config.md for the schema).
 #   2. llm.model — must match a model registered on the LLM
 #      provider the platform admin has configured.
+#   3. container.env may reference repo-scoped variables / secrets
+#      via `${VAR_NAME}` syntax.  Variables are managed in the
+#      repo's Settings → Variables & Secrets page.  Example:
+#        env:
+#          OPENAI_API_KEY: ${OPENAI_API_KEY}
+#          NODE_ENV: production
 
 version: 1
 
