@@ -317,7 +317,7 @@ onMounted(async () => {
             <h3 class="mb-2 text-sm font-semibold">{{ t('admin.usage.detail.request') }}</h3>
             <pre
               v-if="formatBody(detail.request_body)"
-              class="max-h-80 overflow-auto whitespace-pre-wrap rounded bg-muted/40 p-3 font-mono text-xs"
+              class="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-3 font-mono text-xs"
             >{{ formatBody(detail.request_body) }}</pre>
             <p v-else class="text-sm text-muted-foreground">{{ t('admin.usage.detail.emptyBody') }}</p>
           </div>
@@ -325,7 +325,7 @@ onMounted(async () => {
             <h3 class="mb-2 text-sm font-semibold">{{ t('admin.usage.detail.response') }}</h3>
             <pre
               v-if="formatBody(detail.response_body)"
-              class="max-h-80 overflow-auto whitespace-pre-wrap rounded bg-muted/40 p-3 font-mono text-xs"
+              class="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-3 font-mono text-xs"
             >{{ formatBody(detail.response_body) }}</pre>
             <p v-else class="text-sm text-muted-foreground">{{ t('admin.usage.detail.emptyBody') }}</p>
           </div>

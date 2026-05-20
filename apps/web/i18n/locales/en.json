@@ -796,6 +796,7 @@
       "uploadFailed": "Upload failed",
       "insert": "Insert into comment",
       "remove": "Remove",
+      "removeFailed": "Remove failed",
       "deleted": "Attachment \"{name}\" has been deleted",
       "unknown": "Unknown attachment #{id}",
       "insertBtn": "Attach",

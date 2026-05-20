@@ -796,6 +796,7 @@
       "uploadFailed": "上传失败",
       "insert": "插入到评论",
       "remove": "移除",
+      "removeFailed": "移除失败",
       "deleted": "附件「{name}」已被删除",
       "unknown": "未知附件 #{id}",
       "insertBtn": "附件",

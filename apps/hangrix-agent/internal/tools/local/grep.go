@@ -15,8 +15,9 @@ import (
 // grep prefers ripgrep when available — it's an order of magnitude faster
 // than walking + regex'ing in pure Go and is .gitignore-aware out of the
 // box, both of which matter when an agent runs `grep "TODO" .` on a real
-// repo. Fallback path uses regexp.MustCompile and filepath.WalkDir so the
-// tool still works in containers without rg installed.
+// repo. The Go fallback mirrors ripgrep's behaviour: .git/ is skipped and
+// .gitignore rules are honoured via the go-gitignore library already used
+// by the glob tool in this package.
 
 type grepArgs struct {
 	Pattern    string `json:"pattern"`
@@ -118,8 +119,26 @@ func (g *grepTool) runGoFallback(a grepArgs) (any, error) {
 		return nil, fmt.Errorf("grep: pattern %q is not a valid RE2 regex: %w. RE2 omits backreferences and lookarounds — rewrite without those features, or escape literal regex metacharacters (\\., \\*, \\(, etc).", a.Pattern, err)
 	}
 	var matches []string
+	ig := loadGitignore()
+	root, _ := filepath.Abs(a.Path)
+
 	walkErr := filepath.WalkDir(a.Path, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
+			return nil
+		}
+		// Never descend into .git/ unless it was the explicit search root.
+		if d.IsDir() && d.Name() == ".git" && path != root {
+			return filepath.SkipDir
+		}
+		// Respect .gitignore — skip ignored directories entirely
+		// so we don't waste time reading their contents.
+		if pathIgnored(ig, path, d.IsDir()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
 			return nil
 		}
 		if a.Glob != "" {

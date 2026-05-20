@@ -204,7 +204,9 @@ func (h *Handler) deleteAttachment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Only the uploader or a repo manager can delete.
-	if caller.ID != att.AuthorID && !h.canManage(r, caller, rc.repo) {
+	// Agent-uploaded attachments (AuthorID == 0) have no human author,
+	// so any authenticated user who can access the repo may delete them.
+	if att.AuthorID != 0 && caller.ID != att.AuthorID && !h.canManage(r, caller, rc.repo) {
 		httpx.WriteError(w, http.StatusForbidden, "forbidden")
 		return
 	}
