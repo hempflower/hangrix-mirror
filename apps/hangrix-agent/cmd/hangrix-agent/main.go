@@ -25,6 +25,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/config"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/ipc"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/llm"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/mcp"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/prompt"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/runtime"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools"
@@ -40,6 +41,7 @@ func buildContainer() *ioc.Container {
 	c.Load(
 		config.Module(),
 		llm.Module(),
+		mcp.Module(),
 		tools.Module(),
 		prompt.Module(),
 		ipc.Module(),

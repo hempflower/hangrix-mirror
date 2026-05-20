@@ -23,6 +23,7 @@ import type { LLMProvider, LLMProviderListResp } from '~/types/llm-provider'
 definePageMeta({ layout: 'admin' })
 
 const { t } = useI18n()
+useHead({ title: () => `${t('admin.usage.title')} - ${t('admin.section')} - ${t('app.name')}` })
 
 setBreadcrumbs(() => [
   { label: t('admin.section'), to: '/admin/llm' },

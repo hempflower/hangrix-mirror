@@ -38,6 +38,7 @@ import type {
 definePageMeta({ layout: 'admin' })
 
 const { t } = useI18n()
+useHead({ title: () => `${t('admin.llm.title')} - ${t('admin.section')} - ${t('app.name')}` })
 
 setBreadcrumbs(() => [
   { label: t('admin.section'), to: '/admin/llm' },

@@ -17,6 +17,7 @@ const { t } = useI18n()
 const { user, refresh } = useCurrentUser()
 
 setBreadcrumbs(() => [{ label: t('nav.profile') }])
+useHead({ title: () => `${t('profile.title')} - ${t('app.name')}` })
 
 // Email form
 const emailSchema = computed(() => toTypedSchema(z.object({

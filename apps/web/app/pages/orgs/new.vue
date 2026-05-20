@@ -10,6 +10,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import type { PublicOrg } from '~/types/org'
 
 const { t } = useI18n()
+useHead({ title: () => `${t('org.createTitle')} - ${t('app.name')}` })
 
 setBreadcrumbs(() => [{ label: t('org.createTitle') }])
 const router = useRouter()

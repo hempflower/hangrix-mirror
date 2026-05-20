@@ -25,6 +25,7 @@ setBreadcrumbs(() => [{ label: String(route.params.owner ?? '') }])
 const { user: currentUser, refresh: refreshUser } = useCurrentUser()
 
 const ownerName = computed(() => String(route.params.owner ?? ''))
+useHead({ title: () => `${ownerName.value} - ${t('app.name')}` })
 
 // "kind === null" is the loading-but-unresolved state; we render skeleton.
 const kind = ref<'user' | 'org' | null>(null)

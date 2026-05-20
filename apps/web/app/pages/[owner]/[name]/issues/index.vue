@@ -16,6 +16,7 @@ const router = useRouter()
 
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
+useHead({ title: () => `${owner.value}/${name.value} · ${t('issue.title')} - ${t('app.name')}` })
 
 setBreadcrumbs(() => {
   const base = `/${owner.value}/${name.value}`

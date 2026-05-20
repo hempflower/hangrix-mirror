@@ -14,6 +14,7 @@ import (
 	"fmt"
 
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/ipc"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/mcp"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/prompt"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/runtime"
 )
@@ -22,12 +23,14 @@ type Deps struct {
 	Loop      *runtime.Loop
 	Writer    *ipc.Writer
 	Assembled *prompt.Assembled
+	MCPBundle *mcp.Bundle
 }
 
 type App struct {
 	loop      *runtime.Loop
 	writer    *ipc.Writer
 	assembled *prompt.Assembled
+	mcpBundle *mcp.Bundle
 }
 
 func New(deps *Deps) *App {
@@ -35,6 +38,7 @@ func New(deps *Deps) *App {
 		loop:      deps.Loop,
 		writer:    deps.Writer,
 		assembled: deps.Assembled,
+		mcpBundle: deps.MCPBundle,
 	}
 }
 
@@ -42,6 +46,8 @@ func New(deps *Deps) *App {
 // closes. Init errors are not Run's concern — they surface as panics
 // during container construction and are caught by main.go's recover.
 func (a *App) Run(ctx context.Context) error {
+	defer a.mcpBundle.Close()
+
 	_ = a.writer.Log("info", fmt.Sprintf("agent starting; system prompt layers: %v", a.assembled.KeptLayers))
 	if err := a.loop.Run(ctx); err != nil {
 		_ = a.writer.Log("error", err.Error())

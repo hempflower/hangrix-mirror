@@ -5,6 +5,7 @@ import (
 
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/config"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/llm"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/mcp"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/local"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/platform"
 	"github.com/hangrix/hangrix/pkg/ioc"
@@ -39,8 +40,9 @@ func NewLocalBundle(deps *Deps) *LocalBundle {
 // list (Deps, Bundle) as two parameters; the bundle has to be a field
 // on its own deps struct.
 type RegistryDeps struct {
-	Cfg    *config.Config
-	Bundle *LocalBundle
+	Cfg       *config.Config
+	Bundle    *LocalBundle
+	MCPBundle *mcp.Bundle
 }
 
 // BashLifecycleDeps wraps the bundle so NewBashLifecycle can be a
@@ -80,7 +82,11 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 		client := platform.NewClient(base, deps.Cfg.SessionToken)
 		platformTools = platform.All(client)
 	}
-	return Build(deps.Bundle.Tools, platformTools, allow)
+	var mcpTools []local.Tool
+	if deps.MCPBundle != nil {
+		mcpTools = deps.MCPBundle.Tools
+	}
+	return Build(deps.Bundle.Tools, platformTools, mcpTools, allow)
 }
 
 func Module() *ioc.Module {
