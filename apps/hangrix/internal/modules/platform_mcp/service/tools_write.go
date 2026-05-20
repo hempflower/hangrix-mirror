@@ -64,10 +64,6 @@ func (r *Registry) issueCommentTool() *platformmcpdomain.Tool {
 			body := strings.TrimSpace(req.Body)
 			if body == "" {
 				return errorResult("body is required"), nil
-		if agentsconfig.HasBacktickWrappedMention(body) {
-			return errorResult("body contains an @agent-<role> mention wrapped in backticks — remove the backticks around the mention so the parser can see it, or omit the mention entirely"), nil
-		}
-
 			}
 			if agentsconfig.HasBacktickWrappedMention(body) {
 				return errorResult("body contains an @agent-<role> mention wrapped in backticks — remove the backticks around the mention so the parser can see it, or omit the mention entirely"), nil
@@ -483,17 +479,26 @@ func (r *Registry) issueAttachmentUploadTool() *platformmcpdomain.Tool {
 
 			// When the attachment module lands (server work, issue #38),
 			// the upload path below will be used. Until then, return
-			// file metadata so the agent knows the file was found.
+			// file metadata plus a placeholder attachment_id and
+			// markdown_snippet so the agent can still form comments
+			// matching the documented contract.
 			if r.deps.Attachments == nil {
+				stagedID := "staged-" + sha256Hex[:16]
+				snippet := "[attachment:" + stagedID + "]"
+				if req.Inline {
+					snippet = "![attachment:" + stagedID + "]"
+				}
 				return textResult(map[string]any{
-					"staged":       true,
-					"path":         cleanPath,
-					"display_name": displayName,
-					"size_bytes":   fi.Size(),
-					"mime_type":    mimeType,
-					"sha256":       sha256Hex,
-					"inline":       req.Inline,
-					"note":         "attachment backend not yet available — file validated, pending server module",
+					"staged":           true,
+					"attachment_id":    stagedID,
+					"markdown_snippet": snippet,
+					"path":             cleanPath,
+					"display_name":     displayName,
+					"size_bytes":       fi.Size(),
+					"mime_type":        mimeType,
+					"sha256":           sha256Hex,
+					"inline":           req.Inline,
+					"note":             "attachment backend not yet available — file validated, placeholder ID and snippet generated",
 				}), nil
 			}
 
@@ -565,22 +570,40 @@ type AttachmentResult struct {
 }
 
 // resolveAttachmentPath normalises the agent-supplied path relative to
-// the repo's filesystem root (scope.fsPath). Rejects paths that escape
-// the repo root (e.g. ../../etc/passwd).
+// the repo's filesystem root (scope.fsPath). Absolute paths must be
+// within repoRoot (they are verified, not rewritten). Relative paths
+// are joined with repoRoot. Both paths then go through EvalSymlinks
+// and a second containment check so that symlinks inside the repo
+// pointing outside are rejected rather than followed.
 func resolveAttachmentPath(repoRoot, agentPath string) (cleanRel, abs string, err error) {
 	p := filepath.Clean(agentPath)
 	if filepath.IsAbs(p) {
-		// Absolute path: strip the leading slash and join with repo root.
-		// The path must still be within the repo after resolution.
-		p = p[1:] // strip leading /
+		// Verify the absolute path lives within repoRoot.
+		if !strings.HasPrefix(p, repoRoot+string(filepath.Separator)) && p != repoRoot {
+			return "", "", fmt.Errorf("absolute path %q is not within repository root", agentPath)
+		}
+		abs = p
+	} else {
+		abs = filepath.Join(repoRoot, p)
 	}
-	abs = filepath.Join(repoRoot, p)
-	// Double-check the resolved path is still within repoRoot.
+
+	// Reject paths that escape repoRoot (catches ../ escapes in relative paths).
 	rel, err := filepath.Rel(repoRoot, abs)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return "", "", fmt.Errorf("path escapes repository root: %s", agentPath)
 	}
-	return rel, abs, nil
+
+	// Resolve symlinks and re-verify containment.
+	realAbs, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve symlinks: %w", err)
+	}
+	realRel, err := filepath.Rel(repoRoot, realAbs)
+	if err != nil || strings.HasPrefix(realRel, "..") {
+		return "", "", fmt.Errorf("symlink target escapes repository root: %s", agentPath)
+	}
+
+	return realRel, realAbs, nil
 }
 
 // detectMimeType reads the first 512 bytes and uses net/http to sniff
