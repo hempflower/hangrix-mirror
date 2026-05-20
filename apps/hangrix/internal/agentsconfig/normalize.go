@@ -1,11 +1,11 @@
 package agentsconfig
 
-// NormalizeHostConfig is currently a no-op. The schema used to default
-// `mention_by` here; that field has been removed (any mention with a
-// matching trigger now wakes the role). The function is kept so
-// existing call sites that follow the parse → normalize convention
-// don't need to be touched; a future schema-level default would land
-// here as well.
+// NormalizeHostConfig fills in defaults for any block that was absent
+// from the yaml. Call it after ParseHostConfig so code paths that
+// return un-normalized configs (tests, round-trip) can still see the
+// difference between "user wrote nothing" and "normalizer filled it".
 func NormalizeHostConfig(cfg *HostConfig) {
-	_ = cfg
+	if cfg.Issues == nil {
+		cfg.Issues = &IssuesConfig{DeleteBranchOnMerge: true}
+	}
 }

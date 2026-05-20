@@ -1,5 +1,15 @@
 package agentsconfig
 
+// IssuesConfig collects issue-level behaviour switches. Defaults (below)
+// are chosen so that an absent `issues:` block yields the platform's
+// recommended behaviour; hosts that need to opt out set the relevant flag
+// explicitly.
+type IssuesConfig struct {
+	// DeleteBranchOnMerge controls whether the issue branch is
+	// automatically deleted after a successful merge. Default true.
+	DeleteBranchOnMerge bool
+}
+
 // HostConfig models the parsed `.hangrix/agents.yml`. It is the single
 // source of truth for which roles a host repo runs, in what container,
 // under whose LLM defaults, and with which prompts.
@@ -16,6 +26,10 @@ type HostConfig struct {
 	// through to admin-configured platform default". Per-role
 	// overrides on Role.LLM win when set.
 	LLM *LLMConfig
+
+	// Issues holds issue-level behaviour switches. nil means "use
+	// defaults for every switch".
+	Issues *IssuesConfig
 
 	// Roles maps role-key → Role. The map is guaranteed non-empty by
 	// the parser; an empty `roles:` is a misconfiguration. Iteration

@@ -41,14 +41,15 @@ import (
 )
 
 type Handler struct {
-	issues     domain.Store
-	repos      repodomain.Store
-	storage    *repoinfra.Storage
-	git        gitdomain.Git
-		cache      *kv.RepoCache
-	users      userdomain.Repo
-	resolver   orgdomain.Resolver
-	middleware authdomain.Middleware
+	issues      domain.Store
+	repos       repodomain.Store
+	storage     *repoinfra.Storage
+	git         gitdomain.Git
+		cache       *kv.RepoCache
+	users       userdomain.Repo
+	resolver    orgdomain.Resolver
+	middleware  authdomain.Middleware
+	protections repodomain.ProtectionStore
 	// agent_session lifecycle hooks. All four are optional (nil-safe
 	// call sites) so the handler keeps working in test configurations
 	// where the module isn't loaded; in production ioc binds all of
@@ -57,16 +58,24 @@ type Handler struct {
 	archiver   agentsessiondomain.Archiver
 	auditor    agentsessiondomain.Auditor
 	controller agentsessiondomain.Controller
+	// guards are BranchWriteGuard implementations. When nil (tests
+	// without the repo module) the handler skips guard checks.
+	guards []repodomain.BranchWriteGuard
 }
 
 type HandlerDeps struct {
-	Issues     domain.Store
-	Repos      repodomain.Store
-	Storage    *repoinfra.Storage
-	Git        gitdomain.Git
-	Users      userdomain.Repo
-	Resolver   orgdomain.Resolver
-	Middleware authdomain.Middleware
+	Issues      domain.Store
+	Repos       repodomain.Store
+	Storage     *repoinfra.Storage
+	Git         gitdomain.Git
+	Users       userdomain.Repo
+	Resolver    orgdomain.Resolver
+	Middleware  authdomain.Middleware
+	// Protections is the branch_protections store from the repo module.
+	// Used by merge to honour forbid_delete rules before deleting the
+	// issue branch post-merge. Nil-safe — the handler skips protection
+	// checks when absent (tests).
+	Protections repodomain.ProtectionStore
 		// Cache provides Redis-backed invalidation for git-read caches.
 		// When nil (tests, no Redis) the handler silently skips flushes.
 		Cache *kv.RepoCache
@@ -76,22 +85,27 @@ type HandlerDeps struct {
 	Archiver   agentsessiondomain.Archiver
 	Auditor    agentsessiondomain.Auditor
 	Controller agentsessiondomain.Controller
+	// Guards are BranchWriteGuard implementations. When nil (tests
+	// without the repo module) the handler skips guard checks.
+	Guards []repodomain.BranchWriteGuard
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
-		issues:     deps.Issues,
-		repos:      deps.Repos,
-		storage:    deps.Storage,
-		git:        deps.Git,
-			cache:      deps.Cache,
-		users:      deps.Users,
-		resolver:   deps.Resolver,
-		middleware: deps.Middleware,
-		spawner:    deps.Spawner,
-		archiver:   deps.Archiver,
-		auditor:    deps.Auditor,
-		controller: deps.Controller,
+		issues:      deps.Issues,
+		repos:       deps.Repos,
+		storage:     deps.Storage,
+		git:         deps.Git,
+			cache:       deps.Cache,
+		users:       deps.Users,
+		resolver:    deps.Resolver,
+		middleware:  deps.Middleware,
+		protections: deps.Protections,
+		spawner:     deps.Spawner,
+		archiver:    deps.Archiver,
+		auditor:     deps.Auditor,
+		controller:  deps.Controller,
+		guards:      deps.Guards,
 	}
 }
 
@@ -931,9 +945,9 @@ type mergeReq struct {
 }
 
 // merge runs MergeBranch on the bare repo. Only owner or admin may merge.
-// On success the issue transitions to State=merged and the timeline gets a
-// branch_merged event. The issue branch is **kept** post-merge so the diff
-// stays inspectable; deleting it would also require us to relax the guard.
+// On success the issue transitions to State=merged, timeline events are
+// written, sessions are archived, and the issue branch is deleted (unless
+// the host config disables it or branch protections forbid it).
 func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	rc, ok := h.resolveRepo(w, r)
 	if !ok {
@@ -1003,16 +1017,23 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	statePayload, _ := json.Marshal(domain.StateChangedPayload{From: domain.StateOpen, To: domain.StateMerged})
 	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventStateChanged, statePayload, caller.ID)
 
+	// Try to delete the issue branch unless the host config disables it.
+	cleanup := h.tryDeleteIssueBranch(r.Context(), rc.repo.ID, rc.fsPath, iss.BranchName)
+
 	// Archive every live session on this issue. The parent issue is the
 	// only thing that can archive sessions — admin "stop this agent" is
 	// "remove the role from host yaml", not a per-session button.
 	h.fireIssueClosed(r.Context(), rc.repo.ID, int32(iss.Number))
 
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"issue":     toPublic(updated),
 		"merge_sha": mergeSHA,
 		"mode":      mode,
-	})
+	}
+	if cleanup != nil {
+		resp["cleanup"] = cleanup
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
 // sync inspects the on-disk issue branch and updates HeadSHA + commit_pushed
@@ -1038,6 +1059,58 @@ func (h *Handler) sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, toPublic(refreshed))
+}
+
+// mergeCleanup is the post-merge branch-deletion outcome. nil means "no
+// attempt was made" (neither the host config nor protections were consulted).
+type mergeCleanup struct {
+	Deleted bool   `json:"deleted"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// tryDeleteIssueBranch attempts to delete the issue branch after a successful
+// merge. It consults the host config first: if delete_branch_on_merge is
+// explicitly false the call is a no-op. Otherwise it checks branch protections,
+// runs guards, and calls git.DeleteBranch. Failures are recorded in the
+// returned cleanup struct but never prevent the merge from succeeding.
+func (h *Handler) tryDeleteIssueBranch(ctx context.Context, repoID int64, fsPath, branchName string) *mergeCleanup {
+	// Consult host config. Missing yaml = nil config → treat as
+	// "defaults apply" (delete_branch_on_merge defaults to true).
+	if h.spawner != nil {
+		cfg, err := h.spawner.LoadHostConfig(ctx, repoID)
+		if err == nil && cfg != nil && cfg.Issues != nil && !cfg.Issues.DeleteBranchOnMerge {
+			return nil
+		}
+	}
+
+	// Check branch protections.
+	if h.protections != nil {
+		rules, err := h.protections.List(ctx, repoID)
+		if err == nil {
+			if rule := repodomain.MatchProtection(rules, branchName); rule != nil && rule.ForbidDelete {
+				return &mergeCleanup{Deleted: false, Reason: "protected"}
+			}
+		}
+	}
+
+	// Run branch-write guards.
+	oldSHA, _ := h.git.ResolveCommit(fsPath, branchName)
+	for _, g := range h.guards {
+		if err := g.CheckBranchWrite(ctx, repodomain.BranchWriteOp{
+			RepoID:     repoID,
+			Branch:     branchName,
+			OldSHA:     oldSHA,
+			IsDelete:   true,
+			IsInternal: true,
+		}); err != nil {
+			return &mergeCleanup{Deleted: false, Reason: "denied"}
+		}
+	}
+
+	if err := h.git.DeleteBranch(fsPath, branchName); err != nil {
+		return &mergeCleanup{Deleted: false, Reason: "delete_failed"}
+	}
+	return &mergeCleanup{Deleted: true}
 }
 
 // mentionSuggestions feeds the comment editor's `@` autocomplete. Returns the
