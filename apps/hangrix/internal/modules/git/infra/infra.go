@@ -1013,28 +1013,10 @@ func (g *GoGit) MergeBranch(path, intoBranch, fromRef, message string, author do
 			return "", "", fmt.Errorf("merge: merge-base: %w", err)
 		}
 
-		// Collect commits reachable from fromRef but not from mergeBase.
-		var commits []*object.Commit
-		iter, err := repo.Log(&git.LogOptions{From: fromHash})
-		if err != nil {
-			return "", "", fmt.Errorf("merge: log: %w", err)
-		}
-		err = iter.ForEach(func(c *object.Commit) error {
-			if c.Hash == bases[0].Hash {
-				return storerStop
+			commits, err := collectRebaseCommits(repo, fromHash, bases[0].Hash)
+			if err != nil {
+				return "", "", fmt.Errorf("merge: walk commits: %w", err)
 			}
-			commits = append(commits, c)
-			return nil
-		})
-		iter.Close()
-		if err != nil && !errors.Is(err, storerStop) {
-			return "", "", fmt.Errorf("merge: walk commits: %w", err)
-		}
-
-		// Reverse to chronological order (oldest first) for replay.
-		for i, j := 0, len(commits)-1; i < j; i, j = i+1, j-1 {
-			commits[i], commits[j] = commits[j], commits[i]
-		}
 
 		when := author.When
 		if when.IsZero() {
@@ -1576,6 +1558,76 @@ func (g *GoGit) CheckFastForward(path, baseRef, headRef string) (bool, string, e
 	return false, "diverged", nil
 }
 
+// collectRebaseCommits returns commits reachable from fromHash but not from
+// mergeBaseHash, reversed to chronological order (oldest first). This is the
+// shared commit-walk used by both CheckAutoMerge (dry-run) and MergeBranch
+// (real replay).
+func collectRebaseCommits(repo *git.Repository, fromHash, mergeBaseHash plumbing.Hash) ([]*object.Commit, error) {
+	var commits []*object.Commit
+	iter, err := repo.Log(&git.LogOptions{From: fromHash})
+	if err != nil {
+		return nil, fmt.Errorf("merge: log: %w", err)
+	}
+	err = iter.ForEach(func(c *object.Commit) error {
+		if c.Hash == mergeBaseHash {
+			return storerStop
+		}
+		commits = append(commits, c)
+		return nil
+	})
+	iter.Close()
+	if err != nil && !errors.Is(err, storerStop) {
+		return nil, fmt.Errorf("merge: walk commits: %w", err)
+	}
+	// Reverse to chronological order (oldest first) for replay.
+	for i, j := 0, len(commits)-1; i < j; i, j = i+1, j-1 {
+		commits[i], commits[j] = commits[j], commits[i]
+	}
+	return commits, nil
+}
+
+// tryRebase simulates cherry-picking each commit in chronological order onto
+// ontoCommit using three-way tree merges, without writing any commit objects.
+// Returns nil if every commit applies cleanly, or the first conflict/error.
+//
+// This is the dry-run counterpart to the per-commit replay loop in MergeBranch
+// and — critically — uses the SAME per-commit mergeTrees calls so
+// issue_mergeable and issue_merge agree on conflict detection.
+func tryRebase(repo *git.Repository, ontoCommit *object.Commit, commits []*object.Commit) error {
+	currentTree, err := ontoCommit.Tree()
+	if err != nil {
+		return fmt.Errorf("merge: base tree: %w", err)
+	}
+	for _, c := range commits {
+		var parentTree *object.Tree
+		if c.NumParents() > 0 {
+			parent, err := c.Parent(0)
+			if err != nil {
+				return fmt.Errorf("merge: parent of %s: %w", c.Hash.String()[:7], err)
+			}
+			parentTree, err = parent.Tree()
+			if err != nil {
+				return fmt.Errorf("merge: parent tree of %s: %w", c.Hash.String()[:7], err)
+			}
+		} else {
+			parentTree = &object.Tree{}
+		}
+		commitTree, err := c.Tree()
+		if err != nil {
+			return fmt.Errorf("merge: tree of %s: %w", c.Hash.String()[:7], err)
+		}
+		mergedTreeHash, err := mergeTrees(repo, parentTree, currentTree, commitTree)
+		if err != nil {
+			return err
+		}
+		currentTree, err = repo.TreeObject(mergedTreeHash)
+		if err != nil {
+			return fmt.Errorf("merge: get merged tree: %w", err)
+		}
+	}
+	return nil
+}
+
 // CheckAutoMerge evaluates whether headRef can be merged into baseRef
 // under the rebase-first strategy without modifying refs. It is the shared
 // pre-flight check for issue_mergeable and issue_merge.
@@ -1605,50 +1657,43 @@ func (g *GoGit) CheckAutoMerge(path, baseRef, headRef string) (bool, string, str
 		return true, "up-to-date", "issue branch is already included in base", nil
 	}
 
-	// Diverged — check if auto-rebase would succeed via three-way merge.
-	repo, err := openRepo(path)
-	if err != nil {
-		return false, "unknown", err.Error(), err
-	}
-	baseHash, err := resolveRef(repo, baseRef)
-	if err != nil {
-		return false, "unknown", "cannot resolve base ref", nil
-	}
-	headHash, err := resolveRef(repo, headRef)
-	if err != nil {
-		return false, "unknown", "cannot resolve head ref", nil
-	}
-	baseCommit, err := repo.CommitObject(baseHash)
-	if err != nil {
-		return false, "unknown", "cannot load base commit", nil
-	}
-	headCommit, err := repo.CommitObject(headHash)
-	if err != nil {
-		return false, "unknown", "cannot load head commit", nil
-	}
-	bases, err := baseCommit.MergeBase(headCommit)
-	if err != nil || len(bases) == 0 {
-		return false, "unknown", "cannot determine merge-base", nil
-	}
-	mergeBaseTree, err := bases[0].Tree()
-	if err != nil {
-		return false, "unknown", "cannot load merge-base tree", nil
-	}
-	baseTree, err := baseCommit.Tree()
-	if err != nil {
-		return false, "unknown", "cannot load base tree", nil
-	}
-	headTree, err := headCommit.Tree()
-	if err != nil {
-		return false, "unknown", "cannot load head tree", nil
-	}
-	_, err = mergeTrees(repo, mergeBaseTree, baseTree, headTree)
-	if err != nil {
-		if errors.Is(err, domain.ErrMergeConflict) {
-			return false, "conflicted", "auto-rebase would conflict — rebase onto " + baseRef + " manually", nil
+		// Diverged — try per-commit replay (same logic as MergeBranch's
+		// cherry-pick loop) so issue_mergeable's conflict detection is
+		// exactly equivalent to what issue_merge will encounter.
+		repo, err := openRepo(path)
+		if err != nil {
+			return false, "unknown", err.Error(), err
 		}
-		return false, "unknown", err.Error(), nil
-	}
-	return true, "rebase-fast-forward", "will rebase onto " + baseRef + " before merging", nil
+		baseHash, err := resolveRef(repo, baseRef)
+		if err != nil {
+			return false, "unknown", "cannot resolve base ref", nil
+		}
+		headHash, err := resolveRef(repo, headRef)
+		if err != nil {
+			return false, "unknown", "cannot resolve head ref", nil
+		}
+		baseCommit, err := repo.CommitObject(baseHash)
+		if err != nil {
+			return false, "unknown", "cannot load base commit", nil
+		}
+		headCommit, err := repo.CommitObject(headHash)
+		if err != nil {
+			return false, "unknown", "cannot load head commit", nil
+		}
+		bases, err := baseCommit.MergeBase(headCommit)
+		if err != nil || len(bases) == 0 {
+			return false, "unknown", "cannot determine merge-base", nil
+		}
+		commits, err := collectRebaseCommits(repo, headHash, bases[0].Hash)
+		if err != nil {
+			return false, "unknown", err.Error(), nil
+		}
+		if err := tryRebase(repo, baseCommit, commits); err != nil {
+			if errors.Is(err, domain.ErrMergeConflict) {
+				return false, "conflicted", "auto-rebase would conflict — rebase onto " + baseRef + " manually", nil
+			}
+			return false, "unknown", err.Error(), nil
+		}
+		return true, "rebase-fast-forward", "will rebase onto " + baseRef + " before merging", nil
 }
 
