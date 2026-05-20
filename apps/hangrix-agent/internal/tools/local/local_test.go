@@ -59,6 +59,404 @@ func TestEditRequiresPriorRead(t *testing.T) {
 	}
 }
 
+// TestEditNormalizeIndentation verifies the edit tool is tolerant of
+// tab/space differences between the read content (as the LLM might copy
+// it) and the actual file content.
+func TestEditNormalizeIndentation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	// File uses tabs for indentation.
+	content := "\tline1\n\t\tline2\n\tline3\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	// Read first.
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Try to replace using SPACES instead of tabs (the LLM often does this).
+	// The normalised match should find it.
+	findText := "  line1\n    line2" // spaces, not tabs
+	replaceText := "  new1\n    new2"
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace", "find": findText, "replace": replaceText,
+	}))
+	if err != nil {
+		t.Fatalf("edit with space-indented find should succeed via normalisation: %v", err)
+	}
+
+	body, _ := os.ReadFile(path)
+	got := string(body)
+	// The replacement should have been adapted to use tabs (matching file style).
+	if !strings.Contains(got, "\tnew1") {
+		t.Errorf("replacement should use tabs (file style), got: %q", got)
+	}
+	if strings.Contains(got, "line1") {
+		t.Errorf("original 'line1' should have been replaced, got: %q", got)
+	}
+}
+
+// TestEditTrailingWhitespaceNormalization verifies trailing-whitespace
+// tolerance — the LLM often strips trailing spaces when copying from a
+// `read` result.
+func TestEditTrailingWhitespaceNormalization(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "hello   \nworld\t\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Find without trailing whitespace should still match.
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace", "find": "hello\nworld", "replace": "hi\nthere",
+	}))
+	if err != nil {
+		t.Fatalf("edit with trailing-whitespace normalisation: %v", err)
+	}
+
+	body, _ := os.ReadFile(path)
+	if string(body) != "hi\nthere\n" {
+		t.Errorf("expected 'hi\\nthere', got %q", string(body))
+	}
+}
+
+// TestEditAnchorProximitySearch verifies that the anchor parameter narrows
+// the search region, allowing the LLM to target a specific block when the
+// same text appears elsewhere.
+func TestEditAnchorProximitySearch(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	// "target" appears twice — anchor lets us specify which one.
+	content := "target: x\n...\n...\nunique anchor\n...\ntarget: y\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Replace the SECOND "target" (near "unique anchor").
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path":    path,
+		"mode":    "replace",
+		"find":    "target: y",
+		"replace": "changed: z",
+		"anchor":  "unique anchor",
+	}))
+	if err != nil {
+		t.Fatalf("edit with anchor: %v", err)
+	}
+
+	body, _ := os.ReadFile(path)
+	got := string(body)
+	if !strings.Contains(got, "target: x") {
+		t.Errorf("first 'target' should be unchanged, got: %q", got)
+	}
+	if !strings.Contains(got, "changed: z") {
+		t.Errorf("second 'target' should be changed, got: %q", got)
+	}
+}
+
+// TestEditMatchFailureContext verifies that when matching fails, the error
+// message includes a preview of the search region, not just a terse "not found".
+func TestEditMatchFailureContext(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "line one\nline two\nline three\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace", "find": "nonexistent", "replace": "x",
+	}))
+	if err == nil {
+		t.Fatal("expected error for non-matching find")
+	}
+	msg := err.Error()
+	// The error should show context — at least some lines from the file.
+	if !strings.Contains(msg, "line one") && !strings.Contains(msg, "line two") {
+		t.Errorf("match-failure error should show file context; got: %s", msg)
+	}
+	if !strings.Contains(msg, path) {
+		t.Errorf("match-failure error should mention the file path; got: %s", msg)
+	}
+}
+
+// TestEditAnchorNotFoundContext verifies that when an anchor doesn't match,
+// the error shows the file content so the LLM can fix the anchor text.
+func TestEditAnchorNotFoundContext(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "actual content here\nmore lines\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace", "find": "x", "replace": "y",
+		"anchor": "nonexistent anchor",
+	}))
+	if err == nil {
+		t.Fatal("expected error for non-matching anchor")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "anchor") {
+		t.Errorf("error should mention 'anchor' as the failing component; got: %s", msg)
+	}
+	if !strings.Contains(msg, "actual content") {
+		t.Errorf("anchor-failure error should show file context; got: %s", msg)
+	}
+}
+
+// TestEditInsertIndentationAdaptation verifies that inserted text gets its
+// indentation adapted to match the file's style.
+func TestEditInsertIndentationAdaptation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	// File uses 2-space indentation.
+	content := "func foo() {\n  x := 1\n}\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Insert a line with 4-space indentation — should be normalized to 2.
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "insert", "after": 1,
+		"text": "    y := 2",
+	}))
+	if err != nil {
+		t.Fatalf("edit insert: %v", err)
+	}
+
+	body, _ := os.ReadFile(path)
+	got := string(body)
+	if !strings.Contains(got, "  y := 2") {
+		t.Errorf("inserted text should use 2-space indent (file style), got: %q", got)
+	}
+}
+
+// TestEditReplaceIndentationAdaptation verifies that the replacement text's
+// indentation is adapted to match the file's style.
+func TestEditReplaceIndentationAdaptation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	// File uses tabs.
+	content := "\told line\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Replace with space-indented text — should be adapted to tabs.
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace",
+		"find": "\told line", "replace": "    new line",
+	}))
+	if err != nil {
+		t.Fatalf("edit replace: %v", err)
+	}
+
+	body, _ := os.ReadFile(path)
+	got := string(body)
+	// Expect the replacement to have been converted to tab indentation.
+	if got != "\tnew line\n" && got != "\tnew line" {
+		t.Errorf("replacement should use tab indent (file style), got: %q", got)
+	}
+}
+
+// TestEditAnchorDisambiguatesExactMatch verifies that when `find` appears
+// identically in multiple places, the anchor selects the right occurrence
+// rather than blindly picking the first one.
+func TestEditAnchorDisambiguatesExactMatch(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	// "duplicate" appears twice — anchor disambiguates.
+	content := "first duplicate\n...\nmarker here\n...\nsecond duplicate\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Replace the SECOND "duplicate" (near "marker here").
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path":    path,
+		"mode":    "replace",
+		"find":    "duplicate",
+		"replace": "changed",
+		"anchor":  "marker here",
+	}))
+	if err != nil {
+		t.Fatalf("edit with anchor for disambiguation: %v", err)
+	}
+
+	body, _ := os.ReadFile(path)
+	got := string(body)
+	if !strings.Contains(got, "first duplicate") {
+		t.Errorf("first 'duplicate' should be unchanged, got: %q", got)
+	}
+	if !strings.Contains(got, "second changed") {
+		t.Errorf("second 'duplicate' should be changed to 'changed', got: %q", got)
+	}
+}
+
+// TestEditDeleteWithAnchor verifies that delete mode respects the anchor
+// for disambiguation when the find text appears multiple times.
+func TestEditDeleteWithAnchor(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "keep me\n...\nunique anchor\n...\ndelete me\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Delete "me" near "unique anchor" — should delete the SECOND "me",
+	// leaving "keep me" intact.
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path":   path,
+		"mode":   "delete",
+		"find":   "me",
+		"anchor": "unique anchor",
+	}))
+	if err != nil {
+		t.Fatalf("delete with anchor: %v", err)
+	}
+
+	body, _ := os.ReadFile(path)
+	got := string(body)
+	if !strings.Contains(got, "keep me") {
+		t.Errorf("first 'me' should be unchanged, got: %q", got)
+	}
+	if strings.Contains(got, "delete me") {
+		t.Errorf("second 'me' should be deleted, got: %q", got)
+	}
+}
+
+// TestEditDeleteAnchorNotFound verifies that delete mode reports a helpful
+// error when the anchor doesn't match.
+func TestEditDeleteAnchorNotFound(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "some content\nhere\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path":   path,
+		"mode":   "delete",
+		"find":   "x",
+		"anchor": "nonexistent",
+	}))
+	if err == nil {
+		t.Fatal("expected error for non-matching anchor in delete mode")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "anchor") {
+		t.Errorf("error should mention 'anchor'; got: %s", msg)
+	}
+	if !strings.Contains(msg, "some content") {
+		t.Errorf("error should show file context; got: %s", msg)
+	}
+}
+
+
+
+
 // TestBashForeground covers the basic (sync) bash path: output capture
 // and exit code propagation. The PTY merges stdout and stderr by design,
 // so we assert against the unified `output` field rather than checking
