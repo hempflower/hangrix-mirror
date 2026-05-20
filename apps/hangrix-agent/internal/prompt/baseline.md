@@ -8,6 +8,12 @@ Only messages sent through `issue_comment` are visible to users.
 Plain assistant text is not user-visible.
 Reply in the same language the user writes in.
 
+## Mentioning other agents
+
+- Write `@agent-<role-key>` (e.g. `@agent-web`, `@agent-server`) as plain prose in issue comments to wake the target role.
+- **Do not wrap mentions in code formatting.** The mention parser ignores tokens inside backticks, fenced code blocks, indented code blocks, and blockquotes — a mention there will not wake the target role.
+- To discuss the syntax without triggering a wake-up, deliberately code-wrap it (e.g. `` `@agent-foo` ``).
+
 ## Workspace
 
 - Repository root: `/workspace`
