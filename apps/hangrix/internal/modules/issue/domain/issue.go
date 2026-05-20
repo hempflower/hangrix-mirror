@@ -158,9 +158,9 @@ type Event struct {
 // CommitPushedPayload is the JSON shape stored in Event.Payload for
 // EventCommitPushed.
 type CommitPushedPayload struct {
-	OldSHA  string                  `json:"old_sha"`
-	NewSHA  string                  `json:"new_sha"`
-	Commits []CommitPushedSummary   `json:"commits"`
+	OldSHA  string                `json:"old_sha"`
+	NewSHA  string                `json:"new_sha"`
+	Commits []CommitPushedSummary `json:"commits"`
 }
 
 type CommitPushedSummary struct {
@@ -236,3 +236,63 @@ type Store interface {
 	CreateAgentEvent(ctx context.Context, issueID int64, kind EventKind, payload []byte, agentRole string) (*Event, error)
 	ListEvents(ctx context.Context, issueID int64) ([]*Event, error)
 }
+
+// --- attachments ---
+
+// AttachmentKind classifies the file for frontend rendering decisions.
+// Mirrors the DB's kind column.
+type AttachmentKind string
+
+const (
+	AttachmentKindImage   AttachmentKind = "image"
+	AttachmentKindVideo   AttachmentKind = "video"
+	AttachmentKindArchive AttachmentKind = "archive"
+	AttachmentKindText    AttachmentKind = "text"
+	AttachmentKindBinary  AttachmentKind = "binary"
+)
+
+// AttachmentStatus tracks the lifecycle of an attachment row.
+type AttachmentStatus string
+
+const (
+	AttachmentStatusUploaded AttachmentStatus = "uploaded"
+	AttachmentStatusAttached AttachmentStatus = "attached"
+	AttachmentStatusDeleted  AttachmentStatus = "deleted"
+)
+
+// Attachment is the domain model for an uploaded file bound to an issue.
+// Rows start as "uploaded" (draft, not yet referenced in a comment) and
+// transition to "attached" when a comment body includes the token. Soft
+// delete sets status=deleted and wipes the on-disk file; the row stays
+// for audit and tombstone rendering on the frontend.
+type Attachment struct {
+	ID               int64
+	RepoID           int64
+	IssueID          int64
+	CommentID        int64
+	AuthorID         int64
+	AgentRole        string
+	StorageKey       string
+	OriginalName     string
+	SizeBytes        int64
+	MimeType         string
+	DetectedMimeType string
+	SHA256           string
+	Kind             AttachmentKind
+	Status           AttachmentStatus
+	CreatedAt        time.Time
+	DeletedAt        *time.Time
+}
+
+// AttachmentStore is the persistence abstraction for issue attachments.
+type AttachmentStore interface {
+	CreateAttachment(ctx context.Context, repoID, issueID, authorID int64, agentRole, storageKey, originalName string, sizeBytes int64, mimeType, detectedMimeType, sha256 string, kind AttachmentKind) (*Attachment, error)
+	GetAttachment(ctx context.Context, id int64) (*Attachment, error)
+	ListAttachments(ctx context.Context, issueID, commentID int64) ([]*Attachment, error)
+	MarkAttached(ctx context.Context, id int64, commentID int64) error
+	SoftDeleteAttachment(ctx context.Context, id int64) error
+}
+
+var (
+	ErrAttachmentNotFound = errors.New("attachment not found")
+)

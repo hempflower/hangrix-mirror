@@ -53,6 +53,10 @@ type StorageConfig struct {
 	// ReposPath is the directory under which bare repositories live, as
 	// `<ReposPath>/<owner>/<name>.git`. Created on demand at first use.
 	ReposPath string `mapstructure:"repos_path"`
+	// AttachmentsPath is the directory under which issue attachments live,
+	// as `<AttachmentsPath>/<repo_id>/<issue_id>/<attachment_id>/<sha256>`.
+	// Created on demand at first upload.
+	AttachmentsPath string `mapstructure:"attachments_path"`
 }
 
 type ServerConfig struct {
@@ -106,6 +110,7 @@ func NewConfig(path string) (*Config, error) {
 	v.SetDefault("auth.cookie_secure", false)
 	v.SetDefault("auth.session_ttl", "168h") // 7 days
 	v.SetDefault("storage.repos_path", "./data/repos")
+	v.SetDefault("storage.attachments_path", "./data/attachments")
 	v.SetDefault("runner.default_agent_image", "")
 	v.SetDefault("automation.scanner_interval", "60s")
 

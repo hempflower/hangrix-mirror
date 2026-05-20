@@ -8,6 +8,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/handler"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/infra"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/service"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/server"
 	"github.com/hangrix/hangrix/pkg/ioc"
@@ -15,7 +16,14 @@ import (
 
 func Module() *ioc.Module {
 	m := ioc.NewModule()
-	m.Provide(infra.NewPostgresStore).ToInterface(new(domain.Store))
+
+	// Persistence: PostgresStore satisfies Store and AttachmentStore.
+	storeBinder := m.Provide(infra.NewPostgresStore)
+	storeBinder.ToInterface(new(domain.Store))
+	storeBinder.ToInterface(new(domain.AttachmentStore))
+
+	// Attachment service: validation, hashing, on-disk writes.
+	m.Provide(service.NewAttachmentService).ToSelf()
 
 	// The handler doubles as a RouteProvider and is also a dependency of
 	// the PushObserver — bind it through ToSelf (so the observer can
