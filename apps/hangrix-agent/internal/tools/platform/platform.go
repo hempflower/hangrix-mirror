@@ -287,6 +287,11 @@ func resolveWorkspacePath(p string) (string, error) {
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(workspaceRoot, p)
 	}
+
+	// Ensure the original path (before symlink resolution) is within workspace.
+	if !strings.HasPrefix(p, workspaceRoot+"/") && p != workspaceRoot {
+		return "", fmt.Errorf("path %q is outside workspace", p)
+	}
 	// Resolve symlinks to get the real on-disk target.
 	resolved, err := filepath.EvalSymlinks(p)
 	if err != nil {
