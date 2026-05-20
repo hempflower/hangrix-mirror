@@ -251,9 +251,15 @@ func (t *Tool) Call(ctx context.Context, args json.RawMessage) (any, error) {
 // attachmentTool is like Tool but reads the file from the local workspace
 // and sends it as multipart/form-data (real file upload — no base64
 // encoding) to the server. The server-side handler receives the file
-// bytes as a "file" form part plus metadata fields. The LLM-facing
-// descriptor is identical to a plain Tool — the agent only knows it
-// passes a "path" and gets back attachment metadata.
+// bytes as a "file" form part plus metadata fields.
+//
+// Paths are resolved against the workspace root (/workspace) with
+// symlink-target containment — any path that resolves outside the
+// workspace (including via symlink) is rejected to prevent secret
+// exfiltration.
+//
+// The LLM-facing descriptor is identical to a plain Tool — the agent
+// only knows it passes a "path" and gets back attachment metadata.
 type attachmentTool struct {
 	name        string
 	description string
@@ -268,6 +274,34 @@ func (t *attachmentTool) Schema() map[string]any { return t.schema }
 // maxAttachmentBytes is the maximum file size the agent will read and
 // upload (64 MiB, matching the server-side limit).
 const maxAttachmentBytes = 64 << 20
+
+// workspaceRoot is the agent container's working tree mount point.
+const workspaceRoot = "/workspace"
+
+// resolveWorkspacePath resolves a user-supplied path (relative or
+// absolute) to a real, symlink-resolved absolute path that MUST fall
+// within workspaceRoot.  Returns an error if the path is outside the
+// workspace, is a symlink that escapes, or cannot be resolved.
+func resolveWorkspacePath(p string) (string, error) {
+	p = filepath.Clean(p)
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(workspaceRoot, p)
+	}
+	// Resolve symlinks to get the real on-disk target.
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return "", fmt.Errorf("resolve path %q: %w", p, err)
+	}
+	// Containment: the resolved path must be inside workspaceRoot.
+	rel, err := filepath.Rel(workspaceRoot, resolved)
+	if err != nil {
+		return "", fmt.Errorf("path %q resolves outside workspace", p)
+	}
+	if strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("path %q resolves outside workspace", p)
+	}
+	return resolved, nil
+}
 
 func (t *attachmentTool) Call(ctx context.Context, args json.RawMessage) (any, error) {
 	var req struct {
@@ -284,7 +318,12 @@ func (t *attachmentTool) Call(ctx context.Context, args json.RawMessage) (any, e
 		return nil, fmt.Errorf("issue_attachment_upload: path is required. Provide a workspace-relative or absolute path to the file to upload.")
 	}
 
-	data, err := os.ReadFile(req.Path)
+	safePath, err := resolveWorkspacePath(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("issue_attachment_upload: %w. Only files inside the workspace can be uploaded.", err)
+	}
+
+	data, err := os.ReadFile(safePath)
 	if err != nil {
 		return nil, fmt.Errorf("issue_attachment_upload: cannot read file %q: %w. Check that the path exists and is a regular file in the workspace.", req.Path, err)
 	}
