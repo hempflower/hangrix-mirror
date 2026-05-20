@@ -49,8 +49,9 @@ import (
 const callTimeout = 60 * time.Second
 
 // maxRequestBody bounds the JSON arg payload. The biggest expected case
-// is a `issue_comment` with a long body; 1 MiB is generous.
-const maxRequestBody = 1 << 20
+// is an `issue_attachment_upload` with a base64-encoded file; 4 MiB
+// accommodates ~3 MiB files after encoding overhead.
+const maxRequestBody = 4 << 20
 
 // Registry is the subset of *service.Registry the handler needs.
 // Defined as an interface so tests can substitute a fake without

@@ -35,7 +35,7 @@ type RegistryDeps struct {
 	Spawner     agentsessiondomain.Spawner
 	Archiver    agentsessiondomain.Archiver
 	Controller  agentsessiondomain.Controller
-	Attachments AttachmentUploader
+	Attachments issuedomain.AttachmentUploader
 }
 
 // NewRegistry assembles the tool catalogue at startup. Tools share the

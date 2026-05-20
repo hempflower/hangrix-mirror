@@ -183,6 +183,106 @@ func (s *AttachmentService) Upload(
 	return attachment, nil
 }
 
+// UploadAttachment fulfills domain.AttachmentUploader. It accepts raw
+// file bytes (sent by the platform_mcp tool after decoding base64 from
+// the agent) together with metadata, validates the extension and size,
+// computes SHA256, writes the file to disk, and creates the DB row.
+// authorID is always 0 — agent uploads have no user author.
+func (s *AttachmentService) UploadAttachment(
+	ctx context.Context,
+	params *domain.AttachmentUploadParams,
+) (*domain.Attachment, error) {
+	ext := strings.ToLower(filepath.Ext(params.Name))
+
+	// Special-case .tar.gz / .tgz — filepath.Ext returns ".gz".
+	switch {
+	case strings.HasSuffix(strings.ToLower(params.Name), ".tar.gz"):
+		ext = ".tar.gz"
+	case strings.HasSuffix(strings.ToLower(params.Name), ".tgz"):
+		ext = ".tgz"
+	}
+
+	if !AllowedExtensions[ext] {
+		return nil, fmt.Errorf("%w: %s", ErrAttachmentExtension, ext)
+	}
+
+	if len(params.Data) > MaxAttachmentSize {
+		return nil, fmt.Errorf("%w: %d bytes", ErrAttachmentTooLarge, len(params.Data))
+	}
+
+	// Detect MIME from the first 512 bytes.
+	head := params.Data
+	if len(head) > 512 {
+		head = head[:512]
+	}
+	detectedMime := http.DetectContentType(head)
+
+	// Ensure the root attachments directory exists before CreateTemp.
+	if err := os.MkdirAll(s.attachmentsPath, 0o755); err != nil {
+		return nil, fmt.Errorf("mkdir attachments root: %w", err)
+	}
+
+	// Compute SHA256 and write to a temp file.
+	hasher := sha256.New()
+	tmp, err := os.CreateTemp(s.attachmentsPath, "upload-*")
+	if err != nil {
+		return nil, fmt.Errorf("create temp file: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+
+	// Write to both the hasher and the temp file in one pass.
+	tee := io.MultiWriter(tmp, hasher)
+	if _, err := tee.Write(params.Data); err != nil {
+		return nil, fmt.Errorf("write temp: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return nil, fmt.Errorf("sync temp: %w", err)
+	}
+
+	sha256Sum := hex.EncodeToString(hasher.Sum(nil))
+	kind := kindFromMime(detectedMime)
+
+	// Client-supplied MIME — agent may pass application/octet-stream.
+	clientMime := "application/octet-stream"
+
+	// Generate a random 8-char hex directory component.
+	dirComp, err := randHex(8)
+	if err != nil {
+		return nil, fmt.Errorf("generate dir: %w", err)
+	}
+
+	// storageKey = <repo_id>/<issue_id>/<dirComp>/<sha256>
+	storageKey := filepath.Join(
+		fmt.Sprintf("%d", params.RepoID),
+		fmt.Sprintf("%d", params.IssueID),
+		dirComp,
+		sha256Sum,
+	)
+
+	// Create the on-disk target directory and move the temp file in.
+	targetDir := filepath.Join(s.attachmentsPath, filepath.Dir(storageKey))
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return nil, fmt.Errorf("mkdir storage: %w", err)
+	}
+	targetPath := filepath.Join(s.attachmentsPath, storageKey)
+	if err := os.Rename(tmp.Name(), targetPath); err != nil {
+		return nil, fmt.Errorf("move to storage: %w", err)
+	}
+
+	// Create the DB row. authorID is always 0 for agent uploads.
+	attachment, err := s.store.CreateAttachment(ctx, params.RepoID, params.IssueID, 0,
+		params.AgentRole, storageKey, params.Name, int64(len(params.Data)),
+		clientMime, detectedMime, sha256Sum, kind)
+	if err != nil {
+		_ = os.Remove(targetPath)
+		return nil, fmt.Errorf("create attachment row: %w", err)
+	}
+
+	return attachment, nil
+}
+
+
 // Get is a pass-through to the store.
 func (s *AttachmentService) Get(ctx context.Context, id int64) (*domain.Attachment, error) {
 	return s.store.GetAttachment(ctx, id)

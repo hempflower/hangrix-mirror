@@ -23,7 +23,9 @@ func Module() *ioc.Module {
 	storeBinder.ToInterface(new(domain.AttachmentStore))
 
 	// Attachment service: validation, hashing, on-disk writes.
-	m.Provide(service.NewAttachmentService).ToSelf()
+	svcBinder := m.Provide(service.NewAttachmentService)
+	svcBinder.ToSelf()
+	svcBinder.ToInterface(new(domain.AttachmentUploader))
 
 	// The handler doubles as a RouteProvider and is also a dependency of
 	// the PushObserver — bind it through ToSelf (so the observer can

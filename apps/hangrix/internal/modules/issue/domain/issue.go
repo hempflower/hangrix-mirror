@@ -293,6 +293,29 @@ type AttachmentStore interface {
 	SoftDeleteAttachment(ctx context.Context, id int64) error
 }
 
+// AttachmentUploadParams carries the data the platform_mcp tool passes
+// when uploading an attachment on behalf of an agent session. Data is
+// the raw file bytes (decoded from base64 on the server side).
+type AttachmentUploadParams struct {
+	RepoID      int64
+	IssueID     int64
+	Data        []byte // raw file bytes
+	Name        string // original filename (e.g. "screenshot.png")
+	DisplayName string // optional display name override
+	Inline      bool
+	CommentID   int64
+	AgentRole   string
+}
+
+// AttachmentUploader is the cross-module seam for uploading attachments
+// from the platform_mcp tool. The issue module's AttachmentService
+// implements it; platform_mcp depends on the interface, not the
+// concrete service, so the module boundary stays clean.
+type AttachmentUploader interface {
+	UploadAttachment(ctx context.Context, params *AttachmentUploadParams) (*Attachment, error)
+}
+
+
 var (
 	ErrAttachmentNotFound = errors.New("attachment not found")
 )

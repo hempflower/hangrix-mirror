@@ -2,14 +2,10 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
+	b64 "encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -394,27 +390,30 @@ func (r *Registry) sessionRecoverTool() *platformmcpdomain.Tool {
 }
 
 
-// issueAttachmentUploadTool uploads a workspace file as an issue attachment.
-// The agent passes a workspace-relative or absolute `path`; the handler reads
-// the file from the server's repo clone, detects MIME type, and uploads it
-// to the issue attachments API.
-//
-// Returns attachment metadata including an attachment_id and markdown_snippet
-// the agent can insert into a subsequent issue_comment call.
+// issueAttachmentUploadTool uploads a file as an issue attachment.
+// The agent reads the file from its workspace, base64-encodes it, and
+// sends the encoded bytes as `data` together with the original `name`.
+// The server decodes the base64, validates, hashes, stores the file,
+// and returns attachment metadata including an attachment_id and
+// markdown_snippet the agent can insert into a subsequent issue_comment.
 func (r *Registry) issueAttachmentUploadTool() *platformmcpdomain.Tool {
 	return &platformmcpdomain.Tool{
 		Name:        "issue_attachment_upload",
-		Description: "Upload a file from the workspace as an issue attachment. Returns attachment metadata including an `attachment_id` and `markdown_snippet` — use `issue_comment` to insert the snippet into a comment body. `path` must be a workspace-relative or absolute path to an existing file. Set `inline` to true for images/videos you want rendered inline (produces `![attachment:N]` syntax); false / omitted produces `[attachment:N]` link syntax.",
+		Description: "Upload a file from the workspace as an issue attachment. Returns attachment metadata including an `attachment_id` and `markdown_snippet` — use `issue_comment` to insert the snippet into a comment body. `data` must be the base64-encoded file bytes; `name` is the original filename (e.g. \"screenshot.png\"). Set `inline` to true for images/videos you want rendered inline (produces `![attachment:N]` syntax); false / omitted produces `[attachment:N]` link syntax.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path": map[string]any{
+				"data": map[string]any{
 					"type":        "string",
-					"description": "Workspace-relative or absolute path to the file to upload. Required.",
+					"description": "Base64-encoded file bytes. Required.",
+				},
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Original filename (e.g. 'screenshot.png'). Required.",
 				},
 				"display_name": map[string]any{
 					"type":        "string",
-					"description": "Optional display name for the attachment. Defaults to the file's basename.",
+					"description": "Optional display name for the attachment. Defaults to `name`.",
 				},
 				"inline": map[string]any{
 					"type":        "boolean",
@@ -425,7 +424,7 @@ func (r *Registry) issueAttachmentUploadTool() *platformmcpdomain.Tool {
 					"description": "Optional comment ID to bind the attachment to an existing comment.",
 				},
 			},
-			"required": []string{"path"},
+			"required": []string{"data", "name"},
 		},
 		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
@@ -433,7 +432,8 @@ func (r *Registry) issueAttachmentUploadTool() *platformmcpdomain.Tool {
 				return errorResult(err.Error()), nil
 			}
 			var req struct {
-				Path        string `json:"path"`
+				Data        string `json:"data"`
+				Name        string `json:"name"`
 				DisplayName string `json:"display_name"`
 				Inline      bool   `json:"inline"`
 				CommentID   int64  `json:"comment_id"`
@@ -441,79 +441,31 @@ func (r *Registry) issueAttachmentUploadTool() *platformmcpdomain.Tool {
 			if err := unmarshalArgs(args, &req); err != nil {
 				return errorResult("invalid arguments: " + err.Error()), nil
 			}
-			req.Path = strings.TrimSpace(req.Path)
-			if req.Path == "" {
-				return errorResult("path is required"), nil
+			req.Data = strings.TrimSpace(req.Data)
+			req.Name = strings.TrimSpace(req.Name)
+			if req.Data == "" || req.Name == "" {
+				return errorResult("data and name are required"), nil
 			}
 
-			cleanPath, absPath, err := resolveAttachmentPath(scope.fsPath, req.Path)
+			fileBytes, err := b64Decode(req.Data)
 			if err != nil {
-				return errorResult("resolve path: " + err.Error()), nil
-			}
-
-			fi, err := os.Stat(absPath)
-			if err != nil {
-				if os.IsNotExist(err) {
-					return errorResult(fmt.Sprintf("file not found: %s", cleanPath)), nil
-				}
-				return errorResult("stat file: " + err.Error()), nil
-			}
-			if fi.IsDir() {
-				return errorResult(fmt.Sprintf("path is a directory, not a file: %s", cleanPath)), nil
-			}
-
-			mimeType, err := detectMimeType(absPath)
-			if err != nil {
-				return errorResult("detect MIME type: " + err.Error()), nil
-			}
-
-			sha256Hex, err := sha256File(absPath)
-			if err != nil {
-				return errorResult("sha256: " + err.Error()), nil
+				return errorResult("decode base64 data: " + err.Error()), nil
 			}
 
 			displayName := strings.TrimSpace(req.DisplayName)
 			if displayName == "" {
-				displayName = filepath.Base(cleanPath)
+				displayName = req.Name
 			}
 
-			// When the attachment module lands (server work, issue #38),
-			// the upload path below will be used. Until then, return
-			// file metadata plus a placeholder attachment_id and
-			// markdown_snippet so the agent can still form comments
-			// matching the documented contract.
-			if r.deps.Attachments == nil {
-				stagedID := "staged-" + sha256Hex[:16]
-				snippet := "[attachment:" + stagedID + "]"
-				if req.Inline {
-					snippet = "![attachment:" + stagedID + "]"
-				}
-				return textResult(map[string]any{
-					"staged":           true,
-					"attachment_id":    stagedID,
-					"markdown_snippet": snippet,
-					"path":             cleanPath,
-					"display_name":     displayName,
-					"size_bytes":       fi.Size(),
-					"mime_type":        mimeType,
-					"sha256":           sha256Hex,
-					"inline":           req.Inline,
-					"note":             "attachment backend not yet available — file validated, placeholder ID and snippet generated",
-				}), nil
-			}
-
-			// When the attachment module is ready, this path uploads the file:
-			att, err := r.deps.Attachments.Upload(ctx, AttachmentUploadParams{
+			att, err := r.deps.Attachments.UploadAttachment(ctx, &issuedomain.AttachmentUploadParams{
 				RepoID:      scope.repo.ID,
 				IssueID:     scope.issue.ID,
-				FilePath:    absPath,
+				Data:        fileBytes,
+				Name:        req.Name,
 				DisplayName: displayName,
 				Inline:      req.Inline,
 				CommentID:   req.CommentID,
 				AgentRole:   sess.RoleKey,
-				SizeBytes:   fi.Size(),
-				MimeType:    mimeType,
-				SHA256:      sha256Hex,
 			})
 			if err != nil {
 				return errorResult("upload attachment: " + err.Error()), nil
@@ -521,119 +473,38 @@ func (r *Registry) issueAttachmentUploadTool() *platformmcpdomain.Tool {
 
 			return textResult(map[string]any{
 				"attachment_id":    att.ID,
-				"display_name":     att.DisplayName,
+				"display_name":     displayName,
+				"original_name":    att.OriginalName,
 				"size_bytes":       att.SizeBytes,
-				"mime_type":        att.MimeType,
-				"download_url":     att.DownloadURL,
-				"preview_url":      att.PreviewURL,
-				"markdown_snippet": att.MarkdownSnippet,
+				"mime_type":        att.DetectedMimeType,
+				"kind":             string(att.Kind),
+				"markdown_snippet": attachmentMarkdownSnippet(att.ID, att.Kind, req.Inline),
 			}), nil
 		},
 	}
 }
 
-// ---- attachment helpers ----
-
-// AttachmentUploader is the seam between the platform_mcp tool and the
-// attachment module. The attachment module (being built in issue #38)
-// will provide an implementation bound via ioc. nil means the module is
-// not yet available and the tool returns a "staged" response.
-type AttachmentUploader interface {
-	Upload(ctx context.Context, params AttachmentUploadParams) (*AttachmentResult, error)
-}
-
-// AttachmentUploadParams carries everything the attachment module needs
-// to store the file and create the DB row.
-type AttachmentUploadParams struct {
-	RepoID      int64
-	IssueID     int64
-	FilePath    string // absolute path to the temp source file
-	DisplayName string
-	Inline      bool
-	CommentID   int64
-	AgentRole   string
-	SizeBytes   int64
-	MimeType    string
-	SHA256      string
-}
-
-// AttachmentResult is the subset of the attachment row the tool returns
-// to the agent.
-type AttachmentResult struct {
-	ID              int64
-	DisplayName     string
-	SizeBytes       int64
-	MimeType        string
-	DownloadURL     string
-	PreviewURL      string
-	MarkdownSnippet string
-}
-
-// resolveAttachmentPath normalises the agent-supplied path relative to
-// the repo's filesystem root (scope.fsPath). Absolute paths must be
-// within repoRoot (they are verified, not rewritten). Relative paths
-// are joined with repoRoot. Both paths then go through EvalSymlinks
-// and a second containment check so that symlinks inside the repo
-// pointing outside are rejected rather than followed.
-func resolveAttachmentPath(repoRoot, agentPath string) (cleanRel, abs string, err error) {
-	p := filepath.Clean(agentPath)
-	if filepath.IsAbs(p) {
-		// Verify the absolute path lives within repoRoot.
-		if !strings.HasPrefix(p, repoRoot+string(filepath.Separator)) && p != repoRoot {
-			return "", "", fmt.Errorf("absolute path %q is not within repository root", agentPath)
-		}
-		abs = p
-	} else {
-		abs = filepath.Join(repoRoot, p)
+// b64Decode decodes standard base64 (with optional padding). It rejects
+// data-url prefixes ("data:...;base64,") so the agent must send raw base64.
+func b64Decode(s string) ([]byte, error) {
+	raw := s
+	// Strip any data-url prefix the agent might accidentally include.
+	if idx := strings.Index(s, ";base64,"); idx >= 0 {
+		raw = s[idx+8:]
 	}
-
-	// Reject paths that escape repoRoot (catches ../ escapes in relative paths).
-	rel, err := filepath.Rel(repoRoot, abs)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return "", "", fmt.Errorf("path escapes repository root: %s", agentPath)
-	}
-
-	// Resolve symlinks and re-verify containment.
-	realAbs, err := filepath.EvalSymlinks(abs)
+	dec, err := b64.StdEncoding.DecodeString(raw)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve symlinks: %w", err)
+		return nil, err
 	}
-	realRel, err := filepath.Rel(repoRoot, realAbs)
-	if err != nil || strings.HasPrefix(realRel, "..") {
-		return "", "", fmt.Errorf("symlink target escapes repository root: %s", agentPath)
-	}
-
-	return realRel, realAbs, nil
+	return dec, nil
 }
 
-// detectMimeType reads the first 512 bytes and uses net/http to sniff
-// the content type. Falls back to "application/octet-stream".
-func detectMimeType(absPath string) (string, error) {
-	f, err := os.Open(absPath)
-	if err != nil {
-		return "", err
+// attachmentMarkdownSnippet returns the markdown token for an attachment.
+func attachmentMarkdownSnippet(id int64, kind issuedomain.AttachmentKind, inline bool) string {
+	if inline && (kind == issuedomain.AttachmentKindImage || kind == issuedomain.AttachmentKindVideo) {
+		return fmt.Sprintf("![attachment:%d]", id)
 	}
-	defer f.Close()
-	buf := make([]byte, 512)
-	n, err := io.ReadFull(f, buf)
-	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		return "", err
-	}
-	return http.DetectContentType(buf[:n]), nil
-}
-
-// sha256File computes the hex-encoded SHA-256 digest of the file.
-func sha256File(absPath string) (string, error) {
-	f, err := os.Open(absPath)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return fmt.Sprintf("[attachment:%d]", id)
 }
 
 
