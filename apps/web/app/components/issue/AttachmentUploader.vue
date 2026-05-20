@@ -71,7 +71,10 @@ async function onFileSelected(e: Event) {
   }
 }
 
+const deleting = ref<Set<number>>(new Set())
+
 async function removeAttachment(att: IssueAttachment) {
+  deleting.value.add(att.id)
   try {
     await $fetch(
       `/api/repos/${props.owner}/${props.name}/issues/${props.issueNumber}/attachments/${att.id}`,
@@ -79,7 +82,9 @@ async function removeAttachment(att: IssueAttachment) {
     )
     attachments.value = attachments.value.filter((a) => a.id !== att.id)
   } catch {
-    // Silently ignore deletion errors — the item may already be gone
+    // Keep the attachment in the list — server may have rejected the delete
+  } finally {
+    deleting.value.delete(att.id)
   }
 }
 
@@ -156,9 +161,11 @@ function formatSize(bytes: number): string {
           size="icon"
           class="size-6 text-muted-foreground hover:text-destructive"
           :title="t('issue.attachment.remove')"
+          :disabled="deleting.has(att.id)"
           @click="removeAttachment(att)"
         >
-          <X class="size-3.5" />
+          <Loader2 v-if="deleting.has(att.id)" class="size-3.5 animate-spin" />
+          <X v-else class="size-3.5" />
         </Button>
       </li>
     </ul>

@@ -5,6 +5,8 @@ import DOMPurify from 'dompurify'
 import { Download, ExternalLink, FileWarning } from 'lucide-vue-next'
 import type { IssueAttachment } from '~/types/issue'
 
+const { t } = useI18n()
+
 const props = withDefaults(defineProps<{
   source: string
   // GitHub-style soft line breaks: `true` matches issue/comment conventions
@@ -22,9 +24,10 @@ const ATTACH_RE = /(!?)\[attachment:(\d+)\]/g
 
 function buildAttachmentCard(att: IssueAttachment, inline: boolean): string {
   if (att.status === 'deleted') {
+    const msg = t('issue.attachment.deleted', { name: att.original_name })
     return `<div class="attachment-card attachment-deleted flex items-center gap-2 rounded-md border border-dashed border-muted-foreground/40 bg-muted/20 px-3 py-2 my-1 text-xs text-muted-foreground">
       <span class="inline-flex">⚠</span>
-      <span>Attachment "${escapeHtml(att.original_name)}" has been deleted</span>
+      <span>${escapeHtml(msg)}</span>
     </div>`
   }
 
@@ -40,7 +43,7 @@ function buildAttachmentCard(att: IssueAttachment, inline: boolean): string {
       <div class="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
         <span class="truncate">${escapeHtml(att.original_name)}</span>
         <span>${formatSize(att.size_bytes)}</span>
-        <a href="${escapeHtml(att.download_url)}" class="hover:text-foreground underline" download>Download</a>
+        <a href="${escapeHtml(att.download_url)}" class="hover:text-foreground underline" download>${t('issue.attachment.download')}</a>
       </div>
     </div>`
   }
@@ -51,7 +54,7 @@ function buildAttachmentCard(att: IssueAttachment, inline: boolean): string {
       <div class="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
         <span class="truncate">${escapeHtml(att.original_name)}</span>
         <span>${formatSize(att.size_bytes)}</span>
-        <a href="${escapeHtml(att.download_url)}" class="hover:text-foreground underline" download>Download</a>
+        <a href="${escapeHtml(att.download_url)}" class="hover:text-foreground underline" download>${t('issue.attachment.download')}</a>
       </div>
     </div>`
   }
@@ -62,7 +65,7 @@ function buildAttachmentCard(att: IssueAttachment, inline: boolean): string {
     <span class="shrink-0 font-mono text-muted-foreground">${kindLabel}</span>
     <span class="min-w-0 flex-1 truncate font-medium">${escapeHtml(att.original_name)}</span>
     <span class="shrink-0 text-muted-foreground">${formatSize(att.size_bytes)}</span>
-    <a href="${escapeHtml(att.download_url)}" class="shrink-0 hover:text-foreground underline" download>Download</a>
+    <a href="${escapeHtml(att.download_url)}" class="shrink-0 hover:text-foreground underline" download>${t('issue.attachment.download')}</a>
   </div>`
 }
 
@@ -90,8 +93,9 @@ const processedSource = computed(() => {
     const inline = bang === '!'
     if (!att) {
       // Unknown attachment — show a placeholder
+      const msg = t('issue.attachment.unknown', { id })
       return `<span class="attachment-card inline-flex items-center gap-1 rounded border border-dashed border-muted-foreground/40 bg-muted/20 px-1.5 py-0.5 text-xs text-muted-foreground">
-        <span>📎</span> Unknown attachment #${id}
+        <span>📎</span> ${escapeHtml(msg)}
       </span>`
     }
     return buildAttachmentCard(att, inline)
