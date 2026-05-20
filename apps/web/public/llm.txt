@@ -1,8 +1,8 @@
 # Hangrix Platform Reference
 
-> Fetch this file via `webfetch` when you need the canonical platform specification.
-> The runtime baseline prompt is deliberately lean; exhaustive schemas and parameter
-> details live here so they can be kept up to date without bloating every agent turn.
+&gt; Fetch this file via `webfetch` when you need the canonical platform specification.
+&gt; The runtime baseline prompt is deliberately lean; exhaustive schemas and parameter
+&gt; details live here so they can be kept up to date without bloating every agent turn.
 
 ---
 
@@ -243,7 +243,7 @@ The host repo's agent roster lives at `.hangrix/agents.yml`. When you read, vali
           "properties": {
             "mentioned_only": {
               "type": "boolean",
-              "description": "When true, the role fires only if its own key is in the comment's @agent-<key> mention list."
+              "description": "When true, the role fires only if its own key is in the comment's @agent-&lt;key&gt; mention list."
             },
             "from_roles": {
               "type": "array",
@@ -290,119 +290,3 @@ The host repo's agent roster lives at `.hangrix/agents.yml`. When you read, vali
   }
 }
 ```
-
----
-
-## Tool Reference
-
-### `grep` tool
-
-The `grep` tool is a structured wrapper around ripgrep (Go-regex fallback when `rg` is absent). Its surface is intentionally narrow — for flags it doesn't expose, run `rg` (or `grep`) through `bash` directly.
-
-- **`pattern`** (required) — an **RE2** regular expression, the same syntax Go's `regexp` package and ripgrep use. RE2 **omits backreferences (`\1`) and lookahead/lookbehind (`(?=…)`, `(?<=…)`)**; patterns that rely on those features fail to compile. Escape literal regex metacharacters: `\.`, `\*`, `\(`, `\)`, `\?`, `\+`, `\|`, `\[`, `\]`, `\{`, `\}`. Alternation `a|b`, character classes `[abc]`, anchors `^`/`$`, repetition `{n,m}`, and word boundaries `\b` all work.
-- **`path`** — file or directory to search. Defaults to `.` (the working tree at `/workspace`); accepts relative or absolute paths.
-- **`ignore_case`** — boolean. Prefer this over inline `(?i)` for readability.
-- **`glob`** — restrict matches to files whose name matches a shell-style glob (`*.go`, `*.ts`, `*_test.go`). Simple extension globs work in both the ripgrep and fallback paths; richer path-style globs (e.g. `apps/**/handler/*.go`) are only honoured when ripgrep is the active backend.
-- **`limit`** — cap on returned match lines, default 200. The response includes a `truncated` flag — if it's set, **narrow the pattern or add a `glob`** rather than just raising the limit.
-
-Result shape: `{ pattern, count, matches: ["path:lineno:line", …], truncated }`. **Zero matches is not an error** — `count: 0` means the pattern genuinely did not appear, not that the search broke.
-
-Common shapes (note the doubled backslashes — JSON arg encoding eats one level):
-
-- Call sites of a function: `pattern="MyFunc\\("`, `glob="*.go"`.
-- YAML/JSON config key: `pattern="my_key\\s*:"`, `glob="*.yaml"`.
-- TODO / FIXME survey: `pattern="\\b(TODO|FIXME|XXX)\\b"`, `ignore_case=true`.
-- Case-insensitive substring: `pattern="oauth"`, `ignore_case=true`.
-- Exact string with regex metacharacters: `pattern="config\\.json"` to find the literal `config.json`.
-
-When you need context lines (`-C N`), filenames-only (`-l`), per-file counts (`-c`), inverse match (`-v`), multiple `--include`/`--exclude` patterns, or `--type` filtering, drop down to `bash` + `rg`/`grep` — those flags don't have tool-level analogues.
-
-### `bash_input`
-
-`bash_input` writes bytes to the **stdin** of a background bash task — one started with `run_in_background=true`, *or* one a foreground call promoted after 30s. Required args: `task_id` (from the original `bash` response) and `data` (the bytes to send). A trailing `\n` is appended automatically — set `no_newline=true` to suppress it. The tool **MUST NOT** be used on a *currently-running* synchronous foreground call (you have no `task_id` for it yet); if you anticipate needing to feed stdin, start the command with `run_in_background=true` rather than waiting for the auto-promote.
-
-Use `bash_input` when, and only when, a backgrounded program is blocked on `read()` from its terminal and the answer is something you can supply now. Concretely:
-
-- **Interactive y/N confirmation.** `apt-get install …` without `-y`, `gh pr create` without `--yes`, install scripts that ask "continue? [y/N]", any prompt of the same shape. Send `y` (newline appended) once the prompt has appeared. You **SHOULD** still prefer the non-interactive flag (`-y`, `--yes`, `DEBIAN_FRONTEND=noninteractive`) when one exists — it's auditable in the command line and free of timing races.
-- **Password / passphrase entry.** Tools that read a secret from the TTY (`sudo -S` style helpers, `ssh-keygen -p`, `gpg --passphrase-fd`). The PTY hides the echo for you. **Never** hard-code real secrets — read the value from an environment variable inside the command and `bash_input` only what the prompt actually asks for.
-- **REPL-style sessions.** A long-running interpreter (`python3 -i`, `node`, `psql`, `sqlite3`) where you want to send a sequence of statements and observe each result before deciding the next. Start it in the background, send lines with `bash_input`, poll with `bash(task_id=…)` between sends.
-- **Driving a TUI mid-flight.** Sending raw escape sequences or single keystrokes (arrows, Ctrl-C) to a curses-style program. Use `no_newline=true` so the bytes go through unmodified.
-
-Do **NOT** use `bash_input` for cases that have a cleaner non-interactive path:
-
-- **Piping stdin you already have.** Use a heredoc or pipe in the original command: `sqlite3 db.sqlite <<'SQL' … SQL`, `echo y | apt-get install …`, `cat secret.txt | gpg --batch …`. `bash_input` is for input you couldn't supply upfront, not a worse heredoc.
-- **Answering prompts a flag can silence.** `apt-get -y`, `gh --yes`, `rm -f`, `git rebase --autostash`, etc. The flag is auditable in the command; `bash_input` racing against a prompt is not.
-- **Recovering from a finished task.** Once `bash(task_id=…)` returns `status: "done"`, its stdin is closed — `bash_input` will fail. Start a fresh background command instead of trying to "reopen" it.
-
-Operating rules:
-
-- Start the task with `run_in_background=true`, then **poll it once** with `bash(task_id=…)` to confirm the prompt has actually been emitted before sending input. Writing before the program has reached its `read()` is a race — the bytes land in the kernel buffer and may be consumed by an earlier read or ignored entirely.
-- Send the smallest answer the prompt expects: `y`, the password, one REPL statement. Trailing newline is on by default; you almost never need `no_newline=true` outside TUI work.
-- Keep one logical conversation per `task_id`. If you need to talk to a different program, start a new background task — don't try to multiplex.
-- After sending input, poll again to see the program's response, and treat `status: "done"` as the signal to stop and read the final `output`.
-
-### `webfetch`
-
-`webfetch` is a first-class tool — treat it the same way you'd treat `grep` or `read`. The web knows the current state of the ecosystem; your training-time memory does not. When the answer to "what's the right version / API shape / config flag / migration path / current best practice for X" matters to the change you're about to commit, **reach for `webfetch` instead of guessing**.
-
-- `webfetch` defaults to HTML-to-text. Set `raw=true` for non-HTML payloads (JSON, plaintext, markdown sources).
-- **Searching: use Bing.** When you don't already have a URL in hand, your search entry point **SHOULD** be Bing — fetch `https://www.bing.com/search?q=<URL-encoded query>` and follow the most relevant result. Bing is the platform's default because its result page is friendly to HTML-to-text extraction; you **SHOULD NOT** fall back to other search engines unless Bing genuinely failed to find what you need.
-- **When `webfetch` is the right call** (non-exhaustive; the bar is *low*, not high):
-  - The issue, code comment, or task description references a URL — fetch it.
-  - You're about to add, upgrade, pin, or replace a dependency — check the current stable version on the registry (npm, PyPI, crates.io, Go pkg, Maven Central, …) and the upstream changelog.
-  - You're using a library, framework, or API and the call shape / option names / default behaviour is not already obvious from the codebase — go to the vendor docs.
-  - You're choosing between approaches and the "current best practice" might have shifted since training cutoff — search Bing for recent guidance (release notes, security advisories, RFCs).
-  - You hit a build/lint/runtime error message you don't immediately recognise — search the exact error string on Bing rather than speculating.
-- **Trust the web over stale memory.** Writing an out-of-date version, deprecated API, or removed flag into a commit is worse than the few seconds an audited fetch costs.
-- **Stay purposeful, not speculative.** Every fetch is audited, so each one **SHOULD** be tied to a concrete question the task needs answered. Don't browse for entertainment, scrape unrelated sites, or chase tangential reading — and keep results focused (follow the one or two links that matter, not every link on the page).
-
-### `compact_session`
-
-Long sessions accumulate stale tool output that costs tokens and slows the upstream — and they eventually hit the model's context window. `compact_session` is the tool you call to release that space: it replaces your visible conversation with a single summary that you yourself write, and the next turn continues from there.
-
-- **When to call.**
-  - You finished a task and the next event (a new mention, a fresh issue comment from the user, a new sub-issue) is **unrelated to the work you just completed**. The prior tool transcript is dead weight; compact before you start the new task.
-  - The runtime injected a `<system_reminder>` saying token usage crossed the configured threshold. Finish the current sub-step at its next clean boundary, then compact.
-  - You can feel the context getting heavy — many large file reads, large bash outputs, several rounds of search/edit — and the next step doesn't need that detail anymore.
-- **When NOT to call.** Mid-task — if you're partway through an edit/test/commit sequence, finish it first. Compacting between an edit and its verification means the next turn won't remember whether the test ran. Also do not compact pre-emptively at the start of a fresh task with little history; you're throwing away nothing useful and you'll lose the original event payload.
-- **Argument shape.** `summary: string` — the *only* memory the next turn carries forward. It MUST cover:
-  - **Completed decisions and why.** Not just "edited foo.go"; say *what* and *why*, with file pointers (`apps/foo/handler.go:42`).
-  - **Outstanding work.** What still needs to happen, in which role, by which step. If a hand-off is queued via `@agent-<role>`, name the role and the comment id.
-  - **Key facts the next turn cannot re-derive.** Branch state, commit shas, issue/PR numbers, identifiers seen in tool results, blockers raised. Anything the model would need a re-run of `git log` / `issue_read` to recover — write it down.
-- **Result shape.** `{ok: true, compacted: true, note: "..."}`. The note re-states the contract; it's not new information you need to act on.
-- **Call it alone.** Do not batch `compact_session` with other tool calls in the same response — the sibling tool's result becomes invisible to the next turn (it's part of the compacted segment). One call, then return for the next turn.
-- **There is no rollback.** Once compacted, prior detail is gone from your working memory (the audit log retains it, but you cannot read it back mid-session). Write the summary thoroughly enough that you would not need to.
-
-### `research`
-
-`research` fans out up to 10 read-only sub-agents in parallel, each running its own focused LLM conversation against the same `/workspace` tree. Use it when you have several **independent** investigation questions that don't depend on each other's answers — exploring unrelated modules at once, checking several hypotheses across the codebase, or comparing config files concurrently. Each sub-agent returns one final summary message; you receive the results in task order.
-
-This is different from "Run independent calls in parallel" in the operating principles: that rule is about batching primitive tool calls inside a single response. `research` is for investigations that themselves need **reasoning between reads** — the sub-agent gets its own multi-step LLM loop, not just one round-trip.
-
-- **Argument shape.** `tasks: [{prompt, max_steps?}, …]` — 1 to 10 entries. `prompt` is the focused brief for the sub-agent; `max_steps` caps that sub-agent's LLM round-trips (default 64, hard cap 9999). Optional top-level `model` overrides the model for every sub-agent on this call.
-- **Result shape.** `{results: [{outcome, summary, steps_used}, …]}` ordered to match `tasks`. `outcome` is `ok` (sub-agent finished by emitting a final assistant message), `step_limit` (budget ran out before it stopped calling tools; `summary` is the last assistant text seen), or `error` (transport/internal failure; `error` carries the reason).
-- **What sub-agents have.** A strictly read-only catalogue: `read`, `glob`, `grep`, `webfetch`. Nothing else — no `write`, no `edit`, no `bash`, no platform tools, no nested `research`. They share your working tree on disk but each has its own conversation state and tool history; they cannot see each other's work or yours.
-- **When to use.** Parallelism across independent prompts is the entire point. Three questions that each take ~30s serially complete in ~30s when dispatched together. Sub-agent transcripts also stay out of your own context — only their summaries land back in your conversation.
-- **When NOT to use.** A single question (call `read`/`grep` yourself); anything that must mutate state (sub-agents cannot write, commit, comment, or run commands); sequentially dependent steps (if task B needs A's answer, run them serially in your own turn); a "second opinion" on one question (the value is fan-out, not redundancy).
-- **Prompt sub-agents like a focused brief.** State exactly what to investigate, what shape of answer you want back, and any pointers (file paths, symbols, search terms). "Look in `apps/foo/handler/`, find every call site of `Bar.Init()`, summarize the patterns" finishes in a handful of steps; "tell me about foo" burns budget. Each step is a full LLM round-trip — keep `max_steps` proportional to depth, and re-dispatch with a tighter prompt if a `step_limit` outcome left the answer incomplete.
-
----
-
-## Useful Bash Patterns
-
-Concrete snippets that come up often (these are **`bash` invocations**, not arguments to the `grep` tool). They're tools, not rules — reach for them when the situation fits.
-
-- **Cap output at the source.** `cmd 2>&1 | head -100` for diagnostics; `grep -m N` (or `--max-count=N`) for per-file match caps; `grep -l` for filenames only; `grep -c` for counts only. Counting matches before reading them (`grep -rn foo | wc -l`) lets you decide whether to narrow the query first.
-- **Scope `grep` properly.** `grep -rn --include='*.go' --include='*.ts' 'pattern' apps/` skips binaries and unrelated trees in one shot. `grep -rnC 2 'pattern'` adds two lines of context above and below — often enough to skip the follow-up `read`. `grep -rE 'foo|bar'` for alternations.
-- **`find` with `-prune`** when you must walk the tree: `find . -path ./node_modules -prune -o -name '*.go' -print` walks a Go tree without diving into vendored or build dirs (`-prune` short-circuits the descent). Combine multiple prunes with `\(  -path A -o -path B \) -prune`.
-- **Combine commands deliberately.** `a && b` runs `b` only if `a` succeeded — the right glue when the second step depends on the first. `a; b` runs both regardless — right for independent diagnostic dumps. `a || b` runs `b` only on failure — handy fallbacks. Don't reach for `;` when `&&` is what you meant; a silent first-step failure that gets papered over by the second step is a bug source.
-- **Git incantations worth memorising.**
-  - `git log --oneline -20` — recent history at a glance.
-  - `git log --oneline --stat <base>..HEAD` — what this branch adds vs its base, with diffstats.
-  - `git show <sha> --stat` (or `git show <sha> -- <path>`) — one commit, full or scoped.
-  - `git diff --name-only <base>...HEAD` — list of files this branch touches, no diff body. Useful before running narrow tests.
-  - `git blame -L <start>,<end> <file>` — who last touched a specific range.
-  - `git grep -n 'pattern'` — like `grep -rn` but only over tracked files; faster than `grep -r` on large repos.
-- **JSON via `jq`.** `... | jq '.items[].id'` extracts a field across an array; `... | jq -r '.field'` strips surrounding quotes for piping into another command. `jq -c .` collapses to one line per record for grep-friendliness.
-- **Heredoc for multi-line scripts.** Use `<<'EOF'` (quoted delimiter) when the body should be literal — no `$VAR` expansion, no backtick traps. Use unquoted `<<EOF` only when you actually want expansion. Example: `python3 - <<'PY'` for inline Python without writing a temp file.
-- **One useful inspection chain: `sort | uniq -c | sort -rn`** — counts unique lines descending. Pairs well with `grep ... | awk '{print $1}' | sort | uniq -c | sort -rn` to see the dominant value in a column.
