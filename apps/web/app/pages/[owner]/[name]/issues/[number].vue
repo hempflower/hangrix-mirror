@@ -276,7 +276,7 @@ async function submitComment() {
       },
     )
     commentBody.value = ''
-    await loadTimeline()
+    await Promise.all([loadTimeline(), loadAttachments()])
   } catch (e: any) {
     commentError.value = e?.data?.error ?? t('issue.commentForm.failed')
   } finally {
@@ -747,6 +747,7 @@ onUnmounted(stopRefreshTimer)
                       :name="name"
                       :issue-number="Number(number)"
                       @insert="(snippet: string) => mentionTextareaRef?.insertAtCursor(snippet)"
+                      @uploaded="(att: IssueAttachment) => attachments.push(att)"
                     />
                     <MentionTextarea
                       ref="mentionTextareaRef"

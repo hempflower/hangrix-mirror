@@ -25,6 +25,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'insert', snippet: string): void
+  (e: 'uploaded', att: IssueAttachment): void
 }>()
 
 const uploading = ref(false)
@@ -62,6 +63,7 @@ async function onFileSelected(e: Event) {
       },
     )
     attachments.value.push(res)
+    emit('uploaded', res)
   } catch (e: any) {
     uploadError.value = e?.data?.error ?? t('issue.attachment.uploadFailed')
   } finally {
