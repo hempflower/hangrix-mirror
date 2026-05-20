@@ -70,20 +70,11 @@
         },
         "env": {
           "type": "object",
-          "description": "Plain-text env vars injected into every role container. Keys uppercase `[A-Z_][A-Z0-9_]*`.",
+          "description": "Plain-text env vars injected into every role container. Keys uppercase `[A-Z_][A-Z0-9_]*`; values support `${VAR_NAME}` whole-value references to repo variables and secrets (expanded by the runner at session start).",
           "patternProperties": {
             "^[A-Z_][A-Z0-9_]*$": { "type": "string" }
           },
           "additionalProperties": false
-        },
-        "secrets": {
-          "type": "array",
-          "description": "Name-only list of secrets the platform injects from the repo's secrets settings. Values never appear in this file.",
-          "items": {
-            "type": "string",
-            "pattern": "^[A-Z_][A-Z0-9_]*$"
-          },
-          "uniqueItems": true
         },
         "volumes": {
           "type": "array",

@@ -117,6 +117,23 @@ Spawn 时 server 已经把 role 解析后的 prompt 内容快照进 `agent_sessi
 
 `internal/orchestrator/fake.go` 用三对 `io.Pipe` 实现 `Orchestrator` 接口；测试侧把"agent"换成一个 goroutine 写 stdout，可以脱离 docker 跑端到端验收（见 `internal/loop/session_test.go`）。
 
+## Task payload — repo variables 下发
+
+Runner 在 `GET /api/runner/tasks` 拉到的 task 载荷中，除 `Env`（session 原始 env map，含 spawner 写入的 `${VAR_NAME}` 引用）、`SessionToken`、`ContainerID` 外，还包含：
+
+```json
+{
+  "repo_variables": {
+    "OPENAI_API_KEY": "sk-abc123",
+    "NPM_AUTH_TOKEN": "npm_xxx"
+  }
+}
+```
+
+- `repo_variables` 是 `map[string]string`，key 为变量名，value 为明文（机密变量已在服务端解密后下发）。
+- Runner 在 `buildAgentEnv()` 之前调用 `expandEnv(env, repoVars)` 对 `Env` 做 `${VAR_NAME}` 整值展开（仅 `FOO: ${BAR}` 形状；`FOO: prefix-${BAR}` 不做部分替换）。展开失败（引用不存在的变量名）时 session 明确失败并返回缺失名，不静默注入空串。
+- `repo_variables` 为 `nil` 表示服务端尚未升级（向后兼容，`${...}` 引用不做展开也不报错）；空 non-nil map 表示服务端已升级但仓库无变量（`${...}` 引用明确报错）。
+
 ## 不在本设计里的事
 
 - **多 session 并发：** v1 一 runner 一时刻一 session，串行消化。M7a 起按 `runner.capabilities.parallelism` 扩。

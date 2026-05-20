@@ -39,13 +39,10 @@ container:                        # host 声明的容器环境
   # 镜像里烤了 s6-overlay / supervisord 等监管进程要让它接管时填这里。
   # entrypoint: ["/init"]
 
-  env:                            # 明文环境变量，入 git
+  env:                            # 明文环境变量，入 git；value 支持 ${VAR_NAME} 引用仓库变量/机密（见下文）
     NODE_ENV: development
     GOFLAGS: "-mod=readonly"
-
-  secrets:                        # 只列名字，值在仓库设置的"机密"页面配
-    - GITHUB_TOKEN
-    - NPM_AUTH_TOKEN
+    OPENAI_API_KEY: ${OPENAI_API_KEY}
 
   volumes:                        # repo-scope 共享缓存（runner 本地 bind mount）
     - { name: pnpm-store, mount: /caches/pnpm }
@@ -152,6 +149,18 @@ roles:
 - `roles:` 至少一个；role key 限制 `[a-z][a-z0-9-]*`，**预留 `agent-` 前缀给 mention 协议**（参见下文）。
 - `prompt:` / `prompt_file:` 二选一互斥；同时给两个直接 reject。
 - `container.image` / `container.build` 二选一互斥。
+
+## 仓库变量与机密变量
+
+`container.env` 的 value 支持 `${VAR_NAME}` 整值引用（如 `OPENAI_API_KEY: ${OPENAI_API_KEY}`），引用的是仓库级别的 **变量**（明文存储）和 **机密变量**（加密存储）。`agentsconfig` 解析器将 `${...}` 当作普通字符串保留原样；实际的变量解析与展开由 Runner 在容器启动前完成。
+
+- **管理入口：** 仓库设置页 → 「变量与机密」tab（仅 `manage` 权限可见）。
+- **API：** `GET/POST /api/repos/{owner}/{name}/variables` 列表/创建；`PATCH/DELETE /api/repos/{owner}/{name}/variables/{name}` 更新/删除。
+- **机密回显：** 创建机密时输入明文；保存后列表只显示「已设置」状态，不再回显旧值。更新时输入新值覆盖，留空则保持原值不变。
+- **展开失败：** Runner 在 session 启动时若 `container.env` 引用了不存在的变量名，session 明确失败并返回缺失的变量名（不静默注入空值）。
+- **展开范围：** 仅整值 `${NAME}` 替换；`prefix-${NAME}`、`${A}-${B}`、`${VAR:-default}` 等复合语法不做展开，原样保留。
+- **`container.secrets` 已移除：** 旧的 `secrets:` 数组字段已从 schema、解析器和默认模板中移除。如有旧配置使用了 `secrets:`，请将值迁移到仓库设置页的「变量与机密」中，并在 `container.env` 中通过 `${VAR_NAME}` 引用。
+
 
 ---
 
