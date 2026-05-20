@@ -181,6 +181,10 @@ func (g *stubGit) MergeBranch(string, string, string, string, gitdomain.Signatur
 func (g *stubGit) CheckFastForward(string, string, string) (bool, string, error) {
 	panic("CheckFastForward not stubbed")
 }
+func (g *stubGit) CheckAutoMerge(string, string, string) (bool, string, string, error) {
+	panic("CheckAutoMerge not stubbed")
+}
+
 
 
 // stubRunnerRepo satisfies runnerdomain.Repo for the spawner / archiver /
