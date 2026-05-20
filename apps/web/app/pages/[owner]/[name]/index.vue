@@ -25,9 +25,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -66,6 +64,8 @@ const {
 } = useRepoRefs(() => owner.value, () => name.value)
 
 const tab = ref<'files' | 'commits'>((route.query.tab as any) === 'commits' ? 'commits' : 'files')
+
+const refTab = ref<'branches' | 'tags'>('branches')
 
 const currentRef = ref<string>('')
 const currentPath = ref<string>('')
@@ -335,6 +335,15 @@ watch(() => route.query.ref, (r) => {
   if (nr && nr !== currentRef.value) currentRef.value = nr
 })
 
+// Sync refTab so the dropdown opens on the correct tab when currentRef changes.
+watch([currentRef, branchList, tagList], ([ref, branches, tags]) => {
+  if (ref && tags.some(t => t.name === ref)) {
+    refTab.value = 'tags'
+  } else {
+    refTab.value = 'branches'
+  }
+}, { immediate: true })
+
 onMounted(async () => {
   await loadRepo()
   if (!repoError.value) {
@@ -458,18 +467,36 @@ onMounted(async () => {
                     <SelectValue :placeholder="t('repo.files.ref')" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectGroup v-if="branchList.length > 0">
-                      <SelectLabel>{{ t('repo.files.ref') }}</SelectLabel>
-                      <SelectItem v-for="b in branchList" :key="`b-${b.name}`" :value="b.name">
-                        {{ b.name }}
-                      </SelectItem>
-                    </SelectGroup>
-                    <SelectGroup v-if="tagList.length > 0">
-                      <SelectLabel>tags</SelectLabel>
-                      <SelectItem v-for="tg in tagList" :key="`t-${tg.name}`" :value="tg.name">
-                        {{ tg.name }}
-                      </SelectItem>
-                    </SelectGroup>
+                    <Tabs v-model="refTab" class="w-full">
+                      <TabsList class="w-full">
+                        <TabsTrigger value="branches" class="flex-1">
+                          {{ t('repo.tabs.branches') }}
+                        </TabsTrigger>
+                        <TabsTrigger value="tags" class="flex-1">
+                          {{ t('repo.tabs.tags') }}
+                        </TabsTrigger>
+                      </TabsList>
+                      <TabsContent value="branches" class="max-h-64 overflow-y-auto px-1">
+                        <template v-if="branchList.length > 0">
+                          <SelectItem v-for="b in branchList" :key="`b-${b.name}`" :value="b.name">
+                            {{ b.name }}
+                          </SelectItem>
+                        </template>
+                        <div v-else class="py-3 text-center text-sm text-muted-foreground">
+                          {{ t('repo.branches.empty') }}
+                        </div>
+                      </TabsContent>
+                      <TabsContent value="tags" class="max-h-64 overflow-y-auto px-1">
+                        <template v-if="tagList.length > 0">
+                          <SelectItem v-for="tg in tagList" :key="`t-${tg.name}`" :value="tg.name">
+                            {{ tg.name }}
+                          </SelectItem>
+                        </template>
+                        <div v-else class="py-3 text-center text-sm text-muted-foreground">
+                          {{ t('repo.tags.empty') }}
+                        </div>
+                      </TabsContent>
+                    </Tabs>
                   </SelectContent>
                 </Select>
               </div>
