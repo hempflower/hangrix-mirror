@@ -185,7 +185,15 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 			continue
 		}
 
-		if existing, hasExisting := existingByRole[roleKey]; hasExisting && existing.Status != runnerdomain.SessionStatusArchived {
+		// failed sessions are not automatically rewoken — a failed
+		// session may have orphaned inputs from a previous EnqueueInput-
+		// succeeded-but-ResumeSession-failed path, and rewaking it with a
+		// different cause would replay those orphaned inputs alongside the
+		// new cause (cross-cause replay). A failed session needs explicit
+		// operator recovery via controller.Resume/Recover.
+		if existing, hasExisting := existingByRole[roleKey]; hasExisting &&
+			existing.Status != runnerdomain.SessionStatusArchived &&
+			existing.Status != runnerdomain.SessionStatusFailed {
 			if isLiveStatus(existing.Status) {
 				// Live row — agent is alive or about to be claimed.
 				// Append the event onto its inputs queue; the agent
@@ -199,9 +207,11 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 				out = append(out, enq)
 				continue
 			}
-			// Non-live, non-archived (idle / failed / succeeded /
+			// Non-live, non-archived, non-failed (idle / succeeded /
 			// cancelled). Rewake the row so the next runner poll
 			// picks it up, and seed the new turn with the cause.
+			// (failed sessions are excluded above — they may carry
+			// orphaned inputs and need explicit operator recovery.)
 			rew, err := s.rewakeRole(ctx, in, existing)
 			if err != nil {
 				s.recordSpawnError(ctx, in, roleKey, err)

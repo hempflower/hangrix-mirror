@@ -610,13 +610,12 @@ func TestOnTriggerRewakePreservesIdleToken(t *testing.T) {
 	}
 }
 
-// TestOnTriggerRewakeFromFailedPreservesToken covers the same
-// preservation contract for rows that ended in `failed`. Since the
-// sealed-preservation change, MarkSessionTerminal no longer NULLs
-// sealed, so a subsequent rewake should reuse the same identity —
-// same rationale as idle (the previous clone's .git/config stays
-// valid).
-func TestOnTriggerRewakeFromFailedPreservesToken(t *testing.T) {
+// TestOnTriggerSpawnAfterFailed verifies that a failed session does NOT
+// get automatically rewoken. Instead, a new trigger with a different
+// cause spawns a fresh session (so orphaned inputs from a previous
+// EnqueueInput-succeeded-but-ResumeSession-failed path are never
+// cross-cause replayed). The old failed row stays as a tombstone.
+func TestOnTriggerSpawnAfterFailed(t *testing.T) {
 	h := newTestSpawner(t, []byte(hostYAML), nil)
 	if _, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
@@ -646,23 +645,35 @@ func TestOnTriggerRewakeFromFailedPreservesToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second OnTrigger err: %v", err)
 	}
-	if len(second) != 1 || second[0].Action != domain.SpawnActionRewoken {
-		t.Fatalf("second call = %+v, want one rewoken", second)
+	// Failed session is not rewoken — a fresh session is spawned.
+	if len(second) != 1 || second[0].Action != domain.SpawnActionSpawned {
+		t.Fatalf("second call = %+v, want one spawned (not rewoken)", second)
 	}
-	got := h.runner.sessions[0]
-	if got.SessionTokenPrefix != wantPrefix || got.SessionTokenHash != wantHash || got.SessionTokenSealed != wantSealed {
-		t.Errorf("rewake-from-failed rotated token: prefix %q→%q hash %q→%q sealed %q→%q",
-			wantPrefix, got.SessionTokenPrefix, wantHash, got.SessionTokenHash, wantSealed, got.SessionTokenSealed)
+	// Old failed session is untouched.
+	if original.Status != runnerdomain.SessionStatusFailed {
+		t.Fatalf("original status = %q, want failed (unchanged)", original.Status)
+	}
+	// New session is at index 1 (CreateSession appends).
+	if len(h.runner.sessions) != 2 {
+		t.Fatalf("sessions = %d, want 2 (original failed + new spawned)", len(h.runner.sessions))
+	}
+	newSess := h.runner.sessions[1]
+	if newSess.SessionTokenPrefix == wantPrefix {
+		t.Errorf("new session reused old prefix %q, want fresh", wantPrefix)
+	}
+	if newSess.SessionTokenHash == wantHash {
+		t.Errorf("new session reused old hash, want fresh")
+	}
+	if newSess.SessionTokenSealed == wantSealed {
+		t.Errorf("new session reused old sealed, want fresh")
 	}
 }
 
-// TestOnTriggerRewakeLegacyNullSealedMintsFresh exercises the
-// backward-compat fallback: a row that lost its sealed under the old
-// terminate behaviour (sealed == "") must get a freshly minted token,
-// because there's no plaintext to recover. The cloned `.git/config`
-// on disk is stale either way for such rows — minting is the only
-// option.
-func TestOnTriggerRewakeLegacyNullSealedMintsFresh(t *testing.T) {
+// TestOnTriggerSpawnAfterLegacyFailed verifies that a legacy failed row
+// (NULL sealed, from before the sealed-preservation change) does NOT get
+// rewoken. Instead, a new trigger with a different cause spawns a fresh
+// session with a freshly minted token. The legacy row stays as a tombstone.
+func TestOnTriggerSpawnAfterLegacyFailed(t *testing.T) {
 	h := newTestSpawner(t, []byte(hostYAML), nil)
 	if _, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
@@ -691,15 +702,22 @@ func TestOnTriggerRewakeLegacyNullSealedMintsFresh(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("second OnTrigger err: %v", err)
 	}
-	got := h.runner.sessions[0]
-	if got.SessionTokenPrefix == priorPrefix {
-		t.Errorf("legacy NULL-sealed rewake reused prefix %q, want a fresh mint", priorPrefix)
+	// Old failed session is untouched at index 0.
+	if original.Status != runnerdomain.SessionStatusFailed {
+		t.Fatalf("original status = %q, want failed (unchanged)", original.Status)
 	}
-	if got.SessionTokenHash == priorHash {
-		t.Errorf("legacy NULL-sealed rewake reused hash, want a fresh mint")
+	if len(h.runner.sessions) != 2 {
+		t.Fatalf("sessions = %d, want 2 (legacy failed + new spawned)", len(h.runner.sessions))
 	}
-	if got.SessionTokenSealed == "" {
-		t.Errorf("legacy NULL-sealed rewake left sealed empty, want freshly encrypted plaintext")
+	newSess := h.runner.sessions[1]
+	if newSess.SessionTokenPrefix == priorPrefix {
+		t.Errorf("new session reused legacy prefix %q, want a fresh mint", priorPrefix)
+	}
+	if newSess.SessionTokenHash == priorHash {
+		t.Errorf("new session reused legacy hash, want a fresh mint")
+	}
+	if newSess.SessionTokenSealed == "" {
+		t.Errorf("new session left sealed empty, want freshly encrypted plaintext")
 	}
 }
 
