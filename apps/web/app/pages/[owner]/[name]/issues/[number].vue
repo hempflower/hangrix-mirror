@@ -39,6 +39,8 @@ const { user } = useCurrentUser()
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
 const number = computed(() => Number(route.params.number ?? 0))
+const issue = ref<Issue | null>(null)
+
 useHead({ title: () => {
     const issueTitle = issue.value?.title
     return issueTitle
@@ -57,8 +59,6 @@ setBreadcrumbs(() => {
 })
 
 const { repo, load: loadRepo } = useRepo(() => owner.value, () => name.value)
-
-const issue = ref<Issue | null>(null)
 const issueError = ref<string | null>(null)
 const timeline = ref<IssueTimeline | null>(null)
 const diff = ref<FileDiff[]>([])
