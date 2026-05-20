@@ -334,15 +334,23 @@ func (r *Registry) tryDeleteIssueBranch(ctx context.Context, repoID int64, fsPat
 		}
 	}
 
+	// Run branch-write guards.
 	oldSHA, _ := r.deps.Git.ResolveCommit(fsPath, branchName)
+	for _, g := range r.deps.Guards {
+		if err := g.CheckBranchWrite(ctx, repodomain.BranchWriteOp{
+			RepoID:     repoID,
+			Branch:     branchName,
+			OldSHA:     oldSHA,
+			IsDelete:   true,
+			IsInternal: true,
+		}); err != nil {
+			return &mergeCleanupResult{Deleted: false, Reason: "denied"}
+		}
+	}
+
 	if err := r.deps.Git.DeleteBranch(fsPath, branchName); err != nil {
 		return &mergeCleanupResult{Deleted: false, Reason: "delete_failed"}
 	}
-	// Note: the MCP path doesn't run BranchWriteGuard checks because
-	// the platform itself owns this code path (the guards exist for
-	// user-side git pushes); the `can: [issue_merge]` ACL and the
-	// protection check above are the relevant gates here.
-	_ = oldSHA
 	return &mergeCleanupResult{Deleted: true}
 }
 
