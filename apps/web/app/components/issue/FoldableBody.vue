@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, watch, nextTick } from 'vue'
 import MarkdownBody from '@/components/MarkdownBody.vue'
 
 const props = withDefaults(defineProps<{
@@ -16,11 +16,18 @@ const containerRef = ref<HTMLElement | null>(null)
 const needsFold = ref(false)
 const expanded = ref(false)
 
-onMounted(async () => {
+async function measure() {
   await nextTick()
   if (containerRef.value) {
     needsFold.value = containerRef.value.scrollHeight > props.maxHeight
   }
+}
+
+onMounted(measure)
+
+watch(() => props.source, () => {
+  expanded.value = false
+  measure()
 })
 </script>
 
