@@ -681,13 +681,73 @@ func (h *Handler) transfer(w http.ResponseWriter, r *http.Request) {
 
 // ---- Git reads ----
 
+// refListResp is the paginated response shape for a single ref type
+// (branches or tags). Mirrors the release listResp contract so the
+// frontend can use the same Pagination.vue component.
+type refListResp struct {
+	Items []*gitdomain.Ref `json:"items"`
+	Total int32            `json:"total"`
+}
+
 func (h *Handler) getRefs(w http.ResponseWriter, r *http.Request) {
 	repo, ok := h.resolveRepoForRead(w, r)
 	if !ok {
 		return
 	}
 
-	// Try cache first; on miss fall through to git.
+	refType := strings.TrimSpace(r.URL.Query().Get("type"))
+	offset, limit := parseOffsetLimit(r)
+
+	// When a type filter is requested, return a paginated list response.
+	if refType != "" {
+		if refType != "branches" && refType != "tags" {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid type: must be 'branches' or 'tags'")
+			return
+		}
+
+		// Try cache first; on miss fall through to git.
+		cacheKey := kv.RefKey(repo.ID)
+		var all gitdomain.Refs
+		if !h.cache.Get(r.Context(), cacheKey, &all) {
+			path, ok := h.resolveFsPath(w, repo)
+			if !ok {
+				return
+			}
+			gitRefs, err := h.git.ListRefs(path)
+			if err != nil {
+				if mapGitErr(w, err) {
+					return
+				}
+				httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			h.cache.Set(r.Context(), cacheKey, gitRefs, refsCacheTTL)
+			all = *gitRefs
+		}
+
+		slice := all.Branches
+		if refType == "tags" {
+			slice = all.Tags
+		}
+		total := int32(len(slice))
+
+		start := int(offset)
+		if start > len(slice) {
+			start = len(slice)
+		}
+		end := start + int(limit)
+		if end > len(slice) {
+			end = len(slice)
+		}
+
+		httpx.WriteJSON(w, http.StatusOK, refListResp{
+			Items: slice[start:end],
+			Total: total,
+		})
+		return
+	}
+
+	// No type filter: return the full Refs as before (backwards compatible).
 	cacheKey := kv.RefKey(repo.ID)
 	var refs gitdomain.Refs
 	if h.cache.Get(r.Context(), cacheKey, &refs) {

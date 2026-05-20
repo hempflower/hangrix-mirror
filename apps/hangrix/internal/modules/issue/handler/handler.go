@@ -969,10 +969,11 @@ type mergeReq struct {
 	Message string `json:"message,omitempty"`
 }
 
-// merge runs MergeBranch on the bare repo. Only owner or admin may merge.
-// On success the issue transitions to State=merged, timeline events are
-// written, sessions are archived, and the issue branch is deleted (unless
-// the host config disables it or branch protections forbid it).
+// merge runs MergeBranch (rebase-first strategy) on the bare repo. Only
+// owner or admin may merge. On success the issue transitions to State=merged,
+// timeline events are written, sessions are archived, and the issue branch
+// is deleted (unless the host config disables it or branch protections
+// forbid it).
 func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	rc, ok := h.resolveRepo(w, r)
 	if !ok {

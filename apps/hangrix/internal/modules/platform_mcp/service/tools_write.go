@@ -210,7 +210,7 @@ func (r *Registry) issueCloseTool() *platformmcpdomain.Tool {
 }
 
 // issueMergeTool merges the issue branch into base. The work is the
-// same as the web-API merge handler: three-way merge → state →
+// same as the web-API merge handler: rebase-first merge → state →
 // timeline events → archive sessions.
 //
 // The agent path differs from the web path in one place: there's no
@@ -220,7 +220,7 @@ func (r *Registry) issueCloseTool() *platformmcpdomain.Tool {
 func (r *Registry) issueMergeTool() *platformmcpdomain.Tool {
 	return &platformmcpdomain.Tool{
 		Name:        "issue_merge",
-		Description: "Merge the issue branch into its base. Fails if there are no commits or the merge would conflict.",
+		Description: "Merge the issue branch into its base using a rebase-first strategy: fast-forward if possible, otherwise auto-rebase the issue branch onto the base tip. Fails if there are no commits or the rebase would conflict.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

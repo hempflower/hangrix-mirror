@@ -288,7 +288,21 @@
         "latency": "Latency",
         "status": "Status",
         "session": "Session"
+      },
+      "detail": {
+        "title": "View details",
+        "request": "Request body",
+        "response": "Response body",
+        "loadFailed": "Failed to load detail",
+        "notFound": "Record not found",
+        "emptyBody": "(empty)",
+        "viewDetail": "View details",
+        "provider": "Provider",
+        "model": "Model",
+        "time": "Time",
+        "status": "Status code"
       }
+
     },
     "agentSessions": {
       "title": "Agent sessions",

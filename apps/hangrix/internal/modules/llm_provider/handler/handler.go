@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider/domain"
@@ -73,6 +74,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Delete("/providers/{name}", h.deleteProvider)
 
 		r.Get("/usage", h.listUsage)
+		r.Get("/usage/{id}", h.getUsage)
 	})
 }
 
@@ -385,6 +387,47 @@ func (h *Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
+}
+
+// publicUsageDetail is the single-row DTO for GET /api/admin/llm/usage/{id}.
+// It includes the large body columns the list endpoint deliberately omits.
+type publicUsageDetail struct {
+	ID           int64     `json:"id"`
+	ProviderName string    `json:"provider_name"`
+	Model        string    `json:"model"`
+	CreatedAt    time.Time `json:"created_at"`
+	StatusCode   int32     `json:"status_code"`
+	RequestBody  string    `json:"request_body"`
+	ResponseBody string    `json:"response_body"`
+}
+
+func (h *Handler) getUsage(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	row, err := h.usage.GetUsageByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			httpx.WriteError(w, http.StatusNotFound, "usage record not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, publicUsageDetail{
+		ID:           row.ID,
+		ProviderName: row.ProviderName,
+		Model:        row.Model,
+		CreatedAt:    row.CreatedAt,
+		StatusCode:   row.StatusCode,
+		RequestBody:  row.RequestBody,
+		ResponseBody: row.ResponseBody,
+	})
 }
 
 // ---- helpers ----

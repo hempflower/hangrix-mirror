@@ -223,6 +223,8 @@ func (r *PostgresRepo) RecordUsage(ctx context.Context, u *domain.UsageRecord) e
 		StatusCode:       u.StatusCode,
 		ErrorMessage:     u.ErrorMessage,
 		RequestPath:      u.RequestPath,
+		RequestBody:      u.RequestBody,
+		ResponseBody:     u.ResponseBody,
 	})
 }
 
@@ -308,6 +310,57 @@ type UsageRow struct {
 	RequestPath      string
 	CreatedAt        time.Time
 }
+
+// UsageDetailRow is the single-row read model returned by GetUsageByID.
+// It mirrors UsageRow but also includes RequestBody / ResponseBody.
+type UsageDetailRow struct {
+	ID               int64
+	SessionID        *int64
+	ProviderID       int64
+	ProviderName     string
+	Model            string
+	PromptTokens     int32
+	CompletionTokens int32
+	TotalTokens      int32
+	LatencyMS        int32
+	StatusCode       int32
+	ErrorMessage     string
+	RequestPath      string
+	RequestBody      string
+	ResponseBody     string
+	CreatedAt        time.Time
+}
+
+// GetUsageByID returns a single usage row including the large body
+// columns. Returns pgx.ErrNoRows when the id doesn't exist.
+func (r *PostgresRepo) GetUsageByID(ctx context.Context, id int64) (*UsageDetailRow, error) {
+	row, err := r.q.GetUsageByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	ur := &UsageDetailRow{
+		ID:               row.ID,
+		ProviderID:       row.ProviderID,
+		ProviderName:     row.ProviderName,
+		Model:            row.Model,
+		PromptTokens:     row.PromptTokens,
+		CompletionTokens: row.CompletionTokens,
+		TotalTokens:      row.TotalTokens,
+		LatencyMS:        row.LatencyMs,
+		StatusCode:       row.StatusCode,
+		ErrorMessage:     row.ErrorMessage,
+		RequestPath:      row.RequestPath,
+		RequestBody:      row.RequestBody,
+		ResponseBody:     row.ResponseBody,
+		CreatedAt:        row.CreatedAt.Time,
+	}
+	if row.SessionID.Valid {
+		v := row.SessionID.Int64
+		ur.SessionID = &v
+	}
+	return ur, nil
+}
+
 
 // ---- row → domain ----
 
