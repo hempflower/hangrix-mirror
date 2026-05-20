@@ -12,6 +12,7 @@
     },
     "container": { "$ref": "#/$defs/container" },
     "llm": { "$ref": "#/$defs/llm" },
+    "issues": { "$ref": "#/$defs/issues" },
     "roles": {
       "description": "Map of role-key to Role. At least one role is required.",
       "type": "object",
@@ -211,6 +212,17 @@
           "maxProperties": 0
         }
       ]
+    },
+    "issues": {
+      "type": "object",
+      "description": "Issue behaviour configuration. When omitted every switch uses its default (recommended).",
+      "properties": {
+        "delete_branch_on_merge": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, the issue branch is automatically deleted after a successful merge. Set false to keep merged branches for post-hoc inspection."
+        }
+      }
     },
     "triggerCommentFilter": {
       "description": "Filter block for `issue.comment`. All fields default to no-filter; AND-combined when set. Unknown keys are silently dropped, so a typo (e.g. `mention_only:` for `mentioned_only:`) parses cleanly but leaves the filter empty — diff against the canonical keys below if a trigger fires more or less often than expected.",

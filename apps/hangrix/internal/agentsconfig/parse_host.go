@@ -19,7 +19,12 @@ type hostWire struct {
 	Version   int                       `yaml:"version"`
 	Container *containerWire            `yaml:"container"`
 	LLM       *llmWire                  `yaml:"llm"`
+	Issues    *issuesWire               `yaml:"issues"`
 	Roles     map[string]*roleWire      `yaml:"roles"`
+}
+
+type issuesWire struct {
+	DeleteBranchOnMerge *bool `yaml:"delete_branch_on_merge"`
 }
 
 type containerWire struct {
@@ -156,10 +161,13 @@ func ParseHostConfig(body []byte) (*HostConfig, error) {
 		roles[key] = role
 	}
 
+	issues := buildIssues(wire.Issues)
+
 	return &HostConfig{
 		Version:   wire.Version,
 		Container: container,
 		LLM:       teamLLM,
+		Issues:    issues,
 		Roles:     roles,
 	}, nil
 }
@@ -248,6 +256,17 @@ func buildLLM(w *llmWire, ctx string, requireModel bool) (*LLMConfig, error) {
 		Temperature:      w.Temperature,
 		TopP:             w.TopP,
 	}, nil
+}
+
+// buildIssues lifts the optional `issues:` block. When the block is
+// absent every switch gets its default; a present-but-empty block
+// receives the same defaults so `issues: {}` is equivalent to omission.
+func buildIssues(w *issuesWire) *IssuesConfig {
+	cfg := &IssuesConfig{DeleteBranchOnMerge: true}
+	if w != nil && w.DeleteBranchOnMerge != nil {
+		cfg.DeleteBranchOnMerge = *w.DeleteBranchOnMerge
+	}
+	return cfg
 }
 
 // buildRole validates and lifts one role. The role key is passed in so

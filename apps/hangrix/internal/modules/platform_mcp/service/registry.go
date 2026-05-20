@@ -37,6 +37,8 @@ type RegistryDeps struct {
 	Spawner     agentsessiondomain.Spawner
 	Archiver      agentsessiondomain.Archiver
 	Controller    agentsessiondomain.Controller
+	Protections   repodomain.ProtectionStore
+	Guards        []repodomain.BranchWriteGuard
 	Releases      releasedomain.Store
 	ReleaseAssets releasedomain.AssetStore
 	AssetStorage  *releaseinfra.AssetStorage

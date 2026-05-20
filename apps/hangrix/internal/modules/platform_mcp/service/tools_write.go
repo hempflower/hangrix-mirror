@@ -13,6 +13,7 @@ import (
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	platformmcpdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_mcp/domain"
+	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
 
@@ -287,16 +288,73 @@ func (r *Registry) issueMergeTool() *platformmcpdomain.Tool {
 			})
 			_, _ = r.deps.Issues.CreateAgentEvent(ctx, scope.issue.ID, issuedomain.EventStateChanged, statePayload, sess.RoleKey)
 
+			// Try to delete the issue branch unless the host config
+			// disables it. Same logic as the web merge handler.
+			cleanup := r.tryDeleteIssueBranch(ctx, scope.repo.ID, scope.fsPath, scope.issue.BranchName)
+
 			if r.deps.Archiver != nil {
 				_, _ = r.deps.Archiver.OnIssueClosed(ctx, scope.repo.ID, *sess.IssueNumber)
 			}
 
-			return textResult(map[string]any{
+			result := map[string]any{
 				"merge_sha": mergeSHA,
 				"mode":      mode,
-			}), nil
+			}
+			if cleanup != nil {
+				result["cleanup"] = cleanup
+			}
+			return textResult(result), nil
 		},
 	}
+}
+
+// tryDeleteIssueBranch mirrors the same-named helper in the issue HTTP
+// handler. It consults the host config, branch protections, guards, then
+// calls git.DeleteBranch — all best-effort; failure never rolls back merge.
+func (r *Registry) tryDeleteIssueBranch(ctx context.Context, repoID int64, fsPath, branchName string) *mergeCleanupResult {
+	// Consult host config. Missing yaml = nil config → defaults apply.
+	if r.deps.Spawner != nil {
+		cfg, err := r.deps.Spawner.LoadHostConfig(ctx, repoID)
+		if err == nil && cfg != nil && cfg.Issues != nil && !cfg.Issues.DeleteBranchOnMerge {
+			return nil
+		}
+	}
+
+	// Check branch protections.
+	if r.deps.Protections != nil {
+		rules, err := r.deps.Protections.List(ctx, repoID)
+		if err == nil {
+			if rule := repodomain.MatchProtection(rules, branchName); rule != nil && rule.ForbidDelete {
+				return &mergeCleanupResult{Deleted: false, Reason: "protected"}
+			}
+		}
+	}
+
+	// Run branch-write guards.
+	oldSHA, _ := r.deps.Git.ResolveCommit(fsPath, branchName)
+	for _, g := range r.deps.Guards {
+		if err := g.CheckBranchWrite(ctx, repodomain.BranchWriteOp{
+			RepoID:     repoID,
+			Branch:     branchName,
+			OldSHA:     oldSHA,
+			IsDelete:   true,
+			IsInternal: true,
+		}); err != nil {
+			return &mergeCleanupResult{Deleted: false, Reason: "denied"}
+		}
+	}
+
+	if err := r.deps.Git.DeleteBranch(fsPath, branchName); err != nil {
+		return &mergeCleanupResult{Deleted: false, Reason: "delete_failed"}
+	}
+	return &mergeCleanupResult{Deleted: true}
+}
+
+// mergeCleanupResult duplicates mergeCleanup from the issue HTTP handler
+// so the platform_mcp module stays decoupled from the issue handler package.
+type mergeCleanupResult struct {
+	Deleted bool   `json:"deleted"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // sessionRecoverTool recovers a failed / succeeded / cancelled / idle session

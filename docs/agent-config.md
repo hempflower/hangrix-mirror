@@ -113,6 +113,18 @@ roles:
 
 ### 字段语义
 
+### `issues:` —— Issue 行为开关
+
+可选的顶层配置块，控制 issue 生命周期中的平台行为。
+
+- **`delete_branch_on_merge:`** —— bool，默认 **`true`**。当 `true` 时，issue 合并成功后自动删除对应的 `issue/<n>` 分支。删除遵守 branch protection 规则：若命中 `forbid_delete` 则保留分支并在 merge 响应中报告原因 `"protected"`；若 guard 拒绝则报告 `"denied"`；其它失败报告 `"delete_failed"`。设为 `false` 时合并后保留分支（旧行为）。
+
+```yaml
+# 示例：关闭自动删分支
+issues:
+  delete_branch_on_merge: false
+```
+
 - **`container.image:` vs `container.build:`** —— 二选一互斥，spawner 已都支持：
   - `image: <ref>` —— runner 让 docker daemon 直接 pull（或本地命中即用）。这是最快路径，适合镜像已经发布到 registry 的情况。
   - `build: { dockerfile: <path>, context: <path>, args: { … } }` —— runner 收到 task 后先按 host repo 里那份 Dockerfile 跑 `docker build -t <auto-tag>`，再 `docker create` 用该 tag。auto-tag 由 spawner 端按 `(repo_id, dockerfile, context, args)` 算 sha256 出来——同样的 build spec 始终复用同一个 tag，docker 的本地 layer cache 接管增量 rebuild。`dockerfile` / `context` 都是 host-repo 相对路径，runner 会把它们 join 到 cloned checkout 目录上。Dockerfile 改了但 spec 不变 → 同一个 tag 重新 build（docker 的 layer cache 自动失效改动层）；spec 改了 → 新 tag，老镜像保留直到 `docker image prune`。BuildKit 默认启用（DOCKER_BUILDKIT=1），所以 `# syntax=docker/dockerfile:1.x` heredoc 可用。

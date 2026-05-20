@@ -39,6 +39,9 @@ container:
 llm:
   model: deepseek-v4-pro  # <-- change to a model your provider serves
 
+# issues:                       # issue lifecycle behaviour (all defaults)
+#   delete_branch_on_merge: true  # auto-delete issue branch after merge (default true)
+
 roles:
   seeder:
     triggers:
