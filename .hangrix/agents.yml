@@ -72,6 +72,13 @@ roles:
       - issue_read
       - issue_diff
       - issue_comment
+      - issue_review_vote
+      - read
+      - write
+      - edit
+      - glob
+      - grep
+      - bash
     prompt_file: .hangrix/prompts/tester.md
 
   server:
