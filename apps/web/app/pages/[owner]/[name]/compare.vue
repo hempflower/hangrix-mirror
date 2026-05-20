@@ -33,6 +33,7 @@ const router = useRouter()
 
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
+useHead({ title: () => `${t('repo.compare.title')} · ${owner.value}/${name.value} - ${t('app.name')}` })
 
 const refs = ref<RepoRefs | null>(null)
 const branches = computed(() => refs.value?.branches ?? [])

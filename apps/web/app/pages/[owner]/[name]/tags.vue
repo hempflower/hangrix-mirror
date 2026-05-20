@@ -57,6 +57,7 @@ const { user } = useCurrentUser()
 
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
+useHead({ title: () => `${t('repo.tags.title')} · ${owner.value}/${name.value} - ${t('app.name')}` })
 
 const repo = ref<PublicRepo | null>(null)
 const refs = ref<RepoRefs | null>(null)

@@ -9,6 +9,7 @@ const { t } = useI18n()
 const { user } = useCurrentUser()
 
 setBreadcrumbs(() => [{ label: t('nav.dashboard') }])
+useHead({ title: () => `${t('home.title')} - ${t('app.name')}` })
 
 const stats = computed(() => {
   if (!user.value) return []

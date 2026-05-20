@@ -9,6 +9,7 @@ import type { PublicRepo, RepoListResp } from '~/types/repo'
 const { t } = useI18n()
 
 setBreadcrumbs(() => [{ label: t('repo.title') }])
+useHead({ title: () => `${t('repo.title')} - ${t('app.name')}` })
 
 const repos = ref<PublicRepo[]>([])
 const total = ref(0)

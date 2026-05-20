@@ -21,6 +21,7 @@ import {
 import type { PublicRepo } from '~/types/repo'
 
 const { t } = useI18n()
+useHead({ title: () => `${t('repo.createTitle')} - ${t('app.name')}` })
 
 setBreadcrumbs(() => [
   { label: t('repo.title'), to: '/repos' },

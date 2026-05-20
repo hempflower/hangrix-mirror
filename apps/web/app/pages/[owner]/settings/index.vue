@@ -26,6 +26,7 @@ setBreadcrumbs(() => {
     { label: t('repo.settingsLink') },
   ]
 })
+useHead({ title: () => `${String(route.params.owner ?? '')} · ${t('org.settings.general')} - ${t('app.name')}` })
 const router = useRouter()
 const { user, refresh: refreshUser } = useCurrentUser()
 const { refresh: refreshMyOrgs } = useMyOrgs()

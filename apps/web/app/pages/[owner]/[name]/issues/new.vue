@@ -28,6 +28,7 @@ setBreadcrumbs(() => {
     { label: t('issue.newTitle') },
   ]
 })
+useHead({ title: () => `${t('issue.newTitle')} · ${owner.value}/${name.value} - ${t('app.name')}` })
 
 const { repo, load: loadRepo } = useRepo(() => owner.value, () => name.value)
 

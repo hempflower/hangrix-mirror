@@ -61,6 +61,7 @@ const { user, refresh: refreshUser } = useCurrentUser()
 
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
+useHead({ title: () => `${t('repo.settings.title')} · ${owner.value}/${name.value} - ${t('app.name')}` })
 
 const repo = ref<PublicRepo | null>(null)
 const refs = ref<RepoRefs | null>(null)

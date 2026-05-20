@@ -10,6 +10,7 @@ import type { User, UserListResp } from '~/types/user'
 
 const { t } = useI18n()
 const { user: me } = useCurrentUser()
+useHead({ title: () => `${t('admin.users.title')} - ${t('admin.section')} - ${t('app.name')}` })
 
 setBreadcrumbs(() => [
   { label: t('admin.section'), to: '/admin/users' },
