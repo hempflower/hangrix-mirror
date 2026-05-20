@@ -261,3 +261,77 @@ func TestSessionDriverSkipsCloneWhenReusingContainer(t *testing.T) {
 		t.Errorf("orchestrator ContainerID = %q, want existing-container-77", got)
 	}
 }
+
+// TestSessionDriverForwardsVolumes verifies that client.Task.Volumes are
+// mapped through to orchestrator.Task.Volumes inside SessionDriver.Run.
+// This is the integration-side regression test for the volume plumbing:
+// the field must survive deserialisation (client.Task), the session
+// driver's mapping (mapVolumes), and land on the orchestrator task the
+// fake orchestrator records.
+func TestSessionDriverForwardsVolumes(t *testing.T) {
+	t.Parallel()
+
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/runner/sessions/99/running",
+			r.URL.Path == "/api/runner/sessions/99/messages",
+			r.URL.Path == "/api/runner/sessions/99/terminate",
+			r.URL.Path == "/api/runner/sessions/99/container":
+			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/api/runner/sessions/99/history":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"frame": json.RawMessage(`{"kind":"history","messages":[]}`),
+			})
+		case r.URL.Path == "/api/runner/sessions/99/inputs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"frames": []json.RawMessage{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(platform.Close)
+
+	cli := client.New(platform.URL).WithAgentToken("hgxr_AAAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
+	fake := orchestrator.NewFake()
+
+	go func() {
+		buf := make([]byte, 4096)
+		_, _ = fake.AgentStdin().Read(buf)
+		fake.Exit(0)
+	}()
+
+	drv := &loop.SessionDriver{
+		Client:          cli,
+		Orchestrator:    fake,
+		AgentBinaryPath: "/dev/null",
+		WorkspaceRoot:   t.TempDir(),
+		BaseURL:         "http://platform.test",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	task := &client.Task{
+		SessionID:    99,
+		AgentImage:   "alpine:latest",
+		SessionToken: "hgxs_AAAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+		Env:          map[string]string{},
+		Volumes: []client.Volume{
+			{Name: "npm-cache", Mount: "/root/.npm"},
+			{Name: "go-build-cache", Mount: "/root/.cache/go-build"},
+		},
+	}
+	if _, err := drv.Run(ctx, task); err != nil {
+		t.Fatalf("driver.Run: %v", err)
+	}
+
+	got := fake.LastTask().Volumes
+	if len(got) != 2 {
+		t.Fatalf("orchestrator task volumes len = %d, want 2", len(got))
+	}
+	if got[0].Name != "npm-cache" || got[0].Mount != "/root/.npm" {
+		t.Errorf("volume 0 = %+v, want {npm-cache /root/.npm}", got[0])
+	}
+	if got[1].Name != "go-build-cache" || got[1].Mount != "/root/.cache/go-build" {
+		t.Errorf("volume 1 = %+v, want {go-build-cache /root/.cache/go-build}", got[1])
+	}
+}
+
