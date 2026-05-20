@@ -34,7 +34,7 @@ func TestAssemble_BothLayers(t *testing.T) {
 	if want := []string{"baseline", "host"}; !equalSlices(a.KeptLayers, want) {
 		t.Errorf("kept layers = %v, want %v", a.KeptLayers, want)
 	}
-	baselineIdx := strings.Index(a.Prompt, "Hangrix agent runtime baseline")
+	baselineIdx := strings.Index(a.Prompt, "Hangrix Runtime Contract")
 	hostIdx := strings.Index(a.Prompt, "HOST_LAYER_MARKER")
 	if baselineIdx < 0 || hostIdx < 0 {
 		t.Fatalf("missing layer markers (baseline=%d host=%d)\n%s",
@@ -60,7 +60,7 @@ func TestAssemble_BaselineOnly(t *testing.T) {
 	if !equalSlices(a.KeptLayers, []string{"baseline"}) {
 		t.Errorf("kept layers = %v, want [baseline]", a.KeptLayers)
 	}
-	if !strings.Contains(a.Prompt, "Hangrix agent runtime baseline") {
+	if !strings.Contains(a.Prompt, "Hangrix Runtime Contract") {
 		t.Error("baseline content missing")
 	}
 }
