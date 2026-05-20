@@ -93,16 +93,40 @@ func (s *PostgresStore) GetByRepoAndTag(ctx context.Context, repoID int64, tagNa
 	return rowToRelease(row), nil
 }
 
-func (s *PostgresStore) ListByRepo(ctx context.Context, repoID int64, offset, limit int32) ([]*domain.Release, int64, error) {
-	rows, err := s.q.ListReleasesByRepo(ctx, releasedb.ListReleasesByRepoParams{
-		RepoID: repoID,
-		Limit:  limit,
-		Offset: offset,
+func (s *PostgresStore) ListByRepo(ctx context.Context, repoID int64, offset, limit int32, draft *bool) ([]*domain.Release, int64, error) {
+	if draft == nil {
+		rows, err := s.q.ListReleasesByRepo(ctx, releasedb.ListReleasesByRepoParams{
+			RepoID: repoID,
+			Limit:  limit,
+			Offset: offset,
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+		total, err := s.q.CountReleasesByRepo(ctx, repoID)
+		if err != nil {
+			return nil, 0, err
+		}
+		out := make([]*domain.Release, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, rowToRelease(r))
+		}
+		return out, total, nil
+	}
+
+	rows, err := s.q.ListReleasesByRepoDraft(ctx, releasedb.ListReleasesByRepoDraftParams{
+		RepoID:  repoID,
+		IsDraft: *draft,
+		Limit:   limit,
+		Offset:  offset,
 	})
 	if err != nil {
 		return nil, 0, err
 	}
-	total, err := s.q.CountReleasesByRepo(ctx, repoID)
+	total, err := s.q.CountReleasesByRepoDraft(ctx, releasedb.CountReleasesByRepoDraftParams{
+		RepoID:  repoID,
+		IsDraft: *draft,
+	})
 	if err != nil {
 		return nil, 0, err
 	}

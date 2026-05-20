@@ -1,11 +1,16 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 
 	platformmcpdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_mcp/domain"
+	releasedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
 
@@ -78,12 +83,13 @@ func (r *Registry) releaseCreateTool() *platformmcpdomain.Tool {
 	}
 }
 
-// releaseUploadAssetTool is a descriptor-only tool. The actual upload
-// goes through the agent runtime's HTTP multipart endpoint.
+// releaseUploadAssetTool uploads a custom asset to a release.
+// The file content is passed as base64 so the platform can persist it
+// without needing access to the agent's filesystem.
 func (r *Registry) releaseUploadAssetTool() *platformmcpdomain.Tool {
 	return &platformmcpdomain.Tool{
 		Name:        "release_upload_asset",
-		Description: "Upload a custom asset to a release. The asset binary is read from a local file path on the agent's filesystem and uploaded via HTTP multipart.",
+		Description: "Upload a custom asset to a release. The file content must be base64-encoded.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -95,15 +101,83 @@ func (r *Registry) releaseUploadAssetTool() *platformmcpdomain.Tool {
 					"type":        "string",
 					"description": "Asset file name (required).",
 				},
-				"file_path": map[string]any{
+				"content": map[string]any{
 					"type":        "string",
-					"description": "Local path to the file to upload (required).",
+					"description": "Base64-encoded file content (required).",
+				},
+				"content_type": map[string]any{
+					"type":        "string",
+					"description": "Optional MIME type. Defaults to application/octet-stream.",
 				},
 			},
-			"required": []string{"release_id", "name", "file_path"},
+			"required": []string{"release_id", "name", "content"},
 		},
 		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
-			return errorResult("release_upload_asset: use the platform HTTP endpoint — POST /api/repos/{owner}/{name}/releases/{id}/assets with multipart form"), nil
+			scope, err := r.loadScope(ctx, sess)
+			if err != nil {
+				return errorResult(err.Error()), nil
+			}
+			if r.deps.Releases == nil || r.deps.ReleaseAssets == nil || r.deps.AssetStorage == nil {
+				return errorResult("release store not available"), nil
+			}
+			var req struct {
+				ReleaseID   int64  `json:"release_id"`
+				Name        string `json:"name"`
+				Content     string `json:"content"`
+				ContentType string `json:"content_type"`
+			}
+			if err := unmarshalArgs(args, &req); err != nil {
+				return errorResult("invalid arguments: " + err.Error()), nil
+			}
+			if req.ReleaseID <= 0 {
+				return errorResult("release_id is required and must be positive"), nil
+			}
+			req.Name = strings.TrimSpace(req.Name)
+			if req.Name == "" {
+				return errorResult("name is required"), nil
+			}
+			if req.Content == "" {
+				return errorResult("content is required"), nil
+			}
+			if req.ContentType == "" {
+				req.ContentType = "application/octet-stream"
+			}
+
+			rel, err := r.deps.Releases.GetByID(ctx, req.ReleaseID)
+			if err != nil {
+				return errorResult("release not found"), nil
+			}
+			if rel.RepoID != scope.repo.ID {
+				return errorResult("release not in this repo"), nil
+			}
+
+			decoded, err := base64.StdEncoding.DecodeString(req.Content)
+			if err != nil {
+				return errorResult("invalid base64 content: " + err.Error()), nil
+			}
+
+			storageKey := fmt.Sprintf("%d/%s", req.ReleaseID, req.Name)
+			sizeBytes, err := r.deps.AssetStorage.Store(storageKey, bytes.NewReader(decoded))
+			if err != nil {
+				return errorResult("store asset: " + err.Error()), nil
+			}
+
+			_, err = r.deps.ReleaseAssets.Create(ctx, req.ReleaseID, req.Name, req.ContentType, sizeBytes, storageKey)
+			if err != nil {
+				_ = r.deps.AssetStorage.Remove(storageKey)
+				if errors.Is(err, releasedomain.ErrAssetConflict) {
+					return errorResult("an asset with this name already exists on the release"), nil
+				}
+				return errorResult("create asset: " + err.Error()), nil
+			}
+
+			return textResult(map[string]any{
+				"ok":           true,
+				"release_id":   req.ReleaseID,
+				"name":         req.Name,
+				"size_bytes":   sizeBytes,
+				"content_type": req.ContentType,
+			}), nil
 		},
 	}
 }

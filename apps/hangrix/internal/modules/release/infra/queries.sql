@@ -18,6 +18,15 @@ LIMIT $2 OFFSET $3;
 -- name: CountReleasesByRepo :one
 SELECT COUNT(*) FROM releases WHERE repo_id = $1;
 
+-- name: ListReleasesByRepoDraft :many
+SELECT * FROM releases
+WHERE repo_id = $1 AND is_draft = $2
+ORDER BY published_at DESC NULLS LAST, created_at DESC
+LIMIT $3 OFFSET $4;
+
+-- name: CountReleasesByRepoDraft :one
+SELECT COUNT(*) FROM releases WHERE repo_id = $1 AND is_draft = $2;
+
 -- name: UpdateRelease :one
 UPDATE releases
 SET tag_name          = $2,

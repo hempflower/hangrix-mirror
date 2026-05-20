@@ -20,6 +20,22 @@ func (q *Queries) CountReleasesByRepo(ctx context.Context, repoID int64) (int64,
 	return count, err
 }
 
+const countReleasesByRepoDraft = `-- name: CountReleasesByRepoDraft :one
+SELECT COUNT(*) FROM releases WHERE repo_id = $1 AND is_draft = $2
+`
+
+type CountReleasesByRepoDraftParams struct {
+	RepoID  int64
+	IsDraft bool
+}
+
+func (q *Queries) CountReleasesByRepoDraft(ctx context.Context, arg CountReleasesByRepoDraftParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countReleasesByRepoDraft, arg.RepoID, arg.IsDraft)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAsset = `-- name: CreateAsset :one
 INSERT INTO release_assets (release_id, name, content_type, size_bytes, storage_key)
 VALUES ($1, $2, $3, $4, $5)
@@ -260,6 +276,56 @@ type ListReleasesByRepoParams struct {
 
 func (q *Queries) ListReleasesByRepo(ctx context.Context, arg ListReleasesByRepoParams) ([]Release, error) {
 	rows, err := q.db.Query(ctx, listReleasesByRepo, arg.RepoID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Release{}
+	for rows.Next() {
+		var i Release
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepoID,
+			&i.TagName,
+			&i.TargetCommitSha,
+			&i.Title,
+			&i.Notes,
+			&i.IsDraft,
+			&i.PublishedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReleasesByRepoDraft = `-- name: ListReleasesByRepoDraft :many
+SELECT id, repo_id, tag_name, target_commit_sha, title, notes, is_draft, published_at, created_at, updated_at FROM releases
+WHERE repo_id = $1 AND is_draft = $2
+ORDER BY published_at DESC NULLS LAST, created_at DESC
+LIMIT $3 OFFSET $4
+`
+
+type ListReleasesByRepoDraftParams struct {
+	RepoID  int64
+	IsDraft bool
+	Limit   int32
+	Offset  int32
+}
+
+func (q *Queries) ListReleasesByRepoDraft(ctx context.Context, arg ListReleasesByRepoDraftParams) ([]Release, error) {
+	rows, err := q.db.Query(ctx, listReleasesByRepoDraft,
+		arg.RepoID,
+		arg.IsDraft,
+		arg.Limit,
+		arg.Offset,
+	)
 	if err != nil {
 		return nil, err
 	}

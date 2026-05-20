@@ -49,7 +49,7 @@ type Store interface {
 	Create(ctx context.Context, repoID int64, tagName, targetCommitSHA, title, notes string) (*Release, error)
 	GetByID(ctx context.Context, id int64) (*Release, error)
 	GetByRepoAndTag(ctx context.Context, repoID int64, tagName string) (*Release, error)
-	ListByRepo(ctx context.Context, repoID int64, offset, limit int32) ([]*Release, int64, error)
+	ListByRepo(ctx context.Context, repoID int64, offset, limit int32, draft *bool) ([]*Release, int64, error)
 	Update(ctx context.Context, id int64, tagName, targetCommitSHA, title, notes string) (*Release, error)
 	Publish(ctx context.Context, id int64) (*Release, error)
 	Delete(ctx context.Context, id int64) error

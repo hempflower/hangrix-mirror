@@ -158,7 +158,13 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	offset, limit := parseOffsetLimit(r)
 
-	rels, total, err := h.store.ListByRepo(r.Context(), repo.ID, offset, limit)
+	var draft *bool
+	if v := r.URL.Query().Get("draft"); v != "" {
+		b := v == "true" || v == "1"
+		draft = &b
+	}
+
+	rels, total, err := h.store.ListByRepo(r.Context(), repo.ID, offset, limit, draft)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -478,7 +484,7 @@ func (h *Handler) uploadAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	asset, err := h.assets.Create(r.Context(), rel.ID, name, contentType, sizeBytes, storageKey)
+	_, err = h.assets.Create(r.Context(), rel.ID, name, contentType, sizeBytes, storageKey)
 	if err != nil {
 		if errors.Is(err, releasedomain.ErrAssetConflict) {
 			_ = h.storage.Remove(storageKey)
@@ -490,15 +496,9 @@ func (h *Handler) uploadAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	base := fmt.Sprintf("/api/repos/%s/%s/releases", repo.OwnerName, repo.Name)
-	httpx.WriteJSON(w, http.StatusCreated, publicAsset{
-		ID:          asset.ID,
-		Name:        asset.Name,
-		ContentType: asset.ContentType,
-		SizeBytes:   asset.SizeBytes,
-		CreatedAt:   asset.CreatedAt,
-		DownloadURL: fmt.Sprintf("%s/%d/assets/%d/download", base, rel.ID, asset.ID),
-	})
+	// Return the full release so the frontend can replace its state.
+	assets, _ := h.assets.ListByRelease(r.Context(), rel.ID)
+	httpx.WriteJSON(w, http.StatusCreated, toPublicRelease(repo, rel, assets))
 }
 
 // ---- Delete asset ----
@@ -545,7 +545,10 @@ func (h *Handler) deleteAsset(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+
+	// Return the full release so the frontend can replace its state.
+	assets, _ := h.assets.ListByRelease(r.Context(), rel.ID)
+	httpx.WriteJSON(w, http.StatusOK, toPublicRelease(repo, rel, assets))
 }
 
 // ---- Download asset ----

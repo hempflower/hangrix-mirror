@@ -14,6 +14,7 @@ import (
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	platformmcpdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_mcp/domain"
 	releasedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/domain"
+	releaseinfra "github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/infra"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
@@ -38,6 +39,7 @@ type RegistryDeps struct {
 	Controller    agentsessiondomain.Controller
 	Releases      releasedomain.Store
 	ReleaseAssets releasedomain.AssetStore
+	AssetStorage  *releaseinfra.AssetStorage
 }
 
 // NewRegistry assembles the tool catalogue at startup. Tools share the
