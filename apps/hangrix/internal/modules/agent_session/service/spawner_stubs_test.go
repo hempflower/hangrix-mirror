@@ -194,6 +194,7 @@ type stubRunnerRepo struct {
 	nextID       int64
 	createErr    error
 	archiveCount int64
+	resumeErr    error
 }
 
 func newStubRunnerRepo() *stubRunnerRepo { return &stubRunnerRepo{nextID: 1} }
@@ -333,13 +334,31 @@ func (r *stubRunnerRepo) ClaimNextSession(context.Context, int64) (*runnerdomain
 func (r *stubRunnerRepo) MarkSessionRunning(context.Context, int64) error {
 	panic("MarkSessionRunning not stubbed")
 }
-func (r *stubRunnerRepo) MarkSessionTerminal(context.Context, int64, runnerdomain.SessionStatus, *int32, string) error {
-	panic("MarkSessionTerminal not stubbed")
+func (r *stubRunnerRepo) MarkSessionTerminal(_ context.Context, id int64, status runnerdomain.SessionStatus, exitCode *int32, errMsg string) error {
+	for _, s := range r.sessions {
+		if s.ID == id {
+			s.Status = status
+			s.ExitCode = exitCode
+			s.ErrorMessage = errMsg
+			return nil
+		}
+	}
+	return runnerdomain.ErrSessionNotFound
 }
-func (r *stubRunnerRepo) MarkSessionIdle(context.Context, int64, *int32) error {
-	panic("MarkSessionIdle not stubbed")
+func (r *stubRunnerRepo) MarkSessionIdle(_ context.Context, id int64, exitCode *int32) error {
+	for _, s := range r.sessions {
+		if s.ID == id {
+			s.Status = runnerdomain.SessionStatusIdle
+			s.ExitCode = exitCode
+			return nil
+		}
+	}
+	return runnerdomain.ErrSessionNotFound
 }
 func (r *stubRunnerRepo) ResumeSession(_ context.Context, id int64, tok runnerdomain.NewSessionToken) error {
+	if r.resumeErr != nil {
+		return r.resumeErr
+	}
 	for _, s := range r.sessions {
 		if s.ID == id {
 			s.Status = runnerdomain.SessionStatusPending

@@ -131,32 +131,34 @@ func (c *Controller) resume(ctx context.Context, sessionID int64, event string, 
 	if err != nil {
 		return fmt.Errorf("seal session token: %w", err)
 	}
-	if err := c.runner.ResumeSession(ctx, sessionID, runnerdomain.NewSessionToken{
-		Prefix: prefix,
-		Hash:   string(hashed),
-		Sealed: sealed,
-	}); err != nil {
-		return err
-	}
-	// The history frame is fetched by the runner from
-	// GET /sessions/{sid}/history at agent boot, so resume only needs to
-	// enqueue the synthetic cause event for the agent to react to.
-	frame, _ := json.Marshal(map[string]any{
-		"kind":    "event",
-		"event":   event,
-		"payload": payload,
-	})
-	if _, err := c.runner.EnqueueInput(ctx, sessionID, frame); err != nil {
-		return fmt.Errorf("enqueue cause on resume: %w", err)
-	}
-	if msg != "" {
-		_, _ = c.runner.AppendMessage(ctx, &runnerdomain.Message{
-			SessionID: sessionID,
-			Kind:      runnerdomain.MessageKindSystem,
-			Content:   msg,
+		// Build and enqueue the cause frame first — same ordering as
+		// rewakeRole: if enqueue fails the session stays in its current
+		// (non-live) state, safe to retry. ResumeSession is the final flip.
+		frame, _ := json.Marshal(map[string]any{
+			"kind":    "event",
+			"event":   event,
+			"payload": payload,
 		})
-	}
-	return nil
+		if _, err := c.runner.EnqueueInput(ctx, sessionID, frame); err != nil {
+			return fmt.Errorf("enqueue cause on resume: %w", err)
+		}
+		// Best-effort audit log; the input is already enqueued which is
+		// what drives the agent.
+		if msg != "" {
+			_, _ = c.runner.AppendMessage(ctx, &runnerdomain.Message{
+				SessionID: sessionID,
+				Kind:      runnerdomain.MessageKindSystem,
+				Content:   msg,
+			})
+		}
+		if err := c.runner.ResumeSession(ctx, sessionID, runnerdomain.NewSessionToken{
+			Prefix: prefix,
+			Hash:   string(hashed),
+			Sealed: sealed,
+		}); err != nil {
+			return fmt.Errorf("resume session: %w", err)
+		}
+		return nil
 }
 
 // Delete satisfies domain.Controller. Refuses live sessions to keep

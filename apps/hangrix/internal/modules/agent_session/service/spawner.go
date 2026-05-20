@@ -138,12 +138,12 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 	//                     succeeded/cancelled → rewake the row; archived
 	//                     → spawn a fresh row that replaces the archived
 	//                     predecessor (the archived row stays on disk
-	//                     for audit).
-	//   alreadyForCause — (role, cause_kind, cause_id) tuple was
-	//                     already processed by a LIVE session. Re-
-	//                     firing the same cause onto a live row is a
-	//                     no-op; on a non-live row we still rewake so
-	//                     the user gets a retry.
+		//   alreadyForCause — (role, cause_kind, cause_id) tuple was
+		//                     already processed by ANY non-archived session.
+		//                     Re-firing the same cause onto ANY row that
+		//                     still exists (live or terminal-but-not-archived)
+		//                     is a no-op; this prevents duplicate inputs when
+		//                     a previous rewake partially failed.
 	existing, err := s.runner.ListSessionsByIssue(ctx, in.RepoID, in.IssueNumber)
 	if err != nil {
 		return nil, fmt.Errorf("spawner: list existing sessions: %w", err)
@@ -158,7 +158,7 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 		// spawn order, so a later overwrite keeps the freshest row as
 		// the canonical one for the role.
 		existingByRole[e.RoleKey] = e
-		if isLiveStatus(e.Status) {
+		if e.Status != runnerdomain.SessionStatusArchived {
 			alreadyForCause[causeKey(e.RoleKey, e.CauseKind, e.CauseID)] = struct{}{}
 		}
 	}
@@ -311,6 +311,12 @@ func (s *Spawner) rewakeRole(ctx context.Context, in domain.TriggerInput, existi
 	// Only now flip the session to 'pending' — the runner will claim it
 	// and the agent will find the event already waiting on /inputs.
 	if err := s.runner.ResumeSession(ctx, existing.ID, tok); err != nil {
+		// Best-effort: mark the session failed so a retry with the same
+		// cause won't enqueue a duplicate input (alreadyForCause now
+		// covers all non-archived sessions, not just live ones). The
+		// orphaned input in the queue is residual — no DeleteInput API
+		// exists — but the same-cause dedupe prevents accumulation.
+		_ = s.runner.MarkSessionTerminal(ctx, existing.ID, runnerdomain.SessionStatusFailed, nil, "rewake resume failed: "+err.Error())
 		return domain.SpawnedSession{}, fmt.Errorf("resume session: %w", err)
 	}
 

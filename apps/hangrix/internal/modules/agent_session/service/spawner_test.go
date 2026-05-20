@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -808,5 +809,136 @@ func TestAuditorReturnsSnapshotColumns(t *testing.T) {
 	}
 	if len(r.RoleConfig) == 0 {
 		t.Fatalf("role_config empty")
+	}
+}
+
+// TestOnTriggerRewakeResumeFailureMarksFailed verifies that when a rewake's
+// EnqueueInput succeeds but ResumeSession fails, MarkSessionTerminal is called
+// to mark the session as 'failed'. This prevents the session from being
+// silently stuck in a non-live state with orphaned inputs.
+func TestOnTriggerRewakeResumeFailureMarksFailed(t *testing.T) {
+	h := newTestSpawner(t, []byte(hostYAML), nil)
+
+	// Step 1: spawn a session.
+	first, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
+		Trigger:     agentsconfig.TriggerIssueOpened,
+		CauseKind:   domain.CauseKindIssueOpened,
+		CauseID:     "1",
+		RepoID:      1,
+		IssueNumber: 7,
+		ActorID:     1,
+	})
+	if err != nil {
+		t.Fatalf("first OnTrigger err: %v", err)
+	}
+	if len(first) != 1 || first[0].Action != domain.SpawnActionSpawned {
+		t.Fatalf("first call = %+v, want one spawned", first)
+	}
+
+	// Step 2: set the session to idle (simulates clean shutdown).
+	original := h.runner.sessions[0]
+	original.Status = runnerdomain.SessionStatusIdle
+
+	// Step 3: make ResumeSession fail.
+	h.runner.resumeErr = fmt.Errorf("simulated resume failure")
+
+	// Step 4: trigger rewake with a different cause. OnTrigger swallows
+	// per-role errors (recordSpawnError + continue), so the call itself
+	// succeeds but returns zero spawned sessions.
+	second, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
+		Trigger:     agentsconfig.TriggerIssueOpened,
+		CauseKind:   domain.CauseKindIssueOpened,
+		CauseID:     "2",
+		RepoID:      1,
+		IssueNumber: 7,
+		ActorID:     1,
+	})
+	if err != nil {
+		t.Fatalf("OnTrigger returned unexpected error: %v", err)
+	}
+	if len(second) != 0 {
+		t.Fatalf("got %d sessions, want 0 (rewake failed)", len(second))
+	}
+
+	// Step 5: session must be marked failed by MarkSessionTerminal.
+	if original.Status != runnerdomain.SessionStatusFailed {
+		t.Fatalf("session status = %q, want failed", original.Status)
+	}
+	if original.ErrorMessage != "rewake resume failed: simulated resume failure" {
+		t.Fatalf("error message = %q, want 'rewake resume failed: simulated resume failure'", original.ErrorMessage)
+	}
+
+	// Step 6: the input from the failed rewake is in the queue.
+	// This is a known residual — no DeleteInput API exists — but the
+	// session is now failed so no runner will claim it.
+	if len(h.runner.inputs) != 2 {
+		t.Fatalf("inputs = %d, want 2 (spawn cause + orphaned rewake cause)", len(h.runner.inputs))
+	}
+}
+
+// TestOnTriggerSameCauseIdempotentAcrossNonLive verifies that the
+// alreadyForCause dedupe now covers all non-archived sessions, not just
+// live ones. A retrigger with the same (role, cause_kind, cause_id) on
+// an idle/failed/succeeded session is a no-op — no duplicate input.
+func TestOnTriggerSameCauseIdempotentAcrossNonLive(t *testing.T) {
+	h := newTestSpawner(t, []byte(hostYAML), nil)
+
+	// Spawn a session.
+	first, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
+		Trigger:     agentsconfig.TriggerIssueOpened,
+		CauseKind:   domain.CauseKindIssueOpened,
+		CauseID:     "unique-99",
+		RepoID:      1,
+		IssueNumber: 7,
+		ActorID:     1,
+	})
+	if err != nil {
+		t.Fatalf("first OnTrigger err: %v", err)
+	}
+	if len(first) != 1 || first[0].Action != domain.SpawnActionSpawned {
+		t.Fatalf("first call = %+v, want one spawned", first)
+	}
+
+	// Set the session to idle.
+	h.runner.sessions[0].Status = runnerdomain.SessionStatusIdle
+
+	// Retrigger with the SAME cause. The session is idle (non-live), but
+	// alreadyForCause now covers all non-archived sessions, so this must
+	// be a no-op.
+	second, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
+		Trigger:     agentsconfig.TriggerIssueOpened,
+		CauseKind:   domain.CauseKindIssueOpened,
+		CauseID:     "unique-99",
+		RepoID:      1,
+		IssueNumber: 7,
+		ActorID:     1,
+	})
+	if err != nil {
+		t.Fatalf("second OnTrigger err: %v", err)
+	}
+	if len(second) != 0 {
+		t.Fatalf("second call = %d sessions, want 0 (idempotent across non-live)", len(second))
+	}
+
+	// Inputs must still be 1 (only the original spawn cause).
+	if len(h.runner.inputs) != 1 {
+		t.Fatalf("inputs = %d, want 1 (no duplicate from same-cause retry)", len(h.runner.inputs))
+	}
+
+	// Also verify it works for failed status.
+	h.runner.sessions[0].Status = runnerdomain.SessionStatusFailed
+	third, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
+		Trigger:     agentsconfig.TriggerIssueOpened,
+		CauseKind:   domain.CauseKindIssueOpened,
+		CauseID:     "unique-99",
+		RepoID:      1,
+		IssueNumber: 7,
+		ActorID:     1,
+	})
+	if err != nil {
+		t.Fatalf("third OnTrigger err: %v", err)
+	}
+	if len(third) != 0 {
+		t.Fatalf("third call = %d sessions, want 0 (idempotent across failed)", len(third))
 	}
 }
