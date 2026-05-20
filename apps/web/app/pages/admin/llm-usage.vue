@@ -4,6 +4,14 @@ import { Activity, Cpu, Hash, Timer } from 'lucide-vue-next'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -17,7 +25,7 @@ import {
 } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
-import type { LLMUsage, LLMUsageListResp } from '~/types/llm-usage'
+import type { LLMUsage, LLMUsageDetail, LLMUsageListResp } from '~/types/llm-usage'
 import type { LLMProvider, LLMProviderListResp } from '~/types/llm-provider'
 
 definePageMeta({ layout: 'admin' })
@@ -35,6 +43,12 @@ const total = ref(0)
 const providers = ref<LLMProvider[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
+
+// --- detail dialog ---
+const detailOpen = ref(false)
+const detailLoading = ref(false)
+const detailError = ref<string | null>(null)
+const detail = ref<LLMUsageDetail | null>(null)
 
 const ANY_PROVIDER = '__any__'
 const filterProvider = ref<string>(ANY_PROVIDER)
@@ -94,6 +108,31 @@ async function load() {
     error.value = e?.data?.error ?? t('admin.usage.loadFailed')
   } finally {
     loading.value = false
+  }
+}
+
+async function openDetail(id: number) {
+  detailOpen.value = true
+  detailLoading.value = true
+  detailError.value = null
+  detail.value = null
+  try {
+    const res = await $fetch<LLMUsageDetail>(`/api/admin/llm/usage/${id}`, { credentials: 'include' })
+    detail.value = res
+  } catch (e: any) {
+    detailError.value = e?.data?.error ?? t('admin.usage.detail.loadFailed')
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+function formatBody(raw: string | undefined | null): string {
+  if (!raw) return ''
+  try {
+    const parsed = JSON.parse(raw)
+    return JSON.stringify(parsed, null, 2)
+  } catch {
+    return raw
   }
 }
 
@@ -209,6 +248,7 @@ onMounted(async () => {
               <TableHead class="text-right">{{ t('admin.usage.cols.latency') }}</TableHead>
               <TableHead>{{ t('admin.usage.cols.status') }}</TableHead>
               <TableHead>{{ t('admin.usage.cols.session') }}</TableHead>
+              <TableHead>{{ t('common.actions') }}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -229,6 +269,11 @@ onMounted(async () => {
                 <code v-if="r.session_id" class="font-mono">#{{ r.session_id }}</code>
                 <span v-else>—</span>
               </TableCell>
+              <TableCell>
+                <Button variant="outline" size="sm" @click="openDetail(r.id)">
+                  {{ t('admin.usage.detail.viewDetail') }}
+                </Button>
+              </TableCell>
             </TableRow>
           </TableBody>
         </Table>
@@ -246,5 +291,50 @@ onMounted(async () => {
         />
       </CardContent>
     </Card>
+    <!-- Detail dialog -->
+    <Dialog v-model:open="detailOpen">
+      <DialogContent class="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>{{ t('admin.usage.detail.title') }}</DialogTitle>
+          <DialogDescription v-if="detail">
+            <span class="mr-3">{{ t('admin.usage.detail.provider') }}: <strong>{{ detail.provider_name }}</strong></span>
+            <span class="mr-3">{{ t('admin.usage.detail.model') }}: <strong>{{ detail.model }}</strong></span>
+            <span class="mr-3">{{ t('admin.usage.detail.time') }}: <strong>{{ formatDate(detail.created_at) }}</strong></span>
+            <span>{{ t('admin.usage.detail.status') }}: <strong>{{ detail.status_code }}</strong></span>
+          </DialogDescription>
+        </DialogHeader>
+
+        <div v-if="detailLoading" class="py-12 text-center text-sm text-muted-foreground">
+          {{ t('common.loading') }}
+        </div>
+
+        <div v-else-if="detailError" class="py-12 text-center text-sm text-destructive">
+          {{ detailError }}
+        </div>
+
+        <div v-else-if="detail" class="space-y-6">
+          <div>
+            <h3 class="mb-2 text-sm font-semibold">{{ t('admin.usage.detail.request') }}</h3>
+            <pre
+              v-if="formatBody(detail.request_body)"
+              class="max-h-80 overflow-auto whitespace-pre-wrap rounded bg-muted/40 p-3 font-mono text-xs"
+            >{{ formatBody(detail.request_body) }}</pre>
+            <p v-else class="text-sm text-muted-foreground">{{ t('admin.usage.detail.emptyBody') }}</p>
+          </div>
+          <div>
+            <h3 class="mb-2 text-sm font-semibold">{{ t('admin.usage.detail.response') }}</h3>
+            <pre
+              v-if="formatBody(detail.response_body)"
+              class="max-h-80 overflow-auto whitespace-pre-wrap rounded bg-muted/40 p-3 font-mono text-xs"
+            >{{ formatBody(detail.response_body) }}</pre>
+            <p v-else class="text-sm text-muted-foreground">{{ t('admin.usage.detail.emptyBody') }}</p>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" @click="detailOpen = false">{{ t('common.close') }}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>

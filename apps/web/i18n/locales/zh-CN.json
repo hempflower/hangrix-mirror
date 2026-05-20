@@ -287,7 +287,21 @@
         "latency": "延迟",
         "status": "状态",
         "session": "Session"
+      },
+      "detail": {
+        "title": "查看详情",
+        "request": "请求体",
+        "response": "响应体",
+        "loadFailed": "加载详情失败",
+        "notFound": "记录不存在",
+        "emptyBody": "（空）",
+        "viewDetail": "查看详情",
+        "provider": "Provider",
+        "model": "Model",
+        "time": "时间",
+        "status": "状态码"
       }
+
     },
     "agentSessions": {
       "title": "Agent 会话",

@@ -14,6 +14,16 @@ export interface LLMUsage {
   created_at: string
 }
 
+export interface LLMUsageDetail {
+  id: number
+  provider_name: string
+  model: string
+  created_at: string
+  status_code: number
+  request_body: string
+  response_body: string
+}
+
 export interface LLMUsageListResp {
   items: LLMUsage[]
   total: number
