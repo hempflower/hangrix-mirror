@@ -36,7 +36,8 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
-import type { PublicRepo, RepoRefs } from '~/types/repo'
+import type { PublicRepo, RefListResp, RepoRef, RepoRefs } from '~/types/repo'
+import Pagination from '@/components/ui/pagination/Pagination.vue'
 
 definePageMeta({ layout: 'repo' })
 
@@ -63,6 +64,12 @@ const repo = ref<PublicRepo | null>(null)
 const refs = ref<RepoRefs | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
+
+// ---- paginated tags ----
+const tagItems = ref<RepoRef[]>([])
+const tagTotal = ref(0)
+const tagOffset = ref(0)
+const tagLimit = 50
 
 const createOpen = ref(false)
 const createError = ref<string | null>(null)
@@ -93,6 +100,20 @@ const initial = computed(() => ({
   message: '',
 }))
 
+async function loadTags() {
+  try {
+    const res = await $fetch<RefListResp>(`/api/repos/${owner.value}/${name.value}/refs`, {
+      credentials: 'include',
+      query: { type: 'tags', offset: tagOffset.value, limit: tagLimit },
+    })
+    tagItems.value = res.items ?? []
+    tagTotal.value = res.total
+  } catch (e: any) {
+    error.value = e?.data?.error ?? t('repo.loadFailed')
+    tagItems.value = []
+  }
+}
+
 async function load() {
   loading.value = true
   error.value = null
@@ -103,11 +124,17 @@ async function load() {
     refs.value = await $fetch<RepoRefs>(`/api/repos/${owner.value}/${name.value}/refs`, {
       credentials: 'include',
     })
+    await loadTags()
   } catch (e: any) {
     error.value = e?.data?.error ?? t('repo.loadFailed')
   } finally {
     loading.value = false
   }
+}
+
+function onTagPage(offset: number) {
+  tagOffset.value = offset
+  loadTags()
 }
 
 function shortSha(s: string) { return s.slice(0, 7) }
@@ -128,6 +155,7 @@ async function onCreate(values: any, ctx: any) {
     })
     createOpen.value = false
     ctx?.resetForm?.({ values: initial.value })
+    tagOffset.value = 0
     await load()
   } catch (e: any) {
     createError.value = e?.data?.error ?? t('repo.tags.deleteFailed')
@@ -146,6 +174,7 @@ async function onDelete(tagName: string) {
       method: 'DELETE',
       credentials: 'include',
     })
+    tagOffset.value = 0
     await load()
   } catch (e: any) {
     error.value = e?.data?.error ?? t('repo.tags.deleteFailed')
@@ -188,14 +217,14 @@ onMounted(load)
     <Card class="gap-0 py-0">
       <CardHeader class="rounded-t-xl border-b bg-muted/40 px-4 py-2">
         <CardTitle class="text-sm font-medium">
-          {{ t('repo.tags.title') }} · {{ tags.length }}
+          {{ t('repo.tags.title') }} · {{ tagTotal }}
         </CardTitle>
       </CardHeader>
       <CardContent class="p-0">
         <p v-if="loading" class="p-3 text-sm text-muted-foreground">
           {{ t('common.loading') }}
         </p>
-        <p v-else-if="tags.length === 0" class="p-6 text-center text-sm text-muted-foreground">
+        <p v-else-if="tagItems.length === 0" class="p-6 text-center text-sm text-muted-foreground">
           {{ t('repo.tags.empty') }}
         </p>
         <Table v-else>
@@ -207,7 +236,7 @@ onMounted(load)
             </TableRow>
           </TableHeader>
           <TableBody>
-            <TableRow v-for="tg in tags" :key="tg.name">
+            <TableRow v-for="tg in tagItems" :key="tg.name">
               <TableCell class="font-medium">
                 <span class="inline-flex items-center gap-2">
                   <TagIcon class="size-3.5 text-muted-foreground" />
@@ -238,6 +267,14 @@ onMounted(load)
         </Table>
       </CardContent>
     </Card>
+
+    <Pagination
+      v-if="tagTotal > tagLimit"
+      :total="tagTotal"
+      :offset="tagOffset"
+      :limit="tagLimit"
+      @update:offset="onTagPage"
+    />
 
     <Dialog v-model:open="createOpen">
       <DialogContent>

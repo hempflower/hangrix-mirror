@@ -34,7 +34,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import type { PublicRepo, RepoRefs } from '~/types/repo'
+import type { PublicRepo, RefListResp, RepoRef, RepoRefs } from '~/types/repo'
+import Pagination from '@/components/ui/pagination/Pagination.vue'
 
 definePageMeta({ layout: 'repo' })
 
@@ -62,6 +63,12 @@ const refs = ref<RepoRefs | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
 
+// ---- paginated branches ----
+const branchItems = ref<RepoRef[]>([])
+const branchTotal = ref(0)
+const branchOffset = ref(0)
+const branchLimit = 50
+
 const createOpen = ref(false)
 const createError = ref<string | null>(null)
 
@@ -81,6 +88,20 @@ const schema = computed(() => toTypedSchema(z.object({
 
 const initial = computed(() => ({ name: '', start_ref: defaultBranch.value || '' }))
 
+async function loadBranches() {
+  try {
+    const res = await $fetch<RefListResp>(`/api/repos/${owner.value}/${name.value}/refs`, {
+      credentials: 'include',
+      query: { type: 'branches', offset: branchOffset.value, limit: branchLimit },
+    })
+    branchItems.value = res.items ?? []
+    branchTotal.value = res.total
+  } catch (e: any) {
+    error.value = e?.data?.error ?? t('repo.loadFailed')
+    branchItems.value = []
+  }
+}
+
 async function load() {
   loading.value = true
   error.value = null
@@ -91,11 +112,17 @@ async function load() {
     refs.value = await $fetch<RepoRefs>(`/api/repos/${owner.value}/${name.value}/refs`, {
       credentials: 'include',
     })
+    await loadBranches()
   } catch (e: any) {
     error.value = e?.data?.error ?? t('repo.loadFailed')
   } finally {
     loading.value = false
   }
+}
+
+function onBranchPage(offset: number) {
+  branchOffset.value = offset
+  loadBranches()
 }
 
 function shortSha(s: string) { return s.slice(0, 7) }
@@ -110,6 +137,7 @@ async function onCreate(values: any, ctx: any) {
     })
     createOpen.value = false
     ctx?.resetForm?.({ values: initial.value })
+    branchOffset.value = 0
     await load()
   } catch (e: any) {
     createError.value = e?.data?.error ?? t('repo.branches.deleteFailed')
@@ -123,6 +151,7 @@ async function setDefault(branchName: string) {
       credentials: 'include',
       body: { default_branch: branchName },
     })
+    branchOffset.value = 0
     await load()
   } catch (e: any) {
     error.value = e?.data?.error ?? t('repo.branches.setDefaultFailed')
@@ -141,6 +170,7 @@ async function onDelete(branchName: string) {
       method: 'DELETE',
       credentials: 'include',
     })
+    branchOffset.value = 0
     await load()
   } catch (e: any) {
     error.value = e?.data?.error ?? t('repo.branches.deleteFailed')
@@ -183,7 +213,7 @@ onMounted(load)
     <Card class="gap-0 py-0">
       <CardHeader class="rounded-t-xl border-b bg-muted/40 px-4 py-2">
         <CardTitle class="text-sm font-medium">
-          {{ t('repo.branches.title') }} · {{ branches.length }}
+          {{ t('repo.branches.title') }} · {{ branchTotal }}
         </CardTitle>
         <CardDescription v-if="defaultBranch">
           {{ t('repo.defaultBranch') }}: <code class="font-mono">{{ defaultBranch }}</code>
@@ -193,7 +223,7 @@ onMounted(load)
         <p v-if="loading" class="p-3 text-sm text-muted-foreground">
           {{ t('common.loading') }}
         </p>
-        <p v-else-if="branches.length === 0" class="p-6 text-center text-sm text-muted-foreground">
+        <p v-else-if="branchItems.length === 0" class="p-6 text-center text-sm text-muted-foreground">
           {{ t('repo.branches.empty') }}
         </p>
         <Table v-else>
@@ -206,7 +236,7 @@ onMounted(load)
             </TableRow>
           </TableHeader>
           <TableBody>
-            <TableRow v-for="b in branches" :key="b.name">
+            <TableRow v-for="b in branchItems" :key="b.name">
               <TableCell class="font-medium">
                 <span class="inline-flex items-center gap-2">
                   <GitBranch class="size-3.5 text-muted-foreground" />
@@ -253,6 +283,14 @@ onMounted(load)
         </Table>
       </CardContent>
     </Card>
+
+    <Pagination
+      v-if="branchTotal > branchLimit"
+      :total="branchTotal"
+      :offset="branchOffset"
+      :limit="branchLimit"
+      @update:offset="onBranchPage"
+    />
 
     <Dialog v-model:open="createOpen">
       <DialogContent>
