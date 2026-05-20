@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -67,7 +68,7 @@ func (h *Handler) createAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusCreated, toPublicAttachment(attachment))
+	httpx.WriteJSON(w, http.StatusCreated, toPublicAttachment(rc.repo.OwnerName, rc.repo.Name, iss.Number, attachment))
 }
 
 // listAttachments lists attachments for an issue.
@@ -104,7 +105,7 @@ func (h *Handler) listAttachments(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]publicAttachment, 0, len(attachments))
 	for _, a := range attachments {
-		out = append(out, toPublicAttachment(a))
+		out = append(out, toPublicAttachment(rc.repo.OwnerName, rc.repo.Name, iss.Number, a))
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
@@ -120,7 +121,7 @@ func (h *Handler) getAttachment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	_, ok = h.loadIssue(w, r, rc.repo.ID)
+	iss, ok := h.loadIssue(w, r, rc.repo.ID)
 	if !ok {
 		return
 	}
@@ -137,6 +138,11 @@ func (h *Handler) getAttachment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Verify the attachment belongs to the resolved repo and issue.
+	if att.RepoID != rc.repo.ID || att.IssueID != iss.ID {
+		httpx.WriteError(w, http.StatusNotFound, "attachment not found")
 		return
 	}
 	if att.Status == domain.AttachmentStatusDeleted {
@@ -166,7 +172,7 @@ func (h *Handler) deleteAttachment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	_, ok = h.loadIssue(w, r, rc.repo.ID)
+	iss, ok := h.loadIssue(w, r, rc.repo.ID)
 	if !ok {
 		return
 	}
@@ -191,6 +197,11 @@ func (h *Handler) deleteAttachment(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Verify the attachment belongs to the resolved repo and issue.
+	if att.RepoID != rc.repo.ID || att.IssueID != iss.ID {
+		httpx.WriteError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
 
 	// Only the uploader or a repo manager can delete.
 	if caller.ID != att.AuthorID && !h.canManage(r, caller, rc.repo) {
@@ -209,24 +220,36 @@ func (h *Handler) deleteAttachment(w http.ResponseWriter, r *http.Request) {
 // --- DTOs ---
 
 type publicAttachment struct {
-	ID               int64  `json:"id"`
-	RepoID           int64  `json:"repo_id"`
-	IssueID          int64  `json:"issue_id"`
-	CommentID        int64  `json:"comment_id"`
-	AuthorID         int64  `json:"author_id"`
-	AgentRole        string `json:"agent_role,omitempty"`
-	OriginalName     string `json:"original_name"`
-	SizeBytes        int64  `json:"size_bytes"`
-	MimeType         string `json:"mime_type"`
-	DetectedMimeType string `json:"detected_mime_type"`
-	SHA256           string `json:"sha256"`
-	Kind             string `json:"kind"`
-	Status           string `json:"status"`
+	ID               int64      `json:"id"`
+	RepoID           int64      `json:"repo_id"`
+	IssueID          int64      `json:"issue_id"`
+	CommentID        int64      `json:"comment_id"`
+	AuthorID         int64      `json:"author_id"`
+	AgentRole        string     `json:"agent_role,omitempty"`
+	OriginalName     string     `json:"original_name"`
+	SizeBytes        int64      `json:"size_bytes"`
+	MimeType         string     `json:"mime_type"`
+	DetectedMimeType string     `json:"detected_mime_type"`
+	SHA256           string     `json:"sha256"`
+	Kind             string     `json:"kind"`
+	Status           string     `json:"status"`
+	DownloadURL      string     `json:"download_url"`
+	PreviewURL       string     `json:"preview_url"`
+	MarkdownSnippet  string     `json:"markdown_snippet"`
 	CreatedAt        time.Time  `json:"created_at"`
 	DeletedAt        *time.Time `json:"deleted_at,omitempty"`
 }
 
-func toPublicAttachment(a *domain.Attachment) publicAttachment {
+func toPublicAttachment(owner, repoName string, issueNumber int64, a *domain.Attachment) publicAttachment {
+	downloadURL := fmt.Sprintf("/api/repos/%s/%s/issues/%d/attachments/%d",
+		owner, repoName, issueNumber, a.ID)
+	var markdownSnippet string
+	switch a.Kind {
+	case domain.AttachmentKindImage, domain.AttachmentKindVideo:
+		markdownSnippet = fmt.Sprintf("![attachment:%d]", a.ID)
+	default:
+		markdownSnippet = fmt.Sprintf("[attachment:%d]", a.ID)
+	}
 	out := publicAttachment{
 		ID:               a.ID,
 		RepoID:           a.RepoID,
@@ -241,6 +264,9 @@ func toPublicAttachment(a *domain.Attachment) publicAttachment {
 		SHA256:           a.SHA256,
 		Kind:             string(a.Kind),
 		Status:           string(a.Status),
+		DownloadURL:      downloadURL,
+		PreviewURL:       downloadURL,
+		MarkdownSnippet:  markdownSnippet,
 		CreatedAt:        a.CreatedAt,
 		DeletedAt:        a.DeletedAt,
 	}

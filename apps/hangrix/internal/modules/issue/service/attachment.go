@@ -30,7 +30,7 @@ const MaxAttachmentSize = 64 << 20
 // before matching.
 var AllowedExtensions = map[string]bool{
 	".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
-	".svg": true, ".webp": true,
+	".webp": true,
 	".mp4": true, ".webm": true, ".mov": true,
 	".zip": true, ".tar.gz": true, ".tgz": true, ".gz": true,
 	".txt": true, ".md": true, ".json": true, ".yaml": true,
@@ -107,6 +107,11 @@ func (s *AttachmentService) Upload(
 	}
 	head = head[:n]
 	detectedMime := http.DetectContentType(head)
+
+	// Ensure the root attachments directory exists before CreateTemp.
+	if err := os.MkdirAll(s.attachmentsPath, 0o755); err != nil {
+		return nil, fmt.Errorf("mkdir attachments root: %w", err)
+	}
 
 	// Compute SHA256 over head + remainder while streaming to a temp file.
 	hasher := sha256.New()
