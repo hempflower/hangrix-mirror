@@ -2067,35 +2067,54 @@ func (h *Handler) loadMemberUser(w http.ResponseWriter, r *http.Request) (*userd
 
 // ---- Repo variables ----
 
-type publicRepoVariable struct {
-	ID        int64              `json:"id"`
-	RepoID    int64              `json:"repo_id"`
-	Name      string             `json:"name"`
-	Value     string             `json:"value,omitempty"`
-	Kind      domain.VariableKind `json:"kind"`
-	CreatedAt time.Time          `json:"created_at"`
-	UpdatedAt time.Time          `json:"updated_at"`
+// variableItem is the public shape of a plain variable.
+// Mirrors apps/web/app/types/repo.ts:RepoVariable.
+type variableItem struct {
+	Name      string    `json:"name"`
+	Value     string    `json:"value,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
-func toPublicVariable(v *domain.RepoVariable) publicRepoVariable {
-	pr := publicRepoVariable{
-		ID:        v.ID,
-		RepoID:    v.RepoID,
-		Name:      v.Name,
-		Kind:      v.Kind,
-		CreatedAt: v.CreatedAt,
-		UpdatedAt: v.UpdatedAt,
-	}
-	if v.Kind == domain.VariableKindPlain {
-		pr.Value = v.Value
-	}
-	// Secret values are never returned to the client.
-	return pr
+// secretMeta is the public shape of a secret variable (value never exposed).
+// Mirrors apps/web/app/types/repo.ts:RepoSecretMeta.
+type secretMeta struct {
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// variableListResp matches the frontend RepoVariableListResp contract.
 type variableListResp struct {
-	Items []publicRepoVariable `json:"items"`
+	Variables []variableItem `json:"variables"`
+	Secrets   []secretMeta   `json:"secrets"`
 }
+
+	// variableResp is the response shape for POST/PATCH on a single variable.
+	// The frontend re-fetches the list after mutations so the exact shape is
+	// not critical, but it must include name, value (plain only), kind, and
+	// timestamps.
+	type variableResp struct {
+		Name      string    `json:"name"`
+		Value     string    `json:"value,omitempty"`
+		Kind      string    `json:"kind"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+
+	func toVariableResp(v *domain.RepoVariable) variableResp {
+		r := variableResp{
+			Name:      v.Name,
+			Kind:      string(v.Kind),
+			CreatedAt: v.CreatedAt,
+			UpdatedAt: v.UpdatedAt,
+		}
+		if v.Kind == domain.VariableKindPlain {
+			r.Value = v.Value
+		}
+		return r
+	}
+
 
 func (h *Handler) listVariables(w http.ResponseWriter, r *http.Request) {
 	repo, ok := h.resolveRepoForManage(w, r)
@@ -2107,11 +2126,24 @@ func (h *Handler) listVariables(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	out := make([]publicRepoVariable, 0, len(vars))
+	var out variableListResp
 	for _, v := range vars {
-		out = append(out, toPublicVariable(v))
+		if v.Kind == domain.VariableKindSecret {
+			out.Secrets = append(out.Secrets, secretMeta{
+				Name:      v.Name,
+				CreatedAt: v.CreatedAt,
+				UpdatedAt: v.UpdatedAt,
+			})
+		} else {
+			out.Variables = append(out.Variables, variableItem{
+				Name:      v.Name,
+				Value:     v.Value,
+				CreatedAt: v.CreatedAt,
+				UpdatedAt: v.UpdatedAt,
+			})
+		}
 	}
-	httpx.WriteJSON(w, http.StatusOK, variableListResp{Items: out})
+	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
 type variableCreateReq struct {
@@ -2163,7 +2195,7 @@ func (h *Handler) createVariable(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	httpx.WriteJSON(w, http.StatusCreated, toPublicVariable(vr))
+	httpx.WriteJSON(w, http.StatusCreated, toVariableResp(vr))
 }
 
 type variableUpdateReq struct {
@@ -2251,7 +2283,7 @@ func (h *Handler) updateVariable(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, toPublicVariable(vr))
+	httpx.WriteJSON(w, http.StatusOK, toVariableResp(vr))
 }
 
 func (h *Handler) deleteVariable(w http.ResponseWriter, r *http.Request) {

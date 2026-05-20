@@ -385,7 +385,19 @@ func (s *PostgresVariableStore) List(ctx context.Context, repoID int64) ([]*doma
 	for _, r := range rows {
 		v, err := s.rowToDomain(&r)
 		if err != nil {
-			continue // skip variables whose ciphertext cannot be decrypted
+			// Decryption failed — return a metadata-only entry so the
+			// admin can still see and delete/re-seed the variable.
+			// The empty Value ensures secret PATCH "keep old value"
+			// will fail via Get() rather than silently overwrite.
+			v = &domain.RepoVariable{
+				ID:        r.ID,
+				RepoID:    r.RepoID,
+				Name:      r.Name,
+				Value:     "",
+				Kind:      domain.VariableKind(r.Kind),
+				CreatedAt: r.CreatedAt.Time,
+				UpdatedAt: r.UpdatedAt.Time,
+			}
 		}
 		out = append(out, v)
 	}
