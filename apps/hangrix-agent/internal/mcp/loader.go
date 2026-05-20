@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/local"
@@ -16,7 +17,7 @@ import (
 // failures are logged as warnings and skipped; the agent continues startup.
 //
 // Callers must eventually call Close() on every returned Client.
-func LoadServers(ctx context.Context, cfg *Config, logf func(string, ...interface{})) ([]local.Tool, []*mcpclient.Client) {
+func LoadServers(ctx context.Context, cfg *Config, logf func(string, ...interface{}), httpClient *http.Client) ([]local.Tool, []*mcpclient.Client) {
 	if cfg == nil || len(cfg.McpServers) == 0 {
 		return nil, nil
 	}
@@ -33,6 +34,20 @@ func LoadServers(ctx context.Context, cfg *Config, logf func(string, ...interfac
 	)
 
 	for name, s := range cfg.McpServers {
+		// Per-server validation: bad config skips only this server.
+		switch {
+		case s.Command != "":
+			// stdio — valid, proceed.
+		case s.Type == "http", s.Type == "sse":
+			if s.URL == "" {
+				logf("WARN: skipping mcp server %q: type %q requires url", name, s.Type)
+				continue
+			}
+		default:
+			logf("WARN: skipping mcp server %q: must have either command or type (\"http\" / \"sse\")", name)
+			continue
+		}
+
 		switch {
 		case s.Command != "":
 			t, c, err := loadStdio(ctx, name, s)
@@ -44,7 +59,7 @@ func LoadServers(ctx context.Context, cfg *Config, logf func(string, ...interfac
 			clients = append(clients, c)
 
 		case s.Type == "http":
-			t, c, err := loadHTTP(ctx, name, s)
+			t, c, err := loadHTTP(ctx, name, s, httpClient)
 			if err != nil {
 				logf("WARN: skipping mcp server %q: %v", name, err)
 				continue
@@ -53,7 +68,7 @@ func LoadServers(ctx context.Context, cfg *Config, logf func(string, ...interfac
 			clients = append(clients, c)
 
 		case s.Type == "sse":
-			t, c, err := loadSSE(ctx, name, s)
+			t, c, err := loadSSE(ctx, name, s, httpClient)
 			if err != nil {
 				logf("WARN: skipping mcp server %q: %v", name, err)
 				continue
@@ -82,12 +97,15 @@ func loadStdio(ctx context.Context, name string, s ServerDef) ([]local.Tool, *mc
 	return tools, c, nil
 }
 
-func loadHTTP(ctx context.Context, name string, s ServerDef) ([]local.Tool, *mcpclient.Client, error) {
+func loadHTTP(ctx context.Context, name string, s ServerDef, httpClient *http.Client) ([]local.Tool, *mcpclient.Client, error) {
 	headers, err := ExpandHeaders(name, s.Headers)
 	if err != nil {
 		return nil, nil, err
 	}
 	opts := []mcptransport.StreamableHTTPCOption{}
+	if httpClient != nil {
+		opts = append(opts, mcptransport.WithHTTPBasicClient(httpClient))
+	}
 	if len(headers) > 0 {
 		opts = append(opts, mcptransport.WithHTTPHeaders(headers))
 	}
@@ -107,12 +125,15 @@ func loadHTTP(ctx context.Context, name string, s ServerDef) ([]local.Tool, *mcp
 	return tools, c, nil
 }
 
-func loadSSE(ctx context.Context, name string, s ServerDef) ([]local.Tool, *mcpclient.Client, error) {
+func loadSSE(ctx context.Context, name string, s ServerDef, httpClient *http.Client) ([]local.Tool, *mcpclient.Client, error) {
 	headers, err := ExpandHeaders(name, s.Headers)
 	if err != nil {
 		return nil, nil, err
 	}
 	opts := []mcptransport.ClientOption{}
+	if httpClient != nil {
+		opts = append(opts, mcptransport.WithHTTPClient(httpClient))
+	}
 	if len(headers) > 0 {
 		opts = append(opts, mcptransport.WithHeaders(headers))
 	}
