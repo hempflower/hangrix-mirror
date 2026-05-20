@@ -2164,7 +2164,6 @@ func (h *Handler) createVariable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
-	req.Value = strings.TrimSpace(req.Value)
 	kind := domain.VariableKind(strings.TrimSpace(req.Kind))
 	if kind == "" {
 		kind = domain.VariableKindPlain
@@ -2243,7 +2242,7 @@ func (h *Handler) updateVariable(w http.ResponseWriter, r *http.Request) {
 	if newName == "" {
 		newName = existing.Name
 	}
-	newValue := strings.TrimSpace(req.Value)
+	newValue := req.Value
 	newKind := existing.Kind
 	if k := domain.VariableKind(strings.TrimSpace(req.Kind)); k.Valid() {
 		newKind = k

@@ -387,16 +387,20 @@ func (s *PostgresVariableStore) List(ctx context.Context, repoID int64) ([]*doma
 		if err != nil {
 			// Decryption failed — return a metadata-only entry so the
 			// admin can still see and delete/re-seed the variable.
-			// The empty Value ensures secret PATCH "keep old value"
-			// will fail via Get() rather than silently overwrite.
+			// The empty Value and DecryptionFailed=true ensure:
+			//  - secret PATCH "keep old value" will fail via Get() rather
+			//    than silently overwrite the corrupted ciphertext, and
+			//  - runner dispatch will skip this entry so ${NAME} fails
+			//    explicitly instead of expanding to an empty string.
 			v = &domain.RepoVariable{
-				ID:        r.ID,
-				RepoID:    r.RepoID,
-				Name:      r.Name,
-				Value:     "",
-				Kind:      domain.VariableKind(r.Kind),
-				CreatedAt: r.CreatedAt.Time,
-				UpdatedAt: r.UpdatedAt.Time,
+				ID:               r.ID,
+				RepoID:           r.RepoID,
+				Name:             r.Name,
+				Value:            "",
+				Kind:             domain.VariableKind(r.Kind),
+				DecryptionFailed: true,
+				CreatedAt:        r.CreatedAt.Time,
+				UpdatedAt:        r.UpdatedAt.Time,
 			}
 		}
 		out = append(out, v)

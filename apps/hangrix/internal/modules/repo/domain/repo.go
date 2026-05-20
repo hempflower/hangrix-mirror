@@ -200,8 +200,13 @@ type RepoVariable struct {
 	Name      string
 	Value     string // ciphertext when kind=secret; plaintext when kind=plain
 	Kind      VariableKind
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// DecryptionFailed is true when the stored ciphertext could not be
+	// decrypted (e.g. key rotation, corruption). The Value field is ""
+	// and the entry must not be used for ${NAME} expansion.  Callers
+	// that forward variables to the runner MUST skip these entries.
+	DecryptionFailed bool
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // RepoVariablePublic is the API-safe projection. For secret variables,

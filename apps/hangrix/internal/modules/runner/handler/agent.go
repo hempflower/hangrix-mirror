@@ -420,6 +420,13 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 				}
 				repoVars = make(map[string]string, len(vars))
 				for _, v := range vars {
+					// Skip entries whose ciphertext could not be decrypted.
+					// Including them with Value=="" would cause the runner to
+					// expand ${NAME} to an empty string instead of failing
+					// explicitly.
+					if v.DecryptionFailed {
+						continue
+					}
 					repoVars[v.Name] = v.Value
 				}
 			}
