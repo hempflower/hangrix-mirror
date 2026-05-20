@@ -884,7 +884,7 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 	// and transition matching attachments from uploaded → attached.
 	// Best-effort — a missing or already-deleted attachment is not an error.
 	if h.attachments != nil {
-		re := regexp.MustCompile(`\[!?attachment:(\d+)\]`)
+		re := regexp.MustCompile(`!?\[attachment:(\d+)\]`)
 		for _, m := range re.FindAllStringSubmatch(body, -1) {
 			if attID, err := strconv.ParseInt(m[1], 10, 64); err == nil {
 				_ = h.attachments.MarkAttached(r.Context(), attID, c.ID)
