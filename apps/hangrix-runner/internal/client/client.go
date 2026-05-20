@@ -153,8 +153,14 @@ type Task struct {
 	// (already resolved/decrypted by the server) available for ${VAR_NAME}
 	// expansion in the session's Env values. Keys are variable names;
 	// values are the plaintext (secrets are decrypted server-side before
-	// dispatch). Empty map and nil are equivalent — no expansion.
-	RepoVariables map[string]string `json:"repo_variables,omitempty"`
+	// dispatch).
+	//
+	// Nil means the server has not been upgraded to support repo variable
+	// expansion — the runner treats this as a backward-compat no-op and
+	// leaves ${...} references unexpanded.  An empty non-nil map means the
+	// server supports expansion but the repo has no variables, so any
+	// ${...} reference in task.Env fails the session explicitly.
+	RepoVariables map[string]string `json:"repo_variables"`
 }
 
 // BuildSpec mirrors agentsconfig.Build on the wire. Paths are
