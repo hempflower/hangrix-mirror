@@ -290,12 +290,13 @@ func All(client *Client) []local.Tool {
 		},
 		{
 			name:        "release_upload_asset",
-			description: "Upload a custom asset to a release. The asset binary is read from a local file path on the agent's filesystem and uploaded via HTTP multipart.",
+			description: "Upload a custom asset to a release. The file content must be base64-encoded.",
 			schema: objectSchema(map[string]any{
-				"release_id": intProp("The release ID to attach the asset to (required)."),
-				"name":       stringProp("Asset file name (required)."),
-				"file_path":  stringProp("Local path to the file to upload (required)."),
-			}, []string{"release_id", "name", "file_path"}),
+				"release_id":   intProp("The release ID to attach the asset to (required)."),
+				"name":         stringProp("Asset file name (required)."),
+				"content":      stringProp("Base64-encoded file content (required)."),
+				"content_type": stringProp("Optional MIME type. Defaults to application/octet-stream."),
+			}, []string{"release_id", "name", "content"}),
 		},
 		{
 			name:        "release_publish",

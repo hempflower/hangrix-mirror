@@ -158,7 +158,7 @@ Mutating tools (clearly warrant each call; they appear on the issue timeline):
 Release tools (create and manage releases from existing git tags):
 
 - `release_create` — Creates a draft release from an existing git tag. `tag_name` is required; optional `title` (defaults to tag) and `notes` (markdown).
-- `release_upload_asset` — Uploads a custom asset file to a release. Requires `release_id`, `name`, and `file_path`. The asset binary is uploaded via HTTP multipart.
+- `release_upload_asset` — Uploads a custom asset file to a release. Requires `release_id`, `name`, and `content` (base64-encoded file). Optional `content_type` MIME type.
 - `release_publish` — Publishes a draft release. Requires `release_id`.
 - `release_update` — Edits title, notes, and (in draft state) tag_name. Requires `release_id`.
 - `release_delete` — Deletes a release and its custom assets. Requires `release_id`.
