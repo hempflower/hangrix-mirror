@@ -590,12 +590,12 @@
     "variables": {
       "tabLabel": "变量与机密",
       "variablesTitle": "变量",
-      "variablesSubtitle": "可在 agents.yml 中通过 ${NAME} 引用的明文值。拥有 manage 权限的用户可见。",
+      "variablesSubtitle": "以明文存储的值。仓库管理员可见。",
       "secretsTitle": "机密变量",
-      "secretsSubtitle": "加密存储，通过 ${NAME} 引用。保存后不再显示明文。",
+      "secretsSubtitle": "加密存储。保存后无法查看原值，仅可覆盖更新。",
       "create": "新建变量",
       "edit": "编辑变量",
-      "createDescription": "添加变量或机密，可在 .hangrix/agents.yml 的 container.env 值中通过 ${NAME} 引用。",
+      "createDescription": "变量和机密可供运行在此仓库上的 agent 工作流使用。",
       "editDescription": "更新变量值。机密变量留空则保持原值不变。",
       "noVariables": "暂无变量。",
       "noSecrets": "暂无机密变量。",
@@ -619,7 +619,7 @@
       "loadFailed": "加载失败",
       "deleteFailed": "删除失败",
       "deleteConfirm": "确定删除{kind}「{name}」？此操作不可撤销。",
-      "hint": "在 .hangrix/agents.yml 的 container.env 值中使用 ${NAME} 语法引用这些变量（仅支持整值替换）。旧的 secrets 字段已移除 —— 请将机密变量迁移到此页面。"
+      "hint": "在 agent 配置的环境变量值中使用 ${NAME} 即可引用（仅支持整值替换）。"
     }
   },
   "issue": {

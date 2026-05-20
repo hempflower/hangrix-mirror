@@ -198,6 +198,8 @@ onMounted(load)
 
 <template>
   <div class="space-y-6">
+    <p v-if="loadError" class="text-sm text-destructive">{{ loadError }}</p>
+
     <!-- Variables -->
     <Card>
       <CardHeader class="flex flex-row items-center justify-between gap-2">
@@ -347,7 +349,7 @@ onMounted(load)
           </div>
           <div class="space-y-2">
             <Label>{{ t('repo.variables.kind') }}</Label>
-            <Select v-model="form.kind">
+            <Select v-model="form.kind" :disabled="dialogMode === 'edit'">
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
