@@ -726,6 +726,17 @@
         "requestChanges": "{n} 个要求修改",
         "abstain": "{n} 个弃权"
       }
+    },
+    "attachment": {
+      "attachFile": "上传附件",
+      "uploading": "上传中…",
+      "uploadFailed": "上传失败",
+      "insert": "插入到评论",
+      "remove": "移除",
+      "deleted": "附件「{name}」已被删除",
+      "unknown": "未知附件 #{id}",
+      "insertBtn": "附件",
+      "download": "下载"
     }
   },
   "pat": {

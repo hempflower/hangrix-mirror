@@ -25,7 +25,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import FileDiffList from '@/components/repo/FileDiffList.vue'
 import MarkdownBody from '@/components/MarkdownBody.vue'
 import MentionTextarea from '@/components/issue/MentionTextarea.vue'
-import type { Issue, IssueState, IssueTimeline, IssueMergeResp, ReviewVotePayload, ReviewVoteValue } from '~/types/issue'
+import AttachmentUploader from '@/components/issue/AttachmentUploader.vue'
+import type { Issue, IssueAttachment, IssueState, IssueTimeline, IssueMergeResp, ReviewVotePayload, ReviewVoteValue } from '~/types/issue'
 import type { Commit, FileDiff } from '~/types/repo'
 import { relativeTime } from '~/utils/time'
 
@@ -70,6 +71,15 @@ const children = ref<Issue[]>([])
 const commentBody = ref('')
 const commentBusy = ref(false)
 const commentError = ref<string | null>(null)
+const mentionTextareaRef = ref<InstanceType<typeof MentionTextarea> | null>(null)
+
+// Attachment state
+const attachments = ref<IssueAttachment[]>([])
+const attachmentsMap = computed<Record<number, IssueAttachment>>(() => {
+  const m: Record<number, IssueAttachment> = {}
+  for (const a of attachments.value) m[a.id] = a
+  return m
+})
 
 // Mention suggestions for the comment editor's `@` autocomplete. The
 // list comes from the host yaml at the default-branch tip, which can
@@ -235,6 +245,19 @@ async function loadCommits() {
     commits.value = data ?? []
   } catch {
     commits.value = []
+  }
+}
+
+async function loadAttachments() {
+  if (!issue.value) return
+  try {
+    const data = await $fetch<IssueAttachment[]>(
+      `/api/repos/${owner.value}/${name.value}/issues/${number.value}/attachments`,
+      { credentials: 'include' },
+    )
+    attachments.value = data ?? []
+  } catch {
+    attachments.value = []
   }
 }
 
@@ -495,7 +518,7 @@ async function refreshLive() {
     stopRefreshTimer()
     return
   }
-  await Promise.all([loadIssue(), loadTimeline(), loadDiff(), loadCommits(), loadChildren(), loadMentionAgents()])
+  await Promise.all([loadIssue(), loadTimeline(), loadDiff(), loadCommits(), loadChildren(), loadMentionAgents(), loadAttachments()])
 }
 
 function startRefreshTimer() {
@@ -524,6 +547,7 @@ onMounted(async () => {
       loadParent(),
       loadChildren(),
       loadMentionAgents(),
+      loadAttachments(),
     ])
   }
   startRefreshTimer()
@@ -599,7 +623,7 @@ onUnmounted(stopRefreshTimer)
                     </span>
                   </div>
                   <div class="px-4 py-3 text-sm">
-                    <MarkdownBody v-if="issue.body" :source="issue.body" />
+                    <MarkdownBody v-if="issue.body" :source="issue.body" :attachments="attachmentsMap" />
                     <p v-else class="text-muted-foreground">—</p>
                   </div>
                 </CardContent>
@@ -629,7 +653,7 @@ onUnmounted(stopRefreshTimer)
                       </span>
                     </div>
                     <div class="px-4 py-3 text-sm">
-                      <MarkdownBody :source="it.data.body" />
+                      <MarkdownBody :source="it.data.body" :attachments="attachmentsMap" />
                     </div>
                   </CardContent>
                 </Card>
@@ -665,7 +689,7 @@ onUnmounted(stopRefreshTimer)
                       </span>
                     </div>
                     <div class="px-4 py-3 text-sm">
-                      <MarkdownBody v-if="it.data.payload?.reason" :source="it.data.payload.reason" />
+                      <MarkdownBody v-if="it.data.payload?.reason" :source="it.data.payload.reason" :attachments="attachmentsMap" />
                       <p v-else class="text-muted-foreground">{{ t('issue.review.noReason') }}</p>
                     </div>
                   </CardContent>
@@ -718,7 +742,14 @@ onUnmounted(stopRefreshTimer)
                     <p v-if="hostYamlError" class="text-sm text-destructive">
                       {{ t('issue.commentForm.hostYamlError') }}: {{ hostYamlError }}
                     </p>
+                    <AttachmentUploader
+                      :owner="owner"
+                      :name="name"
+                      :issue-number="Number(number)"
+                      @insert="(snippet: string) => mentionTextareaRef?.insertAtCursor(snippet)"
+                    />
                     <MentionTextarea
+                      ref="mentionTextareaRef"
                       v-model="commentBody"
                       :suggestions="mentionAgents"
                       rows="8"
