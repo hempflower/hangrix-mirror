@@ -420,7 +420,7 @@ func All(client *Client) []local.Tool {
 		},
 		{
 			name:        "roster_list",
-			description: "List every active role session on the current issue.",
+			description: "List every active role session on the current issue. Each item includes a `last_activity_at` field showing the most recent activity timestamp for that session — use it to detect stalled agents.",
 			schema:      objectSchema(nil, nil),
 		},
 		{
