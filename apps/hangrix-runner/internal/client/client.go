@@ -207,11 +207,17 @@ type WorkflowJob struct {
 	JobKey         string            `json:"job_key"`
 	CheckoutRef    string            `json:"checkout_ref"`
 	CommitSHA      string            `json:"commit_sha"`
+	EventName      string            `json:"event_name,omitempty"`
+	EventCauseID   string            `json:"event_cause_id,omitempty"`
 	Container      WorkflowContainer `json:"container"`
 	WorkingDir     string            `json:"working_directory"`
 	Steps          []WorkflowStep    `json:"steps"`
 	TimeoutMinutes int               `json:"timeout_minutes"`
 	RepoVariables  map[string]string `json:"repo_variables"`
+	// Inputs carries the resolved workflow.dispatch inputs, already
+	// transformed to WORKFLOW_INPUT_<UPPER_SNAKE> keys by the server.
+	// Nil/empty for non-dispatch events.
+	Inputs map[string]string `json:"inputs,omitempty"`
 }
 
 // WorkflowContainer carries the resolved container definition for a

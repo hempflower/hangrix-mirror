@@ -99,13 +99,22 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 		}
 	}
 
-	// 5. Expand env and merge platform runtime vars.
-	env := make(map[string]string)
-	for k, v := range job.Container.Env {
-		env[k] = v
-	}
-	if err := expandEnv(env, job.RepoVariables); err != nil {
-		return d.fail(ctx, job, fmt.Errorf("expand env: %w", err))
+	// 5. Early validation: expand ${VAR_NAME} references against repo
+	//    variables. The actual expansion for step execution happens in
+	//    buildWorkflowEnv, but we validate here so we can fail fast
+	//    before spending time on container creation and checkout.
+	//
+	//    We expand a temporary copy so the early check doesn't mutate
+	//    job.Container.Env in place (buildWorkflowEnv does its own
+	//    expansion on a fresh copy at exec time).
+	{
+		tmp := make(map[string]string, len(job.Container.Env))
+		for k, v := range job.Container.Env {
+			tmp[k] = v
+		}
+		if err := expandEnv(tmp, job.RepoVariables); err != nil {
+			return d.fail(ctx, job, fmt.Errorf("expand env: %w", err))
+		}
 	}
 
 	// 6. Create the workflow container.
@@ -115,7 +124,7 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 		buildSpec,
 		job.Container.Entrypoint,
 		repoCheckout,
-		env,
+		job.Container.Env, // validated above; may be unused by impl
 		orchestratorVolumes(job.Container.Volumes),
 	)
 	if err != nil {
@@ -171,7 +180,10 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 // to the platform and returns the exit code.
 func (d *WorkflowJobDriver) runStep(ctx context.Context, job *client.WorkflowJob, containerID, workingDir string, step client.WorkflowStep) (int32, error) {
 	// Build the runtime env for this step.
-	stepEnv := d.buildWorkflowEnv(job)
+	stepEnv, err := d.buildWorkflowEnv(job)
+	if err != nil {
+		return -1, fmt.Errorf("build env: %w", err)
+	}
 
 	handle, err := d.Orchestrator.Exec(ctx, containerID, workingDir, stepEnv, "bash", "-lc", step.Run)
 	if err != nil {
@@ -258,10 +270,17 @@ func (d *WorkflowJobDriver) runStep(ctx context.Context, job *client.WorkflowJob
 // The merged container/workflow/job env is already in job.Container.Env
 // (the server does the merge). This function adds the platform runtime
 // vars that the runner owns.
-func (d *WorkflowJobDriver) buildWorkflowEnv(job *client.WorkflowJob) map[string]string {
+func (d *WorkflowJobDriver) buildWorkflowEnv(job *client.WorkflowJob) (map[string]string, error) {
 	env := make(map[string]string)
 	for k, v := range job.Container.Env {
 		env[k] = v
+	}
+	// Expand ${VAR_NAME} references against repo variables before
+	// injecting platform runtime vars. The expandEnv call in Run is an
+	// early validation gate; this one produces the actual expanded values
+	// that bash will see at exec time.
+	if err := expandEnv(env, job.RepoVariables); err != nil {
+		return nil, err
 	}
 	// Platform runtime env — injected by runner, not server.
 	env["HANGRIX_WORKFLOW_RUN_ID"] = strconv.FormatInt(job.WorkflowRunID, 10)
@@ -275,7 +294,18 @@ func (d *WorkflowJobDriver) buildWorkflowEnv(job *client.WorkflowJob) map[string
 	if job.CheckoutRef != "" {
 		env["HANGRIX_CHECKOUT_REF"] = job.CheckoutRef
 	}
-	return env
+	if job.EventName != "" {
+		env["HANGRIX_EVENT_NAME"] = job.EventName
+	}
+	if job.EventCauseID != "" {
+		env["HANGRIX_EVENT_CAUSE_ID"] = job.EventCauseID
+	}
+	// Dispatch inputs already transformed to WORKFLOW_INPUT_* keys by
+	// the server; inject them as-is so steps can use $WORKFLOW_INPUT_REF etc.
+	for k, v := range job.Inputs {
+		env[k] = v
+	}
+	return env, nil
 }
 
 // appendLog sends one stdout/stderr line to the platform log endpoint.
