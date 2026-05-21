@@ -41,6 +41,7 @@ func TestSessionDriverEndToEnd(t *testing.T) {
 		inputsCalls     atomic.Int32
 		historyCalls    atomic.Int32
 		markRunningHits atomic.Int32
+		pingCalls       atomic.Int32
 		terminateBody   map[string]any
 		eventFrameJSON  = json.RawMessage(`{"kind":"event","event":"test.poke","payload":{"hi":1}}`)
 	)
@@ -80,6 +81,9 @@ func TestSessionDriverEndToEnd(t *testing.T) {
 			mu.Lock()
 			_ = json.Unmarshal(body, &terminateBody)
 			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/api/runner/sessions/42/ping":
+			pingCalls.Add(1)
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/api/runner/sessions/42/container":
 			// SetContainer ACK from the session driver — the fake
@@ -142,6 +146,10 @@ func TestSessionDriverEndToEnd(t *testing.T) {
 	}
 	if got := historyCalls.Load(); got != 1 {
 		t.Errorf("history fetch hits=%d, want 1", got)
+	}
+	// 4 non-idle frames (status, tool_call, message, done) ⇒ 4 ping calls.
+	if got := pingCalls.Load(); got != 4 {
+		t.Errorf("ping calls=%d, want 4 (one per non-idle frame)", got)
 	}
 
 	mu.Lock()

@@ -243,7 +243,7 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 	// platform after handle.Wait returns and cancelIO fires. Lifecycle
 	// is governed by pipe EOF, which arrives naturally on container
 	// exit; ioCtx is only for the actively-blocking goroutines below.
-	go func() { defer wg.Done(); d.shipStdout(ctx, task.SessionID, cid, handle.Stdout(), idleSig, activitySig) }()
+	go func() { defer wg.Done(); d.shipStdout(ctx, task.SessionID, handle.Stdout(), idleSig, activitySig) }()
 	go func() { defer wg.Done(); d.shipStderr(ctx, task.SessionID, handle.Stderr(), stderrTail) }()
 	go func() {
 		defer wg.Done()
@@ -432,7 +432,6 @@ func (d *SessionDriver) shipStdin(ctx context.Context, sessionID int64, w io.Wri
 func (d *SessionDriver) shipStdout(
 	ctx context.Context,
 	sessionID int64,
-	containerID string,
 	r io.Reader,
 	idleSig chan<- idleSignal,
 	activity chan<- struct{},
@@ -472,10 +471,8 @@ func (d *SessionDriver) shipStdout(
 		}
 		// Bump container_last_used_at on every non-idle frame so
 		// roster_list callers can see the most recent activity timestamp.
-		if containerID != "" {
-			if err := d.Client.SetContainer(ctx, sessionID, containerID); err != nil {
-				log.Printf("session %d: bump activity: %v", sessionID, err)
-			}
+		if err := d.Client.Ping(ctx, sessionID); err != nil {
+			log.Printf("session %d: bump activity: %v", sessionID, err)
 		}
 		req := frame.toAppendRequest()
 		if err := d.Client.AppendMessage(ctx, sessionID, req); err != nil {
