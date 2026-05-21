@@ -370,6 +370,7 @@ async function onDeleteAsset(asset: ReleaseAsset) {
                   </a>
                 </Button>
                 <Button
+                  v-if="editMode"
                   variant="outline"
                   size="sm"
                   class="text-destructive hover:text-destructive"
@@ -383,7 +384,7 @@ async function onDeleteAsset(asset: ReleaseAsset) {
           </div>
 
           <!-- Upload -->
-          <div class="flex flex-wrap items-end gap-3 rounded-md border p-3">
+          <div v-if="editMode" class="flex flex-wrap items-end gap-3 rounded-md border p-3">
             <div class="flex-1 space-y-1.5">
               <label for="asset-upload" class="text-sm font-medium">{{ t('release.assets.upload') }}</label>
               <Input id="asset-upload" type="file" @change="onFileChange" />
@@ -393,7 +394,7 @@ async function onDeleteAsset(asset: ReleaseAsset) {
               {{ uploadSaving ? t('release.assets.uploading') : t('release.assets.upload') }}
             </Button>
           </div>
-          <p v-if="uploadError" class="text-sm text-destructive">{{ uploadError }}</p>
+          <p v-if="editMode && uploadError" class="text-sm text-destructive">{{ uploadError }}</p>
         </CardContent>
       </Card>
     </template>
