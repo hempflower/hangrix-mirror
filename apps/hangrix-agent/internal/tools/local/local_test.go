@@ -453,6 +453,73 @@ func TestEditDeleteAnchorNotFound(t *testing.T) {
 
 
 
+// TestEditCRLFCrossToolContract locks the cross-tool contract between
+// `read` (which normalises CRLF→LF via bufio.Scanner) and `edit`
+// (which now normalises its input the same way). A CRLF file read
+// with `read` shows LF-only text; the LLM copies that verbatim into
+// `find` — edit must accept it and preserve the file's CRLF style.
+func TestEditCRLFCrossToolContract(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crlf.txt")
+
+	// Write a file with CRLF line endings.
+	content := []byte("hello\r\nworld\r\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	// 1. Read the file. bufio.Scanner strips \r, so the LLM sees LF only.
+	res, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path}))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var rFields struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(mustReJSON(res), &rFields); err != nil {
+		t.Fatalf("decode read result: %v", err)
+	}
+	// read output must be LF (no \r visible).
+	if strings.Contains(rFields.Content, "\r") {
+		t.Errorf("read output should not contain carriage returns, got: %q", rFields.Content)
+	}
+	if !strings.Contains(rFields.Content, "hello") || !strings.Contains(rFields.Content, "world") {
+		t.Errorf("read output should contain hello and world, got: %q", rFields.Content)
+	}
+
+	// 2. Edit using LF find text (exactly what the LLM would copy from read).
+	_, err = editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace",
+		"find": "hello\nworld", "replace": "hi\nthere",
+	}))
+	if err != nil {
+		t.Fatalf("edit with LF find on CRLF file: %v", err)
+	}
+
+	// 3. File must be updated AND still use CRLF.
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read after edit: %v", err)
+	}
+	if string(body) != "hi\r\nthere\r\n" {
+		t.Errorf("expected CRLF file, got: %q", string(body))
+	}
+
+	// 4. Read again — must show LF output.
+	res2, _ := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path}))
+	var r2Fields struct {
+		Content string `json:"content"`
+	}
+	json.Unmarshal(mustReJSON(res2), &r2Fields)
+	if !strings.Contains(r2Fields.Content, "hi") || !strings.Contains(r2Fields.Content, "there") {
+		t.Errorf("second read should show hi and there, got: %q", r2Fields.Content)
+	}
+}
 // TestBashForeground covers the basic (sync) bash path: output capture
 // and exit code propagation. The PTY merges stdout and stderr by design,
 // so we assert against the unified `output` field rather than checking

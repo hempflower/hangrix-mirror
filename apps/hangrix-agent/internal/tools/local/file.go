@@ -219,6 +219,14 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("edit: cannot read %q: %w", a.Path, err)
 	}
 	original := string(body)
+
+	// Normalise CRLF → LF so that find/anchor strings copied from the
+	// `read` tool (which outputs LF via bufio.Scanner) match the file
+	// content. We restore the original line ending style on write-back.
+	usesCRLF := strings.Contains(original, "\r\n")
+	if usesCRLF {
+		original = strings.ReplaceAll(original, "\r\n", "\n")
+	}
 	fileLines := strings.Split(original, "\n")
 
 	// Default anchor radius.
@@ -326,6 +334,11 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 
 	default:
 		return nil, fmt.Errorf("edit: unknown mode %q. Supported modes are 'replace' (find/replace text), 'insert' (add text at/after a line number), and 'delete' (remove a piece of text). Set 'mode' to one of those.", a.Mode)
+	}
+
+	// Restore the original line ending style before writing back.
+	if usesCRLF {
+		updated = strings.ReplaceAll(updated, "\n", "\r\n")
 	}
 
 	if err := os.WriteFile(a.Path, []byte(updated), 0o644); err != nil {
