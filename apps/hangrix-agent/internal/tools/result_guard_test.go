@@ -101,24 +101,88 @@ func TestGuardResult_ReusesExistingOutputFile(t *testing.T) {
 	}
 }
 
-func TestGuardResult_ScalarUnchanged(t *testing.T) {
+func TestGuardResult_ScalarTruncates(t *testing.T) {
 	t.Parallel()
-	// Scalars (not objects) pass through unchanged regardless of size.
+	// Bare strings over budget are now guarded: wrapped in an object
+	// envelope with truncated preview + output_file.
 	big := strings.Repeat("z", defaultResultBudgetBytes*2)
 	input, _ := json.Marshal(big)
 	got := guardResult(input)
-	if string(got) != string(input) {
-		t.Error("scalar value should pass through unchanged")
+
+	// Must be an object envelope, not the raw string.
+	if len(got) > 0 && got[0] != '{' {
+		t.Errorf("scalar should be wrapped in object envelope; got prefix %q", string(got)[:min(50, len(got))])
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(got, &m); err != nil {
+		t.Fatalf("guard output not valid JSON: %v", err)
+	}
+
+	if truncated, ok := m["truncated"].(bool); !ok || !truncated {
+		t.Errorf("expected truncated=true, got %v", m["truncated"])
+	}
+	if _, ok := m["output_file"].(string); !ok {
+		t.Error("expected output_file in scalar envelope")
+	}
+
+	// output_file must be readable and contain the full string.
+	outFile, _ := m["output_file"].(string)
+	full, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("output_file %q not readable: %v", outFile, err)
+	}
+	if string(full) != big {
+		t.Errorf("output_file content mismatch: got %d bytes, want %d", len(full), len(big))
 	}
 }
 
-func TestGuardResult_ArrayUnchanged(t *testing.T) {
+func TestGuardResult_ArrayTruncates(t *testing.T) {
 	t.Parallel()
+	// Arrays of strings over budget are guarded: wrapped in
+	// {"value": [... truncated ...], "truncated": true, ...}.
 	big := strings.Repeat("a", defaultResultBudgetBytes+512)
 	input, _ := json.Marshal([]string{big, big})
 	got := guardResult(input)
-	if string(got) != string(input) {
-		t.Error("array value should pass through unchanged")
+
+	// Must be an object envelope, not the raw array.
+	if len(got) > 0 && got[0] != '[' {
+		// Already wrapped — good.
+	} else {
+		t.Error("array should be wrapped in object envelope")
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(got, &m); err != nil {
+		t.Fatalf("guard output not valid JSON: %v; raw=%s", err, string(got)[:min(200, len(got))])
+	}
+
+	if truncated, ok := m["truncated"].(bool); !ok || !truncated {
+		t.Errorf("expected truncated=true, got %v", m["truncated"])
+	}
+	outFile, ok := m["output_file"].(string)
+	if !ok || outFile == "" {
+		t.Error("expected output_file in array envelope")
+	}
+
+	// The inner value array's strings should be truncated.
+	arr, ok := m["value"].([]any)
+	if !ok {
+		t.Fatalf("expected value to be an array, got %T", m["value"])
+	}
+	if len(arr) != 2 {
+		t.Fatalf("expected 2 elements, got %d", len(arr))
+	}
+	for i, elem := range arr {
+		s, _ := elem.(string)
+		if len(s) >= len(big) {
+			t.Errorf("element %d should be truncated: %d >= %d", i, len(s), len(big))
+		}
+	}
+
+	// output_file must be readable.
+	if _, err := os.Stat(outFile); err != nil {
+		t.Fatalf("output_file %q not accessible: %v", outFile, err)
 	}
 }
 
@@ -128,6 +192,83 @@ func TestGuardResult_NullUnchanged(t *testing.T) {
 	got := guardResult(input)
 	if string(got) != "null" {
 		t.Errorf("null should pass through unchanged; got %s", got)
+	}
+}
+
+func TestGuardResult_BoolUnchanged(t *testing.T) {
+	t.Parallel()
+	input := json.RawMessage("true")
+	got := guardResult(input)
+	if string(got) != "true" {
+		t.Errorf("bool should pass through unchanged; got %s", got)
+	}
+}
+
+func TestGuardResult_ObjectWithNestedArray(t *testing.T) {
+	t.Parallel()
+	// Object with a string array field — strings inside the array must
+	// be truncated too.
+	huge := strings.Repeat("nested-", defaultResultBudgetBytes)
+	input, err := json.Marshal(map[string]any{
+		"title":    "test",
+		"messages": []string{huge, "short"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := guardResult(input)
+
+	var m map[string]any
+	if err := json.Unmarshal(got, &m); err != nil {
+		t.Fatalf("guard output not valid JSON: %v", err)
+	}
+
+	// The messages array should still be an array.
+	msgs, ok := m["messages"].([]any)
+	if !ok {
+		t.Fatalf("messages should be array, got %T", m["messages"])
+	}
+	// The first element should be truncated.
+	if s, _ := msgs[0].(string); len(s) >= len(huge) {
+		t.Errorf("nested array string should be truncated: %d >= %d", len(s), len(huge))
+	}
+	// The second (short) element should be intact.
+	if s, _ := msgs[1].(string); s != "short" {
+		t.Errorf("short array element changed: got %q, want %q", s, "short")
+	}
+}
+
+func TestGuardResult_ManyMediumStrings(t *testing.T) {
+	t.Parallel()
+	// Regression test for Issue 2: many medium-length strings that
+	// individually are ≤256 but collectively exceed the budget must
+	// still be truncated.
+	entries := make(map[string]any, 400)
+	for i := 0; i < 400; i++ {
+		entries[fmt.Sprintf("key_%03d", i)] = strings.Repeat("m", 256)
+	}
+	input, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(input) <= defaultResultBudgetBytes {
+		t.Skip("test input not large enough")
+	}
+	got := guardResult(input)
+	if !json.Valid(got) {
+		t.Fatalf("guard produced invalid JSON: %s", string(got)[:min(200, len(got))])
+	}
+	var m map[string]any
+	if err := json.Unmarshal(got, &m); err != nil {
+		t.Fatal(err)
+	}
+	// Budget convergence: the result must now fit within budget.
+	if len(got) > defaultResultBudgetBytes {
+		t.Errorf("many-medium-string result still exceeds budget: %d > %d", len(got), defaultResultBudgetBytes)
+	}
+	// Must carry truncation markers.
+	if truncated, ok := m["truncated"].(bool); !ok || !truncated {
+		t.Errorf("expected truncated=true for many-medium-strings, got %v", m["truncated"])
 	}
 }
 
