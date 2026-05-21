@@ -124,15 +124,40 @@ const dispatchDefs = ref<WorkflowDefinition[]>([])
 const dispatchDefsLoading = ref(false)
 const dispatchSelected = ref('')
 const dispatchRef = ref('')
+const dispatchInputValues = ref<Record<string, string>>({})
 const dispatchError = ref<string | null>(null)
 const dispatchSending = ref(false)
+
+const selectedDefinition = computed(() =>
+  dispatchDefs.value.find(d => d.name === dispatchSelected.value),
+)
+
+function resetDispatchForm() {
+  dispatchSelected.value = ''
+  dispatchRef.value = ''
+  dispatchInputValues.value = {}
+}
+
+// Reset input values when the user switches to a different workflow
+watch(dispatchSelected, () => {
+  dispatchInputValues.value = {}
+})
+
+const canDispatch = computed(() => {
+  if (!dispatchSelected.value) return false
+  const def = selectedDefinition.value
+  if (!def) return false
+  for (const input of def.dispatch_inputs) {
+    if (input.required && !(dispatchInputValues.value[input.name] ?? '').trim()) return false
+  }
+  return true
+})
 
 async function openDispatch() {
   dispatchOpen.value = true
   dispatchDefsLoading.value = true
   dispatchError.value = null
-  dispatchSelected.value = ''
-  dispatchRef.value = ''
+  resetDispatchForm()
   try {
     // Fetch workflow definitions to know which ones support dispatch
     const defs = await $fetch<WorkflowDefinition[]>(`/api/repos/${owner.value}/${name.value}/workflows/definitions`, {
@@ -153,6 +178,10 @@ async function onDispatch() {
   try {
     const body: Record<string, string> = {}
     if (dispatchRef.value.trim()) body.ref = dispatchRef.value.trim()
+    for (const input of selectedDefinition.value?.dispatch_inputs ?? []) {
+      const v = (dispatchInputValues.value[input.name] ?? '').trim()
+      if (v) body[input.name] = v
+    }
     await $fetch(`/api/repos/${owner.value}/${name.value}/workflows/${encodeURIComponent(dispatchSelected.value)}/dispatch`, {
       method: 'POST',
       credentials: 'include',
@@ -297,6 +326,28 @@ async function onDispatch() {
                   </SelectContent>
                 </Select>
               </div>
+              <div v-if="selectedDefinition?.dispatch_inputs?.length" class="space-y-3">
+                <Label>{{ t('repo.workflows.dispatchInputLabel') }}</Label>
+                <div
+                  v-for="input in selectedDefinition.dispatch_inputs"
+                  :key="input.name"
+                  class="space-y-1.5"
+                >
+                  <Label :for="`dispatch-input-${input.name}`" class="text-xs">
+                    {{ input.name }}
+                    <span v-if="input.required" class="ml-1 text-destructive">*</span>
+                    <span v-else class="text-muted-foreground font-normal">
+                      ({{ t('repo.workflows.dispatchInputOptional') }})
+                    </span>
+                  </Label>
+                  <Input
+                    :id="`dispatch-input-${input.name}`"
+                    v-model="dispatchInputValues[input.name]"
+                    :placeholder="input.name"
+                    class="h-8 text-sm"
+                  />
+                </div>
+              </div>
               <div class="space-y-2">
                 <Label for="dispatch-ref">{{ t('repo.workflows.dispatchRef') }}</Label>
                 <Input id="dispatch-ref" v-model="dispatchRef" placeholder="main" />
@@ -313,7 +364,7 @@ async function onDispatch() {
             {{ t('common.cancel') }}
           </Button>
           <Button
-            :disabled="!dispatchSelected || dispatchSending || dispatchDefsLoading"
+            :disabled="!canDispatch || dispatchSending || dispatchDefsLoading"
             @click="onDispatch"
           >
             {{ dispatchSending ? t('common.submitting') : t('repo.workflows.dispatchSubmit') }}
