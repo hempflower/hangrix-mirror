@@ -791,7 +791,7 @@
       },
       "basedOn": "基于 {sha}",
       "staleWarning": "{n} 条旧评审已因新提交而失效",
-      "blocked": "合并被评审门禁阻止",
+      "blocked": "此 issue 当前无法合并，评审要求尚未满足。",
       "blockReason": {
       "review_required": "最新提交需要通过评审后才能合并",
       "changes_requested": "最新提交仍有要求修改的评审意见，请处理后重新提交评审"

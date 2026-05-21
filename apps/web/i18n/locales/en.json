@@ -791,7 +791,7 @@
       },
       "basedOn": "Based on {sha}",
       "staleWarning": "{n} previous review(s) are stale — a new commit was pushed after they were submitted.",
-      "blocked": "Merge blocked by review gate",
+      "blocked": "This issue can't be merged right now — review requirements have not been met.",
       "blockReason": {
       "review_required": "The latest commit needs a fresh review before merging.",
       "changes_requested": "Changes have been requested on the latest commit — address them before merging."
