@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
@@ -155,7 +156,7 @@ func (r *Registry) issueChecksTool() *platformmcpdomain.Tool {
 func (r *Registry) rosterListTool() *platformmcpdomain.Tool {
 	return &platformmcpdomain.Tool{
 		Name:        "roster_list",
-		Description: "List the roles currently active on this issue.",
+		Description: "List every active role session on the current issue.",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -171,15 +172,36 @@ func (r *Registry) rosterListTool() *platformmcpdomain.Tool {
 			items := make([]map[string]any, 0, len(rows))
 			for _, s := range rows {
 				items = append(items, map[string]any{
-					"role_key":   s.RoleKey,
-					"status":     string(s.Status),
-					"repo_sha":   s.RepoSHA,
-					"created_at": stableTime(s.CreatedAt),
+					"role_key":         s.RoleKey,
+					"status":           string(s.Status),
+					"repo_sha":         s.RepoSHA,
+					"created_at":       stableTime(s.CreatedAt),
+					"last_activity_at": stableTime(lastActivityAt(s)),
 				})
 			}
 			return textResult(map[string]any{"items": items}), nil
 		},
 	}
+}
+
+// lastActivityAt returns the most recent activity timestamp for the session
+// by taking the maximum of container_last_used_at, ended_at, started_at,
+// claimed_at, and created_at.
+func lastActivityAt(s *runnerdomain.AgentSession) time.Time {
+	latest := s.CreatedAt
+	if s.ClaimedAt != nil && s.ClaimedAt.After(latest) {
+		latest = *s.ClaimedAt
+	}
+	if s.StartedAt != nil && s.StartedAt.After(latest) {
+		latest = *s.StartedAt
+	}
+	if s.EndedAt != nil && s.EndedAt.After(latest) {
+		latest = *s.EndedAt
+	}
+	if s.ContainerLastUsedAt != nil && s.ContainerLastUsedAt.After(latest) {
+		latest = *s.ContainerLastUsedAt
+	}
+	return latest
 }
 
 // ---- DTOs ----
