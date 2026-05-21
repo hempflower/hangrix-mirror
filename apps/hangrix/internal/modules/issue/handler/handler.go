@@ -969,7 +969,7 @@ type mergeReq struct {
 	Message string `json:"message,omitempty"`
 }
 
-// merge runs MergeBranch (rebase-first strategy) on the bare repo. Only
+// merge runs MergeBranch (merge-commit strategy) on the bare repo. Only
 // owner or admin may merge. On success the issue transitions to State=merged,
 // timeline events are written, sessions are archived, and the issue branch
 // is deleted (unless the host config disables it or branch protections
@@ -1017,7 +1017,7 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, gitdomain.ErrMergeConflict) {
-			httpx.WriteError(w, http.StatusConflict, "merge conflict — rebase the issue branch onto "+iss.BaseBranch)
+			httpx.WriteError(w, http.StatusConflict, "merge conflict — resolve conflicts manually")
 			return
 		}
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())

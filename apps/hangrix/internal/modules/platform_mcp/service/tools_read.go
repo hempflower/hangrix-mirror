@@ -259,7 +259,7 @@ type mergeableResult struct {
 func (r *Registry) issueMergeableTool() *platformmcpdomain.Tool {
 	return &platformmcpdomain.Tool{
 		Name:        "issue_mergeable",
-		Description: "Check whether the issue branch can be merged into its base — tries fast-forward first, then checks whether auto-rebase would succeed. mergeable=true means issue_merge is expected to succeed. Returns mergeable, mode, base_branch, base_sha, head_sha, and hint.",
+		Description: "Check whether the issue branch can be merged into its base — tries fast-forward first, then checks whether a merge commit would succeed. mergeable=true means issue_merge is expected to succeed. Returns mergeable, mode, base_branch, base_sha, head_sha, and hint.",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},

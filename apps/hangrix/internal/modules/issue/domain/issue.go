@@ -171,7 +171,7 @@ type CommitPushedSummary struct {
 }
 
 // BranchMergedPayload is the JSON shape stored in Event.Payload for
-// EventBranchMerged. Mode is one of "fast-forward" / "rebase-fast-forward" /
+// EventBranchMerged. Mode is one of "fast-forward" / "merge-commit" /
 // "up-to-date" — mirrors the git domain's MergeBranch return. BaseSHA is
 // the commit BaseBranch pointed at immediately *before* the merge, captured
 // so post-merge views (e.g. the commits tab) can recover the "commits this
