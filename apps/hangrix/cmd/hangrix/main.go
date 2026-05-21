@@ -24,6 +24,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/token"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/user"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/server"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/web"
 	"github.com/hangrix/hangrix/pkg/ioc"
@@ -54,6 +55,7 @@ func main() {
 			dashboard.Module(),
 		platformmcp.Module(),
 		automation.Module(),
+		workflow.Module(),
 		web.Module(),
 	)
 
