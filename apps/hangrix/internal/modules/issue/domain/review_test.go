@@ -110,6 +110,12 @@ func TestComputeReviewStatus_AllApprove(t *testing.T) {
 	if rs.Votes[1].Reviewer != "tester" {
 		t.Errorf("votes[1].Reviewer = %q, want tester", rs.Votes[1].Reviewer)
 	}
+	if !rs.Votes[0].IsAgent {
+		t.Errorf("votes[0].IsAgent = false, want true (agent vote)")
+	}
+	if !rs.Votes[1].IsAgent {
+		t.Errorf("votes[1].IsAgent = false, want true (agent vote)")
+	}
 }
 
 func TestComputeReviewStatus_ChangesRequested(t *testing.T) {
@@ -193,6 +199,9 @@ func TestComputeReviewStatus_StaleVotesOnly(t *testing.T) {
 	}
 	if rs.StaleVotes[0].Reviewer != "tester" {
 		t.Errorf("StaleVotes[0].Reviewer = %q, want tester", rs.StaleVotes[0].Reviewer)
+	}
+	if !rs.StaleVotes[0].IsAgent {
+		t.Errorf("StaleVotes[0].IsAgent = false, want true (agent vote)")
 	}
 }
 
@@ -294,6 +303,9 @@ func TestComputeReviewStatus_HumanReviewer(t *testing.T) {
 	}
 	if rs.Votes[0].Reviewer != "alice" {
 		t.Errorf("Reviewer = %q, want alice", rs.Votes[0].Reviewer)
+	}
+	if rs.Votes[0].IsAgent {
+		t.Errorf("IsAgent = true, want false (human vote)")
 	}
 }
 

@@ -96,6 +96,7 @@ type EffectiveVote struct {
 	Value    ReviewVoteValue `json:"value"`
 	Reason   string          `json:"reason,omitempty"`
 	VotedAt  time.Time       `json:"voted_at"`
+	IsAgent  bool            `json:"is_agent"`
 }
 
 // StaleVote is a reviewer's latest vote that does NOT match the issue's
@@ -104,7 +105,8 @@ type StaleVote struct {
 	Reviewer string          `json:"reviewer"`
 	Value    ReviewVoteValue `json:"value"`
 	VotedAt  time.Time       `json:"voted_at"`
-	VoteHeadSHA string      `json:"vote_head_sha"`
+	VoteHeadSHA string `json:"vote_head_sha"`
+	IsAgent     bool   `json:"is_agent"`
 }
 
 // ReviewStatus is the server-computed review summary. It is the single
@@ -195,6 +197,7 @@ func ComputeReviewStatus(issue *Issue, events []*Event) *ReviewStatus {
 					Value:    lv.payload.Value,
 					Reason:   lv.payload.Reason,
 					VotedAt:  lv.event.CreatedAt,
+					IsAgent:  lv.event.AgentRole != "",
 				})
 			case ReviewVoteApprove:
 				hasApprove = true
@@ -203,6 +206,7 @@ func ComputeReviewStatus(issue *Issue, events []*Event) *ReviewStatus {
 					Value:    lv.payload.Value,
 					Reason:   lv.payload.Reason,
 					VotedAt:  lv.event.CreatedAt,
+					IsAgent:  lv.event.AgentRole != "",
 				})
 			default:
 				// Abstain — not included in effective votes
@@ -214,6 +218,7 @@ func ComputeReviewStatus(issue *Issue, events []*Event) *ReviewStatus {
 				Value:       lv.payload.Value,
 				VotedAt:     lv.event.CreatedAt,
 				VoteHeadSHA: lv.payload.HeadSHA,
+				IsAgent:     lv.event.AgentRole != "",
 			})
 		}
 	}
