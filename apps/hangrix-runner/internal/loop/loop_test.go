@@ -174,6 +174,14 @@ func (g *gatingOrch) Start(ctx context.Context, _ orchestrator.Task) (orchestrat
 
 func (g *gatingOrch) RemoveContainer(context.Context, string) error { return nil }
 
+func (g *gatingOrch) WorkflowContainer(_ context.Context, _ string, _ *orchestrator.BuildSpec, _ []string, _ string, _ map[string]string, _ []orchestrator.Volume) (string, error) {
+	return "", errors.New("workflow container not supported in gatingOrch")
+}
+
+func (g *gatingOrch) Exec(_ context.Context, _, _ string, _ map[string]string, _ ...string) (orchestrator.ExecHandle, error) {
+	return nil, errors.New("exec not supported in gatingOrch")
+}
+
 func (g *gatingOrch) startedCount() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()

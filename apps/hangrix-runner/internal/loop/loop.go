@@ -118,16 +118,33 @@ func (l *Loop) workerLoop(ctx context.Context, workerID int) {
 		if !ok {
 			continue
 		}
-		log.Printf("worker %d: claimed session %d (image=%s)", workerID, task.SessionID, task.AgentImage)
-		drv := &SessionDriver{
-			Client:          l.Client,
-			Orchestrator:    l.Orchestrator,
-			AgentBinaryPath: l.AgentBinaryPath,
-			WorkspaceRoot:   l.WorkspaceRoot,
-			BaseURL:         l.BaseURL,
+		switch {
+		case task.Kind == "workflow_job" && task.WorkflowJob != nil:
+			log.Printf("worker %d: claimed workflow job %d (workflow=%s job=%s)",
+				workerID, task.WorkflowJob.JobRunID, task.WorkflowJob.WorkflowName, task.WorkflowJob.JobKey)
+			drv := &WorkflowJobDriver{
+				Client:        l.Client,
+				Orchestrator:  l.Orchestrator,
+				WorkspaceRoot: l.WorkspaceRoot,
+				BaseURL:       l.BaseURL,
+			}
+			if err := drv.Run(ctx, task.WorkflowJob); err != nil {
+				log.Printf("worker %d: workflow job %d failed: %v", workerID, task.WorkflowJob.JobRunID, err)
+			} else {
+				log.Printf("worker %d: workflow job %d finished", workerID, task.WorkflowJob.JobRunID)
+			}
+		default:
+			log.Printf("worker %d: claimed session %d (image=%s)", workerID, task.SessionID, task.AgentImage)
+			drv := &SessionDriver{
+				Client:          l.Client,
+				Orchestrator:    l.Orchestrator,
+				AgentBinaryPath: l.AgentBinaryPath,
+				WorkspaceRoot:   l.WorkspaceRoot,
+				BaseURL:         l.BaseURL,
+			}
+			exit, err := drv.Run(ctx, task)
+			log.Printf("worker %d: session %d finished: exit=%d err=%v", workerID, task.SessionID, exit, err)
 		}
-		exit, err := drv.Run(ctx, task)
-		log.Printf("worker %d: session %d finished: exit=%d err=%v", workerID, task.SessionID, exit, err)
 	}
 }
 

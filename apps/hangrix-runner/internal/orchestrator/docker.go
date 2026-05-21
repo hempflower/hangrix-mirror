@@ -430,6 +430,120 @@ func (o *DockerOrchestrator) run(ctx context.Context, args ...string) error {
 	return nil
 }
 
+// WorkflowContainer creates a long-lived container for workflow job
+// execution. Like the agent session path it uses `sleep infinity` as PID 1,
+// but it does NOT bind-mount the agent binary or host addendum — the
+// container is purely a sandbox for `docker exec bash -lc <step>`.
+// When build is non-nil the image is materialised via docker build before
+// the container is created.
+func (o *DockerOrchestrator) WorkflowContainer(ctx context.Context, image string, build *BuildSpec, entrypoint []string, hostWorkdir string, env map[string]string, volumes []Volume) (string, error) {
+	if image == "" {
+		return "", fmt.Errorf("image is required")
+	}
+	if hostWorkdir == "" {
+		return "", fmt.Errorf("hostWorkdir is required")
+	}
+	if err := os.MkdirAll(hostWorkdir, 0o755); err != nil {
+		return "", fmt.Errorf("ensure workdir %s: %w", hostWorkdir, err)
+	}
+
+	// Resolve the image (pull or build) before creating the container.
+	if err := o.ensureImage(ctx, Task{
+		Image:       image,
+		Build:       build,
+		HostWorkdir: hostWorkdir,
+	}); err != nil {
+		return "", fmt.Errorf("ensure image: %w", err)
+	}
+
+	ent, cmdArgs := dockerEntrypoint(entrypoint)
+	args := []string{
+		"create",
+		"--network", o.network,
+		"--entrypoint", ent,
+		"-v", o.absMount(hostWorkdir, "/workspace", false),
+	}
+	for _, vol := range volumes {
+		args = append(args, "-v", vol.Name+":"+vol.Mount)
+	}
+	// Workflow runtime env vars (HANGRIX_WORKFLOW_*) are injected at exec
+	// time via Exec, not at container create time — they vary per run.
+	args = append(args, image)
+	args = append(args, cmdArgs...)
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, o.bin, args...)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("docker create (workflow): %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
+	}
+	id := strings.TrimSpace(stdout.String())
+	if id == "" {
+		return "", fmt.Errorf("docker create (workflow): empty container id (stderr: %s)", strings.TrimSpace(stderr.String()))
+	}
+	if err := o.run(ctx, "start", id); err != nil {
+		_ = o.run(context.Background(), "rm", "-f", id)
+		return "", fmt.Errorf("docker start %s: %w", id, err)
+	}
+	return id, nil
+}
+
+// Exec runs a command inside an existing container. The returned
+// ExecHandle streams stdout/stderr; the caller drains them and calls
+// Wait to collect the exit code. The command is run via `docker exec -i`
+// with the given workdir and env vars.
+func (o *DockerOrchestrator) Exec(ctx context.Context, containerID, workdir string, env map[string]string, args ...string) (ExecHandle, error) {
+	if containerID == "" {
+		return nil, fmt.Errorf("containerID is required")
+	}
+	if len(args) == 0 {
+		return nil, fmt.Errorf("args is required")
+	}
+	execArgs := []string{"exec", "-i"}
+	if workdir != "" {
+		execArgs = append(execArgs, "--workdir", workdir)
+	}
+	for k, v := range env {
+		execArgs = append(execArgs, "-e", k+"="+v)
+	}
+	execArgs = append(execArgs, containerID)
+	execArgs = append(execArgs, args...)
+
+	cmd := exec.CommandContext(ctx, o.bin, execArgs...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start docker exec: %w", err)
+	}
+	return &execHandle{cmd: cmd, stdout: stdout, stderr: stderr}, nil
+}
+
+// execHandle is the concrete ExecHandle returned by DockerOrchestrator.Exec.
+type execHandle struct {
+	cmd    *exec.Cmd
+	stdout io.ReadCloser
+	stderr io.ReadCloser
+}
+
+func (h *execHandle) Stdout() io.ReadCloser { return h.stdout }
+func (h *execHandle) Stderr() io.ReadCloser { return h.stderr }
+func (h *execHandle) Wait() (int, error) {
+	if err := h.cmd.Wait(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return ee.ExitCode(), nil
+		}
+		return -1, err
+	}
+	return 0, nil
+}
+
 // RemoveContainer force-removes a container by id. Called by the runner's
 // cleanup sweeper when the platform flags a container for removal
 // (archive, user-delete, 7-day idle). Returns nil when the container is

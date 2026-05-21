@@ -68,6 +68,55 @@ func (f *FakeOrchestrator) RemoveContainer(_ context.Context, id string) error {
 	return nil
 }
 
+// WorkflowContainer returns a synthetic container ID. Tests that need a
+// real container should use DockerOrchestrator directly.
+func (f *FakeOrchestrator) WorkflowContainer(_ context.Context, image string, _ *BuildSpec, _ []string, _ string, _ map[string]string, _ []Volume) (string, error) {
+	if image == "" {
+		return "", fmt.Errorf("orchestrator: image is required")
+	}
+	return fmt.Sprintf("fake-wf-container-%d", len(f.removed)), nil
+}
+
+// Exec returns a fake exec handle backed by in-memory pipes. Tests write
+// step output to the returned handle's stdout/stderr and call
+// fakeExecHandle.Complete to signal exit.
+func (f *FakeOrchestrator) Exec(_ context.Context, containerID, workdir string, env map[string]string, args ...string) (ExecHandle, error) {
+	if containerID == "" {
+		return nil, fmt.Errorf("orchestrator: containerID is required")
+	}
+	return newFakeExecHandle(), nil
+}
+
+// fakeExecHandle implements ExecHandle with in-memory pipes for stdout/stderr.
+type fakeExecHandle struct {
+	stdoutR *io.PipeReader
+	stdoutW *io.PipeWriter
+	stderrR *io.PipeReader
+	stderrW *io.PipeWriter
+	exitCh  chan int
+}
+
+func newFakeExecHandle() *fakeExecHandle {
+	h := &fakeExecHandle{exitCh: make(chan int, 1)}
+	h.stdoutR, h.stdoutW = io.Pipe()
+	h.stderrR, h.stderrW = io.Pipe()
+	return h
+}
+
+func (h *fakeExecHandle) Stdout() io.ReadCloser     { return h.stdoutR }
+func (h *fakeExecHandle) Stderr() io.ReadCloser     { return h.stderrR }
+func (h *fakeExecHandle) StdoutW() io.WriteCloser   { return h.stdoutW }
+func (h *fakeExecHandle) StderrW() io.WriteCloser   { return h.stderrW }
+func (h *fakeExecHandle) Complete(code int) {
+	h.stdoutW.Close()
+	h.stderrW.Close()
+	h.exitCh <- code
+}
+func (h *fakeExecHandle) Wait() (int, error) {
+	code := <-h.exitCh
+	return code, nil
+}
+
 // RemovedContainers returns the ids passed through RemoveContainer in
 // call order. Useful for asserting cleanup-sweeper behaviour in unit
 // tests.

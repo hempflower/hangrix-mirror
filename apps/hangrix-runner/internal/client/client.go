@@ -118,6 +118,16 @@ func (c *Client) Heartbeat(ctx context.Context, req HeartbeatRequest) error {
 // ---- tasks ----
 
 type Task struct {
+	// Kind discriminates the task payload: "agent_session" (default when empty
+	// for backward compatibility) or "workflow_job". The runner's worker loop
+	// routes to SessionDriver or WorkflowJobDriver accordingly.
+	Kind string `json:"kind,omitempty"`
+
+	// ---- workflow_job fields (present when Kind == "workflow_job") ----
+
+	// WorkflowJob is populated when Kind == "workflow_job".
+	WorkflowJob *WorkflowJob `json:"workflow_job,omitempty"`
+
 	SessionID  int64  `json:"session_id"`
 	AgentImage string `json:"agent_image"`
 	// AgentEntrypoint overrides the container's PID 1 (docker
@@ -182,6 +192,45 @@ type BuildSpec struct {
 	Context    string            `json:"context,omitempty"`
 	Args       map[string]string `json:"args,omitempty"`
 }
+
+// ---- workflow job types ----
+
+// WorkflowJob is the task payload when Task.Kind == "workflow_job".
+// It describes a single job to execute inside a one-time container.
+type WorkflowJob struct {
+	JobRunID       int64             `json:"job_run_id"`
+	WorkflowRunID  int64             `json:"workflow_run_id"`
+	RepoID         int64             `json:"repo_id"`
+	Owner          string            `json:"owner"`
+	Name           string            `json:"name"`
+	WorkflowName   string            `json:"workflow_name"`
+	JobKey         string            `json:"job_key"`
+	CheckoutRef    string            `json:"checkout_ref"`
+	CommitSHA      string            `json:"commit_sha"`
+	Container      WorkflowContainer `json:"container"`
+	WorkingDir     string            `json:"working_directory"`
+	Steps          []WorkflowStep    `json:"steps"`
+	TimeoutMinutes int               `json:"timeout_minutes"`
+	RepoVariables  map[string]string `json:"repo_variables"`
+}
+
+// WorkflowContainer carries the resolved container definition for a
+// workflow job — pulled from .hangrix/agents.yml and merged with
+// workflow/job-level env.
+type WorkflowContainer struct {
+	Image      string            `json:"image"`
+	Build      *BuildSpec        `json:"build,omitempty"`
+	Entrypoint []string          `json:"entrypoint,omitempty"`
+	Env        map[string]string `json:"env"`
+	Volumes    []Volume          `json:"volumes"`
+}
+
+// WorkflowStep is one shell command in a workflow job.
+type WorkflowStep struct {
+	Name string `json:"name,omitempty"`
+	Run  string `json:"run"`
+}
+
 
 // PollTasks returns (task, true, nil) on a real assignment, (nil, false, nil)
 // when the server returned 204 (no work), or (nil, false, err) on transport /
@@ -270,6 +319,42 @@ type TerminateRequest struct {
 func (c *Client) Terminate(ctx context.Context, sessionID int64, req TerminateRequest) error {
 	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/runner/sessions/%d/terminate", sessionID), req, nil, true)
 }
+
+// ---- workflow job callbacks ----
+
+// MarkWorkflowJobRunning signals the platform that the runner has claimed
+// this workflow job and is starting execution.
+func (c *Client) MarkWorkflowJobRunning(ctx context.Context, jobRunID int64) error {
+	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/runner/workflow-jobs/%d/running", jobRunID), nil, nil, true)
+}
+
+// AppendWorkflowJobLog sends a single log line to the platform. Stream
+// must be "stdout", "stderr", or "system". The platform appends the line
+// to workflow_job_logs and the caller is expected to call this once per
+// output line from a step.
+func (c *Client) AppendWorkflowJobLog(ctx context.Context, jobRunID int64, stream, line string) error {
+	req := workflowJobLogRequest{Stream: stream, Line: line}
+	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/runner/workflow-jobs/%d/logs", jobRunID), req, nil, true)
+}
+
+type workflowJobLogRequest struct {
+	Stream string `json:"stream"`
+	Line   string `json:"line"`
+}
+
+// WorkflowJobTerminateRequest reports a workflow job's terminal state.
+type WorkflowJobTerminateRequest struct {
+	Status   string `json:"status"`
+	ExitCode int32  `json:"exit_code"`
+	Message  string `json:"message,omitempty"`
+}
+
+// TerminateWorkflowJob reports the final status of a workflow job back
+// to the platform. Status must be "success", "failed", or "cancelled".
+func (c *Client) TerminateWorkflowJob(ctx context.Context, jobRunID int64, req WorkflowJobTerminateRequest) error {
+	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/runner/workflow-jobs/%d/terminate", jobRunID), req, nil, true)
+}
+
 
 // ---- message + input forwarding ----
 

@@ -89,6 +89,15 @@ type Handle interface {
 	ContainerID() string
 }
 
+// ExecHandle represents a running command inside an existing container.
+// The caller reads Stdout/Stderr line-by-line while the command runs,
+// then calls Wait to block until exit and collect the exit code.
+type ExecHandle interface {
+	Stdout() io.ReadCloser
+	Stderr() io.ReadCloser
+	Wait() (int, error)
+}
+
 // Orchestrator starts a session and returns its handle. The contract is
 // "Start blocks just long enough to launch the container, then returns";
 // long-running IO is consumed via the Handle. Start may fail synchronously
@@ -99,8 +108,21 @@ type Handle interface {
 // RemoveContainer is used by the runner's cleanup sweeper to honour
 // platform-flagged cleanups (archive / user-delete / 7-day idle). The
 // implementation must be idempotent — calling on an already-gone id is
-// not an error, so the cleanup ACK is safe to retry.
+// not an error, so the cleanup ACK is idempotent.
+//
+// WorkflowContainer creates a long-lived container (sleep infinity) for
+// workflow job execution without bind-mounting the agent binary or
+// execing into it. The returned container ID is used with Exec to run
+// step commands. When build is non-nil the orchestrator materialises
+// the image via docker build before creating the container (same pattern
+// as Start).
+//
+// Exec runs a command inside an existing container. The returned
+// ExecHandle streams stdout/stderr; the caller drains them and calls
+// Wait to collect the exit code.
 type Orchestrator interface {
 	Start(ctx context.Context, task Task) (Handle, error)
 	RemoveContainer(ctx context.Context, containerID string) error
+	WorkflowContainer(ctx context.Context, image string, build *BuildSpec, entrypoint []string, hostWorkdir string, env map[string]string, volumes []Volume) (string, error)
+	Exec(ctx context.Context, containerID, workdir string, env map[string]string, args ...string) (ExecHandle, error)
 }
