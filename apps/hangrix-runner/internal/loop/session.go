@@ -91,8 +91,9 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 	// container. The agent sees a real working tree at /workspace and
 	// can `git push` straight back to the platform — cloneRepo bakes
 	// a per-host credential.helper into the cloned .git/config; that
-	// helper reads $HANGRIX_SESSION_TOKEN at request time so the same
-	// .git/config keeps working across token refreshes. Sessions
+	// helper reads $HANGRIX_SESSION_TOKEN at request time, so the same
+	// .git/config works whether the server reuses the existing token
+	// (the common resume path since issue #92) or rotates it. Sessions
 	// without owner/name in env (admin smoke path) skip the clone
 	// and get an empty workdir like before.
 	//
@@ -127,6 +128,11 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 			}
 			mountPath = dest
 		} else {
+			// Resume: container is reused; .git/config with the inline
+			// credential helper is already in place from the first clone.
+			// buildAgentEnv injects task.SessionToken as HANGRIX_SESSION_TOKEN;
+			// on resume the server reuses the same token, so the agent and
+			// credential helper see a consistent identity.
 			mountPath = repoCheckout
 		}
 	}
