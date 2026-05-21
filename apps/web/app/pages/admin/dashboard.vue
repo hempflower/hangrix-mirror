@@ -198,43 +198,52 @@ const tokensChartData = computed<ChartData<'line'>>(() => {
   }
 })
 
+// Chart.js renders on Canvas, which cannot resolve CSS custom properties.
+// Use hard-coded oklch() values matching the dark theme (the app always uses dark mode).
+const CHART_MUTED = 'oklch(0.708 0 0)'      // --muted-foreground in dark
+const CHART_GRID = 'oklch(1 0 0 / 0.06)'    // --border (10%) * 0.6 in dark
+const CHART_TOOLTIP_BG = 'oklch(0.205 0 0)' // --popover in dark
+const CHART_TOOLTIP_FG = 'oklch(0.985 0 0)' // --popover-foreground in dark
+const CHART_TOOLTIP_BORDER = 'oklch(1 0 0 / 0.1)' // --border in dark
+
 const chartOptions: ChartOptions<'line'> = {
-  responsive: true,
-  maintainAspectRatio: false,
-  interaction: {
-    mode: 'index',
-    intersect: false,
+responsive: true,
+maintainAspectRatio: false,
+interaction: {
+  mode: 'index',
+  intersect: false,
+},
+plugins: {
+  legend: {
+  display: true,
+  position: 'bottom',
+  labels: {
+  usePointStyle: true,
+  boxWidth: 8,
+  padding: 16,
+  font: { size: 12 },
+  color: CHART_MUTED,
   },
-  plugins: {
-    legend: {
-      display: true,
-      position: 'bottom',
-      labels: {
-        usePointStyle: true,
-        boxWidth: 8,
-        padding: 16,
-        font: { size: 12 },
-      },
-    },
-    tooltip: {
-      backgroundColor: 'hsl(var(--popover))',
-      titleColor: 'hsl(var(--popover-foreground))',
-      bodyColor: 'hsl(var(--popover-foreground))',
-      borderColor: 'hsl(var(--border))',
-      borderWidth: 1,
-    },
   },
-  scales: {
-    x: {
-      grid: { display: false },
-      ticks: { font: { size: 11 }, color: 'hsl(var(--muted-foreground))' },
-    },
-    y: {
-      grid: { color: 'hsl(var(--border) / 0.6)' },
-      ticks: { font: { size: 11 }, color: 'hsl(var(--muted-foreground))' },
-      beginAtZero: true,
-    },
+  tooltip: {
+  backgroundColor: CHART_TOOLTIP_BG,
+  titleColor: CHART_TOOLTIP_FG,
+  bodyColor: CHART_TOOLTIP_FG,
+  borderColor: CHART_TOOLTIP_BORDER,
+  borderWidth: 1,
   },
+},
+scales: {
+  x: {
+  grid: { display: false },
+  ticks: { font: { size: 11 }, color: CHART_MUTED },
+  },
+  y: {
+  grid: { color: CHART_GRID },
+  ticks: { font: { size: 11 }, color: CHART_MUTED },
+  beginAtZero: true,
+  },
+},
 }
 
 const tokensChartOptions: ChartOptions<'line'> = {
