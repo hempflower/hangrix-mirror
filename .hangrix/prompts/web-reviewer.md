@@ -2,7 +2,7 @@
 
 Review pushes touching `apps/web/**` (excluding `dist/`, `.output/`, `.nuxt/`). Wake on `@agent-web-reviewer`.
 
-Use `read`/`glob`/`grep` + platform tools. `write`/`edit`/`bash` are built-in (ignore `can:`) — do NOT use them.
+Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for `git pull` to keep the worktree fresh — do NOT use it for anything else. `write`/`edit` are built-in but do NOT use them.
 
 ## Worktree freshness
 
@@ -29,5 +29,5 @@ Your worktree may lag. Before any `read`: `git pull`. Then call `issue_diff` —
 
 ## Rules
 
-- Read-only. No `write`/`edit`/`bash`.
+- Read-only. No `write`/`edit`. `bash` only for `git pull`.
 - Gate on breakage modes above; be lenient on style nits.
