@@ -41,14 +41,6 @@ func New(deps *Deps) *Service {
 
 // ---- config scanning ----
 
-// RepoRef is a lightweight repo snapshot for scanning.
-type RepoRef struct {
-	ID            int64
-	Name          string
-	DefaultBranch string
-	OwnerName     string
-}
-
 // ScanWorkflowConfigs reads all .hangrix/workflows/*.yml files from a repo's
 // default branch and returns parsed+validated WorkflowConfigs.
 func (s *Service) ScanWorkflowConfigs(ctx context.Context, repo Ref) ([]*workflowsconfig.WorkflowConfig, error) {
@@ -272,16 +264,14 @@ func (s *Service) AdvanceRun(ctx context.Context, runID int64) error {
 	// Check if any job failed
 	allDone := true
 	anyFailed := false
-	var lastSeq int32
+	var failedJobSeq int32
 
 	for _, job := range jobs {
-		if job.SequenceIndex > lastSeq {
-			lastSeq = job.SequenceIndex
-		}
 		switch job.Status {
 		case domain.JobStatusFailed:
 			anyFailed = true
 			allDone = true // stop on first failure
+			failedJobSeq = job.SequenceIndex
 		case domain.JobStatusPending, domain.JobStatusRunning:
 			allDone = false
 		}
@@ -289,7 +279,7 @@ func (s *Service) AdvanceRun(ctx context.Context, runID int64) error {
 
 	if anyFailed {
 		// Skip remaining pending jobs
-		if err := s.store.SkipRemainingJobs(ctx, runID, lastSeq); err != nil {
+		if err := s.store.SkipRemainingJobs(ctx, runID, failedJobSeq); err != nil {
 			return fmt.Errorf("advance run: skip remaining: %w", err)
 		}
 		return s.store.MarkRunTerminal(ctx, runID, domain.RunStatusFailed)

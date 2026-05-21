@@ -57,12 +57,21 @@ WHERE workflow_run_id = sqlc.arg('workflow_run_id')
 ORDER BY sequence_index ASC;
 
 -- name: ClaimNextWorkflowJob :one
+-- Only claim a job if no earlier-sequence job in the same run is still
+-- pending or running. This preserves the sequential execution guarantee:
+-- jobs within a workflow run execute one at a time in sequence order.
 UPDATE workflow_job_runs
 SET status = 'running', runner_id = sqlc.arg('runner_id'), started_at = NOW()
 WHERE id = (
-    SELECT id FROM workflow_job_runs
-    WHERE status = 'pending'
-    ORDER BY sequence_index ASC, created_at ASC, id ASC
+    SELECT j.id FROM workflow_job_runs j
+    WHERE j.status = 'pending'
+      AND NOT EXISTS (
+        SELECT 1 FROM workflow_job_runs j2
+        WHERE j2.workflow_run_id = j.workflow_run_id
+          AND j2.sequence_index < j.sequence_index
+          AND j2.status NOT IN ('success', 'skipped', 'failed', 'cancelled')
+      )
+    ORDER BY j.sequence_index ASC, j.created_at ASC, j.id ASC
     LIMIT 1
     FOR UPDATE SKIP LOCKED
 )

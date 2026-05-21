@@ -33,15 +33,24 @@ const claimNextWorkflowJob = `-- name: ClaimNextWorkflowJob :one
 UPDATE workflow_job_runs
 SET status = 'running', runner_id = $1, started_at = NOW()
 WHERE id = (
-    SELECT id FROM workflow_job_runs
-    WHERE status = 'pending'
-    ORDER BY sequence_index ASC, created_at ASC, id ASC
+    SELECT j.id FROM workflow_job_runs j
+    WHERE j.status = 'pending'
+      AND NOT EXISTS (
+        SELECT 1 FROM workflow_job_runs j2
+        WHERE j2.workflow_run_id = j.workflow_run_id
+          AND j2.sequence_index < j.sequence_index
+          AND j2.status NOT IN ('success', 'skipped', 'failed', 'cancelled')
+      )
+    ORDER BY j.sequence_index ASC, j.created_at ASC, j.id ASC
     LIMIT 1
     FOR UPDATE SKIP LOCKED
 )
 RETURNING id, workflow_run_id, job_key, display_name, status, sequence_index, working_directory, timeout_minutes, runner_id, container_id, env_json, steps_json, started_at, finished_at, exit_code, error_message, created_at
 `
 
+// Only claim a job if no earlier-sequence job in the same run is still
+// pending or running. This preserves the sequential execution guarantee:
+// jobs within a workflow run execute one at a time in sequence order.
 func (q *Queries) ClaimNextWorkflowJob(ctx context.Context, runnerID pgtype.Int8) (WorkflowJobRun, error) {
 	row := q.db.QueryRow(ctx, claimNextWorkflowJob, runnerID)
 	var i WorkflowJobRun
