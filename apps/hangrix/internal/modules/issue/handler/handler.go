@@ -181,6 +181,8 @@ type publicIssue struct {
 	MergedAt       *time.Time `json:"merged_at,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+	// ReviewStatus is populated on issue detail; nil on list responses.
+	ReviewStatus *domain.ReviewStatus `json:"review_status,omitempty"`
 }
 
 func toPublic(i *domain.Issue) publicIssue {
@@ -544,7 +546,14 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, toPublic(iss))
+	pub := toPublic(iss)
+	// Attach server-computed review status so the frontend doesn't need
+	// to derive it from the timeline.
+	events, err := h.issues.ListEvents(r.Context(), iss.ID)
+	if err == nil {
+		pub.ReviewStatus = domain.ComputeReviewStatus(iss, events)
+	}
+	httpx.WriteJSON(w, http.StatusOK, pub)
 }
 
 type patchReq struct {
@@ -992,6 +1001,20 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusConflict, "issue is not open")
 		return
 	}
+	// Review gate: block merge when review requirements are not satisfied.
+	events, gerr := h.issues.ListEvents(r.Context(), iss.ID)
+	if gerr == nil {
+		rs := domain.ComputeReviewStatus(iss, events)
+		if rs.MergeBlocked {
+			httpx.WriteJSON(w, http.StatusConflict, map[string]any{
+				"error":        "merge blocked",
+				"block_reason": rs.BlockReason,
+				"review_status": rs,
+			})
+			return
+		}
+	}
+
 	headSHA, err := h.git.ResolveCommit(rc.fsPath, iss.BranchName)
 	if err != nil || headSHA == "" {
 		httpx.WriteError(w, http.StatusConflict, "issue branch has no commits yet")

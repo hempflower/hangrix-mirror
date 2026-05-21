@@ -35,30 +35,33 @@ func (r *Registry) issueReadTool() *platformmcpdomain.Tool {
 			if err != nil {
 				return errorResult("list events: " + err.Error()), nil
 			}
+			reviewStatus := issuedomain.ComputeReviewStatus(scope.issue, events)
 			out := struct {
-				Number    int64        `json:"number"`
-				Title     string       `json:"title"`
-				Body      string       `json:"body"`
-				State     string       `json:"state"`
-				Base      string       `json:"base_branch"`
-				Branch    string       `json:"branch_name"`
-				HeadSHA   string       `json:"head_sha"`
-				Author    string       `json:"author_username"`
-				CreatedAt string       `json:"created_at"`
-				Comments  []commentDTO `json:"comments"`
-				Events    []eventDTO   `json:"events"`
+				Number       int64                     `json:"number"`
+				Title        string                    `json:"title"`
+				Body         string                    `json:"body"`
+				State        string                    `json:"state"`
+				Base         string                    `json:"base_branch"`
+				Branch       string                    `json:"branch_name"`
+				HeadSHA      string                    `json:"head_sha"`
+				Author       string                    `json:"author_username"`
+				CreatedAt    string                    `json:"created_at"`
+				ReviewStatus *issuedomain.ReviewStatus `json:"review_status"`
+				Comments     []commentDTO              `json:"comments"`
+				Events       []eventDTO                `json:"events"`
 			}{
-				Number:    scope.issue.Number,
-				Title:     scope.issue.Title,
-				Body:      scope.issue.Body,
-				State:     string(scope.issue.State),
-				Base:      scope.issue.BaseBranch,
-				Branch:    scope.issue.BranchName,
-				HeadSHA:   scope.issue.HeadSHA,
-				Author:    scope.issue.AuthorName,
-				CreatedAt: stableTime(scope.issue.CreatedAt),
-				Comments:  commentsToDTO(comments),
-				Events:    eventsToDTO(events),
+				Number:       scope.issue.Number,
+				Title:        scope.issue.Title,
+				Body:         scope.issue.Body,
+				State:        string(scope.issue.State),
+				Base:         scope.issue.BaseBranch,
+				Branch:       scope.issue.BranchName,
+				HeadSHA:      scope.issue.HeadSHA,
+				Author:       scope.issue.AuthorName,
+				CreatedAt:    stableTime(scope.issue.CreatedAt),
+				ReviewStatus: reviewStatus,
+				Comments:     commentsToDTO(comments),
+				Events:       eventsToDTO(events),
 			}
 			return textResult(out), nil
 		},

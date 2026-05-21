@@ -6,7 +6,9 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -68,10 +70,194 @@ func (v ReviewVoteValue) Valid() bool {
 // ReviewVotePayload is the JSON shape stored in Event.Payload for
 // EventReviewVote. Value is the outcome; Reason is the reviewer's free-text
 // rationale (always present in the agent path, may be empty in a future
-// human path).
+// human path). HeadSHA records the issue branch tip this vote was cast
+// against — only votes matching the current issue HeadSHA are "effective".
 type ReviewVotePayload struct {
-	Value  ReviewVoteValue `json:"value"`
-	Reason string          `json:"reason,omitempty"`
+	Value   ReviewVoteValue `json:"value"`
+	Reason  string          `json:"reason,omitempty"`
+	HeadSHA string          `json:"head_sha,omitempty"`
+}
+
+// ReviewVerdict summarises the collective review state for an issue.
+type ReviewVerdict string
+
+const (
+	ReviewVerdictApproved        ReviewVerdict = "approved"
+	ReviewVerdictChangesRequested ReviewVerdict = "changes_requested"
+	ReviewVerdictPending         ReviewVerdict = "pending"
+)
+
+// EffectiveVote is a single reviewer's latest vote whose head_sha matches
+// the issue's current HeadSHA. Stale votes (wrong head_sha) and abstain
+// votes are not included in this list.
+type EffectiveVote struct {
+	Reviewer string          `json:"reviewer"`
+	Value    ReviewVoteValue `json:"value"`
+	Reason   string          `json:"reason,omitempty"`
+	VotedAt  time.Time       `json:"voted_at"`
+}
+
+// StaleVote is a reviewer's latest vote that does NOT match the issue's
+// current HeadSHA — the reviewer needs to re-review before it counts.
+type StaleVote struct {
+	Reviewer string          `json:"reviewer"`
+	Value    ReviewVoteValue `json:"value"`
+	VotedAt  time.Time       `json:"voted_at"`
+	VoteHeadSHA string      `json:"vote_head_sha"`
+}
+
+// ReviewStatus is the server-computed review summary. It is the single
+// source of truth — the frontend consumes this instead of deriving state
+// from the timeline.
+type ReviewStatus struct {
+	HeadSHA      string          `json:"head_sha"`
+	Verdict      ReviewVerdict   `json:"verdict"`
+	MergeBlocked bool            `json:"merge_blocked"`
+	BlockReason  string          `json:"block_reason,omitempty"`
+	Votes        []EffectiveVote `json:"votes"`
+	StaleVotes   []StaleVote     `json:"stale_votes"`
+}
+
+// ErrReviewNotSatisfied is returned by merge gates when the review status
+// blocks the merge.
+var ErrReviewNotSatisfied = errors.New("review requirements not satisfied")
+
+// ComputeReviewStatus is the single-source-of-truth review computation. It
+// takes the issue and its events, finds the latest review_vote per reviewer,
+// and determines which are effective (payload.head_sha == issue.HeadSHA) vs
+// stale. The verdict is "approved" when every effective vote is approve,
+// "changes_requested" when any effective vote is request_changes, and
+// "pending" when there are no effective votes or HeadSHA is empty. Merge is
+// blocked unless the verdict is "approved".
+func ComputeReviewStatus(issue *Issue, events []*Event) *ReviewStatus {
+	rs := &ReviewStatus{
+		HeadSHA:      issue.HeadSHA,
+		Verdict:      ReviewVerdictPending,
+		MergeBlocked: true,
+		Votes:        []EffectiveVote{},
+		StaleVotes:   []StaleVote{},
+	}
+
+	if issue.HeadSHA == "" {
+		rs.BlockReason = "issue branch has no commits yet"
+		return rs
+	}
+
+	// Latest vote per reviewer (by agent_role or by actor_id for humans).
+	type latestVote struct {
+		event   *Event
+		payload ReviewVotePayload
+	}
+	latest := make(map[string]*latestVote) // key is "agent:<role>" or "user:<id>"
+
+	for _, e := range events {
+		if e.Kind != EventReviewVote {
+			continue
+		}
+		var p ReviewVotePayload
+		if err := jsonUnmarshalPayload(e.Payload, &p); err != nil {
+			continue
+		}
+		key := reviewerKey(e)
+		if key == "" {
+			continue
+		}
+		if cur, ok := latest[key]; !ok || e.CreatedAt.After(cur.event.CreatedAt) {
+			latest[key] = &latestVote{event: e, payload: p}
+		}
+	}
+
+	if len(latest) == 0 {
+		rs.BlockReason = "no review votes yet"
+		return rs
+	}
+
+	hasChangesRequested := false
+	hasApprove := false
+
+	for _, lv := range latest {
+		if lv.payload.HeadSHA == issue.HeadSHA {
+			// Effective vote
+			switch lv.payload.Value {
+			case ReviewVoteRequestChanges:
+				hasChangesRequested = true
+				rs.Votes = append(rs.Votes, EffectiveVote{
+					Reviewer: reviewerDisplay(lv.event),
+					Value:    lv.payload.Value,
+					Reason:   lv.payload.Reason,
+					VotedAt:  lv.event.CreatedAt,
+				})
+			case ReviewVoteApprove:
+				hasApprove = true
+				rs.Votes = append(rs.Votes, EffectiveVote{
+					Reviewer: reviewerDisplay(lv.event),
+					Value:    lv.payload.Value,
+					Reason:   lv.payload.Reason,
+					VotedAt:  lv.event.CreatedAt,
+				})
+			default:
+				// Abstain — not included in effective votes
+			}
+		} else {
+			// Stale vote
+			rs.StaleVotes = append(rs.StaleVotes, StaleVote{
+				Reviewer:    reviewerDisplay(lv.event),
+				Value:       lv.payload.Value,
+				VotedAt:     lv.event.CreatedAt,
+				VoteHeadSHA: lv.payload.HeadSHA,
+			})
+		}
+	}
+
+	if hasChangesRequested {
+		rs.Verdict = ReviewVerdictChangesRequested
+		rs.MergeBlocked = true
+		rs.BlockReason = "changes requested by reviewer"
+	} else if hasApprove {
+		rs.Verdict = ReviewVerdictApproved
+		rs.MergeBlocked = false
+	} else {
+		// All effective votes are abstain, or only stale votes exist
+		rs.Verdict = ReviewVerdictPending
+		rs.MergeBlocked = true
+		if len(rs.StaleVotes) > 0 {
+			rs.BlockReason = "all review votes are stale — re-review required after latest push"
+		} else {
+			rs.BlockReason = "waiting for review"
+		}
+	}
+
+	return rs
+}
+
+// reviewerKey returns a stable key for a review_vote event's actor: either
+// "agent:<agent_role>" or "user:<actor_id>".
+func reviewerKey(e *Event) string {
+	if e.AgentRole != "" {
+		return "agent:" + e.AgentRole
+	}
+	if e.ActorID > 0 {
+		return fmt.Sprintf("user:%d", e.ActorID)
+	}
+	return ""
+}
+
+// reviewerDisplay returns a human-readable label for the reviewer.
+func reviewerDisplay(e *Event) string {
+	if e.AgentRole != "" {
+		return e.AgentRole
+	}
+	if e.ActorName != "" {
+		return e.ActorName
+	}
+	return fmt.Sprintf("user:%d", e.ActorID)
+}
+
+func jsonUnmarshalPayload(data []byte, v any) error {
+	if len(data) == 0 {
+		return errors.New("empty payload")
+	}
+	return json.Unmarshal(data, v)
 }
 
 // Issue is the metadata row. HeadSHA is the current tip of the issue branch

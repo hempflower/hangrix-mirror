@@ -111,6 +111,10 @@ func (r *Registry) issueReviewVoteTool() *platformmcpdomain.Tool {
 			if err != nil {
 				return errorResult(err.Error()), nil
 			}
+			// Reject votes when there's nothing on the branch to review.
+			if scope.issue.HeadSHA == "" {
+				return errorResult("cannot vote on an issue with no commits — push first"), nil
+			}
 			var req struct {
 				Value  string `json:"value"`
 				Reason string `json:"reason"`
@@ -123,8 +127,9 @@ func (r *Registry) issueReviewVoteTool() *platformmcpdomain.Tool {
 				return errorResult("value must be approve|request_changes|abstain"), nil
 			}
 			payload, _ := json.Marshal(issuedomain.ReviewVotePayload{
-				Value:  value,
-				Reason: req.Reason,
+				Value:   value,
+				Reason:  req.Reason,
+				HeadSHA: scope.issue.HeadSHA,
 			})
 			evt, err := r.deps.Issues.CreateAgentEvent(
 				ctx, scope.issue.ID, issuedomain.EventReviewVote, payload, sess.RoleKey,
@@ -238,6 +243,21 @@ func (r *Registry) issueMergeTool() *platformmcpdomain.Tool {
 			if scope.issue.State != issuedomain.StateOpen {
 				return errorResult(fmt.Sprintf("issue is %s, not open", scope.issue.State)), nil
 			}
+			// Review gate: compute effective votes and block merge if
+			// requirements are not satisfied.
+			events, err := r.deps.Issues.ListEvents(ctx, scope.issue.ID)
+			if err != nil {
+				return errorResult("list events: " + err.Error()), nil
+			}
+			reviewStatus := issuedomain.ComputeReviewStatus(scope.issue, events)
+			if reviewStatus.MergeBlocked {
+				blockJSON, _ := json.Marshal(map[string]any{
+					"error":        "merge blocked",
+					"block_reason": reviewStatus.BlockReason,
+				})
+				return platformmcpdomain.Result{Text: string(blockJSON), IsError: true}, nil
+			}
+
 			headSHA, err := r.deps.Git.ResolveCommit(scope.fsPath, scope.issue.BranchName)
 			if err != nil || headSHA == "" {
 				return errorResult("issue branch has no commits yet"), nil
