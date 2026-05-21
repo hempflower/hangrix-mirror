@@ -17,6 +17,9 @@ export interface Issue {
   merged_at?: string | null
   created_at: string
   updated_at: string
+  // review_status is the server-computed review gate summary. Absent / null
+  // means the backend hasn't computed it yet — treat as "pending, no block".
+  review_status?: ReviewStatus | null
 }
 
 export interface IssueListResp {
@@ -65,6 +68,44 @@ export type ReviewVoteValue = 'approve' | 'request_changes' | 'abstain'
 export interface ReviewVotePayload {
   value: ReviewVoteValue
   reason?: string
+  // head_sha is the issue head commit SHA at the moment the vote was cast.
+  // The server populates it from issue.HeadSHA before persisting the event.
+  // A vote is "stale" when this no longer equals the issue's current head_sha.
+  head_sha?: string
+}
+
+export type ReviewVerdict = 'approved' | 'changes_requested' | 'pending'
+
+// ReviewVoteEntry is a single valid (current-head_sha) review vote. The
+// reviewer string carries the agent_role key or a human username; the
+// frontend renders agent roles with the @agent- prefix.
+export interface ReviewVoteEntry {
+  reviewer: string       // agent_role key or username
+  value: ReviewVoteValue
+  reason: string
+  voted_at: string
+}
+
+// StaleVoteEntry is a vote that was cast against an older head_sha and no
+// longer counts toward the merge gate.
+export interface StaleVoteEntry {
+  reviewer: string
+  value: ReviewVoteValue
+  vote_head_sha: string
+  voted_at: string
+}
+
+// ReviewStatus is the server-computed review gate summary. The server is the
+// single source of truth; the frontend must not derive review state from the
+// raw timeline. Absent / null means the backend hasn't computed it yet
+// (forward-compat — treat as "pending, no block").
+export interface ReviewStatus {
+  head_sha: string
+  verdict: ReviewVerdict
+  merge_blocked: boolean
+  block_reason: string   // '' | 'review_required' | 'changes_requested'
+  votes: ReviewVoteEntry[]
+  stale_votes: StaleVoteEntry[]
 }
 
 export interface IssueTimeline {

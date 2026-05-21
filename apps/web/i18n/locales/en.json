@@ -770,26 +770,33 @@
     "subIssues": "Sub-issues",
     "newSubIssue": "New sub-issue",
     "noSubIssues": "No sub-issues yet.",
-    "review": {
+      "review": {
       "title": "Reviews",
       "empty": "No reviews yet.",
       "noReason": "No rationale provided.",
       "vote": {
-        "approve": "Approved",
-        "request_changes": "Changes requested",
-        "abstain": "Abstained"
+      "approve": "Approved",
+      "request_changes": "Changes requested",
+      "abstain": "Abstained"
       },
       "verdict": {
-        "approved": "Approved",
-        "changes_requested": "Changes requested",
-        "pending": "Pending review"
+      "approved": "Approved",
+      "changes_requested": "Changes requested",
+      "pending": "Pending review"
       },
       "summary": {
-        "approve": "{n} approved",
-        "requestChanges": "{n} requested changes",
-        "abstain": "{n} abstained"
+      "approve": "{n} approved",
+      "requestChanges": "{n} requested changes",
+      "abstain": "{n} abstained"
+      },
+      "basedOn": "Based on {sha}",
+      "staleWarning": "{n} previous review(s) are stale — a new commit was pushed after they were submitted.",
+      "blocked": "Merge blocked by review gate",
+      "blockReason": {
+      "review_required": "The latest commit needs a fresh review before merging.",
+      "changes_requested": "Changes have been requested on the latest commit — address them before merging."
       }
-    },
+      },
     "attachment": {
       "attachFile": "Attach file",
       "uploading": "Uploading…",

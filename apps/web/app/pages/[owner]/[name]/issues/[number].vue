@@ -26,7 +26,7 @@ import FileDiffList from '@/components/repo/FileDiffList.vue'
 import FoldableBody from '@/components/issue/FoldableBody.vue'
 import MentionTextarea from '@/components/issue/MentionTextarea.vue'
 import AttachmentUploader from '@/components/issue/AttachmentUploader.vue'
-import type { Issue, IssueAttachment, IssueState, IssueTimeline, IssueMergeResp, ReviewVotePayload, ReviewVoteValue } from '~/types/issue'
+import type { Issue, IssueAttachment, IssueState, IssueTimeline, IssueMergeResp, ReviewStatus, ReviewVerdict, ReviewVoteValue } from '~/types/issue'
 import type { Commit, FileDiff } from '~/types/repo'
 import { relativeTime } from '~/utils/time'
 
@@ -143,6 +143,24 @@ const canManage = computed(() => {
 
 const canMerge = computed(() => {
   return canManage.value && issue.value?.state === 'open' && Boolean(issue.value?.head_sha)
+})
+
+// Review gate properties — driven by the server-computed review_status, not
+// by client-side timeline derivation. When review_status is absent (old
+// backend) we default to "not blocked" for backward compatibility.
+const reviewStatus = computed<ReviewStatus | null>(() => issue.value?.review_status ?? null)
+
+const mergeBlocked = computed(() => reviewStatus.value?.merge_blocked ?? false)
+
+// Localized block reason for display. Falls back to a generic message when
+// the reason code is unrecognised.
+const mergeBlockReason = computed(() => {
+  if (!mergeBlocked.value) return ''
+  const reason = reviewStatus.value?.block_reason
+  if (reason === 'review_required' || reason === 'changes_requested') {
+    return t(`issue.review.blockReason.${reason}`)
+  }
+  return t('issue.review.blocked')
 })
 
 // Aggregate +/- across every file in the issue diff. Parses each unified
@@ -406,52 +424,7 @@ function eventLabel(e: any): string {
   }
 }
 
-// Review state derivation. Each review_vote event is one reviewer (an agent
-// role today, possibly a human later) recording approve / request_changes /
-// abstain. A reviewer can vote multiple times — the most recent vote wins
-// for the "current status" rollup; the timeline still shows the full history.
-interface ReviewerVote {
-  reviewer: string        // agent_role (or actor_username fallback)
-  isAgent: boolean
-  value: ReviewVoteValue
-  reason: string
-  at: string
-}
-const latestVotes = computed<ReviewerVote[]>(() => {
-  const byReviewer = new Map<string, ReviewerVote>()
-  for (const e of timeline.value?.events ?? []) {
-    if (e.kind !== 'review_vote') continue
-    const payload = (e.payload ?? {}) as ReviewVotePayload
-    if (!payload.value) continue
-    const isAgent = Boolean(e.agent_role)
-    const reviewer = e.agent_role || e.actor_username || '—'
-    byReviewer.set(reviewer, {
-      reviewer,
-      isAgent,
-      value: payload.value,
-      reason: payload.reason ?? '',
-      at: e.created_at,
-    })
-  }
-  return Array.from(byReviewer.values()).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
-})
 
-const reviewSummary = computed(() => {
-  const counts = { approve: 0, request_changes: 0, abstain: 0 }
-  for (const v of latestVotes.value) counts[v.value]++
-  return counts
-})
-
-// Aggregate verdict mirrors the simplest "can we merge?" mental model:
-// any outstanding request_changes blocks, otherwise at least one approve
-// is a green light, otherwise we're still pending. Abstains never block
-// and never grant approval — they sit out.
-type ReviewVerdict = 'approved' | 'changes_requested' | 'pending'
-const reviewVerdict = computed<ReviewVerdict>(() => {
-  if (reviewSummary.value.request_changes > 0) return 'changes_requested'
-  if (reviewSummary.value.approve > 0) return 'approved'
-  return 'pending'
-})
 
 function voteValueClass(v: ReviewVoteValue) {
   switch (v) {
@@ -481,9 +454,7 @@ function verdictIcon(v: ReviewVerdict) {
     case 'pending': return CircleSlash
   }
 }
-function reviewerLabel(v: ReviewerVote) {
-  return v.isAgent ? `@agent-${v.reviewer}` : v.reviewer
-}
+
 
 const cloneUrl = computed(() => {
   if (!repo.value) return ''
@@ -894,64 +865,76 @@ onUnmounted(stopRefreshTimer)
             </CardContent>
           </Card>
 
-          <!-- Reviews: at-a-glance "where does this stand?" pane. The verdict
-               chip is the headline (changes_requested blocks merge, approve
-               unblocks, pending = no one has weighed in yet). The roster
-               below shows the *latest* vote per reviewer — earlier votes by
-               the same reviewer are superseded but still visible in the
-               timeline for audit. -->
-          <Card class="gap-0 py-0">
-            <CardContent class="space-y-3 p-4">
-              <div class="flex items-center justify-between gap-2">
-                <p class="flex items-center gap-1 text-xs text-muted-foreground">
-                  <ThumbsUp class="size-3" />
-                  {{ t('issue.review.title') }}
-                </p>
-                <Badge :class="verdictClass(reviewVerdict)" variant="secondary">
-                  <component :is="verdictIcon(reviewVerdict)" class="mr-1 size-3" />
-                  {{ t(`issue.review.verdict.${reviewVerdict}`) }}
-                </Badge>
-              </div>
+  <!-- Reviews: server-computed review_status is the single source of
+  truth. The verdict shows the current gate outcome (approved /
+  changes_requested / pending) against the issue's current
+  head_sha. Valid votes are those cast on the current head_sha;
+  stale votes are recorded in the timeline but no longer count. -->
+  <Card class="gap-0 py-0">
+  <CardContent class="space-y-3 p-4">
+  <div class="flex items-center justify-between gap-2">
+  <p class="flex items-center gap-1 text-xs text-muted-foreground">
+  <ThumbsUp class="size-3" />
+  {{ t('issue.review.title') }}
+  </p>
+  <Badge
+  v-if="reviewStatus"
+  :class="verdictClass(reviewStatus.verdict)"
+  variant="secondary"
+  >
+  <component :is="verdictIcon(reviewStatus.verdict)" class="mr-1 size-3" />
+  {{ t(`issue.review.verdict.${reviewStatus.verdict}`) }}
+  </Badge>
+  <Badge v-else :class="verdictClass('pending')" variant="secondary">
+  <component :is="verdictIcon('pending')" class="mr-1 size-3" />
+  {{ t('issue.review.verdict.pending') }}
+  </Badge>
+  </div>
 
-              <div
-                v-if="latestVotes.length > 0"
-                class="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground"
-              >
-                <span v-if="reviewSummary.approve > 0" class="flex items-center gap-1">
-                  <ThumbsUp class="size-3 text-emerald-600 dark:text-emerald-400" />
-                  {{ t('issue.review.summary.approve', { n: reviewSummary.approve }) }}
-                </span>
-                <span v-if="reviewSummary.request_changes > 0" class="flex items-center gap-1">
-                  <ThumbsDown class="size-3 text-red-600 dark:text-red-400" />
-                  {{ t('issue.review.summary.requestChanges', { n: reviewSummary.request_changes }) }}
-                </span>
-                <span v-if="reviewSummary.abstain > 0" class="flex items-center gap-1">
-                  <MinusCircle class="size-3 text-slate-500" />
-                  {{ t('issue.review.summary.abstain', { n: reviewSummary.abstain }) }}
-                </span>
-              </div>
+  <!-- Based on which head_sha -->
+  <p
+  v-if="reviewStatus?.head_sha"
+  class="text-xs text-muted-foreground"
+  >
+  {{ t('issue.review.basedOn', { sha: shortSha(reviewStatus.head_sha) }) }}
+  </p>
 
-              <p v-if="latestVotes.length === 0" class="text-xs text-muted-foreground">
-                {{ t('issue.review.empty') }}
-              </p>
-              <ul v-else class="space-y-1.5">
-                <li
-                  v-for="v in latestVotes"
-                  :key="v.reviewer"
-                  class="flex items-center gap-2 text-xs"
-                >
-                  <Bot v-if="v.isAgent" class="size-3 shrink-0 text-muted-foreground" />
-                  <span class="min-w-0 flex-1 truncate font-medium text-foreground" :title="reviewerLabel(v)">
-                    {{ reviewerLabel(v) }}
-                  </span>
-                  <Badge :class="voteValueClass(v.value)" variant="secondary" class="shrink-0">
-                    <component :is="voteValueIcon(v.value)" class="mr-1 size-3" />
-                    {{ t(`issue.review.vote.${v.value}`) }}
-                  </Badge>
-                </li>
-              </ul>
-            </CardContent>
-          </Card>
+  <!-- Valid vote list -->
+  <p
+  v-if="!reviewStatus || reviewStatus.votes.length === 0"
+  class="text-xs text-muted-foreground"
+  >
+  {{ t('issue.review.empty') }}
+  </p>
+  <ul v-else class="space-y-1.5">
+  <li
+  v-for="v in reviewStatus.votes"
+  :key="v.reviewer"
+  class="flex items-center gap-2 text-xs"
+  >
+  <Bot class="size-3 shrink-0 text-muted-foreground" />
+  <span
+  class="min-w-0 flex-1 truncate font-medium text-foreground"
+  :title="`@agent-${v.reviewer}`"
+  >
+  @agent-{{ v.reviewer }}
+  </span>
+  <Badge :class="voteValueClass(v.value)" variant="secondary" class="shrink-0">
+  <component :is="voteValueIcon(v.value)" class="mr-1 size-3" />
+  {{ t(`issue.review.vote.${v.value}`) }}
+  </Badge>
+  </li>
+  </ul>
+
+  <!-- Stale votes warning -->
+  <p
+  v-if="reviewStatus?.stale_votes?.length"
+  class="text-xs text-amber-600 dark:text-amber-400"
+  >
+  {{ t('issue.review.staleWarning', { n: reviewStatus.stale_votes.length }) }}
+  </p>
+  </CardContent>
+  </Card>
 
           <Card class="gap-0 py-0">
             <CardContent class="space-y-3 p-4">
@@ -995,22 +978,25 @@ onUnmounted(stopRefreshTimer)
             </CardContent>
           </Card>
 
-          <div v-if="actionError" class="text-sm text-destructive">{{ actionError }}</div>
-          <div v-if="actionInfo" class="text-sm text-emerald-700 dark:text-emerald-400">{{ actionInfo }}</div>
+  <div v-if="actionError" class="text-sm text-destructive">{{ actionError }}</div>
+  <div v-if="actionInfo" class="text-sm text-emerald-700 dark:text-emerald-400">{{ actionInfo }}</div>
 
-          <div class="space-y-2">
-            <Button
-              v-if="canMerge"
-              class="w-full"
-              :disabled="mergeBusy"
-              @click="merge"
-            >
-              <GitMerge class="size-4" />
-              {{ mergeBusy ? t('issue.merging') : t('issue.merge') }}
-            </Button>
+  <div class="space-y-2">
+  <Button
+  v-if="canMerge"
+  class="w-full"
+  :disabled="mergeBusy || mergeBlocked"
+  @click="merge"
+  >
+  <GitMerge class="size-4" />
+  {{ mergeBusy ? t('issue.merging') : t('issue.merge') }}
+  </Button>
+  <p v-if="canMerge && mergeBlocked" class="text-xs text-destructive">
+  {{ mergeBlockReason }}
+  </p>
 
-            <Button
-              v-if="issue.state !== 'merged' && (issue.author_id === user?.id || canManage)"
+  <Button
+  v-if="issue.state !== 'merged' && (issue.author_id === user?.id || canManage)"
               variant="outline"
               class="w-full"
               :disabled="stateBusy"

@@ -770,26 +770,33 @@
     "subIssues": "子 issue",
     "newSubIssue": "新建子 issue",
     "noSubIssues": "暂无子 issue。",
-    "review": {
+      "review": {
       "title": "评审",
       "empty": "暂无评审意见。",
       "noReason": "未填写理由。",
       "vote": {
-        "approve": "通过",
-        "request_changes": "需要修改",
-        "abstain": "弃权"
+      "approve": "通过",
+      "request_changes": "需要修改",
+      "abstain": "弃权"
       },
       "verdict": {
-        "approved": "已通过",
-        "changes_requested": "需要修改",
-        "pending": "待评审"
+      "approved": "已通过",
+      "changes_requested": "需要修改",
+      "pending": "待评审"
       },
       "summary": {
-        "approve": "{n} 个通过",
-        "requestChanges": "{n} 个要求修改",
-        "abstain": "{n} 个弃权"
+      "approve": "{n} 个通过",
+      "requestChanges": "{n} 个要求修改",
+      "abstain": "{n} 个弃权"
+      },
+      "basedOn": "基于 {sha}",
+      "staleWarning": "{n} 条旧评审已因新提交而失效",
+      "blocked": "合并被评审门禁阻止",
+      "blockReason": {
+      "review_required": "最新提交需要通过评审后才能合并",
+      "changes_requested": "最新提交仍有要求修改的评审意见，请处理后重新提交评审"
       }
-    },
+      },
     "attachment": {
       "attachFile": "上传附件",
       "uploading": "上传中…",
