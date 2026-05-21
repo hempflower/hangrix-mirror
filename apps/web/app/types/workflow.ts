@@ -64,7 +64,6 @@ export interface WorkflowJobLogLine {
 
 export interface WorkflowRunDetail {
   run: WorkflowRun
-  definitions: WorkflowDefinition[]
   jobs: WorkflowJobRun[]
 }
 
@@ -75,4 +74,5 @@ export interface WorkflowRunListResp {
 
 export interface WorkflowJobLogsResp {
   lines: WorkflowJobLogLine[]
+  total: number
 }
