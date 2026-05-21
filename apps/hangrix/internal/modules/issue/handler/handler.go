@@ -1003,16 +1003,18 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	}
 	// Review gate: block merge when review requirements are not satisfied.
 	events, gerr := h.issues.ListEvents(r.Context(), iss.ID)
-	if gerr == nil {
-		rs := domain.ComputeReviewStatus(iss, events)
-		if rs.MergeBlocked {
-			httpx.WriteJSON(w, http.StatusConflict, map[string]any{
-				"error":        "merge blocked",
-				"block_reason": rs.BlockReason,
-				"review_status": rs,
-			})
-			return
-		}
+	if gerr != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "cannot evaluate review status")
+		return
+	}
+	rs := domain.ComputeReviewStatus(iss, events)
+	if rs.MergeBlocked {
+		httpx.WriteJSON(w, http.StatusConflict, map[string]any{
+			"error":         "merge blocked",
+			"block_reason":  rs.BlockReason,
+			"review_status": rs,
+		})
+		return
 	}
 
 	headSHA, err := h.git.ResolveCommit(rc.fsPath, iss.BranchName)
