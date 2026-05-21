@@ -72,7 +72,8 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 			SessionToken: "", // workflow jobs don't use session tokens
 			Dest:          repoCheckout,
 			// For workflow jobs we always check out a specific ref.
-			// We clone the repo shallow at the target commit.
+			// We clone the repo with --no-checkout, then checkout
+			// the target commit.
 		}
 		if err := d.cloneWorkflowRepo(ctx, cloneJob, job.CommitSHA); err != nil {
 			return d.fail(ctx, job, fmt.Errorf("clone repo: %w", err))
@@ -344,8 +345,9 @@ func (d *WorkflowJobDriver) fail(ctx context.Context, job *client.WorkflowJob, e
 
 // cloneWorkflowRepo clones the host repo and checks out a specific commit.
 // Unlike cloneRepo (which is designed for agent sessions with working
-// branches), this does a shallow clone at the target commit and does NOT
-// set up a credential helper (workflow jobs don't push).
+// branches), this does a full clone with --no-checkout, then checks out
+// the specific commit. No credential helper is set up (workflow jobs don't
+// push).
 func (d *WorkflowJobDriver) cloneWorkflowRepo(ctx context.Context, spec cloneSpec, commitSHA string) error {
 	if err := os.RemoveAll(spec.Dest); err != nil {
 		return fmt.Errorf("clear dest %s: %w", spec.Dest, err)
@@ -354,12 +356,11 @@ func (d *WorkflowJobDriver) cloneWorkflowRepo(ctx context.Context, spec cloneSpe
 		return fmt.Errorf("ensure parent of %s: %w", spec.Dest, err)
 	}
 
-	// Shallow clone of the host repo at the target commit.
-	// We use --branch with the commit SHA directly.
 	gitURL := strings.TrimRight(spec.BaseURL, "/") + "/git/" + spec.Owner + "/" + spec.Name + ".git"
 
-	// Clone with --no-checkout first, then checkout the specific commit.
-	// This avoids issues with --branch not accepting a raw SHA in older git.
+	// Full clone with --no-checkout first, then checkout the specific
+	// commit. Using --no-checkout avoids issues with --branch not
+	// accepting a raw SHA in older git.
 	cloneArgs := []string{
 		"clone",
 		"--no-checkout",
