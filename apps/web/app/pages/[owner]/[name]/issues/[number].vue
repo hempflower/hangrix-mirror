@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch, nextTick } from 'vue'
 import {
   Bot,
   CircleDot,
@@ -41,6 +41,15 @@ const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
 const number = computed(() => Number(route.params.number ?? 0))
 const issue = ref<Issue | null>(null)
+
+// Dynamic header height tracking for sticky sidebar positioning.
+// When the issue title wraps the header grows beyond the default
+// 8rem (top-32), so we measure it with a ResizeObserver instead of
+// hardcoding a fixed offset.
+const headerRef = ref<HTMLElement | null>(null)
+const headerHeight = ref(128) // default 8rem fallback (Tailwind top-32)
+let _headerObserver: ResizeObserver | null = null
+
 
 useHead({ title: () => {
     const issueTitle = issue.value?.title
@@ -546,14 +555,30 @@ onMounted(async () => {
       loadCommits(),
       loadParent(),
       loadChildren(),
-      loadMentionAgents(),
-      loadAttachments(),
+  loadMentionAgents(),
+  loadAttachments(),
     ])
   }
   startRefreshTimer()
+// Observe the sticky header so the sidebar's top offset stays in
+// sync regardless of title wrap / multi-line layout shifts.
+nextTick(() => {
+  if (headerRef.value) {
+    _headerObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        headerHeight.value = entry.contentRect.height
+      }
+    })
+    _headerObserver.observe(headerRef.value)
+  }
 })
 
-onUnmounted(stopRefreshTimer)
+})
+
+onUnmounted(() => {
+  stopRefreshTimer()
+  _headerObserver?.disconnect()
+})
 </script>
 
 <template>
@@ -563,7 +588,7 @@ onUnmounted(stopRefreshTimer)
 <template v-if="issue">
 <Tabs v-model="tab">
   <!-- Combined sticky header: title + meta + tabs bar -->
-  <div class="sticky top-0 z-20 bg-background">
+  <div ref="headerRef" class="sticky top-0 z-20 bg-background">
   <header class="space-y-2 pb-2 pt-0">
   <div class="flex flex-wrap items-center gap-2">
   <h1 class="text-2xl font-semibold tracking-tight">
@@ -835,7 +860,13 @@ onUnmounted(stopRefreshTimer)
     </TabsContent>
   </div>
 
-  <aside class="sticky top-32 self-start space-y-4 max-h-[calc(100vh-6rem)] overflow-y-auto">
+  <aside
+  class="sticky self-start space-y-4 overflow-y-auto"
+  :style="{
+    top: `${headerHeight}px`,
+    maxHeight: `calc(100vh - ${headerHeight}px - 1.5rem)`,
+  }"
+  >
           <Card class="gap-0 py-0">
             <CardContent class="space-y-3 p-4 text-sm">
               <div class="flex items-center gap-2 text-xs text-muted-foreground">
