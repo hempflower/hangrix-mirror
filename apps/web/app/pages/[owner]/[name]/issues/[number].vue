@@ -560,49 +560,52 @@ onUnmounted(stopRefreshTimer)
   <div class="space-y-6">
     <p v-if="issueError" class="text-sm text-destructive">{{ issueError }}</p>
 
-    <template v-if="issue">
-      <header class="space-y-2">
-        <div class="flex flex-wrap items-center gap-2">
-          <h1 class="text-2xl font-semibold tracking-tight">
-            {{ issue.title }}
-            <span class="text-muted-foreground">#{{ issue.number }}</span>
-          </h1>
-          <Badge :class="stateBadgeClass(issue.state)" variant="secondary">
-            <component :is="stateBadgeIcon(issue.state)" class="mr-1 size-3" />
-            {{ t(`issue.state.${issue.state}`) }}
-          </Badge>
-        </div>
-        <p class="text-sm text-muted-foreground">
-          {{ t('issue.openedBy', { name: issue.author_username, time: rel(issue.created_at) }) }}
-        </p>
-      </header>
+<template v-if="issue">
+<Tabs v-model="tab">
+  <!-- Combined sticky header: title + meta + tabs bar -->
+  <div class="sticky top-0 z-20 bg-background">
+  <header class="space-y-2 pb-2 pt-0">
+  <div class="flex flex-wrap items-center gap-2">
+  <h1 class="text-2xl font-semibold tracking-tight">
+  {{ issue.title }}
+  <span class="text-muted-foreground">#{{ issue.number }}</span>
+  </h1>
+  <Badge :class="stateBadgeClass(issue.state)" variant="secondary">
+  <component :is="stateBadgeIcon(issue.state)" class="mr-1 size-3" />
+  {{ t(`issue.state.${issue.state}`) }}
+  </Badge>
+  </div>
+  <p class="text-sm text-muted-foreground">
+  {{ t('issue.openedBy', { name: issue.author_username, time: rel(issue.created_at) }) }}
+  </p>
+  </header>
+  <div class="border-b border-border pb-2">
+  <TabsList>
+  <TabsTrigger value="conversation">
+  <MessageSquare class="size-4" />
+  {{ t('issue.tabs.conversation') }}
+  </TabsTrigger>
+  <TabsTrigger value="commits">
+  <GitCommit class="size-4" />
+  {{ t('issue.tabs.commits') }}
+  <span v-if="commits.length > 0" class="ml-1 text-xs text-muted-foreground">
+  {{ commits.length }}
+  </span>
+  </TabsTrigger>
+  <TabsTrigger value="diff">
+  <DiffIcon class="size-4" />
+  {{ t('issue.tabs.diff') }}
+  </TabsTrigger>
+  <TabsTrigger value="agents">
+  <Bot class="size-4" />
+  {{ t('issue.tabs.agents') }}
+  </TabsTrigger>
+  </TabsList>
+  </div>
+  </div>
 
-      <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div class="min-w-0 space-y-4">
-          <Tabs v-model="tab">
-            <div class="sticky top-16 z-10 bg-background/75 backdrop-blur-sm pb-2 border-b border-border">
-            <TabsList>
-              <TabsTrigger value="conversation">
-                <MessageSquare class="size-4" />
-                {{ t('issue.tabs.conversation') }}
-              </TabsTrigger>
-              <TabsTrigger value="commits">
-                <GitCommit class="size-4" />
-                {{ t('issue.tabs.commits') }}
-                <span v-if="commits.length > 0" class="ml-1 text-xs text-muted-foreground">
-                  {{ commits.length }}
-                </span>
-              </TabsTrigger>
-              <TabsTrigger value="diff">
-                <DiffIcon class="size-4" />
-                {{ t('issue.tabs.diff') }}
-              </TabsTrigger>
-              <TabsTrigger value="agents">
-                <Bot class="size-4" />
-                {{ t('issue.tabs.agents') }}
-              </TabsTrigger>
-            </TabsList>
-            </div>
+  <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px] mt-4">
+  <div class="min-w-0 space-y-4">
 
             <TabsContent value="conversation" class="space-y-3">
               <!-- Issue body: same comment-card shape as replies. The opener
@@ -829,11 +832,10 @@ onUnmounted(stopRefreshTimer)
                 :name="name"
                 :issue-number="Number(number)"
               />
-            </TabsContent>
-          </Tabs>
-        </div>
+    </TabsContent>
+  </div>
 
-        <aside class="sticky top-16 self-start space-y-4 max-h-[calc(100vh-5rem)] overflow-y-auto">
+  <aside class="sticky top-32 self-start space-y-4 max-h-[calc(100vh-6rem)] overflow-y-auto">
           <Card class="gap-0 py-0">
             <CardContent class="space-y-3 p-4 text-sm">
               <div class="flex items-center gap-2 text-xs text-muted-foreground">
@@ -1019,8 +1021,9 @@ onUnmounted(stopRefreshTimer)
               {{ issue.state === 'open' ? t('issue.close') : t('issue.reopen') }}
             </Button>
           </div>
-        </aside>
-      </div>
-    </template>
+    </aside>
+    </div>
+  </Tabs>
+  </template>
   </div>
 </template>
