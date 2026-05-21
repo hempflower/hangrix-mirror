@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { Clock, Play, ScrollText, Terminal, XCircle } from 'lucide-vue-next'
+import { Clock, Play, ScrollText, Terminal } from 'lucide-vue-next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -51,7 +51,7 @@ async function load() {
   loading.value = true
   error.value = null
   try {
-    detail.value = await $fetch<WorkflowRunDetail>(`/api/repos/${owner.value}/${name.value}/workflows/runs/${id.value}`, {
+    detail.value = await $fetch<WorkflowRunDetail>(`/api/repos/${owner.value}/${name.value}/workflow-runs/${id.value}`, {
       credentials: 'include',
     })
   } catch (e: any) {
@@ -69,7 +69,7 @@ async function loadLogs(jobId: number) {
   logsError.value = null
   logs.value = []
   try {
-    const res = await $fetch<WorkflowJobLogsResp>(`/api/repos/${owner.value}/${name.value}/workflows/runs/${id.value}/jobs/${jobId}/logs`, {
+    const res = await $fetch<WorkflowJobLogsResp>(`/api/repos/${owner.value}/${name.value}/workflow-runs/${id.value}/jobs/${jobId}/logs`, {
       credentials: 'include',
     })
     logs.value = res.lines ?? []
@@ -137,26 +137,7 @@ function streamClass(s: string) {
   }
 }
 
-// --- Cancel ---
-const cancelSending = ref(false)
 
-async function onCancel() {
-  if (!detail.value) return
-  if (!window.confirm(t('repo.workflows.cancelConfirm'))) return
-  cancelSending.value = true
-  try {
-    const updated = await $fetch<WorkflowRunDetail>(`/api/repos/${owner.value}/${name.value}/workflows/runs/${id.value}/cancel`, {
-      method: 'POST',
-      credentials: 'include',
-    })
-    detail.value = updated
-  } catch (e: any) {
-    // eslint-disable-next-line no-alert
-    window.alert(e?.data?.error ?? t('repo.workflows.cancelFailed'))
-  } finally {
-    cancelSending.value = false
-  }
-}
 </script>
 
 <template>
@@ -199,16 +180,7 @@ async function onCancel() {
               </template>
             </p>
           </div>
-          <Button
-            v-if="detail.run.status === 'pending' || detail.run.status === 'running'"
-            variant="outline"
-            class="text-destructive hover:text-destructive"
-            :disabled="cancelSending"
-            @click="onCancel"
-          >
-            <XCircle class="size-4" />
-            {{ t('repo.workflows.cancel') }}
-          </Button>
+
         </div>
       </header>
 

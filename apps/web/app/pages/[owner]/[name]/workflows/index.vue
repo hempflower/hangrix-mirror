@@ -14,17 +14,9 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import Pagination from '@/components/ui/pagination/Pagination.vue'
-import type { WorkflowDefinition, WorkflowRun, WorkflowRunListResp, WorkflowRunStatus } from '~/types/workflow'
+import type { WorkflowRun, WorkflowRunListResp, WorkflowRunStatus } from '~/types/workflow'
 import { relativeTime } from '~/utils/time'
 
 definePageMeta({ layout: 'repo' })
@@ -64,7 +56,7 @@ async function load() {
   try {
     const query: Record<string, any> = { limit, offset: offset.value }
     if (tab.value !== 'all') query.status = tab.value
-    const res = await $fetch<WorkflowRunListResp>(`/api/repos/${owner.value}/${name.value}/workflows/runs`, {
+    const res = await $fetch<WorkflowRunListResp>(`/api/repos/${owner.value}/${name.value}/workflow-runs`, {
       credentials: 'include',
       query,
     })
@@ -119,70 +111,60 @@ function duration(started: string | null, finished: string | null): string {
 }
 
 // --- Dispatch dialog ---
+// Minimal dispatch form — no definitions endpoint exists yet, so the user
+// enters the workflow name and optional inputs manually.
+interface DispatchInput {
+  id: number
+  name: string
+  value: string
+}
+
 const dispatchOpen = ref(false)
-const dispatchDefs = ref<WorkflowDefinition[]>([])
-const dispatchDefsLoading = ref(false)
-const dispatchSelected = ref('')
+const dispatchWorkflowName = ref('')
 const dispatchRef = ref('')
-const dispatchInputValues = ref<Record<string, string>>({})
+const dispatchInputs = ref<DispatchInput[]>([])
 const dispatchError = ref<string | null>(null)
 const dispatchSending = ref(false)
 
-const selectedDefinition = computed(() =>
-  dispatchDefs.value.find(d => d.name === dispatchSelected.value),
-)
+let nextInputId = 0
 
 function resetDispatchForm() {
-  dispatchSelected.value = ''
+  dispatchWorkflowName.value = ''
   dispatchRef.value = ''
-  dispatchInputValues.value = {}
+  dispatchInputs.value = []
+  nextInputId = 0
 }
 
-// Reset input values when the user switches to a different workflow
-watch(dispatchSelected, () => {
-  dispatchInputValues.value = {}
-})
+const canDispatch = computed(() => dispatchWorkflowName.value.trim().length > 0)
 
-const canDispatch = computed(() => {
-  if (!dispatchSelected.value) return false
-  const def = selectedDefinition.value
-  if (!def) return false
-  for (const input of def.dispatch_inputs) {
-    if (input.required && !(dispatchInputValues.value[input.name] ?? '').trim()) return false
-  }
-  return true
-})
+function addDispatchInput() {
+  dispatchInputs.value.push({ id: nextInputId++, name: '', value: '' })
+}
+
+function removeDispatchInput(id: number) {
+  dispatchInputs.value = dispatchInputs.value.filter(di => di.id !== id)
+}
 
 async function openDispatch() {
   dispatchOpen.value = true
-  dispatchDefsLoading.value = true
   dispatchError.value = null
   resetDispatchForm()
-  try {
-    // Fetch workflow definitions to know which ones support dispatch
-    const defs = await $fetch<WorkflowDefinition[]>(`/api/repos/${owner.value}/${name.value}/workflows/definitions`, {
-      credentials: 'include',
-    })
-    dispatchDefs.value = defs.filter(d => d.on.includes('workflow.dispatch'))
-  } catch (e: any) {
-    dispatchError.value = e?.data?.error ?? t('repo.workflows.dispatchFailed')
-  } finally {
-    dispatchDefsLoading.value = false
-  }
 }
 
 async function onDispatch() {
-  if (!dispatchSelected.value) return
+  if (!dispatchWorkflowName.value.trim()) return
   dispatchSending.value = true
   dispatchError.value = null
   try {
-    const body: Record<string, string> = {}
-    if (dispatchRef.value.trim()) body.ref = dispatchRef.value.trim()
-    for (const input of selectedDefinition.value?.dispatch_inputs ?? []) {
-      const v = (dispatchInputValues.value[input.name] ?? '').trim()
-      if (v) body[input.name] = v
+    const inputs = dispatchInputs.value
+      .filter(di => di.name.trim())
+      .map(di => ({ name: di.name.trim(), value: di.value }))
+    const body: { workflow_name: string; ref?: string; inputs: { name: string; value: string }[] } = {
+      workflow_name: dispatchWorkflowName.value.trim(),
+      inputs,
     }
-    await $fetch(`/api/repos/${owner.value}/${name.value}/workflows/${encodeURIComponent(dispatchSelected.value)}/dispatch`, {
+    if (dispatchRef.value.trim()) body.ref = dispatchRef.value.trim()
+    await $fetch(`/api/repos/${owner.value}/${name.value}/workflow-runs`, {
       method: 'POST',
       credentials: 'include',
       body,
@@ -303,60 +285,60 @@ async function onDispatch() {
           </DialogDescription>
         </DialogHeader>
         <div class="space-y-4">
-          <div v-if="dispatchDefsLoading" class="text-sm text-muted-foreground">
-            {{ t('common.loading') }}
+          <!-- Workflow name -->
+          <div class="space-y-2">
+            <Label for="dispatch-workflow-name">{{ t('repo.workflows.colName') }}</Label>
+            <Input
+              id="dispatch-workflow-name"
+              v-model="dispatchWorkflowName"
+              placeholder="ci"
+              class="h-8 text-sm"
+            />
           </div>
-          <template v-else>
-            <div v-if="dispatchDefs.length === 0" class="text-sm text-muted-foreground">
-              {{ t('repo.workflows.empty') }}
+
+          <!-- Ref -->
+          <div class="space-y-2">
+            <Label for="dispatch-ref">{{ t('repo.workflows.dispatchRef') }}</Label>
+            <Input id="dispatch-ref" v-model="dispatchRef" placeholder="main" />
+            <p class="text-xs text-muted-foreground">
+              {{ t('repo.workflows.dispatchRefHint') }}
+            </p>
+          </div>
+
+          <!-- Inputs -->
+          <div class="space-y-2">
+            <div class="flex items-center justify-between">
+              <Label>{{ t('repo.workflows.dispatchInputLabel') }}</Label>
+              <Button variant="ghost" size="sm" class="h-6 text-xs" @click="addDispatchInput">
+                + Add
+              </Button>
             </div>
-            <template v-else>
-              <div class="space-y-2">
-                <Label>{{ t('repo.workflows.dispatchSelect') }}</Label>
-                <Select v-model="dispatchSelected">
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem v-for="d in dispatchDefs" :key="d.name" :value="d.name">
-                        {{ d.name }}
-                      </SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div v-if="selectedDefinition?.dispatch_inputs?.length" class="space-y-3">
-                <Label>{{ t('repo.workflows.dispatchInputLabel') }}</Label>
-                <div
-                  v-for="input in selectedDefinition.dispatch_inputs"
-                  :key="input.name"
-                  class="space-y-1.5"
-                >
-                  <Label :for="`dispatch-input-${input.name}`" class="text-xs">
-                    {{ input.name }}
-                    <span v-if="input.required" class="ml-1 text-destructive">*</span>
-                    <span v-else class="text-muted-foreground font-normal">
-                      ({{ t('repo.workflows.dispatchInputOptional') }})
-                    </span>
-                  </Label>
-                  <Input
-                    :id="`dispatch-input-${input.name}`"
-                    v-model="dispatchInputValues[input.name]"
-                    :placeholder="input.name"
-                    class="h-8 text-sm"
-                  />
-                </div>
-              </div>
-              <div class="space-y-2">
-                <Label for="dispatch-ref">{{ t('repo.workflows.dispatchRef') }}</Label>
-                <Input id="dispatch-ref" v-model="dispatchRef" placeholder="main" />
-                <p class="text-xs text-muted-foreground">
-                  {{ t('repo.workflows.dispatchRefHint') }}
-                </p>
-              </div>
-            </template>
-          </template>
+            <div
+              v-for="di in dispatchInputs"
+              :key="di.id"
+              class="flex items-start gap-2"
+            >
+              <Input
+                v-model="di.name"
+                placeholder="name"
+                class="h-8 flex-1 text-sm"
+              />
+              <Input
+                v-model="di.value"
+                placeholder="value"
+                class="h-8 flex-1 text-sm"
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                class="size-8 shrink-0 text-muted-foreground hover:text-destructive"
+                @click="removeDispatchInput(di.id)"
+              >
+                &times;
+              </Button>
+            </div>
+          </div>
+
           <p v-if="dispatchError" class="text-sm text-destructive">{{ dispatchError }}</p>
         </div>
         <DialogFooter>
@@ -364,7 +346,7 @@ async function onDispatch() {
             {{ t('common.cancel') }}
           </Button>
           <Button
-            :disabled="!canDispatch || dispatchSending || dispatchDefsLoading"
+            :disabled="!canDispatch || dispatchSending"
             @click="onDispatch"
           >
             {{ dispatchSending ? t('common.submitting') : t('repo.workflows.dispatchSubmit') }}
