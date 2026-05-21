@@ -142,6 +142,11 @@ func (r *Registry) makeResult(src Source, value any, err error) CallResult {
 	if mErr != nil {
 		return CallResult{Source: src, IsError: true, ErrMsg: fmt.Sprintf("marshal result: %s", mErr)}
 	}
+	// Apply the unified size guard.  When a tool result balloons past
+	// the budget (long bash output, a huge webfetch page, …), the
+	// guard truncates the in-context payload and writes the full
+	// content to a temp file the LLM can read on demand.
+	raw = guardResult(raw)
 	return CallResult{Source: src, ResultJSON: raw}
 }
 

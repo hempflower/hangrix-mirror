@@ -168,7 +168,7 @@ type bashResult struct {
 	TimedOut   bool   `json:"timed_out"`
 	TaskID     string `json:"task_id,omitempty"`
 	Status     string `json:"status,omitempty"`      // "running" | "done" | "promoted" | "" (sync result)
-	OutputFile string `json:"output_file,omitempty"` // path to the per-job log; only set on background results
+	OutputFile string `json:"output_file,omitempty"` // path to the per-job log; set on all results (enables unified size guard)
 }
 
 type bashJob struct {
@@ -556,11 +556,17 @@ func foregroundResult(job *bashJob) *bashResult {
 	// Non-exit errors (start failures, IO errors) end up in the file
 	// already via the goroutines above; the exit code carries the rest
 	// of the signal. We don't need to re-append anything here.
+	//
+	// OutputFile is set on foreground results so the unified size guard
+	// (tools/result_guard.go) can reference the existing per-job log
+	// instead of creating a duplicate temp file when the Output field
+	// exceeds the result budget.
 	return &bashResult{
-		Summary:  job.summary,
-		Output:   job.snapshot(),
-		ExitCode: job.exitCode,
-		TimedOut: job.timedOut,
+		Summary:    job.summary,
+		Output:     job.snapshot(),
+		ExitCode:   job.exitCode,
+		TimedOut:   job.timedOut,
+		OutputFile: job.outPath,
 	}
 }
 
