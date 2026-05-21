@@ -89,8 +89,19 @@ func (c *Controller) Stop(ctx context.Context, sessionID int64, reason string) e
 	return nil
 }
 
-// Resume satisfies domain.Controller. Mints a fresh sealed session
-// token and flips an idle / failed / succeeded row back to 'pending'.
+// Resume satisfies domain.Controller. Flips an idle / failed / succeeded
+// row back to 'pending' so the next runner poll picks it up.
+//
+// Token identity is preserved across rewake: if the row still carries a
+// non-empty session_token_sealed, we reuse the existing prefix / hash /
+// sealed unchanged — the runner's container workspace already has the
+// old token baked into .git/config's credential.helper env reference,
+// and keeping the value stable avoids gratuitous DB churn.
+//
+// Only when sealed is empty (legacy rows, or rows that predate the
+// sealed-preservation change) do we mint a fresh token and write it
+// back via ResumeSession.
+//
 // Used by the web UI resume button; enqueues a manual.resume event.
 func (c *Controller) Resume(ctx context.Context, sessionID int64) error {
 	return c.resume(ctx, sessionID, "manual.resume", map[string]any{
@@ -98,8 +109,8 @@ func (c *Controller) Resume(ctx context.Context, sessionID int64) error {
 	}, "resumed by user")
 }
 
-// Recover satisfies domain.Controller. Same token-mint-and-flip as
-// Resume, but enqueues a manual.recover event whose payload carries
+// Recover satisfies domain.Controller. Same token-preservation behaviour
+// as Resume, but enqueues a manual.recover event whose payload carries
 // the caller's role key so the resumed agent can distinguish
 // agent-initiated recovery from a UI resume.
 func (c *Controller) Recover(ctx context.Context, sessionID int64, recoveredBy string) error {
@@ -123,42 +134,63 @@ func (c *Controller) resume(ctx context.Context, sessionID int64, event string, 
 		runnerdomain.SessionStatusRunning:
 		return domain.ErrNotResumable
 	}
-	plaintext, prefix, hashed, err := service.MintSessionToken()
-	if err != nil {
-		return fmt.Errorf("mint session token: %w", err)
+
+	// Prefer the existing token identity when sealed plaintext is still
+	// available — the runner reuses the same working tree and inline
+	// credential.helper, so rotation would break git push for any
+	// container that still holds the old env value.  Only fall back to
+	// minting when sealed is genuinely missing (legacy rows or rows that
+	// predate the sealed-preservation change).
+	var prefix string
+	var hashed string
+	var sealed string
+
+	if sess.SessionTokenSealed != "" {
+		prefix = sess.SessionTokenPrefix
+		hashed = sess.SessionTokenHash
+		sealed = sess.SessionTokenSealed
+	} else {
+		plaintext, pfx, hsh, err := service.MintSessionToken()
+		if err != nil {
+			return fmt.Errorf("mint session token: %w", err)
+		}
+		enc, err := c.box.Encrypt(plaintext)
+		if err != nil {
+			return fmt.Errorf("seal session token: %w", err)
+		}
+		prefix = pfx
+		hashed = string(hsh)
+		sealed = enc
 	}
-	sealed, err := c.box.Encrypt(plaintext)
-	if err != nil {
-		return fmt.Errorf("seal session token: %w", err)
+
+	// Build and enqueue the cause frame first — same ordering as
+	// rewakeRole: if enqueue fails the session stays in its current
+	// (non-live) state, safe to retry. ResumeSession is the final flip.
+	frame, _ := json.Marshal(map[string]any{
+		"kind":    "event",
+		"event":   event,
+		"payload": payload,
+	})
+	if _, err := c.runner.EnqueueInput(ctx, sessionID, frame); err != nil {
+		return fmt.Errorf("enqueue cause on resume: %w", err)
 	}
-		// Build and enqueue the cause frame first — same ordering as
-		// rewakeRole: if enqueue fails the session stays in its current
-		// (non-live) state, safe to retry. ResumeSession is the final flip.
-		frame, _ := json.Marshal(map[string]any{
-			"kind":    "event",
-			"event":   event,
-			"payload": payload,
+	// Best-effort audit log; the input is already enqueued which is
+	// what drives the agent.
+	if msg != "" {
+		_, _ = c.runner.AppendMessage(ctx, &runnerdomain.Message{
+			SessionID: sessionID,
+			Kind:      runnerdomain.MessageKindSystem,
+			Content:   msg,
 		})
-		if _, err := c.runner.EnqueueInput(ctx, sessionID, frame); err != nil {
-			return fmt.Errorf("enqueue cause on resume: %w", err)
-		}
-		// Best-effort audit log; the input is already enqueued which is
-		// what drives the agent.
-		if msg != "" {
-			_, _ = c.runner.AppendMessage(ctx, &runnerdomain.Message{
-				SessionID: sessionID,
-				Kind:      runnerdomain.MessageKindSystem,
-				Content:   msg,
-			})
-		}
-		if err := c.runner.ResumeSession(ctx, sessionID, runnerdomain.NewSessionToken{
-			Prefix: prefix,
-			Hash:   string(hashed),
-			Sealed: sealed,
-		}); err != nil {
-			return fmt.Errorf("resume session: %w", err)
-		}
-		return nil
+	}
+	if err := c.runner.ResumeSession(ctx, sessionID, runnerdomain.NewSessionToken{
+		Prefix: prefix,
+		Hash:   hashed,
+		Sealed: sealed,
+	}); err != nil {
+		return fmt.Errorf("resume session: %w", err)
+	}
+	return nil
 }
 
 // Delete satisfies domain.Controller. Refuses live sessions to keep
