@@ -14,8 +14,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	repoDomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/binaries"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
+	workflowdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
 	"github.com/hangrix/hangrix/pkg/cryptobox"
 )
 
@@ -36,20 +39,24 @@ const pollWait = 20 * time.Second
 const pollTick = 500 * time.Millisecond
 
 type AgentHandler struct {
-	repo            domain.Repo
-	agentValidator  domain.AgentValidator
-	enrollValidator domain.EnrollValidator
-	box             *cryptobox.Box
-	cfg             *config.Config
-	variables       repoDomain.VariableStore
+	repo               domain.Repo
+	agentValidator     domain.AgentValidator
+	enrollValidator    domain.EnrollValidator
+	box                *cryptobox.Box
+	cfg                *config.Config
+	variables          repoDomain.VariableStore
+	repoStore          repoDomain.Store
+	workflowDispatcher workflowdomain.Dispatcher
 }
 
 type AgentHandlerDeps struct {
-	Repo            domain.Repo
-	AgentValidator  domain.AgentValidator
-	EnrollValidator domain.EnrollValidator
-	Config          *config.Config
-	Variables       repoDomain.VariableStore
+	Repo               domain.Repo
+	AgentValidator     domain.AgentValidator
+	EnrollValidator    domain.EnrollValidator
+	Config             *config.Config
+	Variables          repoDomain.VariableStore
+	RepoStore          repoDomain.Store
+	WorkflowDispatcher workflowdomain.Dispatcher
 }
 
 func NewAgentHandler(deps *AgentHandlerDeps) *AgentHandler {
@@ -58,12 +65,14 @@ func NewAgentHandler(deps *AgentHandlerDeps) *AgentHandler {
 		panic(err)
 	}
 	return &AgentHandler{
-		repo:            deps.Repo,
-		agentValidator:  deps.AgentValidator,
-		enrollValidator: deps.EnrollValidator,
-		box:             box,
-		cfg:             deps.Config,
-		variables:       deps.Variables,
+		repo:               deps.Repo,
+		agentValidator:     deps.AgentValidator,
+		enrollValidator:    deps.EnrollValidator,
+		box:                box,
+		cfg:                deps.Config,
+		variables:          deps.Variables,
+		repoStore:          deps.RepoStore,
+		workflowDispatcher: deps.WorkflowDispatcher,
 	}
 }
 
@@ -349,6 +358,13 @@ func (h *AgentHandler) heartbeat(w http.ResponseWriter, r *http.Request) {
 // ---- task dispatch ----
 
 type taskResp struct {
+	// Kind discriminates the task type. "agent_session" is the default
+	// (empty for backward compatibility); "workflow_job" triggers the
+	// runner's WorkflowJobDriver.
+	Kind string `json:"kind,omitempty"`
+
+	// ---- agent_session fields ----
+
 	SessionID       int64             `json:"session_id"`
 	AgentImage      string            `json:"agent_image"`
 	AgentEntrypoint []string          `json:"agent_entrypoint,omitempty"`
@@ -383,11 +399,52 @@ type taskResp struct {
 	// agents.yml container block. The runner adds each as a `-v` bind
 	// mount at `docker create` time. Nil/empty means no volumes.
 	Volumes []volumeDTO `json:"volumes,omitempty"`
+
+	// ---- workflow_job fields (present when Kind == "workflow_job") ----
+
+	// WorkflowJob is populated when Kind == "workflow_job".
+	WorkflowJob *workflowJobDTO `json:"workflow_job,omitempty"`
+}
+
+// workflowJobDTO mirrors the runner's client.WorkflowJob wire shape.
+type workflowJobDTO struct {
+	JobRunID       int64                 `json:"job_run_id"`
+	WorkflowRunID  int64                 `json:"workflow_run_id"`
+	RepoID         int64                 `json:"repo_id"`
+	Owner          string                `json:"owner"`
+	Name           string                `json:"name"`
+	WorkflowName   string                `json:"workflow_name"`
+	JobKey         string                `json:"job_key"`
+	CheckoutRef    string                `json:"checkout_ref"`
+	CommitSHA      string                `json:"commit_sha"`
+	EventName      string                `json:"event_name,omitempty"`
+	EventCauseID   string                `json:"event_cause_id,omitempty"`
+	Container      workflowContainerDTO  `json:"container"`
+	WorkingDir     string                `json:"working_directory"`
+	Steps          []workflowStepDTO     `json:"steps"`
+	TimeoutMinutes int                   `json:"timeout_minutes"`
+	RepoVariables  map[string]string     `json:"repo_variables"`
+	Inputs         map[string]string     `json:"inputs,omitempty"`
+}
+
+// workflowContainerDTO mirrors the runner's client.WorkflowContainer.
+type workflowContainerDTO struct {
+	Image      string            `json:"image"`
+	Build      *agentBuildSpec   `json:"build,omitempty"`
+	Entrypoint []string          `json:"entrypoint,omitempty"`
+	Env        map[string]string `json:"env"`
+	Volumes    []volumeDTO       `json:"volumes"`
+}
+
+// workflowStepDTO mirrors the runner's client.WorkflowStep.
+type workflowStepDTO struct {
+	Name string `json:"name,omitempty"`
+	Run  string `json:"run"`
 }
 
 // pollTasks blocks up to pollWait waiting for a pending session pinned to
-// this runner. 204 means "no work yet"; the runner re-polls. 200 carries
-// the task payload including the decrypted session token plaintext.
+// this runner, or a pending workflow job. 204 means "no work yet"; the runner
+// re-polls. 200 carries the task payload (agent session or workflow job).
 func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 	runner := runnerFromContext(r.Context())
 	if runner == nil {
@@ -397,6 +454,7 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 
 	deadline := time.Now().Add(pollWait)
 	for {
+		// 1. Try claiming an agent session first (existing path).
 		sess, err := h.repo.ClaimNextSession(r.Context(), runner.ID)
 		if err == nil {
 			// Decrypt the session token plaintext for this dispatch.
@@ -425,9 +483,6 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 				repoVars = make(map[string]string, len(vars))
 				for _, v := range vars {
 					// Skip entries whose ciphertext could not be decrypted.
-					// Including them with Value=="" would cause the runner to
-					// expand ${NAME} to an empty string instead of failing
-					// explicitly.
 					if v.DecryptionFailed {
 						continue
 					}
@@ -456,7 +511,29 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		// nothing pending; tick until the deadline or context cancel.
+
+		// 2. No agent session; fall through to workflow job claim.
+		if h.workflowDispatcher != nil {
+			job, err := h.workflowDispatcher.ClaimNextJob(r.Context(), runner.ID)
+			if err == nil {
+				dto, err := h.buildWorkflowJobDTO(r.Context(), job)
+				if err != nil {
+					httpx.WriteError(w, http.StatusInternalServerError, "build workflow job: "+err.Error())
+					return
+				}
+				httpx.WriteJSON(w, http.StatusOK, taskResp{
+					Kind:        "workflow_job",
+					WorkflowJob: dto,
+				})
+				return
+			}
+			if !errors.Is(err, workflowdomain.ErrNoPendingJob) {
+				httpx.WriteError(w, http.StatusInternalServerError, "claim workflow job: "+err.Error())
+				return
+			}
+		}
+
+		// Nothing pending; tick until the deadline or context cancel.
 		if time.Now().After(deadline) {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -468,6 +545,124 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 		case <-time.After(pollTick):
 		}
 	}
+}
+
+
+// buildWorkflowJobDTO assembles the workflow job dispatch payload from a
+// claimed WorkflowJobRun and its parent WorkflowRun. It deserialises the
+// frozen EnvJSON, StepsJSON, and ContainerSnapshotJSON, resolves the repo
+// metadata, and fetches repo-level variables.
+func (h *AgentHandler) buildWorkflowJobDTO(ctx context.Context, job *workflowdomain.WorkflowJobRun) (*workflowJobDTO, error) {
+	// Get parent workflow run.
+	run, err := h.workflowDispatcher.GetRunForJob(ctx, job.ID)
+	if err != nil {
+		return nil, fmt.Errorf("get run for job %d: %w", job.ID, err)
+	}
+
+	// Resolve repo metadata (owner name, repo name).
+	repo, err := h.repoStore.GetByID(ctx, run.RepoID)
+	if err != nil {
+		return nil, fmt.Errorf("get repo %d: %w", run.RepoID, err)
+	}
+
+	// Deserialise the frozen env map (merged container ← workflow ← job).
+	var env map[string]string
+	if len(job.EnvJSON) > 0 {
+		if err := json.Unmarshal(job.EnvJSON, &env); err != nil {
+			return nil, fmt.Errorf("deserialise job env: %w", err)
+		}
+	}
+	if env == nil {
+		env = make(map[string]string)
+	}
+
+	// Deserialise the frozen steps list.
+	var steps []workflowStepDTO
+	if len(job.StepsJSON) > 0 {
+		if err := json.Unmarshal(job.StepsJSON, &steps); err != nil {
+			return nil, fmt.Errorf("deserialise job steps: %w", err)
+		}
+	}
+
+	// Deserialise the container snapshot from the parent run.
+	var snap workflowdomain.ContainerSnapshot
+	if len(run.ContainerSnapshotJSON) > 0 {
+		if err := json.Unmarshal(run.ContainerSnapshotJSON, &snap); err != nil {
+			return nil, fmt.Errorf("deserialise container snapshot: %w", err)
+		}
+	}
+
+	// Build container DTO.
+	container := workflowContainerDTO{
+		Image:      snap.Image,
+		Entrypoint: snap.Entrypoint,
+		Env:        env,
+		Volumes:    make([]volumeDTO, 0, len(snap.Volumes)),
+	}
+	if snap.Build != nil {
+		container.Build = &agentBuildSpec{
+			Dockerfile: snap.Build.Dockerfile,
+			Context:    snap.Build.Context,
+			Args:       snap.Build.Args,
+		}
+	}
+	for _, vol := range snap.Volumes {
+		container.Volumes = append(container.Volumes, volumeDTO{
+			Name:  vol.Name,
+			Mount: vol.Mount,
+		})
+	}
+
+	// Fetch repo-level variables for ${VAR_NAME} expansion.
+	var repoVars map[string]string
+	vars, err := h.variables.List(ctx, run.RepoID)
+	if err == nil && vars != nil {
+		repoVars = make(map[string]string, len(vars))
+		for _, v := range vars {
+			if v.DecryptionFailed {
+				continue
+			}
+			repoVars[v.Name] = v.Value
+		}
+	}
+
+	// Extract dispatch inputs from the trigger payload (only non-empty for
+	// workflow.dispatch events).
+	var inputs map[string]string
+	if len(run.TriggerPayloadJSON) > 0 {
+		var trigger struct {
+			DispatchInputs map[string]string `json:"dispatch_inputs"`
+		}
+		if err := json.Unmarshal(run.TriggerPayloadJSON, &trigger); err == nil {
+			inputs = trigger.DispatchInputs
+		}
+	}
+
+	// Build cause ID string for the runner.
+	var causeID string
+	if run.CauseID != nil {
+		causeID = strconv.FormatInt(*run.CauseID, 10)
+	}
+
+	return &workflowJobDTO{
+		JobRunID:       job.ID,
+		WorkflowRunID:  run.ID,
+		RepoID:         run.RepoID,
+		Owner:          repo.OwnerName,
+		Name:           repo.Name,
+		WorkflowName:   run.WorkflowName,
+		JobKey:         job.JobKey,
+		CheckoutRef:    run.Ref,
+		CommitSHA:      run.CommitSHA,
+		EventName:      string(run.EventName),
+		EventCauseID:   causeID,
+		Container:      container,
+		WorkingDir:     job.WorkingDirectory,
+		Steps:          steps,
+		TimeoutMinutes: int(job.TimeoutMinutes),
+		RepoVariables:  repoVars,
+		Inputs:         inputs,
+	}, nil
 }
 
 // ---- session lifecycle ----
