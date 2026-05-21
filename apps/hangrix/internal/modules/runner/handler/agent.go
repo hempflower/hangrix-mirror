@@ -364,6 +364,12 @@ type taskResp struct {
 	// runner's WorkflowJobDriver.
 	Kind string `json:"kind,omitempty"`
 
+	// HostRepoID is the owning repo for this task. The runner uses it to
+	// namespace named volumes per-repo so that two repos' "pnpm-store"
+	// volumes don't collide. Always populated for both agent sessions and
+	// workflow jobs.
+	HostRepoID int64 `json:"host_repo_id"`
+
 	// ---- agent_session fields ----
 
 	SessionID       int64             `json:"session_id"`
@@ -490,7 +496,12 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 					repoVars[v.Name] = v.Value
 				}
 			}
+			var hostRepoID int64
+			if sess.RepoID != nil {
+				hostRepoID = *sess.RepoID
+			}
 			httpx.WriteJSON(w, http.StatusOK, taskResp{
+				HostRepoID:      hostRepoID,
 				SessionID:       sess.ID,
 				AgentImage:      sess.AgentImage,
 				AgentEntrypoint: extractEntrypoint(sess.RoleConfig),
@@ -524,6 +535,7 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 				}
 				httpx.WriteJSON(w, http.StatusOK, taskResp{
 					Kind:        "workflow_job",
+					HostRepoID:  dto.RepoID,
 					WorkflowJob: dto,
 				})
 				return
