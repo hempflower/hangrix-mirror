@@ -15,6 +15,7 @@ import {
   Plus,
   ThumbsDown,
   ThumbsUp,
+  User,
 } from 'lucide-vue-next'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import AgentSessionsView from '@/components/issue/AgentSessionsView.vue'
@@ -95,6 +96,16 @@ const mentionAgents = ref<MentionAgent[]>([])
 // signal the operator has no clue why agents stopped responding after a
 // merge that touched the file.
 const hostYamlError = ref<string | null>(null)
+
+// Known agent role keys derived from .hangrix/agents.yml.  Used to
+// distinguish agent reviewers (Bot icon + @agent- prefix) from human
+// reviewers (User icon, plain username) in the review gate card.
+const knownAgentRoles = computed<Set<string>>(() => {
+  const s = new Set<string>()
+  for (const a of mentionAgents.value) s.add(a.role_key)
+  return s
+})
+
 async function loadMentionAgents() {
   try {
     const res = await $fetch<{ agents: MentionAgent[], host_yaml_error?: string }>(
@@ -152,15 +163,17 @@ const reviewStatus = computed<ReviewStatus | null>(() => issue.value?.review_sta
 
 const mergeBlocked = computed(() => reviewStatus.value?.merge_blocked ?? false)
 
-// Localized block reason for display. Falls back to a generic message when
-// the reason code is unrecognised.
+// Localized block reason for display.  When the backend sends a known
+// stable code we localise it; otherwise we display the raw reason string
+// so whatever the backend produces reaches the user.
 const mergeBlockReason = computed(() => {
   if (!mergeBlocked.value) return ''
   const reason = reviewStatus.value?.block_reason
+  if (!reason) return t('issue.review.blocked')
   if (reason === 'review_required' || reason === 'changes_requested') {
     return t(`issue.review.blockReason.${reason}`)
   }
-  return t('issue.review.blocked')
+  return reason
 })
 
 // Aggregate +/- across every file in the issue diff. Parses each unified
@@ -912,12 +925,21 @@ onUnmounted(stopRefreshTimer)
   :key="v.reviewer"
   class="flex items-center gap-2 text-xs"
   >
-  <Bot class="size-3 shrink-0 text-muted-foreground" />
+  <Bot v-if="knownAgentRoles.has(v.reviewer)" class="size-3 shrink-0 text-muted-foreground" />
+  <User v-else class="size-3 shrink-0 text-muted-foreground" />
   <span
+  v-if="knownAgentRoles.has(v.reviewer)"
   class="min-w-0 flex-1 truncate font-medium text-foreground"
   :title="`@agent-${v.reviewer}`"
   >
   @agent-{{ v.reviewer }}
+  </span>
+  <span
+  v-else
+  class="min-w-0 flex-1 truncate font-medium text-foreground"
+  :title="v.reviewer"
+  >
+  {{ v.reviewer }}
   </span>
   <Badge :class="voteValueClass(v.value)" variant="secondary" class="shrink-0">
   <component :is="voteValueIcon(v.value)" class="mr-1 size-3" />
