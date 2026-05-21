@@ -103,11 +103,12 @@ func TestComputeReviewStatus_AllApprove(t *testing.T) {
 	if len(rs.Votes) != 2 {
 		t.Fatalf("got %d effective votes, want 2", len(rs.Votes))
 	}
-	if rs.Votes[0].Reviewer != "tester" {
-		t.Errorf("votes[0].Reviewer = %q, want tester", rs.Votes[0].Reviewer)
+	// Sorted alphabetically by reviewer key.
+	if rs.Votes[0].Reviewer != "server" {
+		t.Errorf("votes[0].Reviewer = %q, want server", rs.Votes[0].Reviewer)
 	}
-	if rs.Votes[1].Reviewer != "server" {
-		t.Errorf("votes[1].Reviewer = %q, want server", rs.Votes[1].Reviewer)
+	if rs.Votes[1].Reviewer != "tester" {
+		t.Errorf("votes[1].Reviewer = %q, want tester", rs.Votes[1].Reviewer)
 	}
 }
 

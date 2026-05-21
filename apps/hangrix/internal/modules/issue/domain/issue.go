@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -175,7 +176,15 @@ func ComputeReviewStatus(issue *Issue, events []*Event) *ReviewStatus {
 	hasChangesRequested := false
 	hasApprove := false
 
-	for _, lv := range latest {
+	// Sort keys for deterministic output.
+	keys := make([]string, 0, len(latest))
+	for k := range latest {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		lv := latest[k]
 		if lv.payload.HeadSHA == issue.HeadSHA {
 			// Effective vote
 			switch lv.payload.Value {
