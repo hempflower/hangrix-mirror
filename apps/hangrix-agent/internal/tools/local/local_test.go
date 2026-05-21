@@ -59,10 +59,10 @@ func TestEditRequiresPriorRead(t *testing.T) {
 	}
 }
 
-// TestEditNormalizeIndentation verifies the edit tool is tolerant of
-// tab/space differences between the read content (as the LLM might copy
-// it) and the actual file content.
-func TestEditNormalizeIndentation(t *testing.T) {
+// TestEditExactMatchRequired verifies that the edit tool requires exact
+// text matching — no whitespace normalisation. The LLM must copy text
+// verbatim from the file.
+func TestEditExactMatchRequired(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -82,37 +82,34 @@ func TestEditNormalizeIndentation(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 
-	// Try to replace using SPACES instead of tabs (the LLM often does this).
-	// The normalised match should find it.
-	findText := "  line1\n    line2" // spaces, not tabs
-	replaceText := "  new1\n    new2"
+	// Replace using exact tab-indented text (verbatim copy from file).
+	findText := "\tline1\n\t\tline2"
+	replaceText := "\tnew1\n\t\tnew2"
 	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
 		"path": path, "mode": "replace", "find": findText, "replace": replaceText,
 	}))
 	if err != nil {
-		t.Fatalf("edit with space-indented find should succeed via normalisation: %v", err)
+		t.Fatalf("edit with exact tab-indented find should succeed: %v", err)
 	}
 
 	body, _ := os.ReadFile(path)
 	got := string(body)
-	// The replacement should have been adapted to use tabs (matching file style).
 	if !strings.Contains(got, "\tnew1") {
-		t.Errorf("replacement should use tabs (file style), got: %q", got)
+		t.Errorf("replacement should be inserted verbatim, got: %q", got)
 	}
 	if strings.Contains(got, "line1") {
 		t.Errorf("original 'line1' should have been replaced, got: %q", got)
 	}
 }
 
-// TestEditTrailingWhitespaceNormalization verifies trailing-whitespace
-// tolerance — the LLM often strips trailing spaces when copying from a
-// `read` result.
-func TestEditTrailingWhitespaceNormalization(t *testing.T) {
+// TestEditExactTrailingWhitespace verifies that trailing whitespace
+// must match exactly — no normalisation is applied.
+func TestEditExactTrailingWhitespace(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
 
-	content := "hello   \nworld\t\n"
+	content := "hello\nworld\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -125,12 +122,12 @@ func TestEditTrailingWhitespaceNormalization(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 
-	// Find without trailing whitespace should still match.
+	// Find must match exactly — no whitespace normalisation.
 	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
 		"path": path, "mode": "replace", "find": "hello\nworld", "replace": "hi\nthere",
 	}))
 	if err != nil {
-		t.Fatalf("edit with trailing-whitespace normalisation: %v", err)
+		t.Fatalf("edit with exact match: %v", err)
 	}
 
 	body, _ := os.ReadFile(path)
@@ -255,14 +252,13 @@ func TestEditAnchorNotFoundContext(t *testing.T) {
 	}
 }
 
-// TestEditInsertIndentationAdaptation verifies that inserted text gets its
-// indentation adapted to match the file's style.
-func TestEditInsertIndentationAdaptation(t *testing.T) {
+// TestEditInsertVerbatim verifies that inserted text is passed through
+// verbatim — no indentation adaptation.
+func TestEditInsertVerbatim(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
 
-	// File uses 2-space indentation.
 	content := "func foo() {\n  x := 1\n}\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -276,7 +272,7 @@ func TestEditInsertIndentationAdaptation(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 
-	// Insert a line with 4-space indentation — should be normalized to 2.
+	// Insert a line with 4-space indentation — should be kept verbatim.
 	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
 		"path": path, "mode": "insert", "after": 1,
 		"text": "    y := 2",
@@ -287,14 +283,14 @@ func TestEditInsertIndentationAdaptation(t *testing.T) {
 
 	body, _ := os.ReadFile(path)
 	got := string(body)
-	if !strings.Contains(got, "  y := 2") {
-		t.Errorf("inserted text should use 2-space indent (file style), got: %q", got)
+	if !strings.Contains(got, "    y := 2") {
+		t.Errorf("inserted text should be kept verbatim (4-space indent), got: %q", got)
 	}
 }
 
-// TestEditReplaceIndentationAdaptation verifies that the replacement text's
-// indentation is adapted to match the file's style.
-func TestEditReplaceIndentationAdaptation(t *testing.T) {
+// TestEditReplaceVerbatim verifies that replacement text is passed through
+// verbatim — no indentation adaptation.
+func TestEditReplaceVerbatim(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -313,7 +309,7 @@ func TestEditReplaceIndentationAdaptation(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 
-	// Replace with space-indented text — should be adapted to tabs.
+	// Replace with space-indented text — should be kept verbatim.
 	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
 		"path": path, "mode": "replace",
 		"find": "\told line", "replace": "    new line",
@@ -324,9 +320,9 @@ func TestEditReplaceIndentationAdaptation(t *testing.T) {
 
 	body, _ := os.ReadFile(path)
 	got := string(body)
-	// Expect the replacement to have been converted to tab indentation.
-	if got != "\tnew line\n" && got != "\tnew line" {
-		t.Errorf("replacement should use tab indent (file style), got: %q", got)
+	// Expect the replacement to be kept verbatim (4-space indent).
+	if got != "    new line\n" && got != "    new line" {
+		t.Errorf("replacement should be kept verbatim (4-space indent), got: %q", got)
 	}
 }
 
@@ -457,6 +453,73 @@ func TestEditDeleteAnchorNotFound(t *testing.T) {
 
 
 
+// TestEditCRLFCrossToolContract locks the cross-tool contract between
+// `read` (which normalises CRLF→LF via bufio.Scanner) and `edit`
+// (which now normalises its input the same way). A CRLF file read
+// with `read` shows LF-only text; the LLM copies that verbatim into
+// `find` — edit must accept it and preserve the file's CRLF style.
+func TestEditCRLFCrossToolContract(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crlf.txt")
+
+	// Write a file with CRLF line endings.
+	content := []byte("hello\r\nworld\r\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	// 1. Read the file. bufio.Scanner strips \r, so the LLM sees LF only.
+	res, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path}))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var rFields struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(mustReJSON(res), &rFields); err != nil {
+		t.Fatalf("decode read result: %v", err)
+	}
+	// read output must be LF (no \r visible).
+	if strings.Contains(rFields.Content, "\r") {
+		t.Errorf("read output should not contain carriage returns, got: %q", rFields.Content)
+	}
+	if !strings.Contains(rFields.Content, "hello") || !strings.Contains(rFields.Content, "world") {
+		t.Errorf("read output should contain hello and world, got: %q", rFields.Content)
+	}
+
+	// 2. Edit using LF find text (exactly what the LLM would copy from read).
+	_, err = editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace",
+		"find": "hello\nworld", "replace": "hi\nthere",
+	}))
+	if err != nil {
+		t.Fatalf("edit with LF find on CRLF file: %v", err)
+	}
+
+	// 3. File must be updated AND still use CRLF.
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read after edit: %v", err)
+	}
+	if string(body) != "hi\r\nthere\r\n" {
+		t.Errorf("expected CRLF file, got: %q", string(body))
+	}
+
+	// 4. Read again — must show LF output.
+	res2, _ := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path}))
+	var r2Fields struct {
+		Content string `json:"content"`
+	}
+	json.Unmarshal(mustReJSON(res2), &r2Fields)
+	if !strings.Contains(r2Fields.Content, "hi") || !strings.Contains(r2Fields.Content, "there") {
+		t.Errorf("second read should show hi and there, got: %q", r2Fields.Content)
+	}
+}
 // TestBashForeground covers the basic (sync) bash path: output capture
 // and exit code propagation. The PTY merges stdout and stderr by design,
 // so we assert against the unified `output` field rather than checking
