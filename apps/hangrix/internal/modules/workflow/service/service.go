@@ -541,5 +541,11 @@ func (s *Service) GetJobRun(ctx context.Context, id int64) (*domain.WorkflowJobR
 	return s.store.GetJobRun(ctx, id)
 }
 
+// ListRunsByRepo returns paginated workflow runs for a repo.
+func (s *Service) ListRunsByRepo(ctx context.Context, repoID int64, workflowName string, offset, limit int32) ([]*domain.WorkflowRun, int64, error) {
+	return s.store.ListRunsByRepo(ctx, repoID, workflowName, offset, limit)
+}
+
+
 // Ensure json import is used
 var _ = json.Marshal

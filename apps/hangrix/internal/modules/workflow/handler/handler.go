@@ -3,6 +3,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -13,6 +14,9 @@ import (
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
+	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
+	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
+	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/service"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/server"
@@ -20,21 +24,30 @@ import (
 
 // Handler implements server.RouteProvider for the workflow module.
 type Handler struct {
-	svc        *service.Service
-	middleware authdomain.Middleware
+	svc            *service.Service
+	middleware     authdomain.Middleware
+	agentValidator runnerdomain.AgentValidator
+	repoStore      repodomain.Store
+	orgResolver    orgdomain.Resolver
 }
 
 // HandlerDeps wires the handler's dependencies through ioc.
 type HandlerDeps struct {
-	Service    *service.Service
-	Middleware authdomain.Middleware
+	Service        *service.Service
+	Middleware     authdomain.Middleware
+	AgentValidator runnerdomain.AgentValidator
+	RepoStore      repodomain.Store
+	OrgResolver    orgdomain.Resolver
 }
 
 // NewHandler creates a ready-to-use workflow Handler.
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
-		svc:        deps.Service,
-		middleware: deps.Middleware,
+		svc:            deps.Service,
+		middleware:     deps.Middleware,
+		agentValidator: deps.AgentValidator,
+		repoStore:      deps.RepoStore,
+		orgResolver:    deps.OrgResolver,
 	}
 }
 
@@ -51,10 +64,67 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 
 	// Runner callback API: bearer hgxr_ token
 	r.Route("/api/runner/workflow-jobs/{jobRunID}", func(r chi.Router) {
+		r.Use(h.requireAgentToken)
 		r.Post("/running", h.markJobRunning)
 		r.Post("/logs", h.appendLog)
 		r.Post("/terminate", h.terminateJob)
 	})
+}
+
+// ---- runner auth middleware ----
+
+type workflowCtxKey struct{ name string }
+
+var runnerCtxKey = workflowCtxKey{"runner"}
+
+// requireAgentToken validates the bearer hgxr_ token and injects the runner
+// into the request context. It follows the same pattern as the runner
+// module's AgentHandler.requireAgentToken.
+func (h *Handler) requireAgentToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tok, err := bearerToken(r)
+		if err != nil {
+			httpx.WriteError(w, http.StatusUnauthorized, err.Error())
+			return
+		}
+		runner, err := h.agentValidator.ValidateAgentToken(r.Context(), tok)
+		if err != nil {
+			switch {
+			case errors.Is(err, runnerdomain.ErrInvalidToken):
+				httpx.WriteError(w, http.StatusUnauthorized, "invalid token")
+			case errors.Is(err, runnerdomain.ErrTokenInactive):
+				httpx.WriteError(w, http.StatusForbidden, "token inactive")
+			default:
+				httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+			}
+			return
+		}
+		ctx := context.WithValue(r.Context(), runnerCtxKey, runner)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// runnerFromContext extracts the authenticated runner from the request context.
+func runnerFromContext(ctx context.Context) *runnerdomain.Runner {
+	v, _ := ctx.Value(runnerCtxKey).(*runnerdomain.Runner)
+	return v
+}
+
+// bearerToken extracts the bearer token from an Authorization header.
+func bearerToken(r *http.Request) (string, error) {
+	auth := r.Header.Get("Authorization")
+	if auth == "" {
+		return "", errors.New("missing Authorization header")
+	}
+	const prefix = "Bearer "
+	if !strings.HasPrefix(auth, prefix) {
+		return "", errors.New("Authorization header must use Bearer scheme")
+	}
+	tok := strings.TrimSpace(strings.TrimPrefix(auth, prefix))
+	if tok == "" {
+		return "", errors.New("bearer token is empty")
+	}
+	return tok, nil
 }
 
 // ---- request/response DTOs ----
@@ -189,21 +259,73 @@ func toLogLineDTO(l *domain.WorkflowJobLogLine) logLineDTO {
 	}
 }
 
+// ---- helpers ----
+
+// resolveRepo parses owner/name from the request URL, resolves the owner
+// through orgdomain.Resolver, and fetches the repo from repo.Store.
+func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request) (*repodomain.Repo, bool) {
+	ownerName := chi.URLParam(r, "owner")
+	repoName := chi.URLParam(r, "name")
+
+	owner, err := h.orgResolver.ResolveOwner(r.Context(), ownerName)
+	if err != nil {
+		if errors.Is(err, orgdomain.ErrOwnerNotFound) || errors.Is(err, orgdomain.ErrOrgReserved) {
+			httpx.WriteError(w, http.StatusNotFound, "repo not found")
+			return nil, false
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return nil, false
+	}
+
+	repo, err := h.repoStore.GetByOwnerAndName(r.Context(), repodomain.OwnerKind(owner.Kind), owner.ID, repoName)
+	if err != nil {
+		if errors.Is(err, repodomain.ErrRepoNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "repo not found")
+			return nil, false
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return nil, false
+	}
+
+	return repo, true
+}
+
 // ---- user-facing endpoints ----
 
 // GET /api/repos/{owner}/{name}/workflow-runs
 func (h *Handler) listRuns(w http.ResponseWriter, r *http.Request) {
-	owner := chi.URLParam(r, "owner")
-	name := chi.URLParam(r, "name")
+	repo, ok := h.resolveRepo(w, r)
+	if !ok {
+		return
+	}
+
 	workflowName := r.URL.Query().Get("workflow")
 
-	// TODO: resolve repo ID from owner/name
-	// For now, stub - will need repo.Store dependency
-	_ = owner
-	_ = name
-	_ = workflowName
+	offset := int32(0)
+	limit := int32(50)
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if v, err := strconv.ParseInt(o, 10, 32); err == nil {
+			offset = int32(v)
+		}
+	}
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.ParseInt(l, 10, 32); err == nil && v > 0 && v <= 200 {
+			limit = int32(v)
+		}
+	}
 
-	httpx.WriteError(w, http.StatusNotImplemented, "list runs: repo resolution not yet wired")
+	runs, total, err := h.svc.ListRunsByRepo(r.Context(), repo.ID, workflowName, offset, limit)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	items := make([]runDTO, len(runs))
+	for i, run := range runs {
+		items[i] = toRunDTO(run)
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, runListResp{Items: items, Total: total})
 }
 
 // GET /api/repos/{owner}/{name}/workflow-runs/{runID}
@@ -213,18 +335,7 @@ func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, err := h.svc.GetRunForJob(r.Context(), runID)
-	if err != nil {
-		if errors.Is(err, domain.ErrRunNotFound) {
-			httpx.WriteError(w, http.StatusNotFound, "run not found")
-			return
-		}
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// Use GetRun directly
-	run, err = h.svc.GetRun(r.Context(), runID)
+	run, err := h.svc.GetRun(r.Context(), runID)
 	if err != nil {
 		if errors.Is(err, domain.ErrRunNotFound) {
 			httpx.WriteError(w, http.StatusNotFound, "run not found")
@@ -253,8 +364,10 @@ func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/repos/{owner}/{name}/workflow-runs
 func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
-	owner := chi.URLParam(r, "owner")
-	name := chi.URLParam(r, "name")
+	repo, ok := h.resolveRepo(w, r)
+	if !ok {
+		return
+	}
 
 	var req dispatchReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -272,13 +385,28 @@ func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
 		inputs[i] = service.DispatchInput{Name: in.Name, Value: in.Value}
 	}
 
-	// TODO: resolve repo from owner/name
-	_ = owner
-	_ = name
+	repoRef := service.Ref{
+		ID:            repo.ID,
+		Name:          repo.Name,
+		DefaultBranch: repo.DefaultBranch,
+		OwnerName:     repo.OwnerName,
+	}
 
-	httpx.WriteError(w, http.StatusNotImplemented, "dispatch: repo resolution not yet wired")
-	_ = inputs
-	_ = req.Ref
+	run, jobs, err := h.svc.Dispatch(r.Context(), repoRef, req.WorkflowName, inputs, req.Ref)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jobDTOs := make([]jobRunDTO, len(jobs))
+	for i, j := range jobs {
+		jobDTOs[i] = toJobRunDTO(j)
+	}
+
+	httpx.WriteJSON(w, http.StatusCreated, runDetailResp{
+		Run:  toRunDTO(run),
+		Jobs: jobDTOs,
+	})
 }
 
 // GET /api/repos/{owner}/{name}/workflow-runs/{runID}/jobs/{jobID}/logs
@@ -324,8 +452,13 @@ func (h *Handler) markJobRunning(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: extract runner ID from authenticated context
-	if err := h.svc.MarkJobRunning(r.Context(), jobID, 0); err != nil {
+	runner := runnerFromContext(r.Context())
+	if runner == nil {
+		httpx.WriteError(w, http.StatusUnauthorized, "runner not authenticated")
+		return
+	}
+
+	if err := h.svc.MarkJobRunning(r.Context(), jobID, runner.ID); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
