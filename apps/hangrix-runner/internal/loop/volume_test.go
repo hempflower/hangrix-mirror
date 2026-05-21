@@ -9,9 +9,10 @@ import (
 
 func TestMapVolumes(t *testing.T) {
 	tests := []struct {
-		name string
-		in   []client.Volume
-		want []orchestrator.Volume
+		name   string
+		in     []client.Volume
+		repoID int64
+		want   []orchestrator.Volume
 	}{
 		{
 			name: "nil input",
@@ -24,21 +25,47 @@ func TestMapVolumes(t *testing.T) {
 			want: nil,
 		},
 		{
-			name: "single volume",
+			name: "single volume no repo prefix (repoID=0)",
 			in: []client.Volume{
 				{Name: "npm-cache", Mount: "/root/.npm"},
 			},
+			repoID: 0,
 			want: []orchestrator.Volume{
 				{Name: "npm-cache", Mount: "/root/.npm"},
 			},
 		},
 		{
-			name: "multiple volumes preserve order",
+			name: "single volume with repo prefix",
+			in: []client.Volume{
+				{Name: "npm-cache", Mount: "/root/.npm"},
+			},
+			repoID: 6,
+			want: []orchestrator.Volume{
+				{Name: "repo-6-npm-cache", Mount: "/root/.npm"},
+			},
+		},
+		{
+			name: "multiple volumes preserve order with repo prefix",
 			in: []client.Volume{
 				{Name: "go-cache", Mount: "/root/.cache/go-build"},
 				{Name: "mod-cache", Mount: "/go/pkg/mod"},
 				{Name: "tmp-cache", Mount: "/tmp/build"},
 			},
+			repoID: 6,
+			want: []orchestrator.Volume{
+				{Name: "repo-6-go-cache", Mount: "/root/.cache/go-build"},
+				{Name: "repo-6-mod-cache", Mount: "/go/pkg/mod"},
+				{Name: "repo-6-tmp-cache", Mount: "/tmp/build"},
+			},
+		},
+		{
+			name: "multiple volumes no prefix (repoID=0)",
+			in: []client.Volume{
+				{Name: "go-cache", Mount: "/root/.cache/go-build"},
+				{Name: "mod-cache", Mount: "/go/pkg/mod"},
+				{Name: "tmp-cache", Mount: "/tmp/build"},
+			},
+			repoID: 0,
 			want: []orchestrator.Volume{
 				{Name: "go-cache", Mount: "/root/.cache/go-build"},
 				{Name: "mod-cache", Mount: "/go/pkg/mod"},
@@ -49,7 +76,7 @@ func TestMapVolumes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := mapVolumes(tt.in)
+			got := mapVolumes(tt.in, tt.repoID)
 			if len(got) != len(tt.want) {
 				t.Fatalf("len = %d, want %d", len(got), len(tt.want))
 			}

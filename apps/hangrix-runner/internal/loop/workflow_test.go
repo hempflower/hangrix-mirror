@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/hangrix/hangrix/apps/hangrix-runner/internal/client"
+	"github.com/hangrix/hangrix/apps/hangrix-runner/internal/orchestrator"
 )
 
 func TestBuildWorkflowEnv_ExpandEnv(t *testing.T) {
@@ -348,5 +349,74 @@ func TestBuildWorkflowEnv_ExpandEnvNilRepoVars(t *testing.T) {
 	}
 	if got, want := env["SECRET"], "${MY_SECRET}"; got != want {
 		t.Errorf("SECRET = %q, want %q (should pass through unexpanded)", got, want)
+	}
+}
+
+
+func TestOrchestratorVolumes(t *testing.T) {
+	tests := []struct {
+		name   string
+		vols   []client.Volume
+		repoID int64
+		want   []orchestrator.Volume
+	}{
+		{
+			name:   "nil input",
+			vols:   nil,
+			repoID: 0,
+			want:   nil,
+		},
+		{
+			name:   "empty slice",
+			vols:   []client.Volume{},
+			repoID: 0,
+			want:   nil,
+		},
+		{
+			name: "no prefix when repoID=0",
+			vols: []client.Volume{
+				{Name: "npm-cache", Mount: "/root/.npm"},
+			},
+			repoID: 0,
+			want: []orchestrator.Volume{
+				{Name: "npm-cache", Mount: "/root/.npm"},
+			},
+		},
+		{
+			name: "prefixes with repo-{id}- when repoID>0",
+			vols: []client.Volume{
+				{Name: "npm-cache", Mount: "/root/.npm"},
+			},
+			repoID: 6,
+			want: []orchestrator.Volume{
+				{Name: "repo-6-npm-cache", Mount: "/root/.npm"},
+			},
+		},
+		{
+			name: "multiple volumes with prefix",
+			vols: []client.Volume{
+				{Name: "go-cache", Mount: "/root/.cache/go-build"},
+				{Name: "mod-cache", Mount: "/go/pkg/mod"},
+			},
+			repoID: 6,
+			want: []orchestrator.Volume{
+				{Name: "repo-6-go-cache", Mount: "/root/.cache/go-build"},
+				{Name: "repo-6-mod-cache", Mount: "/go/pkg/mod"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := orchestratorVolumes(tt.vols, tt.repoID)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d", len(got), len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("index %d: got %+v, want %+v", i, got[i], tt.want[i])
+				}
+			}
+		})
 	}
 }
