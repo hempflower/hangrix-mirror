@@ -129,6 +129,12 @@ type Task struct {
 	WorkflowJob *WorkflowJob `json:"workflow_job,omitempty"`
 
 	SessionID  int64  `json:"session_id"`
+	// HostRepoID is the repository id the session belongs to. The runner
+	// uses it to namespace named Docker volumes (e.g. "pnpm-store" becomes
+	// "repo-6-pnpm-store") so caches from different repos never collide.
+	// Zero means the server hasn't been upgraded yet — the runner passes
+	// volume names through verbatim for backward compatibility.
+	HostRepoID int64  `json:"host_repo_id,omitempty"`
 	AgentImage string `json:"agent_image"`
 	// AgentEntrypoint overrides the container's PID 1 (docker
 	// --entrypoint plus appended args). Empty / nil means the

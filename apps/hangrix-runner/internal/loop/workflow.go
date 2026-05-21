@@ -126,7 +126,7 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 		job.Container.Entrypoint,
 		repoCheckout,
 		job.Container.Env, // validated above; may be unused by impl
-		orchestratorVolumes(job.Container.Volumes),
+		orchestratorVolumes(job.Container.Volumes, job.RepoID),
 	)
 	if err != nil {
 		return d.fail(ctx, job, fmt.Errorf("create container: %w", err))
@@ -378,13 +378,19 @@ func (d *WorkflowJobDriver) cloneWorkflowRepo(ctx context.Context, spec cloneSpe
 }
 
 // orchestratorVolumes converts client.Volume slices to orchestrator.Volume slices.
-func orchestratorVolumes(vols []client.Volume) []orchestrator.Volume {
+// When repoID > 0, each volume Name is prefixed as "repo-{repoID}-{name}"
+// so Docker volumes are namespaced per repository.
+func orchestratorVolumes(vols []client.Volume, repoID int64) []orchestrator.Volume {
 	if len(vols) == 0 {
 		return nil
 	}
 	out := make([]orchestrator.Volume, len(vols))
 	for i, v := range vols {
-		out[i] = orchestrator.Volume{Name: v.Name, Mount: v.Mount}
+		name := v.Name
+		if repoID > 0 {
+			name = fmt.Sprintf("repo-%d-%s", repoID, v.Name)
+		}
+		out[i] = orchestrator.Volume{Name: name, Mount: v.Mount}
 	}
 	return out
 }

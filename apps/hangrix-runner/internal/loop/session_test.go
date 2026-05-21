@@ -343,3 +343,74 @@ func TestSessionDriverForwardsVolumes(t *testing.T) {
 	}
 }
 
+// TestSessionDriverForwardsVolumesWithRepoID verifies that when the server
+// sends a HostRepoID, the runner prefixes volume names with "repo-{id}-"
+// before passing them to the orchestrator.
+func TestSessionDriverForwardsVolumesWithRepoID(t *testing.T) {
+	t.Parallel()
+
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/runner/sessions/98/running",
+			r.URL.Path == "/api/runner/sessions/98/messages",
+			r.URL.Path == "/api/runner/sessions/98/terminate",
+			r.URL.Path == "/api/runner/sessions/98/container":
+			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/api/runner/sessions/98/history":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"frame": json.RawMessage(`{"kind":"history","messages":[]}`),
+			})
+		case r.URL.Path == "/api/runner/sessions/98/inputs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"frames": []json.RawMessage{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(platform.Close)
+
+	cli := client.New(platform.URL).WithAgentToken("hgxr_AAAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
+	fake := orchestrator.NewFake()
+
+	go func() {
+		buf := make([]byte, 4096)
+		_, _ = fake.AgentStdin().Read(buf)
+		fake.Exit(0)
+	}()
+
+	drv := &loop.SessionDriver{
+		Client:          cli,
+		Orchestrator:    fake,
+		AgentBinaryPath: "/dev/null",
+		WorkspaceRoot:   t.TempDir(),
+		BaseURL:         "http://platform.test",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	task := &client.Task{
+		SessionID:    98,
+		AgentImage:   "alpine:latest",
+		SessionToken: "hgxs_AAAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+		HostRepoID:   6,
+		Env:          map[string]string{},
+		Volumes: []client.Volume{
+			{Name: "pnpm-store", Mount: "/caches/pnpm"},
+			{Name: "go-build-cache", Mount: "/root/.cache/go-build"},
+		},
+	}
+	if _, err := drv.Run(ctx, task); err != nil {
+		t.Fatalf("driver.Run: %v", err)
+	}
+
+	got := fake.LastTask().Volumes
+	if len(got) != 2 {
+		t.Fatalf("orchestrator task volumes len = %d, want 2", len(got))
+	}
+	if got[0].Name != "repo-6-pnpm-store" || got[0].Mount != "/caches/pnpm" {
+		t.Errorf("volume 0 = %+v, want {repo-6-pnpm-store /caches/pnpm}", got[0])
+	}
+	if got[1].Name != "repo-6-go-build-cache" || got[1].Mount != "/root/.cache/go-build" {
+		t.Errorf("volume 1 = %+v, want {repo-6-go-build-cache /root/.cache/go-build}", got[1])
+	}
+}
+

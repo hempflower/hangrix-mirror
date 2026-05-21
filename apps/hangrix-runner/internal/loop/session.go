@@ -173,7 +173,7 @@ func (d *SessionDriver) Run(ctx context.Context, task *client.Task) (exitCode in
 		HostWorkdir:      mountPath,
 		Env:              env,
 		ContainerID:      task.ContainerID,
-		Volumes:          mapVolumes(task.Volumes),
+		Volumes:          mapVolumes(task.Volumes, task.HostRepoID),
 	}
 	handle, err := d.Orchestrator.Start(ctx, otask)
 	if err != nil {
@@ -768,13 +768,21 @@ func buildAgentEnv(task *client.Task, baseURL string) map[string]string {
 }
 
 // mapVolumes converts client.Volume slices to orchestrator.Volume slices.
-func mapVolumes(vols []client.Volume) []orchestrator.Volume {
+// When repoID > 0, each volume Name is prefixed as "repo-{repoID}-{name}"
+// so Docker volumes are namespaced per repository. repoID == 0 means the
+// server hasn't been upgraded yet — names pass through verbatim for
+// backward compatibility.
+func mapVolumes(vols []client.Volume, repoID int64) []orchestrator.Volume {
 	if len(vols) == 0 {
 		return nil
 	}
 	out := make([]orchestrator.Volume, len(vols))
 	for i, v := range vols {
-		out[i] = orchestrator.Volume{Name: v.Name, Mount: v.Mount}
+		name := v.Name
+		if repoID > 0 {
+			name = fmt.Sprintf("repo-%d-%s", repoID, v.Name)
+		}
+		out[i] = orchestrator.Volume{Name: name, Mount: v.Mount}
 	}
 	return out
 }
