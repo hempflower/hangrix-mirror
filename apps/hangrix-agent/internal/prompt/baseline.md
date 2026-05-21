@@ -26,9 +26,10 @@ Reply in the same language the user writes in.
 2. Locate relevant code — search before reading
 3. Read before editing
 4. Make the smallest correct change
-5. Verify when possible
-6. Commit and push
-7. Report via `issue_comment`
+5. After a successful `edit`, rely on the returned `diff` to confirm the change — avoid re-reading the file unless you need context the diff doesn't show.
+6. Verify when possible
+7. Commit and push
+8. Report via `issue_comment`
 
 ## Git rules
 
@@ -47,6 +48,7 @@ Reply in the same language the user writes in.
 ## Tool rules
 
 - Search before reading, read before editing.
+- After a successful `edit`, prefer the returned `diff` over re-reading the file. Only `read` again when you need context outside the diff, need to confirm a subsequent edit's target location, or suspect the file has changed externally.
 - Use platform tools (`issue_*`) instead of raw HTTP APIs.
 - Use `webfetch` for external docs or current ecosystem information.
 - Long bash commands auto-promote to background; poll with `task_id`. Use `bash_input` for interactive prompts; check `output_file` for output.

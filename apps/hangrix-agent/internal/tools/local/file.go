@@ -2,6 +2,7 @@ package local
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -350,6 +351,7 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 		"occurrences":  changed,
 		"bytes_before": len(original),
 		"bytes_after":  len(updated),
+		"diff":         computeUnifiedDiff(original, updated, a.Path),
 	}, nil
 }
 
@@ -426,6 +428,87 @@ func matchFailureError(lines []string, find, path, kind string, advice string) e
 			"Searched region (first %d lines):\n%s\n%s",
 		kind, find, path, previewN, preview.String(), advice,
 	)
+}
+
+
+// computeUnifiedDiff produces a single-file unified diff between original
+// and updated. It uses a simple prefix/suffix scan to find the changed
+// region and wraps it with 3 lines of context. The result follows standard
+// unified diff conventions so the LLM can understand exactly what changed
+// without re-reading the file.
+func computeUnifiedDiff(original, updated, path string) string {
+	a := strings.Split(original, "\n")
+	b := strings.Split(updated, "\n")
+
+	// Find the first differing line.
+	start := 0
+	for start < len(a) && start < len(b) && a[start] == b[start] {
+		start++
+	}
+
+	// Find the last differing line.
+	endA, endB := len(a)-1, len(b)-1
+	for endA >= start && endB >= start && a[endA] == b[endB] {
+		endA--
+		endB--
+	}
+
+	// No change — shouldn't happen since edit only reaches here on success.
+	if start > endA && start > endB {
+		return ""
+	}
+
+	// Add up to 3 lines of context on each side.
+	contextBefore := min(start, 3)
+	contextAfter := 3
+	hunkStart := start - contextBefore
+	hunkEndA := endA + 1 + contextAfter
+	if hunkEndA > len(a) {
+		hunkEndA = len(a)
+	}
+	hunkEndB := endB + 1 + contextAfter
+	if hunkEndB > len(b) {
+		hunkEndB = len(b)
+	}
+
+	origCount := hunkEndA - hunkStart
+	updCount := hunkEndB - hunkStart
+
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "--- a/%s\n", path)
+	fmt.Fprintf(&buf, "+++ b/%s\n", path)
+	fmt.Fprintf(&buf, "@@ -%d,%d +%d,%d @@\n", hunkStart+1, origCount, hunkStart+1, updCount)
+
+	// Walk both files in lockstep through the hunk range, emitting
+	// interleaved context (-/+/ ) lines in standard unified-diff order.
+	ia, ib := hunkStart, hunkStart
+	for ia < hunkEndA || ib < hunkEndB {
+		// Context: identical line in both sides of the hunk.
+		if ia < hunkEndA && ib < hunkEndB && ia <= endA && ib <= endB && a[ia] == b[ib] {
+			fmt.Fprintf(&buf, " %s\n", a[ia])
+			ia++
+			ib++
+		} else if ia < hunkEndA && ia <= endA {
+			// Removed line.
+			fmt.Fprintf(&buf, "-%s\n", a[ia])
+			ia++
+		} else if ib < hunkEndB && ib <= endB {
+			// Added line.
+			fmt.Fprintf(&buf, "+%s\n", b[ib])
+			ib++
+		} else {
+			// Trailing context: identical in both sides.
+			if ia < hunkEndA {
+				fmt.Fprintf(&buf, " %s\n", a[ia])
+				ia++
+			}
+			if ib < hunkEndB {
+				ib++
+			}
+		}
+	}
+
+	return buf.String()
 }
 
 // ----- glob -----

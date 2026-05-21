@@ -520,6 +520,210 @@ func TestEditCRLFCrossToolContract(t *testing.T) {
 		t.Errorf("second read should show hi and there, got: %q", r2Fields.Content)
 	}
 }
+
+// TestEditReturnsDiffOnReplace verifies that a successful replace-mode edit
+// returns a "diff" field containing a standard unified diff whose hunk
+// matches the actual file change.
+func TestEditReturnsDiffOnReplace(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "line one\nline two\nline three\nline four\nline five\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	res, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace",
+		"find": "line three", "replace": "LINE THREE",
+	}))
+	if err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+
+	var fields struct {
+		Path        string `json:"path"`
+		Mode        string `json:"mode"`
+		Occurrences int    `json:"occurrences"`
+		Diff        string `json:"diff"`
+	}
+	if err := json.Unmarshal(mustReJSON(res), &fields); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if fields.Diff == "" {
+		t.Fatal("expected non-empty diff field")
+	}
+	if !strings.Contains(fields.Diff, "--- a/"+path) {
+		t.Errorf("diff should contain --- a/ header; got:\n%s", fields.Diff)
+	}
+	if !strings.Contains(fields.Diff, "+++ b/"+path) {
+		t.Errorf("diff should contain +++ b/ header; got:\n%s", fields.Diff)
+	}
+	if !strings.Contains(fields.Diff, "@@") {
+		t.Errorf("diff should contain @@ hunk header; got:\n%s", fields.Diff)
+	}
+	if !strings.Contains(fields.Diff, "-line three") {
+		t.Errorf("diff should show removed line; got:\n%s", fields.Diff)
+	}
+	if !strings.Contains(fields.Diff, "+LINE THREE") {
+		t.Errorf("diff should show added line; got:\n%s", fields.Diff)
+	}
+
+	// Verify the file was actually changed.
+	body, _ := os.ReadFile(path)
+	if !strings.Contains(string(body), "LINE THREE") {
+		t.Errorf("file should contain 'LINE THREE'; got: %q", string(body))
+	}
+}
+
+// TestEditReturnsDiffOnInsert verifies that a successful insert-mode edit
+// returns a unified diff.
+func TestEditReturnsDiffOnInsert(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "line one\nline two\nline four\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	res, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "insert", "after": 2,
+		"text": "line three",
+	}))
+	if err != nil {
+		t.Fatalf("edit insert: %v", err)
+	}
+
+	var fields struct {
+		Diff string `json:"diff"`
+	}
+	if err := json.Unmarshal(mustReJSON(res), &fields); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if fields.Diff == "" {
+		t.Fatal("expected non-empty diff field")
+	}
+	if !strings.Contains(fields.Diff, "@@") {
+		t.Errorf("diff should contain @@ hunk header; got:\n%s", fields.Diff)
+	}
+	if !strings.Contains(fields.Diff, "+line three") {
+		t.Errorf("diff should show added line; got:\n%s", fields.Diff)
+	}
+
+	// Verify file content.
+	body, _ := os.ReadFile(path)
+	if !strings.Contains(string(body), "line three") {
+		t.Errorf("file should contain 'line three'; got: %q", string(body))
+	}
+}
+
+// TestEditReturnsDiffOnDelete verifies that a successful delete-mode edit
+// returns a unified diff.
+func TestEditReturnsDiffOnDelete(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "keep this\nremove me\nkeep that\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	res, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "delete",
+		"find": "remove me\n",
+	}))
+	if err != nil {
+		t.Fatalf("edit delete: %v", err)
+	}
+
+	var fields struct {
+		Diff string `json:"diff"`
+	}
+	if err := json.Unmarshal(mustReJSON(res), &fields); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if fields.Diff == "" {
+		t.Fatal("expected non-empty diff field")
+	}
+	if !strings.Contains(fields.Diff, "@@") {
+		t.Errorf("diff should contain @@ hunk header; got:\n%s", fields.Diff)
+	}
+	if !strings.Contains(fields.Diff, "-remove me") {
+		t.Errorf("diff should show removed line; got:\n%s", fields.Diff)
+	}
+
+	// Verify the line was removed.
+	body, _ := os.ReadFile(path)
+	if strings.Contains(string(body), "remove me") {
+		t.Errorf("'remove me' should have been deleted; got: %q", string(body))
+	}
+	if !strings.Contains(string(body), "keep this") {
+		t.Errorf("'keep this' should still be present; got: %q", string(body))
+	}
+}
+
+// TestEditDiffAbsentOnFailure verifies that a failed edit (no match) does
+// not return an empty diff masquerading as success.
+func TestEditDiffAbsentOnFailure(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "hello world\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace",
+		"find": "nonexistent", "replace": "x",
+	}))
+	if err == nil {
+		t.Fatal("expected error for non-matching find")
+	}
+	// The existing contract: failure must be an error return, not a
+	// success payload with an empty diff.
+}
+
 // TestBashForeground covers the basic (sync) bash path: output capture
 // and exit code propagation. The PTY merges stdout and stderr by design,
 // so we assert against the unified `output` field rather than checking
