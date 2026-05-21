@@ -53,13 +53,16 @@ func NewHandler(deps *HandlerDeps) *Handler {
 
 // RegisterRoutes implements server.RouteProvider.
 func (h *Handler) RegisterRoutes(r chi.Router) {
-	// User-facing API: requires auth
-	r.Route("/api/repos/{owner}/{name}", func(r chi.Router) {
+	// User-facing API: requires auth. Mounted under
+	// /api/repos/{owner}/{name}/workflow-runs (not /api/repos/{owner}/{name})
+	// so chi doesn't steal exact-path GET /api/repos/{owner}/{name} from the
+	// repo handler — chi gives longer prefix mounts priority.
+	r.Route("/api/repos/{owner}/{name}/workflow-runs", func(r chi.Router) {
 		r.Use(h.middleware.RequireAuth)
-		r.Get("/workflow-runs", h.listRuns)
-		r.Get("/workflow-runs/{runID}", h.getRun)
-		r.Post("/workflow-runs", h.dispatch)
-		r.Get("/workflow-runs/{runID}/jobs/{jobID}/logs", h.getLogs)
+		r.Get("/", h.listRuns)
+		r.Get("/{runID}", h.getRun)
+		r.Post("/", h.dispatch)
+		r.Get("/{runID}/jobs/{jobID}/logs", h.getLogs)
 	})
 
 	// Runner callback API: bearer hgxr_ token
