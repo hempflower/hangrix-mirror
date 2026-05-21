@@ -323,8 +323,13 @@ func (r *stubRunnerRepo) UpdateRunnerHeartbeat(context.Context, int64, []byte) e
 func (r *stubRunnerRepo) RedeemEnrollment(context.Context, string, func(*runnerdomain.Runner) error, runnerdomain.NewAgentToken, []byte) (*runnerdomain.Runner, error) {
 	panic("RedeemEnrollment not stubbed")
 }
-func (r *stubRunnerRepo) GetSessionByID(context.Context, int64) (*runnerdomain.AgentSession, error) {
-	panic("GetSessionByID not stubbed")
+func (r *stubRunnerRepo) GetSessionByID(_ context.Context, id int64) (*runnerdomain.AgentSession, error) {
+	for _, s := range r.sessions {
+		if s.ID == id {
+			return s, nil
+		}
+	}
+	return nil, runnerdomain.ErrSessionNotFound
 }
 func (r *stubRunnerRepo) GetSessionByTokenPrefix(context.Context, string) (*runnerdomain.AgentSession, error) {
 	panic("GetSessionByTokenPrefix not stubbed")
@@ -403,6 +408,7 @@ func (r *stubRunnerRepo) ClaimPendingInputs(context.Context, int64, int) ([]*run
 func (r *stubRunnerRepo) SetSessionContainer(context.Context, int64, string) error {
 	return nil
 }
+func (r *stubRunnerRepo) PingSession(context.Context, int64) error { return nil }
 func (r *stubRunnerRepo) FlagSessionContainerCleanup(context.Context, int64) error {
 	return nil
 }

@@ -414,13 +414,20 @@ func All(client *Client) []local.Tool {
 			schema:      objectSchema(nil, nil),
 		},
 		{
+			name:        "issue_read_by_number",
+			description: "Read an issue by its number (e.g. 91). Returns the issue's metadata, comments, and timeline events. Only works for issues within the same repository as the current session.",
+			schema: objectSchema(map[string]any{
+				"issue_number": intProp("The issue number to read (required, e.g. 91). Must belong to the same repository as the current session."),
+			}, []string{"issue_number"}),
+		},
+		{
 			name:        "issue_checks",
 			description: "List the latest state of each CI check on the issue's head commit. Currently always returns [].",
 			schema:      objectSchema(nil, nil),
 		},
 		{
 			name:        "roster_list",
-			description: "List every active role session on the current issue.",
+			description: "List every active role session on the current issue. Each item includes a `last_activity_at` field showing the most recent activity timestamp for that session — use it to detect stalled agents.",
 			schema:      objectSchema(nil, nil),
 		},
 		{

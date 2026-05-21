@@ -230,9 +230,9 @@ WHERE id = sqlc.arg('id')
 -- name: MarkSessionIdle :execrows
 -- Flip a running session to idle: one turn finished but the parent issue
 -- is still live, so the row should stay reusable for the next trigger.
--- Unlike MarkSessionTerminal this DOES NOT NULL session_token_sealed —
--- the runner re-uses the same session identity when the row is rewoken,
--- so the sealed plaintext must survive across container exits. ended_at
+-- Like MarkSessionTerminal, this preserves session_token_sealed so that
+-- the runner can re-use the same session identity when the row is
+-- rewoken. ended_at
 -- is intentionally left NULL because the session as a logical unit
 -- isn't done; only the most recent container is.
 UPDATE agent_sessions
@@ -358,6 +358,15 @@ UPDATE agent_session_inputs SET consumed_at = NOW() WHERE id = ANY(sqlc.arg('ids
 UPDATE agent_sessions
 SET container_id           = sqlc.arg('container_id'),
     container_last_used_at = NOW()
+WHERE id = sqlc.arg('id');
+
+-- name: PingSession :execrows
+-- Bumps container_last_used_at to NOW() so the activity timestamp advances
+-- even when the container id hasn't changed. The runtime calls this on
+-- every agent interaction (tool call, thinking, output) so that
+-- roster_list's last_activity_at reflects real-time liveness.
+UPDATE agent_sessions
+SET container_last_used_at = NOW()
 WHERE id = sqlc.arg('id');
 
 -- name: FlagSessionContainerCleanup :execrows

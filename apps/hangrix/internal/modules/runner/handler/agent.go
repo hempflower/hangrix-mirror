@@ -96,6 +96,7 @@ func (h *AgentHandler) RegisterRoutes(r chi.Router) {
 			r.Get("/sessions/{sid}/history", h.getHistory)
 			r.Post("/sessions/{sid}/terminate", h.terminate)
 			r.Put("/sessions/{sid}/container", h.setContainer)
+		r.Post("/sessions/{sid}/ping", h.pingSession)
 			r.Get("/cleanup-tasks", h.listCleanupTasks)
 			r.Post("/cleanup-tasks/{sid}/done", h.markCleanupDone)
 		})
@@ -914,6 +915,25 @@ func (h *AgentHandler) setContainer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.repo.SetSessionContainer(r.Context(), id, cid); err != nil {
+		if errors.Is(err, domain.ErrSessionNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// pingSession bumps container_last_used_at so roster_list last_activity_at
+// reflects real-time agent liveness. The runner calls this on every agent
+// interaction (tool call, thinking, output).
+func (h *AgentHandler) pingSession(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "sid"))
+	if !ok {
+		return
+	}
+	if err := h.repo.PingSession(r.Context(), id); err != nil {
 		if errors.Is(err, domain.ErrSessionNotFound) {
 			httpx.WriteError(w, http.StatusNotFound, "session not found")
 			return

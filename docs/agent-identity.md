@@ -47,7 +47,7 @@ Wire 格式：`hgxs_<8>_<32>`，alphabet `[A-Za-z0-9]`。
    - `agent_sessions.session_token_prefix` 查一次。
    - bcrypt 比对 secret。
    - 检查 `SessionTokenActive(now)`（不在 terminal 状态、未被显式 revoke）。
-5. **结束。** session 进入 `succeeded` / `failed` / `cancelled` 时 `MarkSessionTerminal` 把 `session_token_sealed = NULL` —— 终态后即使 DB 被泄也无法拿到 plaintext；prefix + hash 留行以便审计。
+5. **结束。** session 进入 `succeeded` / `failed` / `cancelled` 时 `MarkSessionTerminal` 保留 `session_token_sealed` —— session identity 在 rewake/resume 时应保持稳定，token rotation 只作为 sealed 缺失时的兜底兼容路径。当 session row 真正退役（issue 关闭、用户删除）时，`ArchiveSessions*` 才把 sealed NULL 掉，确保退役行即使 DB 被泄也无法拿到 plaintext。prefix + hash 留行以便审计。
 
 ## 校验放在哪一层
 

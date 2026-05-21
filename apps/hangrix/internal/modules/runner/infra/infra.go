@@ -505,10 +505,13 @@ func (r *PostgresRepo) MarkSessionRunning(ctx context.Context, id int64) error {
 	return nil
 }
 
-// MarkSessionTerminal flips the session into a terminal state and NULLs
-// the sealed plaintext so a leaked DB snapshot of a dead session can't
-// expose the bearer. The token row remains for audit (prefix + hash); the
-// validator's SessionTokenActive() check rejects it via terminal-status.
+// MarkSessionTerminal flips the session into a terminal state and
+// preserves session_token_sealed — rewake (Resume/Recover) can still hand
+// the same HANGRIX_SESSION_TOKEN back to the next container so that the
+// cloned .git/config credential.helper keeps working. The token row
+// remains for audit (prefix + hash); the validator's SessionTokenActive()
+// check rejects it via terminal-status. The only paths that genuinely
+// retire a session forever are ArchiveSessions*; those NULL sealed.
 func (r *PostgresRepo) MarkSessionTerminal(ctx context.Context, id int64, status domain.SessionStatus, exitCode *int32, errMsg string) error {
 	if !status.Terminal() {
 		return fmt.Errorf("status %q is not terminal", status)
@@ -598,6 +601,19 @@ func (r *PostgresRepo) SetSessionContainer(ctx context.Context, sessionID int64,
 		ContainerID: containerID,
 		ID:          sessionID,
 	})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrSessionNotFound
+	}
+	return nil
+}
+
+// PingSession bumps container_last_used_at so roster_list last_activity_at
+// reflects real-time liveness between agent interactions.
+func (r *PostgresRepo) PingSession(ctx context.Context, sessionID int64) error {
+	n, err := r.q.PingSession(ctx, sessionID)
 	if err != nil {
 		return err
 	}

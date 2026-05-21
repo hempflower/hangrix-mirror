@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
@@ -68,6 +69,92 @@ func (r *Registry) issueReadTool() *platformmcpdomain.Tool {
 	}
 }
 
+// issueReadByNumberTool reads any issue in the same repository by its
+// number (e.g. #91). This fills the gap where an agent creates a child
+// issue and later needs to read its full state without switching sessions.
+// Scope is limited to the calling session's repo — cross-repo lookups
+// return a unified "not found / out of scope" soft error.
+func (r *Registry) issueReadByNumberTool() *platformmcpdomain.Tool {
+	return &platformmcpdomain.Tool{
+		Name:        "issue_read_by_number",
+		Description: "Read an issue's metadata, comments, and timeline events by its number (e.g. 91). Only issues in the same repository as the current session are accessible.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"issue_number": map[string]any{
+					"type":        "integer",
+					"description": "Issue number to read (e.g. 91).",
+				},
+			},
+			"required": []any{"issue_number"},
+		},
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
+			scope, err := r.loadScope(ctx, sess)
+			if err != nil {
+				return errorResult(err.Error()), nil
+			}
+
+			var req struct {
+				IssueNumber int64 `json:"issue_number"`
+			}
+			if err := json.Unmarshal(args, &req); err != nil {
+				return errorResult("invalid args: " + err.Error()), nil
+			}
+			if req.IssueNumber <= 0 {
+				return errorResult("issue_number must be a positive integer"), nil
+			}
+
+			iss, err := r.deps.Issues.GetByNumber(ctx, scope.repo.ID, req.IssueNumber)
+			if err != nil {
+				if errors.Is(err, issuedomain.ErrIssueNotFound) {
+					return errorResult("issue not found or out of scope"), nil
+				}
+				return errorResult("load issue: " + err.Error()), nil
+			}
+
+			comments, err := r.deps.Issues.ListComments(ctx, iss.ID)
+			if err != nil {
+				return errorResult("list comments: " + err.Error()), nil
+			}
+			events, err := r.deps.Issues.ListEvents(ctx, iss.ID)
+			if err != nil {
+				return errorResult("list events: " + err.Error()), nil
+			}
+			reviewStatus := issuedomain.ComputeReviewStatus(iss, events)
+			out := struct {
+				Number       int64                     `json:"number"`
+				Title        string                    `json:"title"`
+				Body         string                    `json:"body"`
+				State        string                    `json:"state"`
+				Base         string                    `json:"base_branch"`
+				Branch       string                    `json:"branch_name"`
+				HeadSHA      string                    `json:"head_sha"`
+				Author       string                    `json:"author_username"`
+				ParentNumber int64                     `json:"parent_number"`
+				CreatedAt    string                    `json:"created_at"`
+				ReviewStatus *issuedomain.ReviewStatus `json:"review_status"`
+				Comments     []commentDTO              `json:"comments"`
+				Events       []eventDTO                `json:"events"`
+			}{
+				Number:       iss.Number,
+				Title:        iss.Title,
+				Body:         iss.Body,
+				State:        string(iss.State),
+				Base:         iss.BaseBranch,
+				Branch:       iss.BranchName,
+				HeadSHA:      iss.HeadSHA,
+				Author:       iss.AuthorName,
+				ParentNumber: iss.ParentNumber,
+				CreatedAt:    stableTime(iss.CreatedAt),
+				ReviewStatus: reviewStatus,
+				Comments:     commentsToDTO(comments),
+				Events:       eventsToDTO(events),
+			}
+			return textResult(out), nil
+		},
+	}
+}
+
 // issueDiffTool returns the file-level unified diff between the issue
 // branch and its base (using merge-base diff, equivalent to
 // `git diff base...branch`). Empty list when the issue has no commits yet —
@@ -122,6 +209,7 @@ func (r *Registry) issueChildrenTool() *platformmcpdomain.Tool {
 			items := make([]map[string]any, 0, len(kids))
 			for _, k := range kids {
 				items = append(items, map[string]any{
+					"id":     k.ID,
 					"number": k.Number,
 					"title":  k.Title,
 					"state":  string(k.State),
@@ -155,7 +243,7 @@ func (r *Registry) issueChecksTool() *platformmcpdomain.Tool {
 func (r *Registry) rosterListTool() *platformmcpdomain.Tool {
 	return &platformmcpdomain.Tool{
 		Name:        "roster_list",
-		Description: "List the roles currently active on this issue.",
+		Description: "List every active role session on the current issue.",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -171,15 +259,36 @@ func (r *Registry) rosterListTool() *platformmcpdomain.Tool {
 			items := make([]map[string]any, 0, len(rows))
 			for _, s := range rows {
 				items = append(items, map[string]any{
-					"role_key":   s.RoleKey,
-					"status":     string(s.Status),
-					"repo_sha":   s.RepoSHA,
-					"created_at": stableTime(s.CreatedAt),
+					"role_key":         s.RoleKey,
+					"status":           string(s.Status),
+					"repo_sha":         s.RepoSHA,
+					"created_at":       stableTime(s.CreatedAt),
+					"last_activity_at": stableTime(lastActivityAt(s)),
 				})
 			}
 			return textResult(map[string]any{"items": items}), nil
 		},
 	}
+}
+
+// lastActivityAt returns the most recent activity timestamp for the session
+// by taking the maximum of container_last_used_at, ended_at, started_at,
+// claimed_at, and created_at.
+func lastActivityAt(s *runnerdomain.AgentSession) time.Time {
+	latest := s.CreatedAt
+	if s.ClaimedAt != nil && s.ClaimedAt.After(latest) {
+		latest = *s.ClaimedAt
+	}
+	if s.StartedAt != nil && s.StartedAt.After(latest) {
+		latest = *s.StartedAt
+	}
+	if s.EndedAt != nil && s.EndedAt.After(latest) {
+		latest = *s.EndedAt
+	}
+	if s.ContainerLastUsedAt != nil && s.ContainerLastUsedAt.After(latest) {
+		latest = *s.ContainerLastUsedAt
+	}
+	return latest
 }
 
 // ---- DTOs ----

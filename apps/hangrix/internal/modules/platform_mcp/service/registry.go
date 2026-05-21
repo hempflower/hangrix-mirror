@@ -54,6 +54,7 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 	r := &Registry{deps: deps}
 	r.tools = []*platformmcpdomain.Tool{
 		r.issueReadTool(),
+		r.issueReadByNumberTool(),
 		r.issueDiffTool(),
 		r.issueMergeableTool(),
 
