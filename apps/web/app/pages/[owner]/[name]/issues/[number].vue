@@ -104,7 +104,6 @@ const mentionAgents = ref<MentionAgent[]>([])
 // signal the operator has no clue why agents stopped responding after a
 // merge that touched the file.
 const hostYamlError = ref<string | null>(null)
-
 async function loadMentionAgents() {
   try {
     const res = await $fetch<{ agents: MentionAgent[], host_yaml_error?: string }>(
@@ -162,11 +161,15 @@ const reviewStatus = computed<ReviewStatus | null>(() => issue.value?.review_sta
 
 const mergeBlocked = computed(() => reviewStatus.value?.merge_blocked ?? false)
 
-// Display the server's block_reason string directly.  Falls back to a
-// generic message when the reason is absent or empty.
+// Localized block reason for display. Falls back to a generic message when
+// the reason code is unrecognised.
 const mergeBlockReason = computed(() => {
   if (!mergeBlocked.value) return ''
-  return reviewStatus.value?.block_reason || t('issue.review.blocked')
+  const reason = reviewStatus.value?.block_reason
+  if (reason === 'review_required' || reason === 'changes_requested') {
+    return t(`issue.review.blockReason.${reason}`)
+  }
+  return t('issue.review.blocked')
 })
 
 // Aggregate +/- across every file in the issue diff. Parses each unified
@@ -942,11 +945,12 @@ onUnmounted(() => {
   :key="v.reviewer"
   class="flex items-center gap-2 text-xs"
   >
+  <Bot class="size-3 shrink-0 text-muted-foreground" />
   <span
   class="min-w-0 flex-1 truncate font-medium text-foreground"
-  :title="v.reviewer"
+  :title="`@agent-${v.reviewer}`"
   >
-  {{ v.reviewer }}
+  @agent-{{ v.reviewer }}
   </span>
   <Badge :class="voteValueClass(v.value)" variant="secondary" class="shrink-0">
   <component :is="voteValueIcon(v.value)" class="mr-1 size-3" />
