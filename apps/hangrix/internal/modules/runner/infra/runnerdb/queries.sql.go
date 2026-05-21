@@ -1199,6 +1199,24 @@ func (q *Queries) MarkSessionTerminal(ctx context.Context, arg MarkSessionTermin
 	return result.RowsAffected(), nil
 }
 
+const pingSession = `-- name: PingSession :execrows
+UPDATE agent_sessions
+SET container_last_used_at = NOW()
+WHERE id = $1
+`
+
+// Bumps container_last_used_at to NOW() so the activity timestamp advances
+// even when the container id hasn't changed. The runtime calls this on
+// every agent interaction (tool call, thinking, output) so that
+// roster_list's last_activity_at reflects real-time liveness.
+func (q *Queries) PingSession(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, pingSession, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const redeemEnrollmentUpdate = `-- name: RedeemEnrollmentUpdate :exec
 UPDATE runners
 SET status                 = 'active',

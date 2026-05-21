@@ -591,6 +591,13 @@ type Repo interface {
 	// on).
 	SetSessionContainer(ctx context.Context, sessionID int64, containerID string) error
 
+	// PingSession bumps container_last_used_at to NOW() without changing
+	// any other column. The runtime calls this on every agent interaction
+	// (tool call, thinking, output) so that roster_list's
+	// last_activity_at reflects real-time liveness. Returns
+	// ErrSessionNotFound when the row does not exist.
+	PingSession(ctx context.Context, sessionID int64) error
+
 	// FlagSessionContainerCleanup marks one session's container for
 	// runner-side reaping. Used by the per-session delete path; the
 	// archive and idle-sweep paths use their own batch queries.

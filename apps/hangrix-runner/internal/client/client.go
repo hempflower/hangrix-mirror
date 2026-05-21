@@ -277,6 +277,15 @@ func (c *Client) SetContainer(ctx context.Context, sessionID int64, containerID 
 		setContainerRequest{ContainerID: containerID}, nil, true)
 }
 
+// Ping bumps container_last_used_at so that roster_list last_activity_at
+// reflects real-time liveness. Called on every agent interaction
+// (tool call, thinking, output).
+func (c *Client) Ping(ctx context.Context, sessionID int64) error {
+	return c.do(ctx, http.MethodPost,
+		fmt.Sprintf("/api/runner/sessions/%d/ping", sessionID),
+		nil, nil, true)
+}
+
 type setContainerRequest struct {
 	ContainerID string `json:"container_id"`
 }

@@ -403,6 +403,7 @@ func (r *stubRunnerRepo) ClaimPendingInputs(context.Context, int64, int) ([]*run
 func (r *stubRunnerRepo) SetSessionContainer(context.Context, int64, string) error {
 	return nil
 }
+func (r *stubRunnerRepo) PingSession(context.Context, int64) error { return nil }
 func (r *stubRunnerRepo) FlagSessionContainerCleanup(context.Context, int64) error {
 	return nil
 }

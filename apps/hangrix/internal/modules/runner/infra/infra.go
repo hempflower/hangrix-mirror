@@ -607,6 +607,19 @@ func (r *PostgresRepo) SetSessionContainer(ctx context.Context, sessionID int64,
 	return nil
 }
 
+// PingSession bumps container_last_used_at so roster_list last_activity_at
+// reflects real-time liveness between agent interactions.
+func (r *PostgresRepo) PingSession(ctx context.Context, sessionID int64) error {
+	n, err := r.q.PingSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrSessionNotFound
+	}
+	return nil
+}
+
 // FlagSessionContainerCleanup marks one session's container as needing
 // runner-side reaping. Returns ErrSessionNotFound only when the row truly
 // does not exist — when the row exists but has no live container, the

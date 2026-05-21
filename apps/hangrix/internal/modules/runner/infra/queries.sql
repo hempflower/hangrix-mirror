@@ -360,6 +360,15 @@ SET container_id           = sqlc.arg('container_id'),
     container_last_used_at = NOW()
 WHERE id = sqlc.arg('id');
 
+-- name: PingSession :execrows
+-- Bumps container_last_used_at to NOW() so the activity timestamp advances
+-- even when the container id hasn't changed. The runtime calls this on
+-- every agent interaction (tool call, thinking, output) so that
+-- roster_list's last_activity_at reflects real-time liveness.
+UPDATE agent_sessions
+SET container_last_used_at = NOW()
+WHERE id = sqlc.arg('id');
+
 -- name: FlagSessionContainerCleanup :execrows
 -- Marks a single session's container for runner-side reaping. Used by:
 --   - the controller's delete-session path (user-initiated trash),
