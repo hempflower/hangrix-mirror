@@ -876,7 +876,7 @@
     "patches": {
       "title": "补丁",
       "empty": "暂无补丁提交。",
-      "emptyHint": "Agent 工作进程通过提交补丁来贡献代码，而不是直接推送。每个补丁代表一个可独立审查的贡献。",
+      "emptyHint": "提交到此 issue 的补丁将显示在这里。每个补丁可独立审查和应用。",
       "listLoadFailed": "加载补丁列表失败",
       "detailLoadFailed": "加载补丁详情失败",
       "detailNotFound": "补丁未找到",

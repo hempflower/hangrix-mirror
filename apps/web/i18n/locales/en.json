@@ -876,7 +876,7 @@
     "patches": {
       "title": "Patches",
       "empty": "No patches submitted yet.",
-      "emptyHint": "Agent workers submit patches instead of pushing directly. Each patch represents a single contribution that can be reviewed independently.",
+      "emptyHint": "Patches submitted to this issue will appear here. Each patch can be reviewed and applied independently.",
       "listLoadFailed": "Failed to load patches",
       "detailLoadFailed": "Failed to load patch detail",
       "detailNotFound": "Patch not found",

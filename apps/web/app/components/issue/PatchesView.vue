@@ -71,6 +71,7 @@ async function loadPatches() {
     }
     if (!selectedId.value && patches.value.length > 0) {
       selectedId.value = patches.value[0]!.id
+      loadDetail(patches.value[0]!.id)
     }
   } catch (e: any) {
     listError.value = e?.data?.error ?? t('issue.patches.listLoadFailed')
@@ -283,7 +284,7 @@ const canApply = computed(() => {
           <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
             <span class="flex items-center gap-1">
               <Bot class="size-3" />
-              @agent-{{ p.agent_role }}
+              {{ p.agent_role }}
             </span>
             <Badge :variant="statusVariant(p.status)" class="px-1.5 py-0 text-[10px] leading-none">
               {{ t(`issue.patches.status.${p.status}`) }}
@@ -340,7 +341,7 @@ const canApply = computed(() => {
             <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
               <span class="flex items-center gap-1">
                 <Bot class="size-3" />
-                {{ t('issue.patches.submittedBy', { role: `@agent-${selectedDetail.agent_role}` }) }}
+                {{ t('issue.patches.submittedBy', { role: selectedDetail.agent_role }) }}
               </span>
               <span>{{ rel(selectedDetail.created_at) }}</span>
               <span>{{ t('issue.patches.stats', { files: selectedDetail.file_count, additions: selectedDetail.additions, deletions: selectedDetail.deletions }) }}</span>
