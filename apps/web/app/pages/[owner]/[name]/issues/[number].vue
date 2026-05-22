@@ -435,6 +435,11 @@ function eventLabel(e: any): string {
         name,
         title: e.payload?.title ?? '',
       })
+    case 'patch_applying':
+      return t('issue.patches.timeline.patchApplying', {
+        name,
+        title: e.payload?.title ?? '',
+      })
     case 'patch_applied':
       return t('issue.patches.timeline.patchApplied', {
         name,

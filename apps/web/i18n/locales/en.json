@@ -912,6 +912,7 @@
       "noDescription": "No description provided.",
       "timeline": {
         "patchSubmitted": "{name} submitted a patch: {title}",
+        "patchApplying": "{name} is applying patch \"{title}\"…",
         "patchApplied": "{name} applied patch \"{title}\" → commit {sha}",
         "patchRejected": "{name} rejected patch \"{title}\" — {reason}",
         "patchWithdrawn": "{name} withdrew patch \"{title}\"",

@@ -50,6 +50,7 @@ export type IssueEventKind =
   | 'title_changed'
   | 'review_vote'
   | 'patch_submitted'
+  | 'patch_applying'
   | 'patch_applied'
   | 'patch_rejected'
   | 'patch_withdrawn'
@@ -215,6 +216,11 @@ export interface PatchSubmittedPayload {
   file_count: number
   additions: number
   deletions: number
+}
+
+export interface PatchApplyingPayload {
+  submission_id: number
+  title: string
 }
 
 export interface PatchAppliedPayload {

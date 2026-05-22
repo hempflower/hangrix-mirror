@@ -912,6 +912,7 @@
       "noDescription": "暂无描述。",
       "timeline": {
         "patchSubmitted": "{name} 提交了一个补丁：{title}",
+        "patchApplying": "{name} 正在应用补丁「{title}」…",
         "patchApplied": "{name} 应用了补丁「{title}」→ 提交 {sha}",
         "patchRejected": "{name} 拒绝了补丁「{title}」—— {reason}",
         "patchWithdrawn": "{name} 撤回了补丁「{title}」",
