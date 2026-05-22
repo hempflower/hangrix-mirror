@@ -157,6 +157,8 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		// Patch submissions (patch-first contribution model, issue #102).
 		r.Get("/{number}/patches", h.listPatches)
 		r.Get("/{number}/patches/{patchID}", h.getPatch)
+		r.Post("/{number}/patches/{patchID}/apply", h.applyPatch)
+		r.Post("/{number}/patches/{patchID}/reject", h.rejectPatch)
 	})
 	// Mention-suggestion list: the comment editor reads this once per
 	// issue page load to populate the `@` autocomplete dropdown with
@@ -1329,5 +1331,189 @@ func (h *Handler) getPatch(w http.ResponseWriter, r *http.Request) {
 	pub := toPublicPatch(patch)
 	pub.PatchText = patch.PatchText // include full diff on detail
 	httpx.WriteJSON(w, http.StatusOK, pub)
+}
+
+// applyPatch applies a submitted patch to the issue branch. Only the repo
+// owner/admin may apply patches. The patch must be in 'submitted' state and
+// its base_head_sha must match the current issue head_sha.
+// The commit's author identity is derived from the original patch submitter's
+// role key; the committer is the human maintainer who triggered the apply.
+func (h *Handler) applyPatch(w http.ResponseWriter, r *http.Request) {
+	rc, ok := h.resolveRepo(w, r)
+	if !ok {
+		return
+	}
+	iss, ok := h.loadIssue(w, r, rc.repo.ID)
+	if !ok {
+		return
+	}
+	caller, _ := authdomain.UserFromRequest(r)
+	if !h.canManage(r, caller, rc.repo) {
+		httpx.WriteError(w, http.StatusForbidden, "only the repo owner can apply patches")
+		return
+	}
+
+	rawID := chi.URLParam(r, "patchID")
+	patchID, err := strconv.ParseInt(rawID, 10, 64)
+	if err != nil || patchID <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid patch id")
+		return
+	}
+
+	var req struct {
+		Message string `json:"message,omitempty"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	patch, err := h.patches.GetPatch(r.Context(), patchID)
+	if err != nil {
+		if errors.Is(err, domain.ErrPatchNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "patch not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if patch.IssueID != iss.ID {
+		httpx.WriteError(w, http.StatusNotFound, "patch not found")
+		return
+	}
+	if patch.Status != domain.PatchStatusSubmitted {
+		httpx.WriteError(w, http.StatusConflict, fmt.Sprintf("cannot apply patch with status '%s' — must be 'submitted'", patch.Status))
+		return
+	}
+	if iss.HeadSHA != "" && patch.BaseHeadSHA != iss.HeadSHA {
+		httpx.WriteError(w, http.StatusConflict, "patch base_head_sha does not match current issue head_sha — patch is stale")
+		return
+	}
+
+	msg := strings.TrimSpace(req.Message)
+	if msg == "" {
+		msg = fmt.Sprintf("Apply patch: %s", patch.Title)
+	}
+
+	// Author = original patch submitter (preserved for audit); committer = current user.
+	authorIdentity := agentsessiondomain.IdentityForRole(patch.AgentRole, "")
+	commitSHA, err := h.git.ApplyPatch(
+		rc.fsPath,
+		iss.BranchName,
+		patch.PatchText,
+		msg,
+		gitdomain.Signature{
+			Name:  authorIdentity.Name,
+			Email: authorIdentity.Email,
+			When:  time.Now(),
+		},
+		gitdomain.Signature{
+			Name:  caller.Username,
+			Email: caller.Email,
+			When:  time.Now(),
+		},
+	)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "apply patch: "+err.Error())
+		return
+	}
+
+	updated, err := h.patches.UpdatePatchStatus(r.Context(), patch.ID, domain.PatchStatusApplied, commitSHA, "")
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "update patch status: "+err.Error())
+		return
+	}
+	_ = h.issues.UpdateHeadSHA(r.Context(), iss.ID, commitSHA)
+
+	payload, _ := json.Marshal(domain.PatchEventPayload{
+		SubmissionID: updated.ID,
+		Title:        updated.Title,
+		AgentRole:    updated.AgentRole,
+		CommitSHA:    commitSHA,
+	})
+	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventPatchApplied, payload, caller.ID)
+
+	// Other submitted patches are now stale since the issue head moved.
+	_, _ = h.patches.MarkStalePatches(r.Context(), iss.ID, commitSHA)
+
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"id":         updated.ID,
+		"status":     string(updated.Status),
+		"commit_sha": commitSHA,
+		"applied_at": updated.AppliedAt,
+	})
+}
+
+// rejectPatch rejects a submitted patch without applying it. Only the repo
+// owner/admin may reject patches. The patch must be in 'submitted' state.
+func (h *Handler) rejectPatch(w http.ResponseWriter, r *http.Request) {
+	rc, ok := h.resolveRepo(w, r)
+	if !ok {
+		return
+	}
+	iss, ok := h.loadIssue(w, r, rc.repo.ID)
+	if !ok {
+		return
+	}
+	caller, _ := authdomain.UserFromRequest(r)
+	if !h.canManage(r, caller, rc.repo) {
+		httpx.WriteError(w, http.StatusForbidden, "only the repo owner can reject patches")
+		return
+	}
+
+	rawID := chi.URLParam(r, "patchID")
+	patchID, err := strconv.ParseInt(rawID, 10, 64)
+	if err != nil || patchID <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid patch id")
+		return
+	}
+
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "reason is required")
+		return
+	}
+
+	patch, err := h.patches.GetPatch(r.Context(), patchID)
+	if err != nil {
+		if errors.Is(err, domain.ErrPatchNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "patch not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if patch.IssueID != iss.ID {
+		httpx.WriteError(w, http.StatusNotFound, "patch not found")
+		return
+	}
+	if patch.Status != domain.PatchStatusSubmitted {
+		httpx.WriteError(w, http.StatusConflict, fmt.Sprintf("cannot reject patch with status '%s' — must be 'submitted'", patch.Status))
+		return
+	}
+
+	updated, err := h.patches.UpdatePatchStatus(r.Context(), patch.ID, domain.PatchStatusRejected, "", reason)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "update patch status: "+err.Error())
+		return
+	}
+
+	payload, _ := json.Marshal(domain.PatchEventPayload{
+		SubmissionID: updated.ID,
+		Title:        updated.Title,
+		AgentRole:    updated.AgentRole,
+		Reason:       reason,
+	})
+	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventPatchRejected, payload, caller.ID)
+
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"id":     updated.ID,
+		"status": string(updated.Status),
+		"reason": updated.RejectedReason,
+	})
 }
 
