@@ -373,100 +373,6 @@ func (t *attachmentTool) Call(ctx context.Context, args json.RawMessage) (any, e
 	return text, nil
 }
 
-// maxPatchSeriesBytes bounds the combined size of every .patch file in a
-// single issue_patch_submit. The patch text travels inside the JSON
-// request body, so this must stay within the server's per-call body
-// budget for the patch-submit route (see maxPatchSubmitBody in the
-// platform handler).
-const maxPatchSeriesBytes = 16 << 20
-
-// patchSubmitTool reads the .patch files named in `patch_paths` from the
-// local workspace and submits their *contents* to the server, exactly as
-// attachmentTool does for uploads. The server is a separate process with
-// no access to the agent's working tree — handing it bare workspace paths
-// (the old behaviour) made it read from its own canonical repo storage,
-// where the agent's git-format-patch output does not exist. Reading the
-// files agent-side and shipping the bytes is the only correct split.
-//
-// The LLM-facing descriptor still takes `patch_paths`; the path→content
-// transform is invisible to the model.
-type patchSubmitTool struct {
-	name        string
-	description string
-	schema      map[string]any
-	client      *Client
-}
-
-func (t *patchSubmitTool) Name() string           { return t.name }
-func (t *patchSubmitTool) Description() string    { return t.description }
-func (t *patchSubmitTool) Schema() map[string]any { return t.schema }
-
-func (t *patchSubmitTool) Call(ctx context.Context, args json.RawMessage) (any, error) {
-	var req struct {
-		Title       string   `json:"title"`
-		Description string   `json:"description"`
-		BaseHeadSHA string   `json:"base_head_sha"`
-		PatchPaths  []string `json:"patch_paths"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, fmt.Errorf("issue_patch_submit: parse arguments: %w. Pass a JSON object with title, description, base_head_sha, and patch_paths.", err)
-	}
-	if len(req.PatchPaths) == 0 {
-		return nil, fmt.Errorf("issue_patch_submit: patch_paths is required and must list at least one .patch file (generate them with `git format-patch`).")
-	}
-
-	type patchFile struct {
-		FileName  string `json:"file_name"`
-		PatchText string `json:"patch_text"`
-	}
-	patches := make([]patchFile, 0, len(req.PatchPaths))
-	var total int
-	for i, p := range req.PatchPaths {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			return nil, fmt.Errorf("issue_patch_submit: patch_paths[%d] is empty.", i)
-		}
-		safePath, err := resolveWorkspacePath(p)
-		if err != nil {
-			return nil, fmt.Errorf("issue_patch_submit: %w. Only files inside the workspace can be submitted.", err)
-		}
-		data, err := os.ReadFile(safePath)
-		if err != nil {
-			return nil, fmt.Errorf("issue_patch_submit: cannot read patch_paths[%d] %q: %w. Check that the path exists in the workspace.", i, p, err)
-		}
-		total += len(data)
-		if total > maxPatchSeriesBytes {
-			return nil, fmt.Errorf("issue_patch_submit: patch series exceeds the %d MiB limit. Split the work into a smaller series.", maxPatchSeriesBytes>>20)
-		}
-		// Preserve the workspace-relative path as the file name so the
-		// server-side display (file_name / source_path) is unchanged.
-		patches = append(patches, patchFile{FileName: p, PatchText: string(data)})
-	}
-
-	payload, err := json.Marshal(map[string]any{
-		"title":         req.Title,
-		"description":   req.Description,
-		"base_head_sha": req.BaseHeadSHA,
-		"patches":       patches,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("issue_patch_submit: encode request: %w", err)
-	}
-
-	text, isError, err := t.client.Call(ctx, t.name, payload)
-	if err != nil {
-		return nil, err
-	}
-	if isError {
-		return map[string]any{"is_error": true, "text": text}, nil
-	}
-	var parsed any
-	if err := json.Unmarshal([]byte(text), &parsed); err == nil {
-		return parsed, nil
-	}
-	return text, nil
-}
-
 // All returns every platform tool the agent ships with, bound to the
 // supplied HTTP client. Order matters for catalogue stability — keep
 // read-only tools first then mutating ones, mirroring the order the
@@ -584,61 +490,42 @@ func All(client *Client) []local.Tool {
 		},
 
 		{
-			name:        "issue_patch_submit",
-			description: "Submit a code contribution as a patch series against the issue branch. Use this instead of git push. First run `git format-patch <base_branch>` to generate one or more .patch files, then pass their workspace paths in `patch_paths`. The files are read in order and preserved as a patch series. The maintainer will review and apply the patch.",
-			schema: objectSchema(map[string]any{
-				"title":         stringProp("Short, descriptive title for the patch (required)."),
-				"description":   stringProp("Description of what was changed and why (required)."),
-				"base_head_sha": stringProp("The issue branch's head commit SHA at the time work started (required)."),
-				"patch_paths":   stringArrayProp("Workspace-relative paths to .patch files generated by `git format-patch`. Files are read in this order and preserved as a patch series (required)."),
-			}, []string{"title", "description", "base_head_sha", "patch_paths"}),
-		},
-
-		{
-			name:        "issue_patch_list",
-			description: "List all patch submissions on the current issue. Returns submission-level summaries with status and patch_count.",
+			name:        "contribution_list",
+			description: "List the contribution branches on the current issue. Each entry has id, agent_role, ref_name, status (pending/approved/rejected/merged/closed), mergeable, merge_mode, head_sha, and diff stats. A contribution is created automatically when you push to issue-<N>/<your-role>/<slug>.",
 			schema:      objectSchema(nil, nil),
 		},
 		{
-			name:        "issue_patch_read",
-			description: "Read a single patch submission by ID. Returns submission metadata plus an ordered list of patch files (patches[]), each with index, file_name, source_path, subject (optional), and patch_text. The patches array is ordered — apply in sequence with git am.",
+			name:        "contribution_read",
+			description: "Read one contribution: metadata, the real diff against the issue branch (what this branch adds), and its review status (verdict plus which required reviewers still must vote). Use the id from contribution_list.",
 			schema: objectSchema(map[string]any{
-				"id": intProp("The patch submission ID to read (required)."),
+				"id": intProp("Contribution id to read (from contribution_list)."),
 			}, []string{"id"}),
+		},
+		{
+			name:        "contribution_set_meta",
+			description: "Set the title and description of your own contribution branch (its merge-request title/body). Only the role that owns the branch may set its metadata.",
+			schema: objectSchema(map[string]any{
+				"id":          intProp("Contribution id."),
+				"title":       stringProp("Short title (1-200 chars)."),
+				"description": stringProp("Optional longer description."),
+			}, []string{"id", "title"}),
 		},
 
 		{
-			name:        "issue_patch_apply",
-			description: "Request the apply agent to apply a patch submission to the issue branch. Only submissions with status='submitted' can be requested. The application happens asynchronously: the server sets status to 'applying' and dispatches a patch.apply_requested event; the apply agent performs git am + git push in its workspace and reports back via issue_patch_apply_result. Returns 'accepted' confirmation — do not expect a commit_sha in the response. Requires `issue_patch_apply` in the role's `can:` whitelist.",
+			name:        "contribution_apply",
+			description: "Merge an approved contribution branch into the issue branch (first-level gate). The server validates the review gate (status must be approved) + mergeability and computes the merge commit — there is no agent push. Requires `contribution_apply` in the role's `can:` whitelist (the maintainer).",
 			schema: objectSchema(map[string]any{
-				"id": intProp("The patch submission ID to request application for (required)."),
+				"id":      intProp("Contribution id to merge (from contribution_list)."),
+				"message": stringProp("Optional merge commit message."),
 			}, []string{"id"}),
 		},
 		{
-			name:        "issue_patch_reject",
-			description: "Reject a patch submission. Only submissions with status='submitted' or 'applying' can be rejected. Records a rejection reason on the timeline. Requires `issue_patch_reject` in the role's `can:` whitelist.",
+			name:        "contribution_close",
+			description: "Close (abandon) your own contribution branch. Only the owning role may close it; merged contributions cannot be closed.",
 			schema: objectSchema(map[string]any{
-				"id":     intProp("The patch submission ID to reject (required)."),
-				"reason": stringProp("Reason for rejection (required, shown on timeline)."),
-			}, []string{"id", "reason"}),
-		},
-		{
-			name:        "issue_patch_withdraw",
-			description: "Withdraw your own patch submission. Only the original submitter (same role on the same issue) can withdraw. Only submissions with status='submitted' can be withdrawn; terminal statuses (applied/rejected/superseded/voided) and in-flight statuses (applying) cannot. The submission is marked 'withdrawn' and a timeline event is recorded.",
-			schema: objectSchema(map[string]any{
-				"id": intProp("The patch submission ID to withdraw (required)."),
+				"id":     intProp("Contribution id to close."),
+				"reason": stringProp("Optional rationale, recorded on the timeline."),
 			}, []string{"id"}),
-		},
-
-		{
-			name:        "issue_patch_apply_result",
-			description: "Report the result of applying a patch submission via git am + git push in the workspace. Call this after the git am workflow completes (success or failure). On success, pass the new commit_sha — the server marks the submission 'applied' and updates the issue head. On failure, pass an error description distinguishing conflict, am-failure, or push-failure — the server records the error on the submission (status stays 'applying' so it can be retried).",
-			schema: objectSchema(map[string]any{
-				"submission_id": intProp("The patch submission ID that was applied (required)."),
-				"success":       boolProp("Whether git am + git push succeeded (required)."),
-				"commit_sha":    stringProp("The new commit SHA on the issue branch after successful apply. Required when success=true."),
-				"error":         stringProp("Error description when success=false. Distinguish: conflict, am-failure, push-failure."),
-			}, []string{"submission_id", "success"}),
 		},
 
 	{
@@ -695,13 +582,6 @@ func All(client *Client) []local.Tool {
 				schema:      d.schema,
 				client:      client,
 			})
-		case "issue_patch_submit":
-			out = append(out, &patchSubmitTool{
-				name:        d.name,
-				description: d.description,
-				schema:      d.schema,
-				client:      client,
-			})
 		default:
 			out = append(out, &Tool{
 				name:        d.name,
@@ -739,8 +619,4 @@ func enumProp(desc string, values []string) map[string]any {
 
 func boolProp(desc string) map[string]any {
 	return map[string]any{"type": "boolean", "description": desc}
-}
-
-func stringArrayProp(desc string) map[string]any {
-	return map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": desc}
 }

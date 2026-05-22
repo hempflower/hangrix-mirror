@@ -13,15 +13,13 @@
 // (kind:"event"). Known event types the runner may deliver:
 //
 //   - "issue.comment"           — someone commented on the issue
-//   - "commit.pushed"           — a commit was pushed to the issue branch
-//   - "patch.submitted"         — a new patch submission was created
-//   - "patch.apply_requested"   — the apply agent should apply the given
-//     submission via git am + push. Payload: {"submission_id":<int64>,
-//     "issue_number":<int>}. The runner has no special handling for this
-//     event — it passes through transparently; the agent's role prompt
-//     and tools (issue_patch_read, issue_patch_apply_result) handle the
-//     workflow. The runner's only responsibility is ensuring the workspace
-//     (cloned repo with credential helper) is ready for git am + git push.
+//   - "commit.pushed"           — a commit was pushed (issue branch or a
+//     contribution branch issue-<N>/<role>/<slug>); reviewers wake on this
+//   - "review_vote.posted"      — a reviewer cast a vote on a contribution
+//
+// The runner has no special handling for any event — it passes them through
+// transparently to the agent. Its only responsibility is ensuring the
+// workspace (cloned repo with credential helper) is ready for git push.
 package orchestrator
 
 import (
