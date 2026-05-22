@@ -6,6 +6,22 @@
 // Separating the surface lets the loop package be unit-tested without a
 // real docker daemon, and lets us swap to containerd or podman later
 // without touching the IO-forwarding code.
+//
+// # IPC Event Types
+//
+// The runner transports platform events to the agent via stdin JSON-Lines
+// (kind:"event"). Known event types the runner may deliver:
+//
+//   - "issue.comment"           — someone commented on the issue
+//   - "commit.pushed"           — a commit was pushed to the issue branch
+//   - "patch.submitted"         — a new patch submission was created
+//   - "patch.apply_requested"   — the apply agent should apply the given
+//     submission via git am + push. Payload: {"submission_id":<int64>,
+//     "issue_number":<int>}. The runner has no special handling for this
+//     event — it passes through transparently; the agent's role prompt
+//     and tools (issue_patch_read, issue_patch_apply_result) handle the
+//     workflow. The runner's only responsibility is ensuring the workspace
+//     (cloned repo with credential helper) is ready for git am + git push.
 package orchestrator
 
 import (

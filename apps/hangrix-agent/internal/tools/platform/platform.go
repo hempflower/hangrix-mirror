@@ -499,6 +499,29 @@ func All(client *Client) []local.Tool {
 			}, []string{"title", "description", "base_head_sha", "patch"}),
 		},
 
+		{
+			name:        "issue_patch_list",
+			description: "List all patch submissions on the current issue. Returns submission-level summaries with status and patch_count.",
+			schema:      objectSchema(nil, nil),
+		},
+		{
+			name:        "issue_patch_read",
+			description: "Read a single patch submission by ID. Returns submission metadata plus an ordered list of patch files (patches[]), each with index, file_name, source_path, subject (optional), and patch_text. The patches array is ordered — apply in sequence with git am.",
+			schema: objectSchema(map[string]any{
+				"id": intProp("The patch submission ID to read (required)."),
+			}, []string{"id"}),
+		},
+		{
+			name:        "issue_patch_apply_result",
+			description: "Report the result of applying a patch submission via git am + git push in the workspace. Call this after the git am workflow completes (success or failure). On success, pass the new commit_sha; on failure, pass an error description distinguishing conflict, am-failure, or push-failure. The server updates the submission status to 'applied' or back from 'applying' to 'submitted' with the error recorded.",
+			schema: objectSchema(map[string]any{
+				"submission_id": intProp("The patch submission ID that was applied (required)."),
+				"success":       boolProp("Whether git am + git push succeeded (required)."),
+				"commit_sha":    stringProp("The new commit SHA on the issue branch after successful apply. Required when success=true."),
+				"error":         stringProp("Error description when success=false. Distinguish: conflict, am-failure, push-failure."),
+			}, []string{"submission_id", "success"}),
+		},
+
 	{
 		name:        "release_create",
 		description: "Create a new release in draft state from an existing git tag. The tag must already exist in the repo.",

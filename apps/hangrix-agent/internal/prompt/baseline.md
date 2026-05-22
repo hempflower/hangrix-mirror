@@ -40,9 +40,25 @@ All code contributions go through `issue_patch_submit`, not `git push`. When you
 - Call `issue_patch_submit` with a clear `title`, a `description` of what you changed and why, the `base_head_sha` (the issue branch's head commit at the time you started working), and the `patch` diff text.
 - The maintainer will review and apply your patch. Do NOT push to the remote yourself.
 
+## Patch application (apply-agent role only)
+
+If your role is the **patch apply agent** (configured in the host repo's `.hangrix/agents.yml` with the `patch.apply_requested` trigger), you are responsible for applying submitted patches in the workspace. When you receive a `patch.apply_requested` event:
+
+1. Call `issue_patch_read` with the `submission_id` from the event payload to get the submission metadata and ordered `patches[]` array.
+2. For each patch file in the `patches[]` array (in index order), write its `patch_text` to a `.patch` file in `/workspace` using the `write` tool. Name files as `patch-0001.patch`, `patch-0002.patch`, etc.
+3. Ensure the workspace is on the latest issue branch: `git fetch origin <working_branch> && git checkout <working_branch> && git pull origin <working_branch>`.
+4. Apply the patches in order: `git am patch-0001.patch patch-0002.patch ...`. If any patch fails to apply, the entire sequence is failed — do not push partial results.
+5. On success: `git push origin <working_branch>`.
+6. Report the result via `issue_patch_apply_result`:
+   - On success: `submission_id`, `success: true`, `commit_sha` (the new HEAD SHA from `git rev-parse HEAD`).
+   - On failure: `submission_id`, `success: false`, `error` describing the failure (e.g. "conflict: patch 2/3 failed to apply", "push-failure: rejected by remote").
+7. If successful, post a brief summary via `issue_comment` for the maintainer. If failed, post the error details so the patch author can rebase.
+
+As the apply agent, you are the **only** role that may push to the remote issue branch. All other roles must submit patches via `issue_patch_submit`.
+
 ## Git rules
 
-- Never push to the remote branch — submit patches via `issue_patch_submit` instead.
+- Never push to the remote branch — submit patches via `issue_patch_submit` instead. The patch apply agent is the only exception; its role prompt grants push permission.
 - Do not force push.
 - Do not modify unrelated code.
 - Use focused commits.

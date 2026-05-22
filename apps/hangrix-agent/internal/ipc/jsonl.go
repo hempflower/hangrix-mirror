@@ -31,6 +31,15 @@ import (
 //   - "history": Messages holds the replayed session history (may be empty
 //     for a brand new session).
 //   - "event":   Event names the trigger; Payload carries the JSON body.
+//     Known event types:
+//       * "issue.comment"          — someone commented on the issue
+//       * "commit.pushed"          — a commit was pushed to the issue branch
+//       * "patch.submitted"        — a new patch submission was created
+//       * "patch.apply_requested"  — the apply agent should apply the given
+//         submission via git am + push. Payload: {"submission_id":<int64>,
+//         "issue_number":<int>}. The apply agent reads the submission with
+//         issue_patch_read, creates .patch files, runs git am, pushes, and
+//         reports back via issue_patch_apply_result.
 //   - "control": Op names the control command (today only "shutdown").
 //
 // We keep all fields on one struct rather than a tagged union because the
