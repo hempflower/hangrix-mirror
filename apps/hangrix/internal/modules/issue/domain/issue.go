@@ -58,6 +58,19 @@ const (
 	// EventPatchRejected fires when a maintainer rejects a patch.
 	// Payload follows PatchEventPayload.
 	EventPatchRejected EventKind = "patch_rejected"
+
+	// EventPatchApplying fires when a maintainer triggers apply of a
+	// patch submission, transitioning it to the 'applying' state before
+	// the async workspace apply takes over. Payload follows PatchEventPayload.
+	EventPatchApplying EventKind = "patch_applying"
+
+	// EventPatchWithdrawn fires when the original submitter withdraws
+	// their own patch submission. Payload follows PatchEventPayload.
+	EventPatchWithdrawn EventKind = "patch_withdrawn"
+
+	// EventPatchVoided fires when a maintainer / system voids a patch
+	// submission that is no longer valid. Payload follows PatchEventPayload.
+	EventPatchVoided EventKind = "patch_voided"
 )
 
 // ReviewVoteValue enumerates the three vote outcomes a reviewer (agent or
@@ -545,21 +558,28 @@ type AttachmentUploader interface {
 
 	// PatchStatus models the lifecycle of a patch submission.
 	// submitted: freshly submitted, awaiting review
-	// stale: base_head_sha no longer matches issue.head_sha
+	// applying: maintainer has accepted the submission; an apply agent is working on it
 	// applied: maintainer applied the patch to the issue branch
 	// rejected: maintainer rejected the patch
 	// superseded: a newer patch from the same role superseded this one
+	// withdrawn: the original submitter withdrew their own submission
+	// voided: a maintainer / system voided the submission (no longer valid)
 	type PatchStatus string
 
 	const (
 		PatchStatusSubmitted   PatchStatus = "submitted"
-		PatchStatusStale       PatchStatus = "stale"
+		PatchStatusApplying    PatchStatus = "applying"
 		PatchStatusApplied     PatchStatus = "applied"
 		PatchStatusRejected    PatchStatus = "rejected"
 		PatchStatusSuperseded  PatchStatus = "superseded"
+		PatchStatusWithdrawn   PatchStatus = "withdrawn"
+		PatchStatusVoided      PatchStatus = "voided"
 	)
 
-	// PatchSubmission is a single patch contributed by an agent to an issue.
+	// PatchSubmission is a patch submission contributed by an agent to an issue.
+	// A submission may contain multiple patch files (a series), each stored in
+	// the PatchFile child table. Aggregate stats (changed_paths, file_count,
+	// additions, deletions, patch_count) are denormalised on the submission row.
 	type PatchSubmission struct {
 		ID               int64
 		RepoID           int64
@@ -569,7 +589,7 @@ type AttachmentUploader interface {
 		BaseHeadSHA      string
 		Title            string
 		Description      string
-		PatchText        string
+		PatchCount       int32
 		ChangedPaths     []string
 		FileCount        int32
 		Additions        int32
@@ -578,20 +598,46 @@ type AttachmentUploader interface {
 		AppliedCommitSHA string
 		AppliedAt        *time.Time
 		RejectedReason   string
+		ApplyError       string
 		CreatedAt        time.Time
 		UpdatedAt        time.Time
 	}
 
-	// PatchStore is the persistence abstraction for patch submissions.
+	// PatchFile is a single patch file within a PatchSubmission series.
+	// Seq is 1-based and determines the order in which patches are applied.
+	type PatchFile struct {
+		ID           int64
+		SubmissionID int64
+		Seq          int32
+		FileName     string
+		PatchText    string
+		Subject      string
+	}
+
+	// PatchFileParams is used when creating a batch of patch files for a
+	// new submission. Seq must be supplied by the caller (1-based).
+	type PatchFileParams struct {
+		Seq       int32
+		FileName  string
+		PatchText string
+		Subject   string
+	}
+
+	// PatchStore is the persistence abstraction for patch submissions and
+	// their associated patch file series.
 	type PatchStore interface {
 		CreatePatch(ctx context.Context, p *PatchSubmission) (*PatchSubmission, error)
+		CreatePatchFiles(ctx context.Context, submissionID int64, files []PatchFileParams) error
 		GetPatch(ctx context.Context, id int64) (*PatchSubmission, error)
+		GetPatchFiles(ctx context.Context, submissionID int64) ([]PatchFile, error)
 		ListPatches(ctx context.Context, issueID int64) ([]*PatchSubmission, error)
 		UpdatePatchStatus(ctx context.Context, id int64, status PatchStatus, appliedCommitSHA, rejectedReason string) (*PatchSubmission, error)
-		// MarkStalePatches marks every submitted patch whose base_head_sha
-		// does not match the given newHeadSHA as stale. Returns the count
-		// of rows updated.
-		MarkStalePatches(ctx context.Context, issueID int64, newHeadSHA string) (int64, error)
+		// MarkApplying transitions a submitted patch to applying and returns
+		// the updated submission. Fails if the patch is not in 'submitted' state.
+		MarkApplying(ctx context.Context, id int64) (*PatchSubmission, error)
+		// UpdateApplyError records the error from a failed apply attempt on
+		// a patch that is currently in 'applying' state.
+		UpdateApplyError(ctx context.Context, id int64, applyError string) error
 		// SupersedePatches marks every submitted patch from the given
 		// (issue_id, agent_role) as superseded. Called when a new patch is
 		// submitted by the same role.
@@ -599,9 +645,9 @@ type AttachmentUploader interface {
 	}
 
 	var (
-		ErrPatchNotFound    = errors.New("patch submission not found")
-		ErrPatchNotApplied  = errors.New("patch is not in 'submitted' or is stale; cannot apply")
-		ErrPatchNotRejected = errors.New("patch is not in 'submitted' state; cannot reject")
+		ErrPatchNotFound      = errors.New("patch submission not found")
+		ErrPatchNotSubmitted  = errors.New("patch is not in 'submitted' state")
+		ErrPatchNotWithdrawn  = errors.New("patch is not in a state that can be withdrawn")
 	)
 
 

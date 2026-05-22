@@ -75,6 +75,8 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 		r.issuePatchSubmitTool(),
 		r.issuePatchApplyTool(),
 		r.issuePatchRejectTool(),
+		r.issuePatchWithdrawTool(),
+		r.issuePatchApplyResultTool(),
 		r.releaseCreateTool(),
 		r.releaseUploadAssetTool(),
 		r.releasePublishTool(),

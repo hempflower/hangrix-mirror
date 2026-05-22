@@ -44,18 +44,24 @@ const (
 	// role's TriggerSpec accepts `paths` / `paths_ignore` glob lists
 	// (same PushFilter) to narrow which patches wake it.
 	TriggerPatchSubmitted Trigger = "patch.submitted"
+
+	// TriggerPatchApplyRequested fires when a maintainer triggers
+	// application of a patch submission. Wakes the dedicated apply-agent
+	// role so it picks up the submission and applies via `git am`.
+	TriggerPatchApplyRequested Trigger = "patch.apply_requested"
 )
 
 // validTriggers is consulted by the parser; map lookup keeps the check
 // O(1) and the constants above remain the single source of truth.
 var validTriggers = map[Trigger]struct{}{
-	TriggerIssueOpened:      {},
-	TriggerIssueClosed:      {},
-	TriggerIssueComment:     {},
-	TriggerCommitPushed:     {},
-	TriggerReviewVotePosted: {},
-	TriggerCIStatusChanged:  {},
-	TriggerPatchSubmitted:   {},
+	TriggerIssueOpened:       {},
+	TriggerIssueClosed:       {},
+	TriggerIssueComment:      {},
+	TriggerCommitPushed:      {},
+	TriggerReviewVotePosted:  {},
+	TriggerCIStatusChanged:   {},
+	TriggerPatchSubmitted:    {},
+	TriggerPatchApplyRequested: {},
 }
 
 // IsValidTrigger reports whether s is a platform-recognised event name.

@@ -96,7 +96,6 @@ type IssuePatch struct {
 	BaseHeadSha      string
 	Title            string
 	Description      string
-	PatchText        string
 	ChangedPaths     []string
 	FileCount        int32
 	Additions        int32
@@ -107,6 +106,17 @@ type IssuePatch struct {
 	RejectedReason   pgtype.Text
 	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
+	PatchCount       int32
+	ApplyError       string
+}
+
+type IssuePatchFile struct {
+	ID           int64
+	SubmissionID int64
+	Seq          int32
+	FileName     string
+	PatchText    string
+	Subject      string
 }
 
 type Organization struct {

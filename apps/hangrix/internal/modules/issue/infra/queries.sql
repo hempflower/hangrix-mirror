@@ -259,7 +259,7 @@ WHERE id = sqlc.arg('id') AND status <> 'deleted';
 -- name: CreatePatch :one
 INSERT INTO issue_patches (
     repo_id, issue_id, session_id, agent_role, base_head_sha,
-    title, description, patch_text, changed_paths,
+    title, description, patch_count, changed_paths,
     file_count, additions, deletions, status
 )
 VALUES (
@@ -270,7 +270,7 @@ VALUES (
     sqlc.arg('base_head_sha'),
     sqlc.arg('title'),
     sqlc.arg('description'),
-    sqlc.arg('patch_text'),
+    sqlc.arg('patch_count'),
     sqlc.arg('changed_paths'),
     sqlc.arg('file_count'),
     sqlc.arg('additions'),
@@ -281,18 +281,20 @@ RETURNING id, created_at, updated_at;
 
 -- name: GetPatch :one
 SELECT id, repo_id, issue_id, session_id, agent_role,
-       base_head_sha, title, description, patch_text,
+       base_head_sha, title, description, patch_count,
        changed_paths, file_count, additions, deletions,
        status, applied_commit_sha, applied_at, rejected_reason,
+       apply_error,
        created_at, updated_at
 FROM issue_patches
 WHERE id = sqlc.arg('id');
 
 -- name: ListPatches :many
 SELECT id, repo_id, issue_id, session_id, agent_role,
-       base_head_sha, title, description, patch_text,
+       base_head_sha, title, description, patch_count,
        changed_paths, file_count, additions, deletions,
        status, applied_commit_sha, applied_at, rejected_reason,
+       apply_error,
        created_at, updated_at
 FROM issue_patches
 WHERE issue_id = sqlc.arg('issue_id')
@@ -306,7 +308,7 @@ SET status = sqlc.arg('status'),
                               ELSE applied_commit_sha
                          END,
     applied_at = CASE WHEN sqlc.arg('status') = 'applied' THEN NOW() ELSE applied_at END,
-    rejected_reason = CASE WHEN sqlc.arg('status') = 'rejected'
+    rejected_reason = CASE WHEN sqlc.arg('status') IN ('rejected', 'voided')
                            THEN sqlc.arg('rejected_reason')
                            ELSE rejected_reason
                       END,
@@ -314,12 +316,16 @@ SET status = sqlc.arg('status'),
 WHERE id = sqlc.arg('id')
 RETURNING repo_id, issue_id;
 
--- name: MarkStalePatches :execrows
+-- name: MarkApplying :one
 UPDATE issue_patches
-SET status = 'stale', updated_at = NOW()
-WHERE issue_id = sqlc.arg('issue_id')
-  AND status = 'submitted'
-  AND base_head_sha <> sqlc.arg('new_head_sha');
+SET status = 'applying', updated_at = NOW()
+WHERE id = sqlc.arg('id') AND status = 'submitted'
+RETURNING repo_id, issue_id;
+
+-- name: UpdateApplyError :exec
+UPDATE issue_patches
+SET apply_error = sqlc.arg('apply_error'), updated_at = NOW()
+WHERE id = sqlc.arg('id') AND status = 'applying';
 
 -- name: SupersedePatches :execrows
 UPDATE issue_patches
@@ -328,5 +334,23 @@ WHERE issue_id = sqlc.arg('issue_id')
   AND agent_role = sqlc.arg('agent_role')
   AND status = 'submitted'
   AND id <> sqlc.arg('except_id');
+
+-- name: CreatePatchFiles :copyfrom
+INSERT INTO issue_patch_files (
+    submission_id, seq, file_name, patch_text, subject
+)
+VALUES (
+    sqlc.arg('submission_id'),
+    sqlc.arg('seq'),
+    sqlc.arg('file_name'),
+    sqlc.arg('patch_text'),
+    sqlc.arg('subject')
+);
+
+-- name: GetPatchFiles :many
+SELECT id, submission_id, seq, file_name, patch_text, subject
+FROM issue_patch_files
+WHERE submission_id = sqlc.arg('submission_id')
+ORDER BY seq;
 
 

@@ -583,7 +583,7 @@ func (s *PostgresStore) CreatePatch(ctx context.Context, p *domain.PatchSubmissi
 		BaseHeadSha:  p.BaseHeadSHA,
 		Title:        p.Title,
 		Description:  p.Description,
-		PatchText:    p.PatchText,
+		PatchCount:   p.PatchCount,
 		ChangedPaths: p.ChangedPaths,
 		FileCount:    p.FileCount,
 		Additions:    p.Additions,
@@ -604,7 +604,7 @@ func (s *PostgresStore) GetPatch(ctx context.Context, id int64) (*domain.PatchSu
 		}
 		return nil, err
 	}
-	return patchFromRow(row), nil
+	return patchFromGetRow(row), nil
 }
 
 func (s *PostgresStore) ListPatches(ctx context.Context, issueID int64) ([]*domain.PatchSubmission, error) {
@@ -614,7 +614,7 @@ func (s *PostgresStore) ListPatches(ctx context.Context, issueID int64) ([]*doma
 	}
 	out := make([]*domain.PatchSubmission, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, patchFromRow(r))
+		out = append(out, patchFromListRow(r))
 	}
 	return out, nil
 }
@@ -636,13 +636,6 @@ func (s *PostgresStore) UpdatePatchStatus(ctx context.Context, id int64, status 
 	return s.GetPatch(ctx, id)
 }
 
-func (s *PostgresStore) MarkStalePatches(ctx context.Context, issueID int64, newHeadSHA string) (int64, error) {
-	return s.q.MarkStalePatches(ctx, issuedb.MarkStalePatchesParams{
-		IssueID:    issueID,
-		NewHeadSha: newHeadSHA,
-	})
-}
-
 func (s *PostgresStore) SupersedePatches(ctx context.Context, issueID int64, agentRole string, exceptID int64) (int64, error) {
 	return s.q.SupersedePatches(ctx, issuedb.SupersedePatchesParams{
 		IssueID:   issueID,
@@ -651,7 +644,62 @@ func (s *PostgresStore) SupersedePatches(ctx context.Context, issueID int64, age
 	})
 }
 
-func patchFromRow(r issuedb.IssuePatch) *domain.PatchSubmission {
+func (s *PostgresStore) CreatePatchFiles(ctx context.Context, submissionID int64, files []domain.PatchFileParams) error {
+	if len(files) == 0 {
+		return nil
+	}
+	params := make([]issuedb.CreatePatchFilesParams, len(files))
+	for i, f := range files {
+		params[i] = issuedb.CreatePatchFilesParams{
+			SubmissionID: submissionID,
+			Seq:          f.Seq,
+			FileName:     f.FileName,
+			PatchText:    f.PatchText,
+			Subject:      f.Subject,
+		}
+	}
+	_, err := s.q.CreatePatchFiles(ctx, params)
+	return err
+}
+
+func (s *PostgresStore) GetPatchFiles(ctx context.Context, submissionID int64) ([]domain.PatchFile, error) {
+	rows, err := s.q.GetPatchFiles(ctx, submissionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.PatchFile, len(rows))
+	for i, r := range rows {
+		out[i] = domain.PatchFile{
+			ID:           r.ID,
+			SubmissionID: r.SubmissionID,
+			Seq:          r.Seq,
+			FileName:     r.FileName,
+			PatchText:    r.PatchText,
+			Subject:      r.Subject,
+		}
+	}
+	return out, nil
+}
+
+func (s *PostgresStore) MarkApplying(ctx context.Context, id int64) (*domain.PatchSubmission, error) {
+	_, err := s.q.MarkApplying(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrPatchNotSubmitted
+		}
+		return nil, err
+	}
+	return s.GetPatch(ctx, id)
+}
+
+func (s *PostgresStore) UpdateApplyError(ctx context.Context, id int64, applyError string) error {
+	return s.q.UpdateApplyError(ctx, issuedb.UpdateApplyErrorParams{
+		ID:         id,
+		ApplyError: applyError,
+	})
+}
+
+func patchFromGetRow(r issuedb.GetPatchRow) *domain.PatchSubmission {
 	p := &domain.PatchSubmission{
 		ID:           r.ID,
 		RepoID:       r.RepoID,
@@ -661,12 +709,46 @@ func patchFromRow(r issuedb.IssuePatch) *domain.PatchSubmission {
 		BaseHeadSHA:  r.BaseHeadSha,
 		Title:        r.Title,
 		Description:  r.Description,
-		PatchText:    r.PatchText,
+		PatchCount:   r.PatchCount,
 		ChangedPaths: r.ChangedPaths,
 		FileCount:    r.FileCount,
 		Additions:    r.Additions,
 		Deletions:    r.Deletions,
 		Status:       domain.PatchStatus(r.Status),
+		ApplyError:   r.ApplyError,
+		CreatedAt:    r.CreatedAt.Time,
+		UpdatedAt:    r.UpdatedAt.Time,
+	}
+	if r.AppliedCommitSha.Valid {
+		p.AppliedCommitSHA = r.AppliedCommitSha.String
+	}
+	if r.AppliedAt.Valid {
+		t := r.AppliedAt.Time
+		p.AppliedAt = &t
+	}
+	if r.RejectedReason.Valid {
+		p.RejectedReason = r.RejectedReason.String
+	}
+	return p
+}
+
+func patchFromListRow(r issuedb.ListPatchesRow) *domain.PatchSubmission {
+	p := &domain.PatchSubmission{
+		ID:           r.ID,
+		RepoID:       r.RepoID,
+		IssueID:      r.IssueID,
+		SessionID:    r.SessionID,
+		AgentRole:    r.AgentRole,
+		BaseHeadSHA:  r.BaseHeadSha,
+		Title:        r.Title,
+		Description:  r.Description,
+		PatchCount:   r.PatchCount,
+		ChangedPaths: r.ChangedPaths,
+		FileCount:    r.FileCount,
+		Additions:    r.Additions,
+		Deletions:    r.Deletions,
+		Status:       domain.PatchStatus(r.Status),
+		ApplyError:   r.ApplyError,
 		CreatedAt:    r.CreatedAt.Time,
 		UpdatedAt:    r.UpdatedAt.Time,
 	}

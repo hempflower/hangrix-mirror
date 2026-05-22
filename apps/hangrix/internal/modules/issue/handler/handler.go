@@ -159,6 +159,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Get("/{number}/patches/{patchID}", h.getPatch)
 		r.Post("/{number}/patches/{patchID}/apply", h.applyPatch)
 		r.Post("/{number}/patches/{patchID}/reject", h.rejectPatch)
+		r.Post("/{number}/patches/{patchID}/void", h.voidPatch)
 	})
 	// Mention-suggestion list: the comment editor reads this once per
 	// issue page load to populate the `@` autocomplete dropdown with
@@ -1237,24 +1238,33 @@ func parseInt32(raw string, def int32) int32 {
 // --- patch handlers ---
 
 type publicPatch struct {
-	ID               int64      `json:"id"`
-	IssueID          int64      `json:"issue_id"`
-	SessionID        int64      `json:"session_id"`
-	AgentRole        string     `json:"agent_role"`
-	BaseHeadSHA      string     `json:"base_head_sha"`
-	Title            string     `json:"title"`
-	Description      string     `json:"description"`
-	PatchText        string     `json:"patch_text,omitempty"`
-	ChangedPaths     []string   `json:"changed_paths"`
-	FileCount        int32      `json:"file_count"`
-	Additions        int32      `json:"additions"`
-	Deletions        int32      `json:"deletions"`
-	Status           string     `json:"status"`
-	AppliedCommitSHA string     `json:"applied_commit_sha,omitempty"`
-	AppliedAt        *time.Time `json:"applied_at,omitempty"`
-	RejectedReason   string     `json:"rejected_reason,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID               int64            `json:"id"`
+	IssueID          int64            `json:"issue_id"`
+	SessionID        int64            `json:"session_id"`
+	AgentRole        string           `json:"agent_role"`
+	BaseHeadSHA      string           `json:"base_head_sha"`
+	Title            string           `json:"title"`
+	Description      string           `json:"description"`
+	PatchCount       int32            `json:"patch_count"`
+	ChangedPaths     []string         `json:"changed_paths"`
+	FileCount        int32            `json:"file_count"`
+	Additions        int32            `json:"additions"`
+	Deletions        int32            `json:"deletions"`
+	Status           string           `json:"status"`
+	AppliedCommitSHA string           `json:"applied_commit_sha,omitempty"`
+	AppliedAt        *time.Time       `json:"applied_at,omitempty"`
+	RejectedReason   string           `json:"rejected_reason,omitempty"`
+	ApplyError       string           `json:"apply_error,omitempty"`
+	Files            []publicPatchFile `json:"files,omitempty"`
+	CreatedAt        time.Time        `json:"created_at"`
+	UpdatedAt        time.Time        `json:"updated_at"`
+}
+
+type publicPatchFile struct {
+	Seq       int32  `json:"seq"`
+	FileName  string `json:"file_name"`
+	PatchText string `json:"patch_text,omitempty"`
+	Subject   string `json:"subject,omitempty"`
 }
 
 func toPublicPatch(p *domain.PatchSubmission) publicPatch {
@@ -1266,6 +1276,7 @@ func toPublicPatch(p *domain.PatchSubmission) publicPatch {
 		BaseHeadSHA:      p.BaseHeadSHA,
 		Title:            p.Title,
 		Description:      p.Description,
+		PatchCount:       p.PatchCount,
 		ChangedPaths:     p.ChangedPaths,
 		FileCount:        p.FileCount,
 		Additions:        p.Additions,
@@ -1274,6 +1285,7 @@ func toPublicPatch(p *domain.PatchSubmission) publicPatch {
 		AppliedCommitSHA: p.AppliedCommitSHA,
 		AppliedAt:        p.AppliedAt,
 		RejectedReason:   p.RejectedReason,
+		ApplyError:       p.ApplyError,
 		CreatedAt:        p.CreatedAt,
 		UpdatedAt:        p.UpdatedAt,
 	}
@@ -1329,15 +1341,24 @@ func (h *Handler) getPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pub := toPublicPatch(patch)
-	pub.PatchText = patch.PatchText // include full diff on detail
+	// Include the patch file series on detail view.
+	if patchFiles, err := h.patches.GetPatchFiles(r.Context(), patch.ID); err == nil {
+		pub.Files = make([]publicPatchFile, len(patchFiles))
+		for i, pf := range patchFiles {
+			pub.Files[i] = publicPatchFile{
+				Seq:       pf.Seq,
+				FileName:  pf.FileName,
+				PatchText: pf.PatchText,
+				Subject:   pf.Subject,
+			}
+		}
+	}
 	httpx.WriteJSON(w, http.StatusOK, pub)
 }
 
-// applyPatch applies a submitted patch to the issue branch. Only the repo
-// owner/admin may apply patches. The patch must be in 'submitted' state and
-// its base_head_sha must match the current issue head_sha.
-// The commit's author identity is derived from the original patch submitter's
-// role key; the committer is the human maintainer who triggered the apply.
+// applyPatch transitions a submitted patch to 'applying' so a dedicated
+// apply agent can pick it up and apply via `git am` in its workspace.
+// base_head_sha is NOT gated — the apply agent decides via `git am`.
 func (h *Handler) applyPatch(w http.ResponseWriter, r *http.Request) {
 	rc, ok := h.resolveRepo(w, r)
 	if !ok {
@@ -1360,11 +1381,6 @@ func (h *Handler) applyPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Message string `json:"message,omitempty"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-
 	patch, err := h.patches.GetPatch(r.Context(), patchID)
 	if err != nil {
 		if errors.Is(err, domain.ErrPatchNotFound) {
@@ -1382,67 +1398,34 @@ func (h *Handler) applyPatch(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusConflict, fmt.Sprintf("cannot apply patch with status '%s' — must be 'submitted'", patch.Status))
 		return
 	}
-	if iss.HeadSHA != "" && patch.BaseHeadSHA != iss.HeadSHA {
-		httpx.WriteError(w, http.StatusConflict, "patch base_head_sha does not match current issue head_sha — patch is stale")
-		return
-	}
 
-	msg := strings.TrimSpace(req.Message)
-	if msg == "" {
-		msg = fmt.Sprintf("Apply patch: %s", patch.Title)
-	}
-
-	// Author = original patch submitter (preserved for audit); committer = current user.
-	authorIdentity := agentsessiondomain.IdentityForRole(patch.AgentRole, "")
-	commitSHA, err := h.git.ApplyPatch(
-		rc.fsPath,
-		iss.BranchName,
-		patch.PatchText,
-		msg,
-		gitdomain.Signature{
-			Name:  authorIdentity.Name,
-			Email: authorIdentity.Email,
-			When:  time.Now(),
-		},
-		gitdomain.Signature{
-			Name:  caller.Username,
-			Email: caller.Email,
-			When:  time.Now(),
-		},
-	)
+	// Transition to applying so the apply agent can pick it up.
+	updated, err := h.patches.MarkApplying(r.Context(), patch.ID)
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "apply patch: "+err.Error())
+		if errors.Is(err, domain.ErrPatchNotSubmitted) {
+			httpx.WriteError(w, http.StatusConflict, "patch is not in 'submitted' state — may have been claimed by another apply request")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, "mark applying: "+err.Error())
 		return
 	}
-
-	updated, err := h.patches.UpdatePatchStatus(r.Context(), patch.ID, domain.PatchStatusApplied, commitSHA, "")
-	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "update patch status: "+err.Error())
-		return
-	}
-	_ = h.issues.UpdateHeadSHA(r.Context(), iss.ID, commitSHA)
 
 	payload, _ := json.Marshal(domain.PatchEventPayload{
 		SubmissionID: updated.ID,
 		Title:        updated.Title,
 		AgentRole:    updated.AgentRole,
-		CommitSHA:    commitSHA,
 	})
-	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventPatchApplied, payload, caller.ID)
-
-	// Other submitted patches are now stale since the issue head moved.
-	_, _ = h.patches.MarkStalePatches(r.Context(), iss.ID, commitSHA)
+	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventPatchApplying, payload, caller.ID)
 
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"id":         updated.ID,
-		"status":     string(updated.Status),
-		"commit_sha": commitSHA,
-		"applied_at": updated.AppliedAt,
+		"id":      updated.ID,
+		"status":  string(updated.Status),
+		"message": "apply request accepted — a dedicated apply agent will pick up this submission",
 	})
 }
 
-// rejectPatch rejects a submitted patch without applying it. Only the repo
-// owner/admin may reject patches. The patch must be in 'submitted' state.
+// rejectPatch rejects a submitted or applying patch without applying it.
+// Only the repo owner/admin may reject patches.
 func (h *Handler) rejectPatch(w http.ResponseWriter, r *http.Request) {
 	rc, ok := h.resolveRepo(w, r)
 	if !ok {
@@ -1491,8 +1474,8 @@ func (h *Handler) rejectPatch(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusNotFound, "patch not found")
 		return
 	}
-	if patch.Status != domain.PatchStatusSubmitted {
-		httpx.WriteError(w, http.StatusConflict, fmt.Sprintf("cannot reject patch with status '%s' — must be 'submitted'", patch.Status))
+	if patch.Status != domain.PatchStatusSubmitted && patch.Status != domain.PatchStatusApplying {
+		httpx.WriteError(w, http.StatusConflict, fmt.Sprintf("cannot reject patch with status '%s' — must be 'submitted' or 'applying'", patch.Status))
 		return
 	}
 
@@ -1514,6 +1497,78 @@ func (h *Handler) rejectPatch(w http.ResponseWriter, r *http.Request) {
 		"id":     updated.ID,
 		"status": string(updated.Status),
 		"reason": updated.RejectedReason,
+	})
+}
+
+// voidPatch voids a submitted or applying patch submission. Only the repo
+// owner/admin may void patches. Used by maintainers to cancel a patch that
+// is no longer valid. Records a patch_voided event.
+func (h *Handler) voidPatch(w http.ResponseWriter, r *http.Request) {
+	rc, ok := h.resolveRepo(w, r)
+	if !ok {
+		return
+	}
+	iss, ok := h.loadIssue(w, r, rc.repo.ID)
+	if !ok {
+		return
+	}
+	caller, _ := authdomain.UserFromRequest(r)
+	if !h.canManage(r, caller, rc.repo) {
+		httpx.WriteError(w, http.StatusForbidden, "only the repo owner can void patches")
+		return
+	}
+
+	rawID := chi.URLParam(r, "patchID")
+	patchID, err := strconv.ParseInt(rawID, 10, 64)
+	if err != nil || patchID <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid patch id")
+		return
+	}
+
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = "voided by maintainer"
+	}
+
+	patch, err := h.patches.GetPatch(r.Context(), patchID)
+	if err != nil {
+		if errors.Is(err, domain.ErrPatchNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "patch not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if patch.IssueID != iss.ID {
+		httpx.WriteError(w, http.StatusNotFound, "patch not found")
+		return
+	}
+	if patch.Status != domain.PatchStatusSubmitted && patch.Status != domain.PatchStatusApplying {
+		httpx.WriteError(w, http.StatusConflict, fmt.Sprintf("cannot void patch with status '%s' — must be 'submitted' or 'applying'", patch.Status))
+		return
+	}
+
+	updated, err := h.patches.UpdatePatchStatus(r.Context(), patch.ID, domain.PatchStatusVoided, "", reason)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "update patch status: "+err.Error())
+		return
+	}
+
+	payload, _ := json.Marshal(domain.PatchEventPayload{
+		SubmissionID: updated.ID,
+		Title:        updated.Title,
+		AgentRole:    updated.AgentRole,
+		Reason:       reason,
+	})
+	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventPatchVoided, payload, caller.ID)
+
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"id":     updated.ID,
+		"status": string(updated.Status),
 	})
 }
 

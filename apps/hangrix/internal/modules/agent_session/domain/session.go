@@ -54,6 +54,10 @@ const (
 	// CauseKindPatchSubmitted — an agent submitted a patch to the issue.
 	CauseKindPatchSubmitted CauseKind = "patch_submitted"
 
+	// CauseKindPatchApplyRequested — a maintainer triggered application
+	// of a patch submission; the apply agent is waking to `git am` it.
+	CauseKindPatchApplyRequested CauseKind = "patch_apply_requested"
+
 	// CauseKindManual — admin spawn path (smoke / debug tooling).
 	CauseKindManual CauseKind = "manual"
 )
