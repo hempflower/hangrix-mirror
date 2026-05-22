@@ -1261,7 +1261,7 @@ type publicPatch struct {
 }
 
 type publicPatchFile struct {
-	Seq        int32  `json:"seq"`
+	Seq        int32  `json:"index"`
 	FileName   string `json:"file_name"`
 	SourcePath string `json:"source_path"`
 	PatchText  string `json:"patch_text,omitempty"`
