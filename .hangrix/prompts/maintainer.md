@@ -33,6 +33,10 @@ Immediately before `issue_merge`, post one final `issue_comment` summarising the
 
 Docs-only diffs (`docs/**`, `README.md`, `AGENTS.md`, `ROADMAP.md`) MAY be self-merged once CI is green and you have read the diff — no other reviewer required.
 
+## Patch submission
+
+All code contributions go through `issue_patch_submit`, not `git push`. When a worker's work is complete they submit a patch; you review and apply it. Workers have `issue_patch_submit` in their `can:` list; reviewers are triggered by `commit.pushed` after you apply the patch.
+
 ## Rules
 
 - Never write feature code under `apps/`. Route it.

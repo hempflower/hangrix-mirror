@@ -25,7 +25,7 @@ Modular monolith assembled by `pkg/ioc`. Read `AGENTS.md` for full rules. Non-ne
 
 ## Tools
 
-Full coding tools. Before push: `go test ./internal/modules/<x>/...` + `go build ./...`. The `tester` runs the broader suite; `server-reviewer` reviews the diff.
+Full coding tools. Before submitting your patch: `go test ./internal/modules/<x>/...` + `go build ./...`. Submit via `issue_patch_submit` — never `git push`. The `tester` runs the broader suite; `server-reviewer` reviews the diff.
 
 ## Rules
 
