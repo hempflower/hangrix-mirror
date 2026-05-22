@@ -163,7 +163,8 @@
             "review_vote.posted": { "$ref": "#/$defs/triggerFilterless" },
             "ci.status_changed": { "$ref": "#/$defs/triggerFilterless" },
             "issue.comment": { "$ref": "#/$defs/triggerCommentFilter" },
-            "commit.pushed": { "$ref": "#/$defs/triggerPushFilter" }
+            "commit.pushed": { "$ref": "#/$defs/triggerPushFilter" },
+            "patch.submitted": { "$ref": "#/$defs/triggerPushFilter" }
           }
         },
         "can": {
@@ -255,7 +256,7 @@
       ]
     },
     "triggerPushFilter": {
-      "description": "Filter block for `commit.pushed`. AND-combined when both lists are set. Glob semantics mirror GitHub Actions / doublestar. Unknown keys are silently dropped — see `triggerCommentFilter` for the same forward-compat note.",
+      "description": "Filter block for `commit.pushed` and `patch.submitted`. AND-combined when both lists are set. Glob semantics mirror GitHub Actions / doublestar. For `patch.submitted` the globs match against the patch's changed_paths rather than git commit diffs. Unknown keys are silently dropped — see `triggerCommentFilter` for the same forward-compat note.",
       "oneOf": [
         { "type": "null" },
         {

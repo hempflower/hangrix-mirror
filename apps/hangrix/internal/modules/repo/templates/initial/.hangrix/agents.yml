@@ -129,8 +129,9 @@ roles:
          reached via the maintainer's `@agent-<role>` mention; their
          `issue.comment` entry MUST set `mentioned_only: true` so they
          wake on direct @-mention only, not on every comment. Module
-         reviewers narrow `commit.pushed` with `paths:` so they only
-         see diffs in their module.
+         reviewers narrow `patch.submitted` (and `commit.pushed` for
+         human pushes) with `paths:` so they only see diffs in their
+         module.
 
          **Always include:**
 
@@ -191,9 +192,10 @@ roles:
            timeline; the maintainer routes from there. can:
            `[issue_read, issue_diff, issue_comment]`.
 
-         - `tester` — `triggers: { commit.pushed: {}, issue.comment:
-           { mentioned_only: true } }`. On every push, either writes /
-           updates tests for the new code or runs the existing suite
+         - `tester` — `triggers: { patch.submitted: {}, commit.pushed: {},
+           issue.comment: { mentioned_only: true } }`. On every patch
+           submission or push, either writes / updates tests for the new
+           code or runs the existing suite
            with `bash`. Posts a single `issue_comment` reporting what
            ran and what failed — concrete file/line references when
            the suite is red so the relevant worker can fix it. The
@@ -213,13 +215,15 @@ roles:
            true } }`, full coding tools (`issue_read`, `issue_diff`,
            `issue_comment`, `read`, `write`, `edit`, `glob`, `grep`,
            `bash`). Implements features inside its module's paths.
-         - **Module reviewer** — `triggers: { commit.pushed: { paths:
+         - **Module reviewer** — `triggers: { patch.submitted: { paths:
+           [<module-paths>] }, commit.pushed: { paths:
            [<module-paths>] } }`. Use `paths:` to limit wake-ups to
-           pushes that touch its module (e.g. `["apps/api/**",
-           "internal/**"]` for a backend reviewer). Posts
-           architecture + code-quality feedback as `issue_comment`
-           and casts an `issue_review_vote`. can: `[issue_read,
-           issue_diff, issue_comment, issue_review_vote]`.
+           patches or pushes that touch its module (e.g. `["apps/api/**",
+           "internal/**"]` for a backend reviewer). `patch.submitted`
+           is the primary trigger for agent contributions; `commit.pushed`
+           covers human pushes. Posts architecture + code-quality feedback
+           as `issue_comment` and casts an `issue_review_vote`. can:
+           `[issue_read, issue_diff, issue_comment, issue_review_vote]`.
 
          Module pairs by project type (combine / extend as needed):
 
