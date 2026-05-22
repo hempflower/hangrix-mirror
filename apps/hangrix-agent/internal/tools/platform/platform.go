@@ -488,6 +488,17 @@ func All(client *Client) []local.Tool {
 			}, []string{"path"}),
 		},
 
+		{
+			name:        "issue_patch_submit",
+			description: "Submit a code contribution as a patch (unified diff) against the issue branch. Use this instead of git push. The maintainer will review and apply the patch.",
+			schema: objectSchema(map[string]any{
+				"title":         stringProp("Short, descriptive title for the patch (required)."),
+				"description":   stringProp("Description of what was changed and why (required)."),
+				"base_head_sha": stringProp("The issue branch's head commit SHA at the time work started (required)."),
+				"patch":         stringProp("Unified diff text of the changes, produced via `git diff <base_branch>...HEAD` (required)."),
+			}, []string{"title", "description", "base_head_sha", "patch"}),
+		},
+
 	{
 		name:        "release_create",
 		description: "Create a new release in draft state from an existing git tag. The tag must already exist in the repo.",
