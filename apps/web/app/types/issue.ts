@@ -49,12 +49,10 @@ export type IssueEventKind =
   | 'state_changed'
   | 'title_changed'
   | 'review_vote'
-  | 'patch_submitted'
-  | 'patch_applying'
-  | 'patch_applied'
-  | 'patch_rejected'
-  | 'patch_withdrawn'
-  | 'patch_voided'
+  | 'contribution_pushed'
+  | 'contribution_merged'
+  | 'contribution_changes_requested'
+  | 'contribution_closed'
 
 export interface IssueEvent {
   id: number
@@ -78,6 +76,11 @@ export interface ReviewVotePayload {
   // The server populates it from issue.HeadSHA before persisting the event.
   // A vote is "stale" when this no longer equals the issue's current head_sha.
   head_sha?: string
+  // contribution_id / reviewed_sha are populated when the vote targets a
+  // specific contribution branch rather than the issue head. Optional for
+  // backward compatibility with issue-level votes.
+  contribution_id?: number
+  reviewed_sha?: string
 }
 
 export type ReviewVerdict = 'approved' | 'changes_requested' | 'pending'
@@ -156,90 +159,71 @@ export interface TitleChangedPayload {
   to: string
 }
 
-// --- Patch Submissions ---
+// --- Contributions (git-branch-based merge requests) ---
 
-export type PatchStatus =
-  | 'submitted'
-  | 'applying'
-  | 'applied'
-  | 'rejected'
-  | 'superseded'
-  | 'withdrawn'
-  | 'voided'
+export type ContributionStatus =
+  | 'open'
+  | 'changes_requested'
+  | 'merged'
+  | 'closed'
 
-// PatchFile represents a single patch file within a submission series.
-// These are produced by `git format-patch` and stored in the order the
-// author intended them to be applied.
-export interface PatchFile {
-  index: number
-  file_name: string
-  source_path: string
-  patch_text: string
-  subject?: string
-}
-
-export interface IssuePatchSubmission {
+// Contribution is a git-branch-based merge request pushed by an agent (or a
+// human) against an issue. It replaces the old text-patch submission model:
+// instead of storing a unified diff, the server tracks a real branch ref and
+// computes the diff against the issue base on demand.
+export interface Contribution {
   id: number
   issue_id: number
   session_id: number
-  agent_role: string
-  base_head_sha: string
+  agent_role: string          // role key, e.g. "server"
+  ref_name: string            // "refs/heads/issue-5/server"
+  head_sha: string
+  base_sha: string
   title: string
   description: string
-  // patches is the new patch-files array from the detail endpoint.
-  // patch_text (single unified diff) is kept for a transitional period
-  // while the backend is being upgraded; both are optional.
-  patches?: PatchFile[]
-  patch_text?: string
-  // patch_count is present on list responses; detail omits it.
-  patch_count?: number
+  status: ContributionStatus
+  mergeable: boolean
+  // merge_mode: 'fast-forward' | 'merge-commit' | 'up-to-date' | 'conflicted' | ''
+  merge_mode: string
   changed_paths: string[]
-  file_count: number
+  files: number
   additions: number
   deletions: number
-  status: PatchStatus
-  applied_commit_sha: string
-  applied_at: string | null
-  rejected_reason: string
+  merged_commit_sha: string
+  merged_at: string | null
   created_at: string
   updated_at: string
-  // Per-file diffs parsed client-side from patches[] or patch_text for
-  // FileDiffList rendering.
-  files?: import('~/types/repo').FileDiff[]
 }
 
-export interface PatchSubmittedPayload {
-  submission_id: number
-  title: string
-  base_head_sha: string
-  changed_paths: string[]
-  file_count: number
-  additions: number
-  deletions: number
-}
-
-export interface PatchApplyingPayload {
-  submission_id: number
+// ContributionPushedPayload is the timeline event emitted when a contribution
+// branch is pushed.
+export interface ContributionPushedPayload {
+  contribution_id: number
+  agent_role: string
+  ref_name: string
+  head_sha: string
   title: string
 }
 
-export interface PatchAppliedPayload {
-  submission_id: number
-  commit_sha: string
+export interface ContributionMergedPayload {
+  contribution_id: number
+  agent_role: string
+  ref_name: string
+  title: string
+  merge_commit_sha: string
 }
 
-export interface PatchRejectedPayload {
-  submission_id: number
+export interface ContributionChangesRequestedPayload {
+  contribution_id: number
+  agent_role: string
+  ref_name: string
   reason: string
 }
 
-export interface PatchWithdrawnPayload {
-  submission_id: number
-}
-
-export interface PatchVoidedPayload {
-  submission_id: number
-  reason: string
+export interface ContributionClosedPayload {
+  contribution_id: number
+  agent_role: string
+  ref_name: string
 }
 
 export interface IssueAttachment {

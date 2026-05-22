@@ -28,9 +28,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/kv"
+	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
@@ -42,24 +42,24 @@ import (
 )
 
 type Handler struct {
-	issues      domain.Store
-	patches     domain.PatchStore
-	repos       repodomain.Store
-	storage     *repoinfra.Storage
-	git         gitdomain.Git
-		cache       *kv.RepoCache
-	users       userdomain.Repo
-	resolver    orgdomain.Resolver
-	middleware  authdomain.Middleware
-	protections repodomain.ProtectionStore
+	issues        domain.Store
+	contributions domain.ContributionStore
+	repos         repodomain.Store
+	storage       *repoinfra.Storage
+	git           gitdomain.Git
+	cache         *kv.RepoCache
+	users         userdomain.Repo
+	resolver      orgdomain.Resolver
+	middleware    authdomain.Middleware
+	protections   repodomain.ProtectionStore
 	// agent_session lifecycle hooks. All four are optional (nil-safe
 	// call sites) so the handler keeps working in test configurations
 	// where the module isn't loaded; in production ioc binds all of
 	// them, so the nil branches never fire.
-	spawner    agentsessiondomain.Spawner
-	archiver   agentsessiondomain.Archiver
-	auditor    agentsessiondomain.Auditor
-	controller agentsessiondomain.Controller
+	spawner     agentsessiondomain.Spawner
+	archiver    agentsessiondomain.Archiver
+	auditor     agentsessiondomain.Auditor
+	controller  agentsessiondomain.Controller
 	attachments *issueservice.AttachmentService
 	// guards are BranchWriteGuard implementations. When nil (tests
 	// without the repo module) the handler skips guard checks.
@@ -67,22 +67,22 @@ type Handler struct {
 }
 
 type HandlerDeps struct {
-	Issues      domain.Store
-	Patches     domain.PatchStore
-	Repos       repodomain.Store
-	Storage     *repoinfra.Storage
-	Git         gitdomain.Git
-	Users       userdomain.Repo
-	Resolver    orgdomain.Resolver
-	Middleware  authdomain.Middleware
+	Issues        domain.Store
+	Contributions domain.ContributionStore
+	Repos         repodomain.Store
+	Storage       *repoinfra.Storage
+	Git           gitdomain.Git
+	Users         userdomain.Repo
+	Resolver      orgdomain.Resolver
+	Middleware    authdomain.Middleware
 	// Protections is the branch_protections store from the repo module.
 	// Used by merge to honour forbid_delete rules before deleting the
 	// issue branch post-merge. Nil-safe — the handler skips protection
 	// checks when absent (tests).
 	Protections repodomain.ProtectionStore
-		// Cache provides Redis-backed invalidation for git-read caches.
-		// When nil (tests, no Redis) the handler silently skips flushes.
-		Cache *kv.RepoCache
+	// Cache provides Redis-backed invalidation for git-read caches.
+	// When nil (tests, no Redis) the handler silently skips flushes.
+	Cache *kv.RepoCache
 	// Spawner + Archiver + Auditor + Controller come from the
 	// agent_session module. Wired through ioc.
 	Spawner    agentsessiondomain.Spawner
@@ -98,21 +98,21 @@ type HandlerDeps struct {
 
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
-		issues:     deps.Issues,
-		patches:    deps.Patches,
-		repos:      deps.Repos,
-		storage:    deps.Storage,
-		git:        deps.Git,
-			cache:      deps.Cache,
-		users:      deps.Users,
-		resolver:   deps.Resolver,
-		middleware: deps.Middleware,
-		spawner:    deps.Spawner,
-		archiver:   deps.Archiver,
-		auditor:    deps.Auditor,
-		controller: deps.Controller,
-		attachments: deps.Attachments,
-		guards:      deps.Guards,
+		issues:        deps.Issues,
+		contributions: deps.Contributions,
+		repos:         deps.Repos,
+		storage:       deps.Storage,
+		git:           deps.Git,
+		cache:         deps.Cache,
+		users:         deps.Users,
+		resolver:      deps.Resolver,
+		middleware:    deps.Middleware,
+		spawner:       deps.Spawner,
+		archiver:      deps.Archiver,
+		auditor:       deps.Auditor,
+		controller:    deps.Controller,
+		attachments:   deps.Attachments,
+		guards:        deps.Guards,
 	}
 }
 
@@ -154,12 +154,11 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Post("/{number}/agent-sessions/{sid}/resume", h.resumeAgentSession)
 		r.Delete("/{number}/agent-sessions/{sid}", h.deleteAgentSession)
 
-		// Patch submissions (patch-first contribution model, issue #102).
-		r.Get("/{number}/patches", h.listPatches)
-		r.Get("/{number}/patches/{patchID}", h.getPatch)
-		r.Post("/{number}/patches/{patchID}/apply", h.applyPatch)
-		r.Post("/{number}/patches/{patchID}/reject", h.rejectPatch)
-		r.Post("/{number}/patches/{patchID}/void", h.voidPatch)
+		// Contribution branches (merge-request model — docs/contribution-branches.md).
+		r.Get("/{number}/contributions", h.listContributions)
+		r.Get("/{number}/contributions/{cid}", h.getContribution)
+		r.Post("/{number}/contributions/{cid}/apply", h.applyContribution)
+		r.Post("/{number}/contributions/{cid}/close", h.closeContribution)
 	})
 	// Mention-suggestion list: the comment editor reads this once per
 	// issue page load to populate the `@` autocomplete dropdown with
@@ -173,11 +172,11 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 // --- DTOs ---
 
 type publicIssue struct {
-	ID             int64      `json:"id"`
-	RepoID         int64      `json:"repo_id"`
-	Number         int64      `json:"number"`
-	AuthorID       int64      `json:"author_id"`
-	AuthorUsername string     `json:"author_username"`
+	ID             int64  `json:"id"`
+	RepoID         int64  `json:"repo_id"`
+	Number         int64  `json:"number"`
+	AuthorID       int64  `json:"author_id"`
+	AuthorUsername string `json:"author_username"`
 	// AgentRole is set on agent-created issues; empty for human-created.
 	AgentRole      string     `json:"agent_role,omitempty"`
 	Title          string     `json:"title"`
@@ -218,10 +217,10 @@ func toPublic(i *domain.Issue) publicIssue {
 }
 
 type publicComment struct {
-	ID             int64     `json:"id"`
-	IssueID        int64     `json:"issue_id"`
-	AuthorID       int64     `json:"author_id"`
-	AuthorUsername string    `json:"author_username"`
+	ID             int64  `json:"id"`
+	IssueID        int64  `json:"issue_id"`
+	AuthorID       int64  `json:"author_id"`
+	AuthorUsername string `json:"author_username"`
 	// AgentRole is set on agent-authored comments. Empty for human
 	// comments. The frontend uses it to render a role chip / avatar.
 	AgentRole string    `json:"agent_role,omitempty"`
@@ -433,22 +432,22 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		parentNumber = parent.Number
 	}
 
-		// Verify the base ref is resolvable before writing anything to the
-		// database — empty repos (no commits) and unresolvable base refs must
-		// fail early so we never leave a DB record with no matching git ref.
-		baseSHA, err := h.git.ResolveCommit(rc.fsPath, base)
-		if err != nil {
-			if errors.Is(err, gitdomain.ErrRefNotFound) {
-				httpx.WriteError(w, http.StatusBadRequest, "base ref not found: "+base)
-			} else {
-				httpx.WriteError(w, http.StatusInternalServerError, "resolve base ref: "+err.Error())
-			}
-			return
+	// Verify the base ref is resolvable before writing anything to the
+	// database — empty repos (no commits) and unresolvable base refs must
+	// fail early so we never leave a DB record with no matching git ref.
+	baseSHA, err := h.git.ResolveCommit(rc.fsPath, base)
+	if err != nil {
+		if errors.Is(err, gitdomain.ErrRefNotFound) {
+			httpx.WriteError(w, http.StatusBadRequest, "base ref not found: "+base)
+		} else {
+			httpx.WriteError(w, http.StatusInternalServerError, "resolve base ref: "+err.Error())
 		}
-		if baseSHA == "" {
-			httpx.WriteError(w, http.StatusBadRequest, "base branch has no commits yet: "+base)
-			return
-		}
+		return
+	}
+	if baseSHA == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "base branch has no commits yet: "+base)
+		return
+	}
 
 	caller, _ := authdomain.UserFromRequest(r)
 	iss, err := h.issues.Create(r.Context(), rc.repo.ID, caller.ID, title, req.Body, base, "", parentID, parentNumber)
@@ -1234,65 +1233,57 @@ func parseInt32(raw string, def int32) int32 {
 	return int32(n)
 }
 
+// --- contribution handlers (branch-based merge requests) ---
 
-// --- patch handlers ---
-
-type publicPatch struct {
-	ID               int64            `json:"id"`
-	IssueID          int64            `json:"issue_id"`
-	SessionID        int64            `json:"session_id"`
-	AgentRole        string           `json:"agent_role"`
-	BaseHeadSHA      string           `json:"base_head_sha"`
-	Title            string           `json:"title"`
-	Description      string           `json:"description"`
-	PatchCount       int32            `json:"patch_count"`
-	ChangedPaths     []string         `json:"changed_paths"`
-	FileCount        int32            `json:"file_count"`
-	Additions        int32            `json:"additions"`
-	Deletions        int32            `json:"deletions"`
-	Status           string           `json:"status"`
-	AppliedCommitSHA string           `json:"applied_commit_sha,omitempty"`
-	AppliedAt        *time.Time       `json:"applied_at,omitempty"`
-	RejectedReason   string           `json:"rejected_reason,omitempty"`
-	ApplyError       string           `json:"apply_error,omitempty"`
-	Patches          []publicPatchFile `json:"patches,omitempty"`
-	CreatedAt        time.Time        `json:"created_at"`
-	UpdatedAt        time.Time        `json:"updated_at"`
+type publicContribution struct {
+	ID              int64      `json:"id"`
+	IssueID         int64      `json:"issue_id"`
+	SessionID       int64      `json:"session_id"`
+	AgentRole       string     `json:"agent_role"`
+	RefName         string     `json:"ref_name"`
+	HeadSHA         string     `json:"head_sha"`
+	BaseSHA         string     `json:"base_sha"`
+	Title           string     `json:"title"`
+	Description     string     `json:"description"`
+	Status          string     `json:"status"`
+	Mergeable       bool       `json:"mergeable"`
+	MergeMode       string     `json:"merge_mode"`
+	ChangedPaths    []string   `json:"changed_paths"`
+	Files           int32      `json:"files"`
+	Additions       int32      `json:"additions"`
+	Deletions       int32      `json:"deletions"`
+	MergedCommitSHA string     `json:"merged_commit_sha,omitempty"`
+	MergedAt        *time.Time `json:"merged_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
-type publicPatchFile struct {
-	Seq        int32  `json:"index"`
-	FileName   string `json:"file_name"`
-	SourcePath string `json:"source_path"`
-	PatchText  string `json:"patch_text,omitempty"`
-	Subject    string `json:"subject,omitempty"`
-}
-
-func toPublicPatch(p *domain.PatchSubmission) publicPatch {
-	return publicPatch{
-		ID:               p.ID,
-		IssueID:          p.IssueID,
-		SessionID:        p.SessionID,
-		AgentRole:        p.AgentRole,
-		BaseHeadSHA:      p.BaseHeadSHA,
-		Title:            p.Title,
-		Description:      p.Description,
-		PatchCount:       p.PatchCount,
-		ChangedPaths:     p.ChangedPaths,
-		FileCount:        p.FileCount,
-		Additions:        p.Additions,
-		Deletions:        p.Deletions,
-		Status:           string(p.Status),
-		AppliedCommitSHA: p.AppliedCommitSHA,
-		AppliedAt:        p.AppliedAt,
-		RejectedReason:   p.RejectedReason,
-		ApplyError:       p.ApplyError,
-		CreatedAt:        p.CreatedAt,
-		UpdatedAt:        p.UpdatedAt,
+func toPublicContribution(c *domain.Contribution) publicContribution {
+	return publicContribution{
+		ID:              c.ID,
+		IssueID:         c.IssueID,
+		SessionID:       c.SessionID,
+		AgentRole:       c.AgentRole,
+		RefName:         c.RefName,
+		HeadSHA:         c.HeadSHA,
+		BaseSHA:         c.BaseSHA,
+		Title:           c.Title,
+		Description:     c.Description,
+		Status:          string(c.Status),
+		Mergeable:       c.Mergeable,
+		MergeMode:       c.MergeMode,
+		ChangedPaths:    c.ChangedPaths,
+		Files:           c.Files,
+		Additions:       c.Additions,
+		Deletions:       c.Deletions,
+		MergedCommitSHA: c.MergedCommitSHA,
+		MergedAt:        c.MergedAt,
+		CreatedAt:       c.CreatedAt,
+		UpdatedAt:       c.UpdatedAt,
 	}
 }
 
-func (h *Handler) listPatches(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) listContributions(w http.ResponseWriter, r *http.Request) {
 	rc, ok := h.resolveRepo(w, r)
 	if !ok {
 		return
@@ -1301,19 +1292,46 @@ func (h *Handler) listPatches(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	patches, err := h.patches.ListPatches(r.Context(), iss.ID)
+	contribs, err := h.contributions.ListContributions(r.Context(), iss.ID)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	items := make([]publicPatch, 0, len(patches))
-	for _, p := range patches {
-		items = append(items, toPublicPatch(p))
+	items := make([]publicContribution, 0, len(contribs))
+	for _, c := range contribs {
+		items = append(items, toPublicContribution(c))
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"patches": items})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"contributions": items})
 }
 
-func (h *Handler) getPatch(w http.ResponseWriter, r *http.Request) {
+// loadContribution resolves the {cid} URL param into a contribution scoped to
+// the given issue, writing the appropriate error on failure.
+func (h *Handler) loadContribution(w http.ResponseWriter, r *http.Request, issueID int64) (*domain.Contribution, bool) {
+	cid, err := strconv.ParseInt(chi.URLParam(r, "cid"), 10, 64)
+	if err != nil || cid <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid contribution id")
+		return nil, false
+	}
+	c, err := h.contributions.GetContribution(r.Context(), cid)
+	if err != nil {
+		if errors.Is(err, domain.ErrContributionNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "contribution not found")
+			return nil, false
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return nil, false
+	}
+	if c.IssueID != issueID {
+		httpx.WriteError(w, http.StatusNotFound, "contribution not found")
+		return nil, false
+	}
+	return c, true
+}
+
+// getContribution returns one contribution plus its real diff (DiffMergeBase
+// against the issue branch), its per-contribution review status, and the
+// issue's comments (for the Comments tab).
+func (h *Handler) getContribution(w http.ResponseWriter, r *http.Request) {
 	rc, ok := h.resolveRepo(w, r)
 	if !ok {
 		return
@@ -1322,130 +1340,43 @@ func (h *Handler) getPatch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rawID := chi.URLParam(r, "patchID")
-	patchID, err := strconv.ParseInt(rawID, 10, 64)
-	if err != nil || patchID <= 0 {
-		httpx.WriteError(w, http.StatusBadRequest, "invalid patch id")
-		return
-	}
-	patch, err := h.patches.GetPatch(r.Context(), patchID)
-	if err != nil {
-		if errors.Is(err, domain.ErrPatchNotFound) {
-			httpx.WriteError(w, http.StatusNotFound, "patch not found")
-			return
-		}
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if patch.IssueID != iss.ID {
-		httpx.WriteError(w, http.StatusNotFound, "patch not found")
-		return
-	}
-	pub := toPublicPatch(patch)
-	// Include the patch file series on detail view.
-	if patchFiles, err := h.patches.GetPatchFiles(r.Context(), patch.ID); err == nil {
-		pub.Patches = make([]publicPatchFile, len(patchFiles))
-		for i, pf := range patchFiles {
-			pub.Patches[i] = publicPatchFile{
-				Seq:        pf.Seq,
-				FileName:   pf.FileName,
-				SourcePath: pf.FileName,
-				PatchText:  pf.PatchText,
-				Subject:    pf.Subject,
-			}
-		}
-	}
-	httpx.WriteJSON(w, http.StatusOK, pub)
-}
-
-// applyPatch transitions a submitted patch to 'applying' so a dedicated
-// apply agent can pick it up and apply via `git am` in its workspace.
-// base_head_sha is NOT gated — the apply agent decides via `git am`.
-func (h *Handler) applyPatch(w http.ResponseWriter, r *http.Request) {
-	rc, ok := h.resolveRepo(w, r)
+	c, ok := h.loadContribution(w, r, iss.ID)
 	if !ok {
 		return
 	}
-	iss, ok := h.loadIssue(w, r, rc.repo.ID)
-	if !ok {
-		return
-	}
-	caller, _ := authdomain.UserFromRequest(r)
-	if !h.canManage(r, caller, rc.repo) {
-		httpx.WriteError(w, http.StatusForbidden, "only the repo owner can apply patches")
-		return
-	}
 
-	rawID := chi.URLParam(r, "patchID")
-	patchID, err := strconv.ParseInt(rawID, 10, 64)
-	if err != nil || patchID <= 0 {
-		httpx.WriteError(w, http.StatusBadRequest, "invalid patch id")
-		return
-	}
-
-	patch, err := h.patches.GetPatch(r.Context(), patchID)
+	contribBranch := strings.TrimPrefix(c.RefName, "refs/heads/")
+	diffs, err := h.git.DiffMergeBase(rc.fsPath, iss.BranchName, contribBranch)
 	if err != nil {
-		if errors.Is(err, domain.ErrPatchNotFound) {
-			httpx.WriteError(w, http.StatusNotFound, "patch not found")
-			return
-		}
-		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if patch.IssueID != iss.ID {
-		httpx.WriteError(w, http.StatusNotFound, "patch not found")
-		return
-	}
-	if patch.Status != domain.PatchStatusSubmitted {
-		httpx.WriteError(w, http.StatusConflict, fmt.Sprintf("cannot apply patch with status '%s' — must be 'submitted'", patch.Status))
-		return
+		// A merged/closed branch may no longer resolve — return an empty diff
+		// rather than failing the whole detail view.
+		diffs = []*gitdomain.FileDiff{}
 	}
 
-	// Transition to applying so the apply agent can pick it up.
-	updated, err := h.patches.MarkApplying(r.Context(), patch.ID)
-	if err != nil {
-		if errors.Is(err, domain.ErrPatchNotSubmitted) {
-			httpx.WriteError(w, http.StatusConflict, "patch is not in 'submitted' state — may have been claimed by another apply request")
-			return
-		}
-		httpx.WriteError(w, http.StatusInternalServerError, "mark applying: "+err.Error())
-		return
+	var review *domain.ReviewStatus
+	if events, err := h.issues.ListEvents(r.Context(), iss.ID); err == nil {
+		review = domain.ComputeContributionReviewStatus(c, events)
 	}
 
-	payload, _ := json.Marshal(domain.PatchEventPayload{
-		SubmissionID: updated.ID,
-		Title:        updated.Title,
-		AgentRole:    updated.AgentRole,
-	})
-	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventPatchApplying, payload, caller.ID)
-
-	// Fire patch.apply_requested trigger to wake the apply agent.
-	if h.spawner != nil {
-		triggerPayload, _ := json.Marshal(map[string]any{
-			"submission_id": updated.ID,
-			"issue_number":  iss.Number,
-		})
-		_, _ = h.spawner.OnTrigger(r.Context(), agentsessiondomain.TriggerInput{
-			Trigger:     agentsconfig.TriggerPatchApplyRequested,
-			CauseKind:   agentsessiondomain.CauseKindPatchApplyRequested,
-			CauseID:     strconv.FormatInt(updated.ID, 10),
-			RepoID:      rc.repo.ID,
-			IssueNumber: int32(iss.Number),
-			ActorID:     caller.ID,
-			Payload:     triggerPayload,
-		})
+	comments, _ := h.issues.ListComments(r.Context(), iss.ID)
+	publicComments := make([]publicComment, 0, len(comments))
+	for _, cm := range comments {
+		publicComments = append(publicComments, toPublicComment(cm))
 	}
 
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"id":      updated.ID,
-		"status":  string(updated.Status),
-		"message": "apply request accepted — a dedicated apply agent will pick up this submission",
+		"contribution": toPublicContribution(c),
+		"diff":         diffs,
+		"review":       review,
+		"comments":     publicComments,
 	})
 }
 
-// rejectPatch rejects a submitted or applying patch without applying it.
-// Only the repo owner/admin may reject patches.
-func (h *Handler) rejectPatch(w http.ResponseWriter, r *http.Request) {
+// applyContribution is the server-side first-level gate (contribution branch →
+// issue branch). It validates the review gate + mergeability, then merges the
+// branch into the issue branch and records the server-computed commit. Human
+// maintainer path; the agent path is the contribution_apply tool.
+func (h *Handler) applyContribution(w http.ResponseWriter, r *http.Request) {
 	rc, ok := h.resolveRepo(w, r)
 	if !ok {
 		return
@@ -1456,73 +1387,85 @@ func (h *Handler) rejectPatch(w http.ResponseWriter, r *http.Request) {
 	}
 	caller, _ := authdomain.UserFromRequest(r)
 	if !h.canManage(r, caller, rc.repo) {
-		httpx.WriteError(w, http.StatusForbidden, "only the repo owner can reject patches")
+		httpx.WriteError(w, http.StatusForbidden, "only the repo owner can apply contributions")
+		return
+	}
+	c, ok := h.loadContribution(w, r, iss.ID)
+	if !ok {
+		return
+	}
+	if c.Status.Terminal() {
+		httpx.WriteError(w, http.StatusConflict, fmt.Sprintf("contribution is %s", c.Status))
 		return
 	}
 
-	rawID := chi.URLParam(r, "patchID")
-	patchID, err := strconv.ParseInt(rawID, 10, 64)
-	if err != nil || patchID <= 0 {
-		httpx.WriteError(w, http.StatusBadRequest, "invalid patch id")
-		return
-	}
-
-	var req struct {
-		Reason string `json:"reason"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-	reason := strings.TrimSpace(req.Reason)
-	if reason == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "reason is required")
-		return
-	}
-
-	patch, err := h.patches.GetPatch(r.Context(), patchID)
+	// First-level review gate: contribution must be approved at its current head.
+	events, err := h.issues.ListEvents(r.Context(), iss.ID)
 	if err != nil {
-		if errors.Is(err, domain.ErrPatchNotFound) {
-			httpx.WriteError(w, http.StatusNotFound, "patch not found")
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if rs := domain.ComputeContributionReviewStatus(c, events); rs.MergeBlocked {
+		httpx.WriteJSON(w, http.StatusConflict, map[string]any{
+			"error":         "merge blocked",
+			"block_reason":  rs.BlockReason,
+			"review_status": rs,
+		})
+		return
+	}
+
+	contribBranch := strings.TrimPrefix(c.RefName, "refs/heads/")
+	mergeable, mode, hint, _ := h.git.CheckAutoMerge(rc.fsPath, iss.BranchName, contribBranch)
+	if !mergeable {
+		_ = h.contributions.SetContributionMergeable(r.Context(), c.ID, false, mode)
+		httpx.WriteError(w, http.StatusConflict, "contribution is not mergeable: "+hint)
+		return
+	}
+
+	msg := fmt.Sprintf("Merge contribution %s into %s (issue #%d)", contribBranch, iss.BranchName, iss.Number)
+	mergeSHA, mergedMode, err := h.git.MergeBranch(rc.fsPath, iss.BranchName, contribBranch, msg, gitdomain.Signature{
+		Name:  caller.Username,
+		Email: caller.Email,
+		When:  time.Now(),
+	})
+	if err != nil {
+		if errors.Is(err, gitdomain.ErrMergeConflict) {
+			_ = h.contributions.SetContributionMergeable(r.Context(), c.ID, false, "conflicted")
+			httpx.WriteError(w, http.StatusConflict, "merge conflict — contributor must rebase and re-push")
 			return
 		}
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if patch.IssueID != iss.ID {
-		httpx.WriteError(w, http.StatusNotFound, "patch not found")
-		return
-	}
-	if patch.Status != domain.PatchStatusSubmitted && patch.Status != domain.PatchStatusApplying {
-		httpx.WriteError(w, http.StatusConflict, fmt.Sprintf("cannot reject patch with status '%s' — must be 'submitted' or 'applying'", patch.Status))
-		return
-	}
 
-	updated, err := h.patches.UpdatePatchStatus(r.Context(), patch.ID, domain.PatchStatusRejected, "", reason)
+	_ = h.issues.UpdateHeadSHA(r.Context(), iss.ID, mergeSHA)
+	merged, err := h.contributions.MarkContributionMerged(r.Context(), c.ID, mergeSHA)
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "update patch status: "+err.Error())
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	payload, _ := json.Marshal(domain.PatchEventPayload{
-		SubmissionID: updated.ID,
-		Title:        updated.Title,
-		AgentRole:    updated.AgentRole,
-		Reason:       reason,
+	evtPayload, _ := json.Marshal(domain.ContributionEventPayload{
+		ContributionID: merged.ID,
+		AgentRole:      merged.AgentRole,
+		RefName:        merged.RefName,
+		Title:          merged.Title,
+		MergeCommitSHA: mergeSHA,
 	})
-	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventPatchRejected, payload, caller.ID)
+	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventContributionMerged, evtPayload, caller.ID)
+
+	// Refresh sibling contributions' mergeability against the new issue head:
+	// landing one contribution may put others into conflict.
+	h.refreshSiblingMergeability(r.Context(), rc.fsPath, iss, merged.ID)
 
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"id":     updated.ID,
-		"status": string(updated.Status),
-		"reason": updated.RejectedReason,
+		"merge_sha": mergeSHA,
+		"mode":      mergedMode,
 	})
 }
 
-// voidPatch voids a submitted or applying patch submission. Only the repo
-// owner/admin may void patches. Used by maintainers to cancel a patch that
-// is no longer valid. Records a patch_voided event.
-func (h *Handler) voidPatch(w http.ResponseWriter, r *http.Request) {
+// closeContribution lets the repo owner abandon a contribution branch.
+func (h *Handler) closeContribution(w http.ResponseWriter, r *http.Request) {
 	rc, ok := h.resolveRepo(w, r)
 	if !ok {
 		return
@@ -1533,61 +1476,51 @@ func (h *Handler) voidPatch(w http.ResponseWriter, r *http.Request) {
 	}
 	caller, _ := authdomain.UserFromRequest(r)
 	if !h.canManage(r, caller, rc.repo) {
-		httpx.WriteError(w, http.StatusForbidden, "only the repo owner can void patches")
+		httpx.WriteError(w, http.StatusForbidden, "only the repo owner can close contributions")
 		return
 	}
-
-	rawID := chi.URLParam(r, "patchID")
-	patchID, err := strconv.ParseInt(rawID, 10, 64)
-	if err != nil || patchID <= 0 {
-		httpx.WriteError(w, http.StatusBadRequest, "invalid patch id")
+	c, ok := h.loadContribution(w, r, iss.ID)
+	if !ok {
 		return
 	}
-
-	var req struct {
-		Reason string `json:"reason"`
+	if c.Status.Terminal() {
+		httpx.WriteError(w, http.StatusConflict, fmt.Sprintf("contribution is %s", c.Status))
+		return
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	reason := strings.TrimSpace(req.Reason)
-	if reason == "" {
-		reason = "voided by maintainer"
-	}
-
-	patch, err := h.patches.GetPatch(r.Context(), patchID)
+	updated, err := h.contributions.SetContributionStatus(r.Context(), c.ID, domain.ContribStatusClosed)
 	if err != nil {
-		if errors.Is(err, domain.ErrPatchNotFound) {
-			httpx.WriteError(w, http.StatusNotFound, "patch not found")
-			return
-		}
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if patch.IssueID != iss.ID {
-		httpx.WriteError(w, http.StatusNotFound, "patch not found")
-		return
-	}
-	if patch.Status != domain.PatchStatusSubmitted && patch.Status != domain.PatchStatusApplying {
-		httpx.WriteError(w, http.StatusConflict, fmt.Sprintf("cannot void patch with status '%s' — must be 'submitted' or 'applying'", patch.Status))
-		return
-	}
-
-	updated, err := h.patches.UpdatePatchStatus(r.Context(), patch.ID, domain.PatchStatusVoided, "", reason)
-	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "update patch status: "+err.Error())
-		return
-	}
-
-	payload, _ := json.Marshal(domain.PatchEventPayload{
-		SubmissionID: updated.ID,
-		Title:        updated.Title,
-		AgentRole:    updated.AgentRole,
-		Reason:       reason,
+	evtPayload, _ := json.Marshal(domain.ContributionEventPayload{
+		ContributionID: updated.ID,
+		AgentRole:      updated.AgentRole,
+		RefName:        updated.RefName,
 	})
-	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventPatchVoided, payload, caller.ID)
-
+	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventContributionClosed, evtPayload, caller.ID)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"id":     updated.ID,
 		"status": string(updated.Status),
 	})
 }
 
+// refreshSiblingMergeability recomputes mergeability for every open
+// contribution on the issue except exceptID, against the current issue head.
+// Best-effort: errors are swallowed so a stale sibling never blocks an apply.
+func (h *Handler) refreshSiblingMergeability(ctx context.Context, fsPath string, iss *domain.Issue, exceptID int64) {
+	contribs, err := h.contributions.ListContributions(ctx, iss.ID)
+	if err != nil {
+		return
+	}
+	for _, c := range contribs {
+		if c.ID == exceptID || c.Status.Terminal() {
+			continue
+		}
+		branch := strings.TrimPrefix(c.RefName, "refs/heads/")
+		mergeable, mode, _, err := h.git.CheckAutoMerge(fsPath, iss.BranchName, branch)
+		if err != nil {
+			continue
+		}
+		_ = h.contributions.SetContributionMergeable(ctx, c.ID, mergeable, mode)
+	}
+}

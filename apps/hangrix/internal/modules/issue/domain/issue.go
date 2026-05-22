@@ -47,30 +47,24 @@ const (
 	// when a vote lands.
 	EventReviewVote EventKind = "review_vote"
 
-	// EventPatchSubmitted fires when an agent submits a patch to the
-	// issue. Payload follows PatchEventPayload.
-	EventPatchSubmitted EventKind = "patch_submitted"
+	// Contribution-branch model (see docs/contribution-branches.md). Each
+	// of these carries a ContributionEventPayload.
 
-	// EventPatchApplied fires when a maintainer applies a patch to the
-	// issue branch. Payload follows PatchEventPayload.
-	EventPatchApplied EventKind = "patch_applied"
+	// EventContributionPushed fires when an agent pushes (creates or
+	// updates) a contribution branch in its per-issue namespace.
+	EventContributionPushed EventKind = "contribution_pushed"
 
-	// EventPatchRejected fires when a maintainer rejects a patch.
-	// Payload follows PatchEventPayload.
-	EventPatchRejected EventKind = "patch_rejected"
+	// EventContributionMerged fires when the server merges an approved
+	// contribution branch into the issue branch (first-level gate).
+	EventContributionMerged EventKind = "contribution_merged"
 
-	// EventPatchApplying fires when a maintainer triggers apply of a
-	// patch submission, transitioning it to the 'applying' state before
-	// the async workspace apply takes over. Payload follows PatchEventPayload.
-	EventPatchApplying EventKind = "patch_applying"
+	// EventContributionChangesRequested fires when a reviewer requests
+	// changes on a contribution branch.
+	EventContributionChangesRequested EventKind = "contribution_changes_requested"
 
-	// EventPatchWithdrawn fires when the original submitter withdraws
-	// their own patch submission. Payload follows PatchEventPayload.
-	EventPatchWithdrawn EventKind = "patch_withdrawn"
-
-	// EventPatchVoided fires when a maintainer / system voids a patch
-	// submission that is no longer valid. Payload follows PatchEventPayload.
-	EventPatchVoided EventKind = "patch_voided"
+	// EventContributionClosed fires when the owning role abandons a
+	// contribution branch.
+	EventContributionClosed EventKind = "contribution_closed"
 )
 
 // ReviewVoteValue enumerates the three vote outcomes a reviewer (agent or
@@ -95,32 +89,43 @@ func (v ReviewVoteValue) Valid() bool {
 
 // ReviewVotePayload is the JSON shape stored in Event.Payload for
 // EventReviewVote. Value is the outcome; Reason is the reviewer's free-text
-// rationale (always present in the agent path, may be empty in a future
-// human path). HeadSHA records the issue branch tip this vote was cast
-// against — only votes matching the current issue HeadSHA are "effective".
+// rationale.
+//
+// A vote can target either the issue branch (legacy / second-level gate) or a
+// specific contribution branch:
+//   - ContributionID == 0: an issue-level vote. HeadSHA records the issue
+//     branch tip it was cast against; effective iff HeadSHA == issue.HeadSHA.
+//   - ContributionID  > 0: a contribution vote. ReviewedSHA records the
+//     contribution head it was cast against; effective iff
+//     ReviewedSHA == contribution.HeadSHA. A new push to the branch changes
+//     the head and silently dismisses prior approvals.
 type ReviewVotePayload struct {
-	Value   ReviewVoteValue `json:"value"`
-	Reason  string          `json:"reason,omitempty"`
-	HeadSHA string          `json:"head_sha,omitempty"`
+	Value          ReviewVoteValue `json:"value"`
+	Reason         string          `json:"reason,omitempty"`
+	HeadSHA        string          `json:"head_sha,omitempty"`
+	ContributionID int64           `json:"contribution_id,omitempty"`
+	ReviewedSHA    string          `json:"reviewed_sha,omitempty"`
 }
 
-// PatchEventPayload is the JSON shape stored in Event.Payload for
-// EventPatchSubmitted, EventPatchApplied, and EventPatchRejected.
-type PatchEventPayload struct {
-	SubmissionID int64  `json:"submission_id"`
-	Title        string `json:"title,omitempty"`
-	AgentRole    string `json:"agent_role,omitempty"`
-	CommitSHA    string `json:"commit_sha,omitempty"` // set on patch_applied
-	Reason       string `json:"reason,omitempty"`      // set on patch_rejected
+// ContributionEventPayload is the JSON shape stored in Event.Payload for the
+// contribution_* event kinds.
+type ContributionEventPayload struct {
+	ContributionID int64  `json:"contribution_id"`
+	AgentRole      string `json:"agent_role,omitempty"`
+	RefName        string `json:"ref_name,omitempty"`
+	HeadSHA        string `json:"head_sha,omitempty"`
+	Title          string `json:"title,omitempty"`
+	MergeCommitSHA string `json:"merge_commit_sha,omitempty"` // set on contribution_merged
+	Reason         string `json:"reason,omitempty"`           // set on changes_requested / closed
 }
 
 // ReviewVerdict summarises the collective review state for an issue.
 type ReviewVerdict string
 
 const (
-	ReviewVerdictApproved        ReviewVerdict = "approved"
+	ReviewVerdictApproved         ReviewVerdict = "approved"
 	ReviewVerdictChangesRequested ReviewVerdict = "changes_requested"
-	ReviewVerdictPending         ReviewVerdict = "pending"
+	ReviewVerdictPending          ReviewVerdict = "pending"
 )
 
 // EffectiveVote is a single reviewer's latest vote whose head_sha matches
@@ -137,11 +142,11 @@ type EffectiveVote struct {
 // StaleVote is a reviewer's latest vote that does NOT match the issue's
 // current HeadSHA — the reviewer needs to re-review before it counts.
 type StaleVote struct {
-	Reviewer string          `json:"reviewer"`
-	Value    ReviewVoteValue `json:"value"`
-	VotedAt  time.Time       `json:"voted_at"`
-	VoteHeadSHA string `json:"vote_head_sha"`
-	IsAgent     bool   `json:"is_agent"`
+	Reviewer    string          `json:"reviewer"`
+	Value       ReviewVoteValue `json:"value"`
+	VotedAt     time.Time       `json:"voted_at"`
+	VoteHeadSHA string          `json:"vote_head_sha"`
+	IsAgent     bool            `json:"is_agent"`
 }
 
 // ReviewStatus is the server-computed review summary. It is the single
@@ -279,6 +284,110 @@ func ComputeReviewStatus(issue *Issue, events []*Event) *ReviewStatus {
 	return rs
 }
 
+// ComputeContributionReviewStatus is the per-contribution analogue of
+// ComputeReviewStatus. It considers only review_vote events whose payload
+// targets this contribution (ContributionID == c.ID), takes the latest vote
+// per reviewer, and treats a vote as effective only when its ReviewedSHA
+// matches the contribution's current head — so a new push (which changes the
+// head) silently dismisses prior approvals. The verdict + merge-block rules
+// match ComputeReviewStatus.
+func ComputeContributionReviewStatus(c *Contribution, events []*Event) *ReviewStatus {
+	rs := &ReviewStatus{
+		HeadSHA:      c.HeadSHA,
+		Verdict:      ReviewVerdictPending,
+		MergeBlocked: true,
+		Votes:        []EffectiveVote{},
+		StaleVotes:   []StaleVote{},
+	}
+	if c.HeadSHA == "" {
+		rs.BlockReason = "contribution branch has no commits yet"
+		return rs
+	}
+
+	type latestVote struct {
+		event   *Event
+		payload ReviewVotePayload
+	}
+	latest := make(map[string]*latestVote)
+	for _, e := range events {
+		if e.Kind != EventReviewVote {
+			continue
+		}
+		var p ReviewVotePayload
+		if err := jsonUnmarshalPayload(e.Payload, &p); err != nil {
+			continue
+		}
+		if p.ContributionID != c.ID {
+			continue
+		}
+		key := reviewerKey(e)
+		if key == "" {
+			continue
+		}
+		if cur, ok := latest[key]; !ok || e.CreatedAt.After(cur.event.CreatedAt) {
+			latest[key] = &latestVote{event: e, payload: p}
+		}
+	}
+	if len(latest) == 0 {
+		rs.BlockReason = "no review votes yet"
+		return rs
+	}
+
+	hasChangesRequested := false
+	hasApprove := false
+	keys := make([]string, 0, len(latest))
+	for k := range latest {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		lv := latest[k]
+		if lv.payload.ReviewedSHA == c.HeadSHA {
+			switch lv.payload.Value {
+			case ReviewVoteRequestChanges:
+				hasChangesRequested = true
+				rs.Votes = append(rs.Votes, EffectiveVote{
+					Reviewer: reviewerDisplay(lv.event), Value: lv.payload.Value,
+					Reason: lv.payload.Reason, VotedAt: lv.event.CreatedAt, IsAgent: lv.event.AgentRole != "",
+				})
+			case ReviewVoteApprove:
+				hasApprove = true
+				rs.Votes = append(rs.Votes, EffectiveVote{
+					Reviewer: reviewerDisplay(lv.event), Value: lv.payload.Value,
+					Reason: lv.payload.Reason, VotedAt: lv.event.CreatedAt, IsAgent: lv.event.AgentRole != "",
+				})
+			default:
+				// abstain — not counted
+			}
+		} else {
+			rs.StaleVotes = append(rs.StaleVotes, StaleVote{
+				Reviewer: reviewerDisplay(lv.event), Value: lv.payload.Value,
+				VotedAt: lv.event.CreatedAt, VoteHeadSHA: lv.payload.ReviewedSHA, IsAgent: lv.event.AgentRole != "",
+			})
+		}
+	}
+
+	switch {
+	case hasChangesRequested:
+		rs.Verdict = ReviewVerdictChangesRequested
+		rs.MergeBlocked = true
+		rs.BlockReason = "changes requested by reviewer"
+	case hasApprove:
+		rs.Verdict = ReviewVerdictApproved
+		rs.MergeBlocked = false
+	default:
+		rs.Verdict = ReviewVerdictPending
+		rs.MergeBlocked = true
+		if len(rs.StaleVotes) > 0 {
+			rs.BlockReason = "all review votes are stale — re-review required after latest push"
+		} else {
+			rs.BlockReason = "waiting for review"
+		}
+	}
+	return rs
+}
+
 // reviewerKey returns a stable key for a review_vote event's actor: either
 // "agent:<agent_role>" or "user:<actor_id>".
 func reviewerKey(e *Event) string {
@@ -316,11 +425,11 @@ func jsonUnmarshalPayload(data []byte, v any) error {
 // the child's base branch is set to the parent's issue/<n> branch at create
 // time so merging a child fast-forwards into the parent's branch.
 type Issue struct {
-	ID             int64
-	RepoID         int64
-	Number         int64
-	AuthorID       int64
-	AuthorName     string
+	ID         int64
+	RepoID     int64
+	Number     int64
+	AuthorID   int64
+	AuthorName string
 	// AgentRole is set on agent-created issues. Empty for human-created
 	// issues. Mirrors the same field on Comment and Event.
 	AgentRole      string
@@ -439,9 +548,9 @@ var (
 
 // ListFilter narrows GetByRepo. Empty State means "any".
 type ListFilter struct {
-	State    State
-	Offset   int32
-	Limit    int32
+	State  State
+	Offset int32
+	Limit  int32
 }
 
 // Store is the persistence abstraction. The Postgres impl lives under
@@ -552,104 +661,103 @@ type AttachmentUploader interface {
 	UploadAttachment(ctx context.Context, params *AttachmentUploadParams) (*Attachment, error)
 }
 
+// ---- contributions (branch-based merge requests) ----
 
-	
-	// ---- patch submissions ----
+// ContributionStatus models the lifecycle of a contribution branch.
+//
+//	open:               pushed and under review (default; a new push resets to this)
+//	changes_requested:  a reviewer asked for changes
+//	merged:             the server merged this branch into the issue branch (terminal)
+//	closed:             the owning role abandoned the branch (terminal)
+type ContributionStatus string
 
-	// PatchStatus models the lifecycle of a patch submission.
-	// submitted: freshly submitted, awaiting review
-	// applying: maintainer has accepted the submission; an apply agent is working on it
-	// applied: maintainer applied the patch to the issue branch
-	// rejected: maintainer rejected the patch
-	// superseded: a newer patch from the same role superseded this one
-	// withdrawn: the original submitter withdrew their own submission
-	// voided: a maintainer / system voided the submission (no longer valid)
-	type PatchStatus string
+const (
+	ContribStatusOpen             ContributionStatus = "open"
+	ContribStatusChangesRequested ContributionStatus = "changes_requested"
+	ContribStatusMerged           ContributionStatus = "merged"
+	ContribStatusClosed           ContributionStatus = "closed"
+)
 
-	const (
-		PatchStatusSubmitted   PatchStatus = "submitted"
-		PatchStatusApplying    PatchStatus = "applying"
-		PatchStatusApplied     PatchStatus = "applied"
-		PatchStatusRejected    PatchStatus = "rejected"
-		PatchStatusSuperseded  PatchStatus = "superseded"
-		PatchStatusWithdrawn   PatchStatus = "withdrawn"
-		PatchStatusVoided      PatchStatus = "voided"
-	)
-
-	// PatchSubmission is a patch submission contributed by an agent to an issue.
-	// A submission may contain multiple patch files (a series), each stored in
-	// the PatchFile child table. Aggregate stats (changed_paths, file_count,
-	// additions, deletions, patch_count) are denormalised on the submission row.
-	type PatchSubmission struct {
-		ID               int64
-		RepoID           int64
-		IssueID          int64
-		SessionID        int64
-		AgentRole        string
-		BaseHeadSHA      string
-		Title            string
-		Description      string
-		PatchCount       int32
-		ChangedPaths     []string
-		FileCount        int32
-		Additions        int32
-		Deletions        int32
-		Status           PatchStatus
-		AppliedCommitSHA string
-		AppliedAt        *time.Time
-		RejectedReason   string
-		ApplyError       string
-		CreatedAt        time.Time
-		UpdatedAt        time.Time
+// Valid reports whether s is one of the documented statuses.
+func (s ContributionStatus) Valid() bool {
+	switch s {
+	case ContribStatusOpen, ContribStatusChangesRequested, ContribStatusMerged, ContribStatusClosed:
+		return true
 	}
+	return false
+}
 
-	// PatchFile is a single patch file within a PatchSubmission series.
-	// Seq is 1-based and determines the order in which patches are applied.
-	type PatchFile struct {
-		ID           int64
-		SubmissionID int64
-		Seq          int32
-		FileName     string
-		PatchText    string
-		Subject      string
-	}
+// Terminal reports whether the contribution can no longer change.
+func (s ContributionStatus) Terminal() bool {
+	return s == ContribStatusMerged || s == ContribStatusClosed
+}
 
-	// PatchFileParams is used when creating a batch of patch files for a
-	// new submission. Seq must be supplied by the caller (1-based).
-	type PatchFileParams struct {
-		Seq       int32
-		FileName  string
-		PatchText string
-		Subject   string
-	}
+// Contribution is one agent's branch in a per-issue namespace
+// (refs/heads/issue-<N>/<role>) treated as an independent merge-request.
+// Reviews and votes attach to the branch; the server merges approved
+// branches into the issue branch. Diff stats are computed from the real
+// git diff (DiffMergeBase against the issue branch) at push time.
+type Contribution struct {
+	ID              int64
+	RepoID          int64
+	IssueID         int64
+	SessionID       int64
+	AgentRole       string
+	RefName         string // refs/heads/issue-<N>/<role>[/slug]
+	HeadSHA         string
+	BaseSHA         string // issue head this was last diffed against
+	Title           string
+	Description     string
+	Status          ContributionStatus
+	Mergeable       bool
+	MergeMode       string // last CheckAutoMerge mode against the issue branch
+	ChangedPaths    []string
+	Files           int32
+	Additions       int32
+	Deletions       int32
+	MergedCommitSHA string
+	MergedAt        *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
 
-	// PatchStore is the persistence abstraction for patch submissions and
-	// their associated patch file series.
-	type PatchStore interface {
-		CreatePatch(ctx context.Context, p *PatchSubmission) (*PatchSubmission, error)
-		CreatePatchFiles(ctx context.Context, submissionID int64, files []PatchFileParams) error
-		GetPatch(ctx context.Context, id int64) (*PatchSubmission, error)
-		GetPatchFiles(ctx context.Context, submissionID int64) ([]PatchFile, error)
-		ListPatches(ctx context.Context, issueID int64) ([]*PatchSubmission, error)
-		UpdatePatchStatus(ctx context.Context, id int64, status PatchStatus, appliedCommitSHA, rejectedReason string) (*PatchSubmission, error)
-		// MarkApplying transitions a submitted patch to applying and returns
-		// the updated submission. Fails if the patch is not in 'submitted' state.
-		MarkApplying(ctx context.Context, id int64) (*PatchSubmission, error)
-		// UpdateApplyError records the error from a failed apply attempt on
-		// a patch that is currently in 'applying' state.
-		UpdateApplyError(ctx context.Context, id int64, applyError string) error
-		// SupersedePatches marks every submitted patch from the given
-		// (issue_id, agent_role) as superseded. Called when a new patch is
-		// submitted by the same role.
-		SupersedePatches(ctx context.Context, issueID int64, agentRole string, exceptID int64) (int64, error)
-	}
+// ContributionUpsertParams carries the post-push snapshot used to create or
+// refresh a contribution. The store keys on (IssueID, RefName).
+type ContributionUpsertParams struct {
+	RepoID       int64
+	IssueID      int64
+	SessionID    int64
+	AgentRole    string
+	RefName      string
+	HeadSHA      string
+	BaseSHA      string
+	ChangedPaths []string
+	Files        int32
+	Additions    int32
+	Deletions    int32
+}
 
-	var (
-		ErrPatchNotFound      = errors.New("patch submission not found")
-		ErrPatchNotSubmitted  = errors.New("patch is not in 'submitted' state")
-		ErrPatchNotWithdrawn  = errors.New("patch is not in a state that can be withdrawn")
-	)
+// ContributionStore is the persistence abstraction for contribution branches.
+type ContributionStore interface {
+	// UpsertContributionOnPush inserts a contribution for a freshly-pushed
+	// namespace ref or refreshes the existing one (by issue_id+ref_name).
+	// Returns the resulting row. When the head SHA changed and the
+	// contribution was open/changes_requested, status is reset to 'open'.
+	UpsertContributionOnPush(ctx context.Context, p ContributionUpsertParams) (*Contribution, error)
+	GetContribution(ctx context.Context, id int64) (*Contribution, error)
+	GetContributionByRef(ctx context.Context, issueID int64, refName string) (*Contribution, error)
+	ListContributions(ctx context.Context, issueID int64) ([]*Contribution, error)
+	SetContributionMeta(ctx context.Context, id int64, title, description string) (*Contribution, error)
+	SetContributionStatus(ctx context.Context, id int64, status ContributionStatus) (*Contribution, error)
+	SetContributionMergeable(ctx context.Context, id int64, mergeable bool, mode string) error
+	// MarkContributionMerged records the server-computed merge commit and
+	// flips status to 'merged'.
+	MarkContributionMerged(ctx context.Context, id int64, mergedCommitSHA string) (*Contribution, error)
+}
 
+var (
+	ErrContributionNotFound = errors.New("contribution not found")
+)
 
 var (
 	ErrAttachmentNotFound = errors.New("attachment not found")

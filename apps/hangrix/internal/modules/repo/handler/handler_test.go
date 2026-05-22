@@ -14,6 +14,8 @@ import (
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
+	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
+	tokendomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/token/domain"
 	userdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/user/domain"
 )
 
@@ -29,11 +31,11 @@ func (s *stubStore) GetByOwnerAndName(_ context.Context, ownerKind domain.OwnerK
 func (s *stubStore) Create(_ context.Context, _ domain.OwnerKind, _ int64, _, _, _ string, _ domain.Visibility) (*domain.Repo, error) {
 	return nil, nil
 }
-func (s *stubStore) GetByID(_ context.Context, _ int64) (*domain.Repo, error)              { return nil, nil }
+func (s *stubStore) GetByID(_ context.Context, _ int64) (*domain.Repo, error) { return nil, nil }
 func (s *stubStore) ListByOwner(_ context.Context, _ domain.OwnerKind, _ int64, _ bool, _, _ int32) ([]*domain.Repo, int64, error) {
 	return nil, 0, nil
 }
-func (s *stubStore) Delete(_ context.Context, _ int64) error                                { return nil }
+func (s *stubStore) Delete(_ context.Context, _ int64) error { return nil }
 func (s *stubStore) UpdateMeta(_ context.Context, _ int64, _, _ string, _ domain.Visibility) (*domain.Repo, error) {
 	return nil, nil
 }
@@ -79,7 +81,7 @@ func (s *stubUserRepo) GetByID(_ context.Context, _ int64) (*userdomain.User, er
 func (s *stubUserRepo) GetByEmail(_ context.Context, _ string) (*userdomain.User, error) {
 	return nil, nil
 }
-func (s *stubUserRepo) Count(_ context.Context) (int64, error)                        { return 0, nil }
+func (s *stubUserRepo) Count(_ context.Context) (int64, error) { return 0, nil }
 func (s *stubUserRepo) List(_ context.Context, _, _ int32) ([]*userdomain.User, error) {
 	return nil, nil
 }
@@ -765,5 +767,98 @@ func TestMemberRole_Valid(t *testing.T) {
 	}
 	if domain.MemberRole("").Valid() {
 		t.Fatal("empty.Valid() = true, want false")
+	}
+}
+
+// TestGitCallerHasWriteScope pins the coarse push-authorization gate. In the
+// contribution-branch model an agent session may push as long as it is bound
+// to an issue with a role key; the actual namespace restriction is the per-ref
+// ACL enforced in gitReceivePack (see TestSessionRefAllowed). PATs still need
+// repo:write; cookie/password are full users.
+func TestGitCallerHasWriteScope(t *testing.T) {
+	num := func(n int32) *int32 { return &n }
+	tests := []struct {
+		name   string
+		caller gitCaller
+		want   bool
+	}{
+		{
+			name:   "session bound to issue+role -> allowed",
+			caller: gitCaller{authMethod: "session", session: &runnerdomain.AgentSession{IssueNumber: num(5), RoleKey: "server"}},
+			want:   true,
+		},
+		{
+			name:   "session with role but no issue -> blocked",
+			caller: gitCaller{authMethod: "session", session: &runnerdomain.AgentSession{RoleKey: "server"}},
+			want:   false,
+		},
+		{
+			name:   "session with issue but no role -> blocked",
+			caller: gitCaller{authMethod: "session", session: &runnerdomain.AgentSession{IssueNumber: num(5)}},
+			want:   false,
+		},
+		{
+			name:   "session nil -> blocked",
+			caller: gitCaller{authMethod: "session", session: nil},
+			want:   false,
+		},
+		{
+			name:   "pat with repo:write scope -> allowed",
+			caller: gitCaller{authMethod: "pat", token: &tokendomain.Token{Scopes: []tokendomain.Scope{tokendomain.ScopeRepoWrite}}},
+			want:   true,
+		},
+		{
+			name:   "pat with only repo:read scope -> blocked",
+			caller: gitCaller{authMethod: "pat", token: &tokendomain.Token{Scopes: []tokendomain.Scope{tokendomain.ScopeRepoRead}}},
+			want:   false,
+		},
+		{
+			name:   "pat nil token -> blocked",
+			caller: gitCaller{authMethod: "pat", token: nil},
+			want:   false,
+		},
+		{
+			name:   "cookie/password session -> full user, allowed",
+			caller: gitCaller{authMethod: "password"},
+			want:   true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.caller.hasWriteScope(); got != tc.want {
+				t.Fatalf("hasWriteScope() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSessionRefAllowed pins the per-ref ACL: a session may only push to refs
+// inside its own per-issue namespace refs/heads/issue-<N>/<role>[/...].
+func TestSessionRefAllowed(t *testing.T) {
+	num := func(n int32) *int32 { return &n }
+	sess := &runnerdomain.AgentSession{IssueNumber: num(5), RoleKey: "server"}
+	base := sessionNamespacePrefix(sess)
+	if base != "refs/heads/issue-5/server" {
+		t.Fatalf("sessionNamespacePrefix = %q, want refs/heads/issue-5/server", base)
+	}
+	tests := []struct {
+		ref  string
+		want bool
+	}{
+		{"refs/heads/issue-5/server", true},            // the namespace base
+		{"refs/heads/issue-5/server/experiment", true}, // a sub-slug
+		{"refs/heads/issue-5/web", false},              // another role's namespace
+		{"refs/heads/issue/5", false},                  // the protected issue branch
+		{"refs/heads/main", false},                     // base branch
+		{"refs/heads/issue-50/server", false},          // different issue (prefix trap)
+	}
+	for _, tc := range tests {
+		if got := refWithinNamespace(tc.ref, base); got != tc.want {
+			t.Errorf("refWithinNamespace(%q) = %v, want %v", tc.ref, got, tc.want)
+		}
+	}
+	// An unbound session denies everything.
+	if refWithinNamespace("refs/heads/issue-5/server", sessionNamespacePrefix(&runnerdomain.AgentSession{})) {
+		t.Error("unbound session should deny all refs")
 	}
 }

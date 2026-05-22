@@ -69,21 +69,17 @@ type PushRefUpdate struct {
 // are logged but don't change the push outcome — the client already got its
 // response.
 //
-// PostReceive receives a Pusher so observers writing audit events can
-// attribute them correctly. PreReceive doesn't take one because sidecar
-// refresh is identity-agnostic.
-//
-// refUpdates carries the parsed pkt-line ref commands. Observers that gate
-// pushes (e.g. fast-forward checks) can inspect the intended new SHA before
-// the ref is updated. The pack data has already been extracted into the repo
-// before PreReceive runs, so the new SHA is resolvable.
+// Both PreReceive and PostReceive receive the parsed ref-update commands so
+// observers can act on the exact refs that moved. PostReceive also receives a
+// Pusher so observers writing audit events can attribute them correctly. The
+// pack data has already been extracted into the repo before PreReceive runs,
+// so the new SHA is resolvable; by PostReceive the refs themselves are updated.
 type PushObserver interface {
 	PreReceive(ctx context.Context, repo *Repo, fsPath string, refUpdates []PushRefUpdate) error
-	PostReceive(ctx context.Context, repo *Repo, fsPath string, pusher Pusher) error
+	PostReceive(ctx context.Context, repo *Repo, fsPath string, pusher Pusher, refUpdates []PushRefUpdate) error
 }
 
 // ErrBranchDiverged is returned by PreReceive observers when a push is
 // rejected because the branch has diverged from its base (non-fast-forward).
 // Handlers map this to HTTP 409 Conflict rather than 500.
 var ErrBranchDiverged = errors.New("branch has diverged from its base branch")
-

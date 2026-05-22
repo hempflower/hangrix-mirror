@@ -19,7 +19,7 @@ import {
 } from 'lucide-vue-next'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import AgentSessionsView from '@/components/issue/AgentSessionsView.vue'
-import PatchesView from '@/components/issue/PatchesView.vue'
+import ContributionsView from '@/components/issue/ContributionsView.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -28,7 +28,7 @@ import FileDiffList from '@/components/repo/FileDiffList.vue'
 import FoldableBody from '@/components/issue/FoldableBody.vue'
 import MentionTextarea from '@/components/issue/MentionTextarea.vue'
 import AttachmentUploader from '@/components/issue/AttachmentUploader.vue'
-import type { Issue, IssueAttachment, IssueState, IssueTimeline, IssueMergeResp, PatchAppliedPayload, PatchRejectedPayload, PatchSubmittedPayload, ReviewStatus, ReviewVerdict, ReviewVoteValue } from '~/types/issue'
+import type { Issue, IssueAttachment, IssueState, IssueTimeline, IssueMergeResp, ReviewStatus, ReviewVerdict, ReviewVoteValue } from '~/types/issue'
 import type { Commit, FileDiff } from '~/types/repo'
 import { relativeTime } from '~/utils/time'
 
@@ -125,13 +125,13 @@ const mergeBusy = ref(false)
 const actionError = ref<string | null>(null)
 const actionInfo = ref<string | null>(null)
 
-type IssueTab = 'conversation' | 'commits' | 'diff' | 'patches' | 'agents'
+type IssueTab = 'conversation' | 'commits' | 'diff' | 'contributions' | 'agents'
 
 // tab state is mirrored into ?tab= so the URL is shareable / refresh-stable.
 // `conversation` is the implicit default — we drop the query key entirely
 // when it's selected so deep links to "/issues/N" stay clean.
 function parseTab(raw: unknown): IssueTab {
-  if (raw === 'commits' || raw === 'diff' || raw === 'patches' || raw === 'agents') return raw
+  if (raw === 'commits' || raw === 'diff' || raw === 'contributions' || raw === 'agents') return raw
   return 'conversation'
 }
 const tab = ref<IssueTab>(parseTab(route.query.tab))
@@ -430,38 +430,28 @@ function eventLabel(e: any): string {
     }
     case 'title_changed':
       return t('issue.timeline.titleChanged', { name })
-    case 'patch_submitted':
-      return t('issue.patches.timeline.patchSubmitted', {
+    case 'contribution_pushed':
+      return t('issue.contributions.timeline.contributionPushed', {
         name,
+        ref: e.payload?.ref_name ?? '',
         title: e.payload?.title ?? '',
       })
-    case 'patch_applying':
-      return t('issue.patches.timeline.patchApplying', {
+    case 'contribution_merged':
+      return t('issue.contributions.timeline.contributionMerged', {
         name,
         title: e.payload?.title ?? '',
+        sha: shortSha(e.payload?.merge_commit_sha ?? ''),
       })
-    case 'patch_applied':
-      return t('issue.patches.timeline.patchApplied', {
+    case 'contribution_changes_requested':
+      return t('issue.contributions.timeline.contributionChangesRequested', {
         name,
-        title: e.payload?.title ?? '',
-        sha: shortSha(e.payload?.commit_sha ?? ''),
-      })
-    case 'patch_rejected':
-      return t('issue.patches.timeline.patchRejected', {
-        name,
-        title: e.payload?.title ?? '',
+        ref: e.payload?.ref_name ?? '',
         reason: e.payload?.reason ?? '',
       })
-    case 'patch_withdrawn':
-      return t('issue.patches.timeline.patchWithdrawn', {
+    case 'contribution_closed':
+      return t('issue.contributions.timeline.contributionClosed', {
         name,
-        title: e.payload?.title ?? '',
-      })
-    case 'patch_voided':
-      return t('issue.patches.timeline.patchVoided', {
-        name,
-        title: e.payload?.title ?? '',
-        reason: e.payload?.reason ?? '',
+        ref: e.payload?.ref_name ?? '',
       })
     default:
       return e.kind
@@ -627,9 +617,9 @@ onUnmounted(() => {
   <DiffIcon class="size-4" />
   {{ t('issue.tabs.diff') }}
   </TabsTrigger>
-	  <TabsTrigger value="patches">
+	  <TabsTrigger value="contributions">
 	    <FileDiffIcon class="size-4" />
-	    {{ t('issue.tabs.patches') }}
+	    {{ t('issue.tabs.contributions') }}
 	  </TabsTrigger>
 
   <TabsTrigger value="agents">
@@ -861,17 +851,15 @@ onUnmounted(() => {
               />
             </TabsContent>
 
-            <TabsContent value="patches" class="space-y-4">
-              <PatchesView
-                :active="tab === 'patches'"
+            <TabsContent value="contributions" class="space-y-4">
+              <ContributionsView
+                :active="tab === 'contributions'"
                 :owner="owner"
                 :name="name"
                 :issue-number="Number(number)"
-                :can-manage="canManage"
-                :issue-head-sha="issue.head_sha"
-                :issue-branch="issue.branch_name"
-                @applied="() => { loadTimeline(); loadDiff(); loadCommits(); }"
-                @rejected="() => loadTimeline()"
+                :can-manage="canMerge"
+                @applied="() => { loadIssue(); loadTimeline(); loadDiff(); loadCommits(); }"
+                @closed="() => loadTimeline()"
               />
             </TabsContent>
 

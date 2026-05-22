@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
+	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
@@ -83,14 +83,17 @@ func (r *Registry) issueCommentTool() *agentapidomain.Tool {
 	}
 }
 
-// issueReviewVoteTool records a structured review vote on the issue.
-// Persistence: an issue_events row of kind=review_vote with
-// payload={value, reason}. Side-effect: fires the review_vote.posted
-// trigger so maintainer roles wake.
+// issueReviewVoteTool records a structured review vote. The vote can target a
+// contribution branch (pass contribution_id — the recommended path; this is
+// the "can this contribution enter the issue branch?" decision) or, with
+// contribution_id omitted, the issue branch itself (second-level / legacy).
+// Persistence: an issue_events row of kind=review_vote whose payload binds the
+// vote to the head it was cast against, so a later push silently dismisses it.
+// Side-effect: fires the review_vote.posted trigger so maintainer roles wake.
 func (r *Registry) issueReviewVoteTool() *agentapidomain.Tool {
 	return &agentapidomain.Tool{
 		Name:        "issue_review_vote",
-		Description: "Cast a structured review vote on the current issue (approve / request_changes / abstain).",
+		Description: "Cast a structured review vote (approve / request_changes / abstain). Pass `contribution_id` to vote on a specific contribution branch — the vote decides whether that branch may merge into the issue branch. Omit it to vote on the issue branch itself. You cannot approve your own contribution.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -103,6 +106,10 @@ func (r *Registry) issueReviewVoteTool() *agentapidomain.Tool {
 					"type":        "string",
 					"description": "Free-text rationale shown on the timeline. Recommended even for 'approve'.",
 				},
+				"contribution_id": map[string]any{
+					"type":        "integer",
+					"description": "Optional: the contribution branch this vote targets (from contribution_list). Omit for an issue-level vote.",
+				},
 			},
 			"required": []string{"value"},
 		},
@@ -111,13 +118,10 @@ func (r *Registry) issueReviewVoteTool() *agentapidomain.Tool {
 			if err != nil {
 				return errorResult(err.Error()), nil
 			}
-			// Reject votes when there's nothing on the branch to review.
-			if scope.issue.HeadSHA == "" {
-				return errorResult("cannot vote on an issue with no commits — push first"), nil
-			}
 			var req struct {
-				Value  string `json:"value"`
-				Reason string `json:"reason"`
+				Value          string `json:"value"`
+				Reason         string `json:"reason"`
+				ContributionID int64  `json:"contribution_id"`
 			}
 			if err := unmarshalArgs(args, &req); err != nil {
 				return errorResult("invalid arguments: " + err.Error()), nil
@@ -126,13 +130,46 @@ func (r *Registry) issueReviewVoteTool() *agentapidomain.Tool {
 			if !value.Valid() {
 				return errorResult("value must be approve|request_changes|abstain"), nil
 			}
-			payload, _ := json.Marshal(issuedomain.ReviewVotePayload{
-				Value:   value,
-				Reason:  req.Reason,
-				HeadSHA: scope.issue.HeadSHA,
-			})
+
+			payload := issuedomain.ReviewVotePayload{Value: value, Reason: req.Reason}
+			if req.ContributionID > 0 {
+				// Contribution vote: bind to the contribution head.
+				c, err := r.deps.Contributions.GetContribution(ctx, req.ContributionID)
+				if err != nil {
+					return errorResult("get contribution: " + err.Error()), nil
+				}
+				if c.IssueID != scope.issue.ID {
+					return errorResult("contribution does not belong to the current issue"), nil
+				}
+				if c.HeadSHA == "" {
+					return errorResult("contribution branch has no commits yet"), nil
+				}
+				// No self-review: a role cannot approve its own contribution.
+				if value == issuedomain.ReviewVoteApprove && c.AgentRole == sess.RoleKey {
+					return errorResult("you cannot approve your own contribution"), nil
+				}
+				payload.ContributionID = c.ID
+				payload.ReviewedSHA = c.HeadSHA
+				// A request_changes vote flips the contribution status so the
+				// list / timeline reflect it; approve leaves status to the gate.
+				if value == issuedomain.ReviewVoteRequestChanges {
+					_, _ = r.deps.Contributions.SetContributionStatus(ctx, c.ID, issuedomain.ContribStatusChangesRequested)
+					reqPayload, _ := json.Marshal(issuedomain.ContributionEventPayload{
+						ContributionID: c.ID, AgentRole: c.AgentRole, RefName: c.RefName, Reason: req.Reason,
+					})
+					_, _ = r.deps.Issues.CreateAgentEvent(ctx, scope.issue.ID, issuedomain.EventContributionChangesRequested, reqPayload, sess.RoleKey)
+				}
+			} else {
+				// Issue-level vote: bind to the issue head.
+				if scope.issue.HeadSHA == "" {
+					return errorResult("cannot vote on an issue with no commits — push first"), nil
+				}
+				payload.HeadSHA = scope.issue.HeadSHA
+			}
+
+			payloadBytes, _ := json.Marshal(payload)
 			evt, err := r.deps.Issues.CreateAgentEvent(
-				ctx, scope.issue.ID, issuedomain.EventReviewVote, payload, sess.RoleKey,
+				ctx, scope.issue.ID, issuedomain.EventReviewVote, payloadBytes, sess.RoleKey,
 			)
 			if err != nil {
 				return errorResult("create vote event: " + err.Error()), nil
@@ -466,7 +503,6 @@ func (r *Registry) sessionRecoverTool() *agentapidomain.Tool {
 	}
 }
 
-
 // issueAttachmentUploadTool declares the issue_attachment_upload tool.
 // File bytes arrive via multipart/form-data (handled by the HTTP handler,
 // which calls Registry.UploadAttachment). The JSON code path returns a
@@ -560,9 +596,6 @@ func attachmentMarkdownSnippet(id int64, kind issuedomain.AttachmentKind, inline
 	}
 	return fmt.Sprintf("[attachment:%d]", id)
 }
-
-
-
 
 // issueCreateTool creates a new issue (optionally as a child of the
 // current issue). When parent=true the new issue's base_branch is set

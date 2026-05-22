@@ -17,11 +17,11 @@ import (
 func Module() *ioc.Module {
 	m := ioc.NewModule()
 
-	// Persistence: PostgresStore satisfies Store, AttachmentStore, and PatchStore.
+	// Persistence: PostgresStore satisfies Store, AttachmentStore, and ContributionStore.
 	storeBinder := m.Provide(infra.NewPostgresStore)
 	storeBinder.ToInterface(new(domain.Store))
 	storeBinder.ToInterface(new(domain.AttachmentStore))
-	storeBinder.ToInterface(new(domain.PatchStore))
+	storeBinder.ToInterface(new(domain.ContributionStore))
 
 	// Attachment service: validation, hashing, on-disk writes.
 	svcBinder := m.Provide(service.NewAttachmentService)

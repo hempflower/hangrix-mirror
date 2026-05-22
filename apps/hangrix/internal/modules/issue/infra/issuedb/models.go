@@ -19,6 +19,30 @@ type BranchProtection struct {
 	UpdatedAt        pgtype.Timestamptz
 }
 
+type Contribution struct {
+	ID              int64
+	RepoID          int64
+	IssueID         int64
+	SessionID       int64
+	AgentRole       string
+	RefName         string
+	HeadSha         string
+	BaseSha         string
+	Title           string
+	Description     string
+	Status          string
+	Mergeable       bool
+	MergeMode       string
+	ChangedPaths    []string
+	Files           int32
+	Additions       int32
+	Deletions       int32
+	MergedCommitSha string
+	MergedAt        pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+}
+
 type Issue struct {
 	ID             int64
 	RepoID         int64
@@ -85,38 +109,6 @@ type IssueEvent struct {
 	ActorID   pgtype.Int8
 	CreatedAt pgtype.Timestamptz
 	AgentRole string
-}
-
-type IssuePatch struct {
-	ID               int64
-	RepoID           int64
-	IssueID          int64
-	SessionID        int64
-	AgentRole        string
-	BaseHeadSha      string
-	Title            string
-	Description      string
-	ChangedPaths     []string
-	FileCount        int32
-	Additions        int32
-	Deletions        int32
-	Status           string
-	AppliedCommitSha pgtype.Text
-	AppliedAt        pgtype.Timestamptz
-	RejectedReason   pgtype.Text
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
-	PatchCount       int32
-	ApplyError       string
-}
-
-type IssuePatchFile struct {
-	ID           int64
-	SubmissionID int64
-	Seq          int32
-	FileName     string
-	PatchText    string
-	Subject      string
 }
 
 type Organization struct {

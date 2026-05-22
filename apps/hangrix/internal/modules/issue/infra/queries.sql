@@ -254,103 +254,103 @@ SET status = 'deleted', deleted_at = NOW()
 WHERE id = sqlc.arg('id') AND status <> 'deleted';
 
 
--- ---- issue_patches ----
+-- ---- contributions ----
 
--- name: CreatePatch :one
-INSERT INTO issue_patches (
-    repo_id, issue_id, session_id, agent_role, base_head_sha,
-    title, description, patch_count, changed_paths,
-    file_count, additions, deletions, status
+-- name: UpsertContributionOnPush :one
+-- Insert a contribution for a freshly-pushed namespace ref, or update the
+-- existing one (keyed by issue_id+ref_name) with the new head/diff. When the
+-- head SHA actually changed, the status resets to 'open' (a new push dismisses
+-- prior approvals — GitHub-style) and mergeable is recomputed by the caller.
+INSERT INTO contributions (
+    repo_id, issue_id, session_id, agent_role, ref_name,
+    head_sha, base_sha, changed_paths, files, additions, deletions, status
 )
 VALUES (
     sqlc.arg('repo_id'),
     sqlc.arg('issue_id'),
     sqlc.arg('session_id'),
     sqlc.arg('agent_role'),
-    sqlc.arg('base_head_sha'),
-    sqlc.arg('title'),
-    sqlc.arg('description'),
-    sqlc.arg('patch_count'),
+    sqlc.arg('ref_name'),
+    sqlc.arg('head_sha'),
+    sqlc.arg('base_sha'),
     sqlc.arg('changed_paths'),
-    sqlc.arg('file_count'),
+    sqlc.arg('files'),
     sqlc.arg('additions'),
     sqlc.arg('deletions'),
-    sqlc.arg('status')
+    'open'
 )
-RETURNING id, created_at, updated_at;
+ON CONFLICT (issue_id, ref_name) DO UPDATE SET
+    session_id    = EXCLUDED.session_id,
+    agent_role    = EXCLUDED.agent_role,
+    head_sha      = EXCLUDED.head_sha,
+    base_sha      = EXCLUDED.base_sha,
+    changed_paths = EXCLUDED.changed_paths,
+    files         = EXCLUDED.files,
+    additions     = EXCLUDED.additions,
+    deletions     = EXCLUDED.deletions,
+    status        = CASE
+                        WHEN contributions.head_sha IS DISTINCT FROM EXCLUDED.head_sha
+                             AND contributions.status IN ('open','changes_requested')
+                        THEN 'open'
+                        ELSE contributions.status
+                    END,
+    updated_at    = NOW()
+RETURNING id;
 
--- name: GetPatch :one
-SELECT id, repo_id, issue_id, session_id, agent_role,
-       base_head_sha, title, description, patch_count,
-       changed_paths, file_count, additions, deletions,
-       status, applied_commit_sha, applied_at, rejected_reason,
-       apply_error,
-       created_at, updated_at
-FROM issue_patches
+-- name: GetContribution :one
+SELECT id, repo_id, issue_id, session_id, agent_role, ref_name,
+       head_sha, base_sha, title, description, status, mergeable,
+       merge_mode, changed_paths, files, additions, deletions,
+       merged_commit_sha, merged_at, created_at, updated_at
+FROM contributions
 WHERE id = sqlc.arg('id');
 
--- name: ListPatches :many
-SELECT id, repo_id, issue_id, session_id, agent_role,
-       base_head_sha, title, description, patch_count,
-       changed_paths, file_count, additions, deletions,
-       status, applied_commit_sha, applied_at, rejected_reason,
-       apply_error,
-       created_at, updated_at
-FROM issue_patches
-WHERE issue_id = sqlc.arg('issue_id')
-ORDER BY created_at DESC, id DESC;
+-- name: GetContributionByRef :one
+SELECT id, repo_id, issue_id, session_id, agent_role, ref_name,
+       head_sha, base_sha, title, description, status, mergeable,
+       merge_mode, changed_paths, files, additions, deletions,
+       merged_commit_sha, merged_at, created_at, updated_at
+FROM contributions
+WHERE issue_id = sqlc.arg('issue_id') AND ref_name = sqlc.arg('ref_name');
 
--- name: UpdatePatchStatus :one
-UPDATE issue_patches
-SET status = sqlc.arg('status'),
-    applied_commit_sha = CASE WHEN sqlc.arg('status') = 'applied'
-                              THEN sqlc.arg('applied_commit_sha')
-                              ELSE applied_commit_sha
-                         END,
-    applied_at = CASE WHEN sqlc.arg('status') = 'applied' THEN NOW() ELSE applied_at END,
-    rejected_reason = CASE WHEN sqlc.arg('status') IN ('rejected', 'voided')
-                           THEN sqlc.arg('rejected_reason')
-                           ELSE rejected_reason
-                      END,
+-- name: ListContributions :many
+SELECT id, repo_id, issue_id, session_id, agent_role, ref_name,
+       head_sha, base_sha, title, description, status, mergeable,
+       merge_mode, changed_paths, files, additions, deletions,
+       merged_commit_sha, merged_at, created_at, updated_at
+FROM contributions
+WHERE issue_id = sqlc.arg('issue_id')
+ORDER BY created_at, id;
+
+-- name: SetContributionMeta :one
+UPDATE contributions
+SET title = sqlc.arg('title'),
+    description = sqlc.arg('description'),
     updated_at = NOW()
 WHERE id = sqlc.arg('id')
-RETURNING repo_id, issue_id;
+RETURNING id;
 
--- name: MarkApplying :one
-UPDATE issue_patches
-SET status = 'applying', updated_at = NOW()
-WHERE id = sqlc.arg('id') AND status = 'submitted'
-RETURNING repo_id, issue_id;
+-- name: SetContributionStatus :one
+UPDATE contributions
+SET status = sqlc.arg('status'), updated_at = NOW()
+WHERE id = sqlc.arg('id')
+RETURNING id;
 
--- name: UpdateApplyError :exec
-UPDATE issue_patches
-SET apply_error = sqlc.arg('apply_error'), updated_at = NOW()
-WHERE id = sqlc.arg('id') AND status = 'applying';
+-- name: SetContributionMergeable :exec
+UPDATE contributions
+SET mergeable = sqlc.arg('mergeable'),
+    merge_mode = sqlc.arg('merge_mode'),
+    updated_at = NOW()
+WHERE id = sqlc.arg('id');
 
--- name: SupersedePatches :execrows
-UPDATE issue_patches
-SET status = 'superseded', updated_at = NOW()
-WHERE issue_id = sqlc.arg('issue_id')
-  AND agent_role = sqlc.arg('agent_role')
-  AND status = 'submitted'
-  AND id <> sqlc.arg('except_id');
-
--- name: CreatePatchFiles :copyfrom
-INSERT INTO issue_patch_files (
-    submission_id, seq, file_name, patch_text, subject
-)
-VALUES (
-    sqlc.arg('submission_id'),
-    sqlc.arg('seq'),
-    sqlc.arg('file_name'),
-    sqlc.arg('patch_text'),
-    sqlc.arg('subject')
-);
-
--- name: GetPatchFiles :many
-SELECT id, submission_id, seq, file_name, patch_text, subject
-FROM issue_patch_files
-WHERE submission_id = sqlc.arg('submission_id')
-ORDER BY seq;
+-- name: MarkContributionMerged :one
+UPDATE contributions
+SET status = 'merged',
+    merged_commit_sha = sqlc.arg('merged_commit_sha'),
+    merged_at = NOW(),
+    mergeable = TRUE,
+    updated_at = NOW()
+WHERE id = sqlc.arg('id')
+RETURNING id;
 
 

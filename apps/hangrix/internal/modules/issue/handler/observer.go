@@ -95,25 +95,35 @@ func (o *PushObserver) PreReceive(ctx context.Context, repo *repodomain.Repo, fs
 	return nil
 }
 
-// PostReceive walks every open issue in the repo and reconciles its on-disk
-// branch tip. Repos with many open issues see an O(open_issues) walk per
-// push — fine for M4 scale; we can add a "branches updated" filter once
-// receive-pack instrumentation gives us that data.
-func (o *PushObserver) PostReceive(ctx context.Context, repo *repodomain.Repo, fsPath string, pusher repodomain.Pusher) error {
+// PostReceive does two things:
+//
+//  1. Walks every open issue in the repo and reconciles its on-disk branch
+//     tip (commit_pushed events on `issue/<n>` branches).
+//  2. For every pushed ref in a per-issue contribution namespace
+//     (refs/heads/issue-<N>/<role>), upserts the contribution record from the
+//     real git diff and wakes reviewers. See SyncContribution.
+//
+// Repos with many open issues see an O(open_issues) walk per push — fine for
+// current scale.
+func (o *PushObserver) PostReceive(ctx context.Context, repo *repodomain.Repo, fsPath string, pusher repodomain.Pusher, refUpdates []repodomain.PushRefUpdate) error {
 	numbers, err := o.h.issues.ListOpenIssueNumbers(ctx, repo.ID)
-	if err != nil {
-		return err
+	if err == nil {
+		for _, n := range numbers {
+			iss, err := o.h.issues.GetByNumber(ctx, repo.ID, n)
+			if err != nil {
+				continue
+			}
+			if err := o.h.SyncIssueBranch(ctx, repo, fsPath, iss, pusher.UserID, pusher.AgentRole); err != nil {
+				// Best-effort per-issue: keep going so one bad branch doesn't
+				// stall the rest.
+				continue
+			}
+		}
 	}
-	for _, n := range numbers {
-		iss, err := o.h.issues.GetByNumber(ctx, repo.ID, n)
-		if err != nil {
-			continue
-		}
-		if err := o.h.SyncIssueBranch(ctx, repo, fsPath, iss, pusher.UserID, pusher.AgentRole); err != nil {
-			// Best-effort per-issue: keep going so one bad branch doesn't
-			// stall the rest.
-			continue
-		}
+
+	// Contribution namespace refs. Best-effort per ref.
+	for _, u := range refUpdates {
+		o.h.SyncContribution(ctx, repo, fsPath, u)
 	}
 	return nil
 }

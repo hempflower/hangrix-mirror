@@ -10,8 +10,9 @@
 //	hgxr_<8>_<32>  runner agent token (long-lived bearer on every poll)
 //	hgxs_<8>_<32>  session token      (one per agent_sessions row; represents
 //	                                   agent identity — used by the in-container
-//	                                   agent to call platform LLM, platform MCP,
-//	                                   etc. NOT coupled to any LLM provider)
+//	                                   agent to call the platform LLM proxy, the
+//	                                   agent HTTP API, etc. NOT coupled to any
+//	                                   LLM provider)
 //
 // The three prefixes are distinct so a single auth router can dispatch a
 // raw Authorization header to the right validator without trying every
@@ -142,15 +143,15 @@ func (r *Runner) EnrollTokenActive() bool {
 //
 // Two layers of state coexist on the same column:
 //
-//   pending → claimed → running                       — one container life.
-//   running → succeeded | failed | cancelled          — that container ended.
-//   running → idle                                    — the container finished
-//             one turn but the parent issue is still open. The row stays put
-//             waiting for the next trigger, which will recycle it back to
-//             pending (and from there through claimed → running again).
-//   * → archived                                      — the parent issue
-//             closed / merged. The row is dead for good; restart means a new
-//             session on a new issue.
+//	pending → claimed → running                       — one container life.
+//	running → succeeded | failed | cancelled          — that container ended.
+//	running → idle                                    — the container finished
+//	          one turn but the parent issue is still open. The row stays put
+//	          waiting for the next trigger, which will recycle it back to
+//	          pending (and from there through claimed → running again).
+//	* → archived                                      — the parent issue
+//	          closed / merged. The row is dead for good; restart means a new
+//	          session on a new issue.
 //
 // Spec: docs/agent-config.md §"Session 模型".
 type SessionStatus string
@@ -295,9 +296,9 @@ const (
 	MessageKindMessage  MessageKind = "message"
 	MessageKindToolCall MessageKind = "tool_call"
 	MessageKindStatus   MessageKind = "status"
-	MessageKindLog     MessageKind = "log"
-	MessageKindDone    MessageKind = "done"
-	MessageKindSystem  MessageKind = "system"
+	MessageKindLog      MessageKind = "log"
+	MessageKindDone     MessageKind = "done"
+	MessageKindSystem   MessageKind = "system"
 )
 
 func (k MessageKind) Valid() bool {
@@ -442,7 +443,6 @@ type NewSessionToken struct {
 	Hash   string
 	Sealed string
 }
-
 
 // ContainerCleanupTask is one (session, container) pair the runner's
 // cleanup sweeper should `docker rm`. Returned by

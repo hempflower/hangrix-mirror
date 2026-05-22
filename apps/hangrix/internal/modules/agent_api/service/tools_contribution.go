@@ -1,0 +1,360 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
+	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
+	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
+	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
+)
+
+// Contribution-branch tools (docs/contribution-branches.md). A contribution is
+// a git branch an agent pushes to its own per-issue namespace
+// (refs/heads/issue-<N>/<role>); pushing creates/updates the contribution
+// implicitly (handled server-side in the push observer). These tools cover the
+// read + lifecycle surface: listing, reading the server-computed diff/reviews,
+// setting metadata, the server-side merge into the issue branch, and closing.
+
+// contributionListTool lists the contributions on the current issue.
+func (r *Registry) contributionListTool() *agentapidomain.Tool {
+	return &agentapidomain.Tool{
+		Name:        "contribution_list",
+		Description: "List the contribution branches on the current issue. Each entry has id, agent_role, ref_name, status, mergeable, merge_mode, head_sha, and diff stats. A contribution is created automatically when you push to refs/heads/issue-<N>/<your-role>.",
+		InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+			scope, err := r.loadScope(ctx, sess)
+			if err != nil {
+				return errorResult(err.Error()), nil
+			}
+			contribs, err := r.deps.Contributions.ListContributions(ctx, scope.issue.ID)
+			if err != nil {
+				return errorResult("list contributions: " + err.Error()), nil
+			}
+			items := make([]map[string]any, 0, len(contribs))
+			for _, c := range contribs {
+				items = append(items, contributionSummary(c))
+			}
+			return textResult(map[string]any{"contributions": items}), nil
+		},
+	}
+}
+
+// contributionReadTool returns a contribution plus its server-computed diff
+// (against the issue branch) and per-contribution review status.
+func (r *Registry) contributionReadTool() *agentapidomain.Tool {
+	return &agentapidomain.Tool{
+		Name:        "contribution_read",
+		Description: "Read one contribution: metadata, the real diff against the issue branch (what this branch adds), and its review status. Use the id from contribution_list.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{"type": "integer", "description": "Contribution id to read."},
+			},
+			"required": []string{"id"},
+		},
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+			scope, err := r.loadScope(ctx, sess)
+			if err != nil {
+				return errorResult(err.Error()), nil
+			}
+			c, errRes := r.loadContribution(ctx, scope, args)
+			if errRes != nil {
+				return *errRes, nil
+			}
+
+			contribBranch := strings.TrimPrefix(c.RefName, "refs/heads/")
+			diffs, derr := r.deps.Git.DiffMergeBase(scope.fsPath, scope.issue.BranchName, contribBranch)
+			if derr != nil {
+				diffs = []*gitdomain.FileDiff{}
+			}
+			var review *issuedomain.ReviewStatus
+			if events, err := r.deps.Issues.ListEvents(ctx, scope.issue.ID); err == nil {
+				review = issuedomain.ComputeContributionReviewStatus(c, events)
+			}
+			return textResult(map[string]any{
+				"contribution": contributionSummary(c),
+				"diff":         diffs,
+				"review":       review,
+			}), nil
+		},
+	}
+}
+
+// contributionSetMetaTool lets the owning role set the title/description of its
+// own contribution (the PR title/body).
+func (r *Registry) contributionSetMetaTool() *agentapidomain.Tool {
+	return &agentapidomain.Tool{
+		Name:        "contribution_set_meta",
+		Description: "Set the title and description of your own contribution branch (its merge-request title/body). Only the role that owns the branch may set its metadata.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":          map[string]any{"type": "integer", "description": "Contribution id."},
+				"title":       map[string]any{"type": "string", "description": "Short title (1-200 chars)."},
+				"description": map[string]any{"type": "string", "description": "Optional longer description."},
+			},
+			"required": []string{"id", "title"},
+		},
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+			scope, err := r.loadScope(ctx, sess)
+			if err != nil {
+				return errorResult(err.Error()), nil
+			}
+			var req struct {
+				ID          int64  `json:"id"`
+				Title       string `json:"title"`
+				Description string `json:"description"`
+			}
+			if err := unmarshalArgs(args, &req); err != nil {
+				return errorResult("invalid arguments: " + err.Error()), nil
+			}
+			title := strings.TrimSpace(req.Title)
+			if title == "" || len(title) > 200 {
+				return errorResult("title is required (1-200 chars)"), nil
+			}
+			c, errRes := r.getContributionScoped(ctx, scope, req.ID)
+			if errRes != nil {
+				return *errRes, nil
+			}
+			if c.AgentRole != sess.RoleKey {
+				return errorResult("only the owning role can set this contribution's metadata"), nil
+			}
+			updated, err := r.deps.Contributions.SetContributionMeta(ctx, c.ID, title, strings.TrimSpace(req.Description))
+			if err != nil {
+				return errorResult("set meta: " + err.Error()), nil
+			}
+			return textResult(contributionSummary(updated)), nil
+		},
+	}
+}
+
+// contributionApplyTool is the first-level gate: it merges an approved
+// contribution branch into the issue branch, server-side. The commit SHA is
+// computed by the server (no agent push). Gated by the `contribution_apply`
+// capability in the role's `can:` whitelist (the maintainer role).
+func (r *Registry) contributionApplyTool() *agentapidomain.Tool {
+	return &agentapidomain.Tool{
+		Name:        "contribution_apply",
+		Description: "Merge an approved contribution branch into the issue branch (first-level gate). The server validates the review gate + mergeability and computes the merge commit — there is no agent push. Requires `contribution_apply` in the role's `can:` whitelist.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":      map[string]any{"type": "integer", "description": "Contribution id to merge."},
+				"message": map[string]any{"type": "string", "description": "Optional merge commit message."},
+			},
+			"required": []string{"id"},
+		},
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+			scope, err := r.loadScope(ctx, sess)
+			if err != nil {
+				return errorResult(err.Error()), nil
+			}
+			var req struct {
+				ID      int64  `json:"id"`
+				Message string `json:"message"`
+			}
+			if err := unmarshalArgs(args, &req); err != nil {
+				return errorResult("invalid arguments: " + err.Error()), nil
+			}
+			c, errRes := r.getContributionScoped(ctx, scope, req.ID)
+			if errRes != nil {
+				return *errRes, nil
+			}
+			if c.Status.Terminal() {
+				return errorResult(fmt.Sprintf("contribution is %s", c.Status)), nil
+			}
+
+			// First-level review gate.
+			events, err := r.deps.Issues.ListEvents(ctx, scope.issue.ID)
+			if err != nil {
+				return errorResult("list events: " + err.Error()), nil
+			}
+			if rs := issuedomain.ComputeContributionReviewStatus(c, events); rs.MergeBlocked {
+				blockJSON, _ := json.Marshal(map[string]any{"error": "merge blocked", "block_reason": rs.BlockReason})
+				return agentapidomain.Result{Text: string(blockJSON), IsError: true}, nil
+			}
+
+			contribBranch := strings.TrimPrefix(c.RefName, "refs/heads/")
+			mergeable, mode, hint, _ := r.deps.Git.CheckAutoMerge(scope.fsPath, scope.issue.BranchName, contribBranch)
+			if !mergeable {
+				_ = r.deps.Contributions.SetContributionMergeable(ctx, c.ID, false, mode)
+				return errorResult("contribution is not mergeable: " + hint), nil
+			}
+
+			msg := strings.TrimSpace(req.Message)
+			if msg == "" {
+				msg = fmt.Sprintf("Merge contribution %s into %s (issue #%d)", contribBranch, scope.issue.BranchName, scope.issue.Number)
+			}
+			identity := agentsessiondomain.IdentityForRole(sess.RoleKey, "")
+			mergeSHA, mergedMode, err := r.deps.Git.MergeBranch(scope.fsPath, scope.issue.BranchName, contribBranch, msg, gitdomain.Signature{
+				Name: identity.Name, Email: identity.Email, When: time.Now(),
+			})
+			if err != nil {
+				if errors.Is(err, gitdomain.ErrMergeConflict) {
+					_ = r.deps.Contributions.SetContributionMergeable(ctx, c.ID, false, "conflicted")
+					return errorResult("merge conflict — contributor must rebase and re-push"), nil
+				}
+				return errorResult("merge: " + err.Error()), nil
+			}
+
+			_ = r.deps.Issues.UpdateHeadSHA(ctx, scope.issue.ID, mergeSHA)
+			merged, err := r.deps.Contributions.MarkContributionMerged(ctx, c.ID, mergeSHA)
+			if err != nil {
+				return errorResult("mark merged: " + err.Error()), nil
+			}
+
+			evtPayload, _ := json.Marshal(issuedomain.ContributionEventPayload{
+				ContributionID: merged.ID, AgentRole: merged.AgentRole, RefName: merged.RefName,
+				Title: merged.Title, MergeCommitSHA: mergeSHA,
+			})
+			_, _ = r.deps.Issues.CreateAgentEvent(ctx, scope.issue.ID, issuedomain.EventContributionMerged, evtPayload, sess.RoleKey)
+
+			// Landing one branch may conflict the siblings; refresh their flags.
+			r.refreshSiblingMergeability(ctx, scope, merged.ID)
+
+			return textResult(map[string]any{
+				"id":        merged.ID,
+				"status":    string(merged.Status),
+				"merge_sha": mergeSHA,
+				"mode":      mergedMode,
+			}), nil
+		},
+	}
+}
+
+// contributionCloseTool lets the owning role abandon its contribution branch.
+func (r *Registry) contributionCloseTool() *agentapidomain.Tool {
+	return &agentapidomain.Tool{
+		Name:        "contribution_close",
+		Description: "Close (abandon) your own contribution branch. Only the owning role may close it; merged contributions cannot be closed.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":     map[string]any{"type": "integer", "description": "Contribution id to close."},
+				"reason": map[string]any{"type": "string", "description": "Optional rationale, recorded on the timeline."},
+			},
+			"required": []string{"id"},
+		},
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+			scope, err := r.loadScope(ctx, sess)
+			if err != nil {
+				return errorResult(err.Error()), nil
+			}
+			var req struct {
+				ID     int64  `json:"id"`
+				Reason string `json:"reason"`
+			}
+			if err := unmarshalArgs(args, &req); err != nil {
+				return errorResult("invalid arguments: " + err.Error()), nil
+			}
+			c, errRes := r.getContributionScoped(ctx, scope, req.ID)
+			if errRes != nil {
+				return *errRes, nil
+			}
+			if c.AgentRole != sess.RoleKey {
+				return errorResult("only the owning role can close this contribution"), nil
+			}
+			if c.Status.Terminal() {
+				return errorResult(fmt.Sprintf("contribution is %s", c.Status)), nil
+			}
+			updated, err := r.deps.Contributions.SetContributionStatus(ctx, c.ID, issuedomain.ContribStatusClosed)
+			if err != nil {
+				return errorResult("close: " + err.Error()), nil
+			}
+			evtPayload, _ := json.Marshal(issuedomain.ContributionEventPayload{
+				ContributionID: updated.ID, AgentRole: updated.AgentRole, RefName: updated.RefName, Reason: strings.TrimSpace(req.Reason),
+			})
+			_, _ = r.deps.Issues.CreateAgentEvent(ctx, scope.issue.ID, issuedomain.EventContributionClosed, evtPayload, sess.RoleKey)
+			return textResult(map[string]any{"id": updated.ID, "status": string(updated.Status)}), nil
+		},
+	}
+}
+
+// loadContribution reads the {id} arg and resolves it to a contribution scoped
+// to the caller's issue. Returns a tool error Result on any failure.
+func (r *Registry) loadContribution(ctx context.Context, scope *sessionScope, args json.RawMessage) (*issuedomain.Contribution, *agentapidomain.Result) {
+	var req struct {
+		ID int64 `json:"id"`
+	}
+	if err := unmarshalArgs(args, &req); err != nil {
+		res := errorResult("invalid arguments: " + err.Error())
+		return nil, &res
+	}
+	return r.getContributionScoped(ctx, scope, req.ID)
+}
+
+// getContributionScoped loads a contribution by id and verifies it belongs to
+// the caller's issue.
+func (r *Registry) getContributionScoped(ctx context.Context, scope *sessionScope, id int64) (*issuedomain.Contribution, *agentapidomain.Result) {
+	if id <= 0 {
+		res := errorResult("id is required and must be positive")
+		return nil, &res
+	}
+	c, err := r.deps.Contributions.GetContribution(ctx, id)
+	if err != nil {
+		res := errorResult("get contribution: " + err.Error())
+		return nil, &res
+	}
+	if c.IssueID != scope.issue.ID {
+		res := errorResult("contribution does not belong to the current issue")
+		return nil, &res
+	}
+	return c, nil
+}
+
+// refreshSiblingMergeability recomputes mergeability for the issue's other open
+// contributions against the (now-advanced) issue head. Best-effort.
+func (r *Registry) refreshSiblingMergeability(ctx context.Context, scope *sessionScope, exceptID int64) {
+	contribs, err := r.deps.Contributions.ListContributions(ctx, scope.issue.ID)
+	if err != nil {
+		return
+	}
+	for _, c := range contribs {
+		if c.ID == exceptID || c.Status.Terminal() {
+			continue
+		}
+		branch := strings.TrimPrefix(c.RefName, "refs/heads/")
+		mergeable, mode, _, err := r.deps.Git.CheckAutoMerge(scope.fsPath, scope.issue.BranchName, branch)
+		if err != nil {
+			continue
+		}
+		_ = r.deps.Contributions.SetContributionMergeable(ctx, c.ID, mergeable, mode)
+	}
+}
+
+// contributionSummary is the wire shape returned to agents for a contribution.
+func contributionSummary(c *issuedomain.Contribution) map[string]any {
+	out := map[string]any{
+		"id":            c.ID,
+		"issue_id":      c.IssueID,
+		"agent_role":    c.AgentRole,
+		"ref_name":      c.RefName,
+		"head_sha":      c.HeadSHA,
+		"base_sha":      c.BaseSHA,
+		"title":         c.Title,
+		"description":   c.Description,
+		"status":        string(c.Status),
+		"mergeable":     c.Mergeable,
+		"merge_mode":    c.MergeMode,
+		"changed_paths": c.ChangedPaths,
+		"files":         c.Files,
+		"additions":     c.Additions,
+		"deletions":     c.Deletions,
+		"created_at":    stableTime(c.CreatedAt),
+		"updated_at":    stableTime(c.UpdatedAt),
+	}
+	if c.MergedCommitSHA != "" {
+		out["merged_commit_sha"] = c.MergedCommitSHA
+	}
+	if c.MergedAt != nil {
+		out["merged_at"] = stableTime(*c.MergedAt)
+	}
+	return out
+}

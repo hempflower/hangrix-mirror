@@ -64,14 +64,18 @@ func (g *gitCaller) hasWriteScope() bool {
 		}
 		return g.token.HasScope(tokendomain.ScopeRepoWrite)
 	case "session":
-		// Agent sessions no longer have direct git write access
-		// (issue #102: patch-first contribution model). Agents
-		// submit patches via the platform MCP tools; only the
-		// maintainer (human or agent with issue_patch_apply) can
-		// advance the issue branch. Per-repo scoping is enforced
-		// via canAccessRepo for read operations, but write is
-		// blocked here regardless.
-		return false
+		// Contribution-branch model (docs/contribution-branches.md): an
+		// agent pushes to its own per-issue namespace ref
+		// (refs/heads/issue-<N>/<role>) — that branch IS its contribution.
+		// No agent pushes a protected branch; the issue branch and base
+		// are advanced server-side. The coarse gate here just requires the
+		// session to be bound to an issue with a role key; the actual
+		// per-ref namespace check happens in gitReceivePack once the
+		// ref-update commands are parsed (see sessionRefAllowed).
+		if g.session == nil || g.session.IssueNumber == nil || g.session.RoleKey == "" {
+			return false
+		}
+		return true
 	}
 	// Cookie and password sessions are equivalent to "full user".
 	return true
@@ -170,6 +174,22 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 	// packStart is 0.
 	refUpdates, packStart := parseReceivePackRefs(bodyBytes)
 
+	// Per-ref ACL for agent sessions (contribution-branch model): a session
+	// may only update refs inside its own per-issue namespace
+	// (refs/heads/issue-<N>/<role>[/...]). Any attempt to touch the issue
+	// branch, base, or another role's namespace is rejected before git runs.
+	// Human callers (cookie/pat/password) are governed by branch protections
+	// + canAccessRepo instead.
+	if caller != nil && caller.authMethod == "session" && caller.session != nil {
+		base := sessionNamespacePrefix(caller.session)
+		for _, u := range refUpdates {
+			if !refWithinNamespace(u.RefName, base) {
+				http.Error(w, "per-ref ACL: agent session may only push to "+base+"[/...]", http.StatusForbidden)
+				return
+			}
+		}
+	}
+
 	// If the push touches any ref, extract the pack objects into the bare
 	// repo so that PreReceive observers (issue fast-forward check) can
 	// resolve the new SHAs. We feed the pack data to `git unpack-objects`
@@ -215,7 +235,7 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	pusher := pusherFromCaller(caller)
 	for _, obs := range h.observers {
-		_ = obs.PostReceive(postCtx, repo, fsPath, pusher)
+		_ = obs.PostReceive(postCtx, repo, fsPath, pusher, refUpdates)
 	}
 	// Push may have changed refs (branch / tag updates, force-pushes,
 	// etc.) — drop every git-read cache key for this repo so the next
@@ -492,6 +512,25 @@ func (h *Handler) identifyGitCaller(r *http.Request) (*gitCaller, bool) {
 		return nil, false
 	}
 	return &gitCaller{user: u, authMethod: "password"}, true
+}
+
+// sessionNamespacePrefix returns the full ref prefix an agent session is
+// allowed to write: refs/heads/issue-<IssueNumber>/<RoleKey>. Returns "" when
+// the session lacks an issue/role binding (callers treat that as "deny all").
+func sessionNamespacePrefix(sess *runnerdomain.AgentSession) string {
+	if sess == nil || sess.IssueNumber == nil || sess.RoleKey == "" {
+		return ""
+	}
+	return fmt.Sprintf("refs/heads/issue-%d/%s", *sess.IssueNumber, sess.RoleKey)
+}
+
+// refWithinNamespace reports whether refName is the namespace base itself or a
+// child of it (base + "/..."). An empty base denies everything.
+func refWithinNamespace(refName, base string) bool {
+	if base == "" {
+		return false
+	}
+	return refName == base || strings.HasPrefix(refName, base+"/")
 }
 
 // parseReceivePackRefs extracts ref-update commands from a git receive-pack

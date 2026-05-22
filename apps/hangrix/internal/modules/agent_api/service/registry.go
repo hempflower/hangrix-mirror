@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
+	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
 	releasedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/domain"
 	releaseinfra "github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/infra"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
@@ -29,13 +29,13 @@ type Registry struct {
 }
 
 type RegistryDeps struct {
-	Issues      issuedomain.Store
-	Patches     issuedomain.PatchStore
-	Repos       repodomain.Store
-	Storage     repodomain.PathResolver
-	Git         gitdomain.Git
-	Runner      runnerdomain.Repo
-	Spawner     agentsessiondomain.Spawner
+	Issues        issuedomain.Store
+	Contributions issuedomain.ContributionStore
+	Repos         repodomain.Store
+	Storage       repodomain.PathResolver
+	Git           gitdomain.Git
+	Runner        runnerdomain.Repo
+	Spawner       agentsessiondomain.Spawner
 	Archiver      agentsessiondomain.Archiver
 	Controller    agentsessiondomain.Controller
 	Protections   repodomain.ProtectionStore
@@ -69,14 +69,12 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 		r.issueCloseTool(),
 		r.issueMergeTool(),
 		r.sessionRecoverTool(),
-		// Patch tools — read-first then mutating.
-		r.issuePatchListTool(),
-		r.issuePatchReadTool(),
-		r.issuePatchSubmitTool(),
-		r.issuePatchApplyTool(),
-		r.issuePatchRejectTool(),
-		r.issuePatchWithdrawTool(),
-		r.issuePatchApplyResultTool(),
+		// Contribution-branch tools — read-first then mutating.
+		r.contributionListTool(),
+		r.contributionReadTool(),
+		r.contributionSetMetaTool(),
+		r.contributionApplyTool(),
+		r.contributionCloseTool(),
 		r.releaseCreateTool(),
 		r.releaseUploadAssetTool(),
 		r.releasePublishTool(),

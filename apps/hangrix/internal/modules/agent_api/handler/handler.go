@@ -53,12 +53,6 @@ const callTimeout = 60 * time.Second
 // with their own budget and are not constrained by this limit.
 const maxRequestBody = 1 << 20
 
-// maxPatchSubmitBody is the larger bound for issue_patch_submit, whose
-// JSON body carries the full text of every patch file in the series
-// (the agent reads them from its workspace and ships the bytes). Kept in
-// sync with the agent-side maxPatchSeriesBytes cap.
-const maxPatchSubmitBody = 16 << 20
-
 // Registry is the subset of *service.Registry the handler needs.
 // Defined as an interface so tests can substitute a fake without
 // instantiating the whole tool catalogue (with its issue / runner / git
@@ -218,16 +212,12 @@ func (h *Handler) call(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bodyLimit := int64(maxRequestBody)
-	if name == "issue_patch_submit" {
-		bodyLimit = maxPatchSubmitBody
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, bodyLimit+1))
+	body, err := io.ReadAll(io.LimitReader(r.Body, int64(maxRequestBody)+1))
 	if err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "read body: "+err.Error())
 		return
 	}
-	if int64(len(body)) > bodyLimit {
+	if int64(len(body)) > int64(maxRequestBody) {
 		httpx.WriteError(w, http.StatusRequestEntityTooLarge, "request body too large")
 		return
 	}
