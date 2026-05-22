@@ -45,6 +45,10 @@ roles:
       - issue_checks
       - issue_merge
       - issue_patch_submit
+      - issue_patch_list
+      - issue_patch_read
+      - issue_patch_apply
+      - issue_patch_reject
       - issue_close
       - issue_attachment_upload
       - roster_list
