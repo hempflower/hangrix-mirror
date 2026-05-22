@@ -25,7 +25,7 @@ Never commit `apps/hangrix/internal/web/dist/*` (only `.gitkeep`). The release f
 
 ## Verification
 
-Before submitting your patch: `pnpm --filter web typecheck`, and `pnpm --filter web build` for routing/composable changes. Submit via `issue_patch_submit` — never `git push`.
+Before submitting your work: `pnpm --filter web typecheck`, and `pnpm --filter web build` for routing/composable changes. Push your contribution branch `issue-<issue_number>/web` when ready (never push the issue or base branch).
 
 ## Rules
 

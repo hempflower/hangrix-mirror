@@ -44,11 +44,10 @@ roles:
       - issue_review_vote
       - issue_checks
       - issue_merge
-      - issue_patch_submit
-      - issue_patch_list
-      - issue_patch_read
-      - issue_patch_apply
-      - issue_patch_reject
+      - contribution_list
+      - contribution_read
+      - contribution_apply
+      - contribution_close
       - issue_close
       - issue_attachment_upload
       - roster_list
@@ -84,6 +83,8 @@ roles:
       - issue_diff
       - issue_comment
       - issue_review_vote
+      - contribution_list
+      - contribution_read
       - read
       - write
       - edit
@@ -109,7 +110,10 @@ roles:
       - issue_comment
       - issue_create
       - issue_attachment_upload
-      - issue_patch_submit
+      - contribution_list
+      - contribution_read
+      - contribution_set_meta
+      - contribution_close
       - roster_list
     prompt_file: .hangrix/prompts/server.md
 
@@ -124,7 +128,7 @@ roles:
           - "**/*db/**"
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_diff, issue_comment, issue_review_vote, roster_list]
+    can: [issue_read, issue_diff, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
     prompt_file: .hangrix/prompts/server-reviewer.md
     llm:
       model: gpt-5.4
@@ -145,7 +149,10 @@ roles:
       - issue_comment
       - issue_create
       - issue_attachment_upload
-      - issue_patch_submit
+      - contribution_list
+      - contribution_read
+      - contribution_set_meta
+      - contribution_close
       - roster_list
     prompt_file: .hangrix/prompts/runtime.md
 
@@ -157,7 +164,7 @@ roles:
           - "apps/hangrix-runner/**"
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_diff, issue_comment, issue_review_vote, roster_list]
+    can: [issue_read, issue_diff, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
     prompt_file: .hangrix/prompts/runtime-reviewer.md
     llm:
       model: gpt-5.4
@@ -176,7 +183,10 @@ roles:
       - issue_comment
       - issue_create
       - issue_attachment_upload
-      - issue_patch_submit
+      - contribution_list
+      - contribution_read
+      - contribution_set_meta
+      - contribution_close
       - roster_list
     prompt_file: .hangrix/prompts/web.md
 
@@ -191,7 +201,7 @@ roles:
           - "apps/web/.nuxt/**"
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_diff, issue_comment, issue_review_vote, roster_list]
+    can: [issue_read, issue_diff, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
     prompt_file: .hangrix/prompts/web-reviewer.md
     llm:
       model: gpt-5.4
@@ -212,6 +222,8 @@ roles:
       - issue_read
       - issue_diff
       - issue_comment
+      - contribution_list
+      - contribution_read
       - roster_list
     prompt_file: .hangrix/prompts/web-copy-lint.md
     llm:

@@ -11,7 +11,7 @@ IPC contract lives in both `apps/hangrix-agent/internal/ipc` and `apps/hangrix-r
 
 ## Tooling
 
-Full coding tools. Sanity: `go test ./... && go build ./...` in each binary directory. Submit via `issue_patch_submit` — never `git push`. E2E smoke test: `docker compose up -d` + enrollment (see `docs/runner-protocol.md`). Note in your final comment whether you only ran unit tests vs a real session.
+Full coding tools. Sanity: `go test ./... && go build ./...` in each binary directory. Push your contribution branch `issue-<issue_number>/runtime` when ready (never push the issue or base branch). E2E smoke test: `docker compose up -d` + enrollment (see `docs/runner-protocol.md`). Note in your final comment whether you only ran unit tests vs a real session.
 
 ## Touch points
 

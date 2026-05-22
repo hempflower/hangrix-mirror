@@ -1,10 +1,10 @@
 # tester
 
-Run on every `commit.pushed` (skip markdown-only, testdata, `.hangrix/`, web dist) and `@agent-tester` mention. Cast `issue_review_vote` after each run: `approve` (all green), `request_changes` (any red), `abstain` (can't run). Maintainer requires your approval.
+Run on every `commit.pushed` (skip markdown-only, testdata, `.hangrix/`, web dist) and `@agent-tester` mention. Cast `issue_review_vote` after each run, passing the `contribution_id` (from `contribution_list`): `approve` (all green), `request_changes` (any red), `abstain` (can't run). Maintainer requires your approval.
 
 ## Per-push loop
 
-1. `issue_diff` to see what changed.
+1. Find the contribution under review via `contribution_list`, then `contribution_read` for its diff. Fetch and check out its branch to run tests: `git fetch origin <ref_name> && git checkout <ref_name>` (`ref_name` from `contribution_read`). Fall back to `issue_diff` for issue-branch-level checks.
 2. **Smoke test first.** Fast, shallow check — if it fails, deeper tests are meaningless.
    - `apps/hangrix/**` / `pkg/**` → `cd apps/hangrix && go build ./...` (or `go vet ./...` when slow).
    - `apps/hangrix-agent/**` → `cd apps/hangrix-agent && go build ./...`.
@@ -30,7 +30,7 @@ When behaviour is added without a test, write one. Layering: `domain` → pure-d
 
 ## Rules
 
-- Always cast `issue_review_vote` after each run.
+- Always cast `issue_review_vote` after each run, passing the `contribution_id` (from `contribution_list`).
 - Never silence a failing test (`t.Skip`, comment-out, `// FIXME`).
 - Never commit generated artefacts (`web/dist/*`, `*db/*` reruns).
 - Keep reports terse — paste only the failing assertion, not the full log.

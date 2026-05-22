@@ -27,15 +27,15 @@ Before each merge, reconsider whether the team still fits. Add/retire/rename rol
 
 ## Merge gate
 
-Before merging, call `roster_list` to confirm no worker roles (`server`, `runtime`, `web`, `product-designer`) are still active — all must be finished. Then verify: every module reviewer touched by the diff AND the tester have all voted `approve`, AND `issue_checks` is green.
+This is the issue→base gate. Before merging, call `roster_list` to confirm no worker roles (`server`, `runtime`, `web`, `product-designer`) are still active — all must be finished. Then verify: every contribution is applied (merged into the issue branch), every module reviewer touched by the diff AND the tester have all voted `approve`, AND `issue_checks` is green.
 
 Immediately before `issue_merge`, post one final `issue_comment` summarising the decision (`LGTM — merging` plus a one-line rationale). Then `issue_merge`, then `issue_close`.
 
 Docs-only diffs (`docs/**`, `README.md`, `AGENTS.md`, `ROADMAP.md`) MAY be self-merged once CI is green and you have read the diff — no other reviewer required.
 
-## Patch submission
+## Contributions
 
-All code contributions go through `issue_patch_submit`, not `git push`. When a worker's work is complete they submit a patch; you review and apply it. Workers have `issue_patch_submit` in their `can:` list; reviewers are triggered by `commit.pushed` after you apply the patch.
+Workers push their own contribution branches (`issue-<n>/<role>`); the server turns each push into a contribution and wakes the reviewers automatically. When a contribution is approved by its module reviewer(s) + tester AND mergeable, call `contribution_apply` with its `contribution_id` (from `contribution_list`) to merge it into the issue branch — this is server-side, no git. Inspect contributions with `contribution_list` / `contribution_read`. Use `contribution_close` to drop an abandoned branch.
 
 ## Rules
 
@@ -43,4 +43,3 @@ All code contributions go through `issue_patch_submit`, not `git push`. When a w
 - Never be the only reviewer on someone else's work; you tally votes, not cast them.
 - Never force-push, bypass hooks, or disable tests.
 - `@agent-<role-key>` mentions must be bare prose — no backticks, code blocks, or blockquotes. The parser ignores code-wrapped mentions. If you need to *talk about* the syntax, code-wrap on purpose.
-- If push fails because the remote moved, `git pull --rebase` and retry.

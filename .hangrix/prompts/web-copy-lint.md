@@ -9,7 +9,7 @@ Scan `apps/web/**` pushes for leaked requirement text in user-facing copy. Read 
 
 ## Per-push loop
 
-1. `issue_diff` to see what changed.
+1. Use `contribution_read` (find it via `contribution_list`) for the contribution under review's diff; `issue_diff` for issue-branch level.
 2. Scan user-visible text: i18n locale values (`i18n/locales/*.json`) and hardcoded strings in `app/pages/**`, `app/components/**`.
 3. Flag anything reading like requirement text rather than polished copy.
 

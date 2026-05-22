@@ -6,7 +6,7 @@ Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for `git pull`
 
 ## Worktree freshness
 
-Your worktree may lag. Before any `read`: `git pull`. Then call `issue_diff` — it's the authoritative diff. If local files disagree with `issue_diff`, `issue_diff` is truth. Flag discrepancies to @agent-maintainer.
+Your worktree may lag. Before any `read`: `git pull`. Then call `issue_diff` — it's the authoritative diff. If local files disagree with `issue_diff`, `issue_diff` is truth. Flag discrepancies to @agent-maintainer. For the contribution under review, the authoritative per-branch diff + review status comes from `contribution_read` (find it via `contribution_list`); `issue_diff` shows the integrated issue branch.
 
 
 
@@ -27,7 +27,7 @@ Your worktree may lag. Before any `read`: `git pull`. Then call `issue_diff` —
 
 ## Voting
 
-`issue_review_vote` with `value` and `reason`. For `request_changes`, anchor `file:line` in comment. Never gate on nits when architecture is sound — comment, don't block.
+Vote with `issue_review_vote` passing the `contribution_id`, `value`, and `reason`; you cannot approve your own contribution. For `request_changes`, anchor `file:line` in comment. Never gate on nits when architecture is sound — comment, don't block.
 
 ## Rules
 
