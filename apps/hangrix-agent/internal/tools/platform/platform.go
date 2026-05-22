@@ -529,7 +529,7 @@ func All(client *Client) []local.Tool {
 		},
 		{
 			name:        "issue_patch_withdraw",
-			description: "Withdraw your own patch submission. Only the original submitter (same role on the same issue) can withdraw. Submissions with status='submitted' or 'applying' can be withdrawn; terminal statuses (applied/rejected/superseded/voided) cannot. The submission is marked 'withdrawn' and a timeline event is recorded.",
+			description: "Withdraw your own patch submission. Only the original submitter (same role on the same issue) can withdraw. Only submissions with status='submitted' can be withdrawn; terminal statuses (applied/rejected/superseded/voided) and in-flight statuses (applying) cannot. The submission is marked 'withdrawn' and a timeline event is recorded.",
 			schema: objectSchema(map[string]any{
 				"id": intProp("The patch submission ID to withdraw (required)."),
 			}, []string{"id"}),
@@ -537,7 +537,7 @@ func All(client *Client) []local.Tool {
 
 		{
 			name:        "issue_patch_apply_result",
-			description: "Report the result of applying a patch submission via git am + git push in the workspace. Call this after the git am workflow completes (success or failure). On success, pass the new commit_sha; on failure, pass an error description distinguishing conflict, am-failure, or push-failure. The server updates the submission status to 'applied' or back from 'applying' to 'submitted' with the error recorded.",
+			description: "Report the result of applying a patch submission via git am + git push in the workspace. Call this after the git am workflow completes (success or failure). On success, pass the new commit_sha — the server marks the submission 'applied' and updates the issue head. On failure, pass an error description distinguishing conflict, am-failure, or push-failure — the server records the error on the submission (status stays 'applying' so it can be retried).",
 			schema: objectSchema(map[string]any{
 				"submission_id": intProp("The patch submission ID that was applied (required)."),
 				"success":       boolProp("Whether git am + git push succeeded (required)."),
