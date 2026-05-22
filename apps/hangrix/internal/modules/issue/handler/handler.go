@@ -1419,6 +1419,23 @@ func (h *Handler) applyPatch(w http.ResponseWriter, r *http.Request) {
 	})
 	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventPatchApplying, payload, caller.ID)
 
+	// Fire patch.apply_requested trigger to wake the apply agent.
+	if h.spawner != nil {
+		triggerPayload, _ := json.Marshal(map[string]any{
+			"submission_id": updated.ID,
+			"issue_number":  iss.Number,
+		})
+		_, _ = h.spawner.OnTrigger(r.Context(), agentsessiondomain.TriggerInput{
+			Trigger:     agentsconfig.TriggerPatchApplyRequested,
+			CauseKind:   agentsessiondomain.CauseKindPatchApplyRequested,
+			CauseID:     strconv.FormatInt(updated.ID, 10),
+			RepoID:      rc.repo.ID,
+			IssueNumber: int32(iss.Number),
+			ActorID:     caller.ID,
+			Payload:     triggerPayload,
+		})
+	}
+
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"id":      updated.ID,
 		"status":  string(updated.Status),
