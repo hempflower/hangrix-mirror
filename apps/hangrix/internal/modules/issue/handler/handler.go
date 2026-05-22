@@ -1261,10 +1261,11 @@ type publicPatch struct {
 }
 
 type publicPatchFile struct {
-	Seq       int32  `json:"seq"`
-	FileName  string `json:"file_name"`
-	PatchText string `json:"patch_text,omitempty"`
-	Subject   string `json:"subject,omitempty"`
+	Seq        int32  `json:"seq"`
+	FileName   string `json:"file_name"`
+	SourcePath string `json:"source_path"`
+	PatchText  string `json:"patch_text,omitempty"`
+	Subject    string `json:"subject,omitempty"`
 }
 
 func toPublicPatch(p *domain.PatchSubmission) publicPatch {
@@ -1346,10 +1347,11 @@ func (h *Handler) getPatch(w http.ResponseWriter, r *http.Request) {
 		pub.Patches = make([]publicPatchFile, len(patchFiles))
 		for i, pf := range patchFiles {
 			pub.Patches[i] = publicPatchFile{
-				Seq:       pf.Seq,
-				FileName:  pf.FileName,
-				PatchText: pf.PatchText,
-				Subject:   pf.Subject,
+				Seq:        pf.Seq,
+				FileName:   pf.FileName,
+				SourcePath: pf.FileName,
+				PatchText:  pf.PatchText,
+				Subject:    pf.Subject,
 			}
 		}
 	}

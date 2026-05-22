@@ -273,10 +273,11 @@ func (r *Registry) issuePatchReadTool() *platformmcpdomain.Tool {
 			files := make([]map[string]any, 0, len(patchFiles))
 			for _, f := range patchFiles {
 				files = append(files, map[string]any{
-					"index":      f.Seq,
-					"file_name":  f.FileName,
-					"subject":    f.Subject,
-					"patch_text": f.PatchText,
+					"index":       f.Seq,
+					"file_name":   f.FileName,
+					"source_path": f.FileName,
+					"subject":     f.Subject,
+					"patch_text":  f.PatchText,
 				})
 			}
 			return textResult(map[string]any{
