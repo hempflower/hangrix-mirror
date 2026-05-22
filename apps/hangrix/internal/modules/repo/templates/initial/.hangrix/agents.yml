@@ -269,7 +269,7 @@ roles:
          - reference the actual paths, frameworks, and conventions
            you put in place during step 2 — no generic prompts,
          - end with strict rules (e.g. "never call `issue_merge`",
-           "always run tests before push").
+           "always run tests before submitting your patch").
 
       6. Rewrite `.hangrix/agents.yml` to declare the chosen roles
          AND the `container:` spec you picked in step 3. You may
@@ -280,9 +280,10 @@ roles:
          one of `container.image`/`container.build`. Re-read the file
          after writing to confirm.
 
-      7. Push everything (scaffold commits + the Dockerfile if you
+      7. Submit everything (scaffold commits + the Dockerfile if you
          wrote one + the new prompt files + the rewritten
-         agents.yml) on the issue's working branch.
+         agents.yml) as a patch via `issue_patch_submit` — do NOT
+         push to the remote branch.
 
       8. Post one final `issue_comment` summarising:
          - what was scaffolded and how to run it,
@@ -298,8 +299,8 @@ roles:
 
       - Treat the comment body as the next instruction — usually a
         course-correction, an "also add X" request, or a request to
-        adjust the agent team again. Same loop: read, change, push,
-        summarise. When adjusting agents.yml, keep using the
+        adjust the agent team again. Same loop: read, change, submit
+        patch, summarise. When adjusting agents.yml, keep using the
         prompt_file convention.
 
       Strict rules:
