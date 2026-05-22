@@ -184,7 +184,22 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 		base := sessionNamespacePrefix(caller.session)
 		for _, u := range refUpdates {
 			if !refWithinNamespace(u.RefName, base) {
-				http.Error(w, "per-ref ACL: agent session may only push to "+base+"[/...]", http.StatusForbidden)
+				http.Error(w, "per-ref ACL: agent session may only push to "+base+"/<slug>", http.StatusForbidden)
+				return
+			}
+			// Require a slug under the role namespace. Contribution branches
+			// are issue-<N>/<role>/<slug> so a role can run several in
+			// parallel, each independently reviewable. The bare role ref is
+			// rejected (and would D/F-conflict with any slugged sibling).
+			if u.RefName == base {
+				http.Error(w, "contribution branch needs a slug: push to "+base+"/<slug> (e.g. "+base+"/fix-typo), not the bare role namespace", http.StatusForbidden)
+				return
+			}
+			// Immutability: a contribution branch is write-once. Any update to
+			// an existing ref (force-push, fast-forward, or delete) is
+			// rejected — revise by pushing a NEW versioned branch (…-v2).
+			if !isZeroSHA(u.OldSHA) {
+				http.Error(w, "contribution branch "+strings.TrimPrefix(u.RefName, "refs/heads/")+" is immutable once pushed — push a new versioned branch (e.g. a -v2 suffix) instead of updating it", http.StatusForbidden)
 				return
 			}
 		}
@@ -531,6 +546,23 @@ func refWithinNamespace(refName, base string) bool {
 		return false
 	}
 	return refName == base || strings.HasPrefix(refName, base+"/")
+}
+
+// isZeroSHA reports whether sha is the git all-zero object id — the old-SHA of
+// a ref create, or the new-SHA of a ref delete. An empty string counts as
+// zero. Used to distinguish "creating a new contribution branch" (old=zero,
+// allowed) from "updating/deleting an existing one" (old≠zero, rejected by the
+// immutability gate).
+func isZeroSHA(sha string) bool {
+	if sha == "" {
+		return true
+	}
+	for _, r := range sha {
+		if r != '0' {
+			return false
+		}
+	}
+	return true
 }
 
 // parseReceivePackRefs extracts ref-update commands from a git receive-pack

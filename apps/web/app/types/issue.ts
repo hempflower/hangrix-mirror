@@ -51,7 +51,7 @@ export type IssueEventKind =
   | 'review_vote'
   | 'contribution_pushed'
   | 'contribution_merged'
-  | 'contribution_changes_requested'
+  | 'contribution_rejected'
   | 'contribution_closed'
 
 export interface IssueEvent {
@@ -67,7 +67,7 @@ export interface IssueEvent {
   created_at: string
 }
 
-export type ReviewVoteValue = 'approve' | 'request_changes' | 'abstain'
+export type ReviewVoteValue = 'approve' | 'reject' | 'abstain'
 
 export interface ReviewVotePayload {
   value: ReviewVoteValue
@@ -83,7 +83,7 @@ export interface ReviewVotePayload {
   reviewed_sha?: string
 }
 
-export type ReviewVerdict = 'approved' | 'changes_requested' | 'pending'
+export type ReviewVerdict = 'approved' | 'rejected' | 'pending'
 
 // ReviewVoteEntry is a single valid (current-head_sha) review vote. The
 // reviewer string carries the agent_role key or a human username; the
@@ -112,7 +112,12 @@ export interface ReviewStatus {
   head_sha: string
   verdict: ReviewVerdict
   merge_blocked: boolean
-  block_reason: string   // '' | 'review_required' | 'changes_requested'
+  block_reason: string   // server-computed reason code, e.g. '' | 'review_required'
+  // required_reviewers is the set of reviewer role keys that must vote before
+  // the review gate can pass. pending_reviewers is the subset that have not
+  // yet voted. Both are server-computed.
+  required_reviewers: string[]
+  pending_reviewers: string[]
   votes: ReviewVoteEntry[]
   stale_votes: StaleVoteEntry[]
 }
@@ -162,8 +167,9 @@ export interface TitleChangedPayload {
 // --- Contributions (git-branch-based merge requests) ---
 
 export type ContributionStatus =
-  | 'open'
-  | 'changes_requested'
+  | 'pending'
+  | 'approved'
+  | 'rejected'
   | 'merged'
   | 'closed'
 
@@ -213,7 +219,7 @@ export interface ContributionMergedPayload {
   merge_commit_sha: string
 }
 
-export interface ContributionChangesRequestedPayload {
+export interface ContributionRejectedPayload {
   contribution_id: number
   agent_role: string
   ref_name: string

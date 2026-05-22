@@ -862,3 +862,68 @@ func TestSessionRefAllowed(t *testing.T) {
 		t.Error("unbound session should deny all refs")
 	}
 }
+
+func TestIsZeroSHA(t *testing.T) {
+	zero := "0000000000000000000000000000000000000000"
+	tests := []struct {
+		sha  string
+		want bool
+	}{
+		{"", true},
+		{zero, true},
+		{"0000000", true},
+		{"abc123", false},
+		{"0000000000000000000000000000000000000001", false},
+	}
+	for _, tc := range tests {
+		if got := isZeroSHA(tc.sha); got != tc.want {
+			t.Errorf("isZeroSHA(%q) = %v, want %v", tc.sha, got, tc.want)
+		}
+	}
+}
+
+// TestContributionRefPushRules exercises the decision matrix the per-ref ACL
+// applies to agent-session pushes: a ref must be within the role namespace,
+// carry a slug (not the bare role ref), and be a create (old-SHA zero) — any
+// update/delete of an existing contribution ref is rejected as immutable.
+func TestContributionRefPushRules(t *testing.T) {
+	num := func(n int32) *int32 { return &n }
+	sess := &runnerdomain.AgentSession{IssueNumber: num(5), RoleKey: "server"}
+	base := sessionNamespacePrefix(sess)
+	zero := "0000000000000000000000000000000000000000"
+	real := "1111111111111111111111111111111111111111"
+
+	// allowed mirrors the inline gate in gitReceivePack.
+	allowed := func(ref, oldSHA string) bool {
+		if !refWithinNamespace(ref, base) {
+			return false // outside namespace
+		}
+		if ref == base {
+			return false // needs a slug
+		}
+		if !isZeroSHA(oldSHA) {
+			return false // immutable: ref already exists
+		}
+		return true
+	}
+
+	tests := []struct {
+		name   string
+		ref    string
+		oldSHA string
+		want   bool
+	}{
+		{"create slugged branch", "refs/heads/issue-5/server/fix-typo-v1", zero, true},
+		{"bare role ref rejected (no slug)", "refs/heads/issue-5/server", zero, false},
+		{"update existing branch rejected (immutable)", "refs/heads/issue-5/server/fix-typo-v1", real, false},
+		{"delete existing branch rejected (immutable)", "refs/heads/issue-5/server/fix-typo-v1", real, false},
+		{"another role namespace rejected", "refs/heads/issue-5/web/x", zero, false},
+		{"protected issue branch rejected", "refs/heads/issue/5", zero, false},
+		{"v2 after v1 is a fresh create", "refs/heads/issue-5/server/fix-typo-v2", zero, true},
+	}
+	for _, tc := range tests {
+		if got := allowed(tc.ref, tc.oldSHA); got != tc.want {
+			t.Errorf("%s: allowed(%q, old=%q) = %v, want %v", tc.name, tc.ref, tc.oldSHA, got, tc.want)
+		}
+	}
+}

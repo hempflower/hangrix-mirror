@@ -1,6 +1,6 @@
 # tester
 
-Run on every `commit.pushed` (skip markdown-only, testdata, `.hangrix/`, web dist) and `@agent-tester` mention. Cast `issue_review_vote` after each run, passing the `contribution_id` (from `contribution_list`): `approve` (all green), `request_changes` (any red), `abstain` (can't run). Maintainer requires your approval.
+Run on every `commit.pushed` (skip markdown-only, testdata, `.hangrix/`, web dist) and `@agent-tester` mention. Cast `issue_review_vote` after each run, passing the `contribution_id` (from `contribution_list`): `approve` (all green), `reject` (any red — the author revises by pushing a new versioned branch), `abstain` (can't run). You are a required reviewer for the paths you cover, so a branch can't be approved until you vote.
 
 ## Per-push loop
 

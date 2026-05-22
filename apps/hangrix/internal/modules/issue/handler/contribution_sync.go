@@ -103,6 +103,12 @@ func (h *Handler) SyncContribution(ctx context.Context, repo *repodomain.Repo, f
 		_ = h.contributions.SetContributionMergeable(ctx, c.ID, mergeable, mode)
 	}
 
+	// Compute the initial review status: 'pending' when the branch has
+	// required reviewers (path-matched from the host config), or 'approved'
+	// straight away when it has none (e.g. an admin change with no matching
+	// reviewer and the maintainer fallback being the author).
+	h.recomputeContributionStatus(ctx, repo.ID, c)
+
 	// Timeline event.
 	evtPayload, _ := json.Marshal(domain.ContributionEventPayload{
 		ContributionID: c.ID,
@@ -144,6 +150,87 @@ func (h *Handler) fireContributionPushed(ctx context.Context, repo *repodomain.R
 	}); err != nil {
 		log.Printf("issue: fireContributionPushed repo=%d issue=%d ref=%s: %v", repo.ID, iss.Number, c.RefName, err)
 	}
+}
+
+// requiredReviewers returns the reviewer role keys that must approve a
+// contribution: path-matched from the host config's `reviewers:` block, minus
+// the contribution author (a role cannot review its own branch). Returns nil
+// when the host has no reviewers config or the yaml can't be loaded — the
+// contribution then has no required reviewers and is approved without review.
+func (h *Handler) requiredReviewers(ctx context.Context, repoID int64, c *domain.Contribution) []string {
+	if h.spawner == nil {
+		return nil
+	}
+	cfg, err := h.spawner.LoadHostConfig(ctx, repoID)
+	if err != nil || cfg == nil {
+		return nil
+	}
+	return excludeRole(cfg.RequiredReviewers(c.ChangedPaths), c.AgentRole)
+}
+
+// recomputeContributionStatus recomputes a non-terminal contribution's cached
+// status from its required reviewers + current votes and persists it when it
+// changed. Best-effort: a failure leaves the previous cached status in place.
+func (h *Handler) recomputeContributionStatus(ctx context.Context, repoID int64, c *domain.Contribution) {
+	if c.Status.Terminal() {
+		return
+	}
+	events, err := h.issues.ListEvents(ctx, c.IssueID)
+	if err != nil {
+		return
+	}
+	rs := domain.ComputeContributionReviewStatus(c, h.requiredReviewers(ctx, repoID, c), events)
+	if next := rs.ContributionStatus(); next != c.Status {
+		_, _ = h.contributions.SetContributionStatus(ctx, c.ID, next)
+	}
+}
+
+// excludeRole returns roles with every occurrence of role removed. A nil/empty
+// role returns the input unchanged.
+func excludeRole(roles []string, role string) []string {
+	if role == "" || len(roles) == 0 {
+		return roles
+	}
+	out := make([]string, 0, len(roles))
+	for _, r := range roles {
+		if r != role {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// issueMergeBlock is the second-level (issue → base) gate: it returns a
+// non-empty reason when the issue branch isn't ready to merge — some
+// contribution is still open, or the issue branch carries no changes. Empty
+// string means ready.
+func (h *Handler) issueMergeBlock(ctx context.Context, fsPath string, iss *domain.Issue) string {
+	contribs, err := h.contributions.ListContributions(ctx, iss.ID)
+	if err != nil {
+		return "cannot evaluate contributions: " + err.Error()
+	}
+	return domain.IssueMergeBlock(contribs, h.issueBranchAhead(fsPath, iss))
+}
+
+// issueBranchAhead reports whether the issue branch has commits its base does
+// not — i.e. whether there is anything to merge into base.
+func (h *Handler) issueBranchAhead(fsPath string, iss *domain.Issue) bool {
+	head, err := h.git.ResolveCommit(fsPath, iss.BranchName)
+	if err != nil || head == "" {
+		return false
+	}
+	base, err := h.git.ResolveCommit(fsPath, iss.BaseBranch)
+	if err != nil || base == "" {
+		return true
+	}
+	if head == base {
+		return false
+	}
+	isAnc, err := h.git.IsAncestor(fsPath, head, base)
+	if err != nil {
+		return true
+	}
+	return !isAnc
 }
 
 // contributionDiffStats derives changed paths + line counts from a real git

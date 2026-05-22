@@ -220,9 +220,11 @@ function initialOf(s?: string) {
 
 function statusVariant(s: ContributionStatus) {
   switch (s) {
-    case 'open':
+    case 'pending':
       return 'secondary' as const
-    case 'changes_requested':
+    case 'approved':
+      return 'default' as const
+    case 'rejected':
       return 'destructive' as const
     case 'merged':
       return 'default' as const
@@ -233,9 +235,11 @@ function statusVariant(s: ContributionStatus) {
 
 function statusIcon(s: ContributionStatus) {
   switch (s) {
-    case 'open':
+    case 'pending':
       return CircleDot
-    case 'changes_requested':
+    case 'approved':
+      return ThumbsUp
+    case 'rejected':
       return ThumbsDown
     case 'merged':
       return GitMerge
@@ -254,29 +258,33 @@ function isConflict(c: Contribution) {
 function voteValueClass(v: ReviewVoteValue) {
   switch (v) {
     case 'approve': return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-    case 'request_changes': return 'bg-red-500/15 text-red-700 dark:text-red-300'
+    case 'reject': return 'bg-red-500/15 text-red-700 dark:text-red-300'
     case 'abstain': return 'bg-slate-500/15 text-slate-700 dark:text-slate-300'
   }
 }
 function voteValueIcon(v: ReviewVoteValue) {
   switch (v) {
     case 'approve': return ThumbsUp
-    case 'request_changes': return ThumbsDown
+    case 'reject': return ThumbsDown
     case 'abstain': return MinusCircle
   }
 }
 function verdictClass(v: ReviewVerdict) {
   switch (v) {
     case 'approved': return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-    case 'changes_requested': return 'bg-red-500/15 text-red-700 dark:text-red-300'
+    case 'rejected': return 'bg-red-500/15 text-red-700 dark:text-red-300'
     case 'pending': return 'bg-slate-500/15 text-slate-700 dark:text-slate-300'
   }
 }
 
 // --- action gates ---
+// A contribution is actionable while it is still in review (`pending`) or has
+// passed review and is ready to apply (`approved`). Branches are immutable, so
+// `rejected` is terminal from the maintainer's side (the author must push a new
+// versioned branch); `merged` / `closed` are likewise terminal.
 const isActionable = computed(() => {
   const s = detail.value?.contribution.status
-  return s === 'open' || s === 'changes_requested'
+  return s === 'pending' || s === 'approved'
 })
 
 const canApply = computed(() => {

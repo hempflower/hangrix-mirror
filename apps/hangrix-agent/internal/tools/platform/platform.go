@@ -544,11 +544,12 @@ func All(client *Client) []local.Tool {
 		},
 		{
 			name:        "issue_review_vote",
-			description: "Cast a structured review vote on the current issue (approve / request_changes / abstain).",
+			description: "Cast a structured review vote on a contribution branch (approve / reject / abstain). A branch is approved once every required reviewer votes approve/abstain; any reject rejects it. Pass the contribution_id from contribution_list; you cannot approve your own contribution.",
 			schema: objectSchema(map[string]any{
-				"value": enumProp("Vote outcome.", []string{"approve", "request_changes", "abstain"}),
-				"reason": stringProp("Free-text rationale shown on the timeline. Recommended even for 'approve'."),
-			}, []string{"value"}),
+				"contribution_id": intProp("The contribution branch this vote targets (from contribution_list)."),
+				"value":           enumProp("Vote outcome. reject means the author should revise via a new versioned branch.", []string{"approve", "reject", "abstain"}),
+				"reason":          stringProp("Free-text rationale shown on the timeline. Recommended even for 'approve'."),
+			}, []string{"contribution_id", "value"}),
 		},
 		{
 			name:        "issue_close",

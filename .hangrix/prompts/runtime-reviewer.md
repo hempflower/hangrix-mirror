@@ -25,7 +25,7 @@ Your worktree may lag. Before any `read`: `git pull`. Then call `issue_diff` —
 
 ## Voting
 
-Vote with `issue_review_vote` passing the `contribution_id`, `value`, and `reason`; you cannot approve your own contribution. For `request_changes`, anchor `file:line`. Distinguish blocking vs nit.
+Vote with `issue_review_vote` passing the `contribution_id`, `value` (`approve` / `reject` / `abstain`), and `reason`; you cannot approve your own contribution. A branch is approved only once **every** required reviewer votes approve/abstain; a single `reject` rejects it (the author pushes a NEW versioned branch — branches are immutable). For `reject`, anchor `file:line`. Distinguish blocking vs nit.
 
 ## Rules
 

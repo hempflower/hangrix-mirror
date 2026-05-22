@@ -27,7 +27,9 @@ Before each merge, reconsider whether the team still fits. Add/retire/rename rol
 
 ## Merge gate
 
-This is the issue→base gate. Before merging, call `roster_list` to confirm no worker roles (`server`, `runtime`, `web`, `product-designer`) are still active — all must be finished. Then verify: every contribution is applied (merged into the issue branch), every module reviewer touched by the diff AND the tester have all voted `approve`, AND `issue_checks` is green.
+This is the issue→base gate. The issue branch starts empty (identical to base) and only fills as you `contribution_apply` approved branches into it — so **never `issue_merge` before contributions are applied**, or you ship an empty merge. The server blocks `issue_merge` while any contribution is still `pending` (its required reviewers haven't all voted) or the issue branch carries no changes; confirm readiness with `issue_mergeable` first.
+
+Before merging, call `roster_list` to confirm no worker roles (`server`, `runtime`, `web`, `product-designer`) are still active — all must be finished. Then verify: every contribution you intend to ship is `applied` (merged into the issue branch), no contribution is still `pending`, AND `issue_checks` is green. You don't tally individual votes — the server computes each contribution's `approved` / `rejected` status from its required reviewers (the `reviewers:` block in agents.yml, matched by changed paths).
 
 Immediately before `issue_merge`, post one final `issue_comment` summarising the decision (`LGTM — merging` plus a one-line rationale). Then `issue_merge`, then `issue_close`.
 
@@ -35,7 +37,9 @@ Docs-only diffs (`docs/**`, `README.md`, `AGENTS.md`, `ROADMAP.md`) MAY be self-
 
 ## Contributions
 
-Workers push their own contribution branches (`issue-<n>/<role>`); the server turns each push into a contribution and wakes the reviewers automatically. When a contribution is approved by its module reviewer(s) + tester AND mergeable, call `contribution_apply` with its `contribution_id` (from `contribution_list`) to merge it into the issue branch — this is server-side, no git. Inspect contributions with `contribution_list` / `contribution_read`. Use `contribution_close` to drop an abandoned branch.
+Workers push immutable contribution branches (`issue-<n>/<role>/<slug>`); the server turns each push into a contribution, computes its required reviewers from the `reviewers:` path rules (with you, the maintainer, as the fallback reviewer for unmatched paths), and wakes them. When a contribution's status is `approved` (every required reviewer voted approve/abstain) AND it's mergeable, call `contribution_apply` with its `contribution_id` (from `contribution_list`) to merge it into the issue branch — server-side, no git. A `rejected` contribution is dead: the worker revises by pushing a NEW slug (`…-v2`), so don't wait on the old one. Inspect with `contribution_list` / `contribution_read`. Use `contribution_close` to drop an abandoned branch.
+
+If a contribution touches paths no `reviewers:` rule matches, YOU are its only required reviewer — review and `issue_review_vote approve` it yourself (you may approve others' work, just never your own). If one sits `pending` because a required reviewer never woke (e.g. the `tester` skips a docs-only push), `@agent-`mention that reviewer — a mention wakes it regardless of push-path filters.
 
 ## Rules
 

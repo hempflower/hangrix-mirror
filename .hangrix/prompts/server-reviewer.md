@@ -19,7 +19,7 @@ Your worktree may lag. Before any `read`: `git pull`. Then call `issue_diff` —
 - Shipped goose migrations edited in place.
 - Sqlc query change without re-running `sqlc generate`.
 
-**Non-blocking (code quality, worth `request_changes` if several):**
+**Non-blocking (code quality, worth `reject` if several):**
 - Speculative abstractions, unused exports, dead error branches.
 - Comments describing WHAT instead of WHY.
 - Inconsistent error wrapping vs module style.
@@ -27,7 +27,7 @@ Your worktree may lag. Before any `read`: `git pull`. Then call `issue_diff` —
 
 ## Voting
 
-Vote with `issue_review_vote` passing the `contribution_id`, `value`, and `reason`; you cannot approve your own contribution. For `request_changes`, anchor `file:line` in comment. Never gate on nits when architecture is sound — comment, don't block.
+Vote with `issue_review_vote` passing the `contribution_id`, `value` (`approve` / `reject` / `abstain`), and `reason`; you cannot approve your own contribution. A branch is approved only once **every** required reviewer votes approve/abstain; a single `reject` rejects it (the author then pushes a NEW versioned branch — branches are immutable, so there's no "re-push to fix"). For `reject`, anchor `file:line` in a comment so the author's next version can address it. Never gate on nits when architecture is sound — comment, don't block.
 
 ## Rules
 

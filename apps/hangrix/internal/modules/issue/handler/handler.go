@@ -190,8 +190,6 @@ type publicIssue struct {
 	MergedAt       *time.Time `json:"merged_at,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
-	// ReviewStatus is populated on issue detail; nil on list responses.
-	ReviewStatus *domain.ReviewStatus `json:"review_status,omitempty"`
 }
 
 func toPublic(i *domain.Issue) publicIssue {
@@ -556,12 +554,6 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pub := toPublic(iss)
-	// Attach server-computed review status so the frontend doesn't need
-	// to derive it from the timeline.
-	events, err := h.issues.ListEvents(r.Context(), iss.ID)
-	if err == nil {
-		pub.ReviewStatus = domain.ComputeReviewStatus(iss, events)
-	}
 	httpx.WriteJSON(w, http.StatusOK, pub)
 }
 
@@ -1010,18 +1002,13 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusConflict, "issue is not open")
 		return
 	}
-	// Review gate: block merge when review requirements are not satisfied.
-	events, gerr := h.issues.ListEvents(r.Context(), iss.ID)
-	if gerr != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "cannot evaluate review status")
-		return
-	}
-	rs := domain.ComputeReviewStatus(iss, events)
-	if rs.MergeBlocked {
+	// Second-level (issue → base) gate: every contribution must be resolved
+	// and the issue branch must carry changes. Per-contribution review is the
+	// first-level gate (contribution_apply); the issue no longer carries votes.
+	if block := h.issueMergeBlock(r.Context(), rc.fsPath, iss); block != "" {
 		httpx.WriteJSON(w, http.StatusConflict, map[string]any{
-			"error":         "merge blocked",
-			"block_reason":  rs.BlockReason,
-			"review_status": rs,
+			"error":        "merge blocked",
+			"block_reason": block,
 		})
 		return
 	}
@@ -1355,7 +1342,7 @@ func (h *Handler) getContribution(w http.ResponseWriter, r *http.Request) {
 
 	var review *domain.ReviewStatus
 	if events, err := h.issues.ListEvents(r.Context(), iss.ID); err == nil {
-		review = domain.ComputeContributionReviewStatus(c, events)
+		review = domain.ComputeContributionReviewStatus(c, h.requiredReviewers(r.Context(), rc.repo.ID, c), events)
 	}
 
 	comments, _ := h.issues.ListComments(r.Context(), iss.ID)
@@ -1399,13 +1386,14 @@ func (h *Handler) applyContribution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// First-level review gate: contribution must be approved at its current head.
+	// First-level review gate: contribution must be approved (every required
+	// reviewer voted, none rejected).
 	events, err := h.issues.ListEvents(r.Context(), iss.ID)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if rs := domain.ComputeContributionReviewStatus(c, events); rs.MergeBlocked {
+	if rs := domain.ComputeContributionReviewStatus(c, h.requiredReviewers(r.Context(), rc.repo.ID, c), events); rs.MergeBlocked {
 		httpx.WriteJSON(w, http.StatusConflict, map[string]any{
 			"error":         "merge blocked",
 			"block_reason":  rs.BlockReason,

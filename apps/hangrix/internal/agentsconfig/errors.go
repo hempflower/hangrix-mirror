@@ -79,4 +79,9 @@ var (
 	// host yaml's `roles:` map. yaml.v3 normally returns the last value
 	// silently — the parser explicitly catches duplicates.
 	ErrDuplicateRoleKey = errors.New("duplicate role key")
+
+	// ErrInvalidReviewers fires when the `reviewers:` block is malformed: a
+	// rule missing paths / reviewers, an empty fallback, or a reviewer role
+	// that does not exist or cannot cast review votes.
+	ErrInvalidReviewers = errors.New("invalid reviewers config")
 )

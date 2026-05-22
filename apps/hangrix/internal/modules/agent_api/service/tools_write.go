@@ -93,25 +93,25 @@ func (r *Registry) issueCommentTool() *agentapidomain.Tool {
 func (r *Registry) issueReviewVoteTool() *agentapidomain.Tool {
 	return &agentapidomain.Tool{
 		Name:        "issue_review_vote",
-		Description: "Cast a structured review vote (approve / request_changes / abstain). Pass `contribution_id` to vote on a specific contribution branch — the vote decides whether that branch may merge into the issue branch. Omit it to vote on the issue branch itself. You cannot approve your own contribution.",
+		Description: "Cast a structured review vote (approve / reject / abstain) on a contribution branch. A branch is approved once every required reviewer has voted approve/abstain; any reject rejects it (the author pushes a new versioned branch). Pass the `contribution_id` from contribution_list. You cannot approve your own contribution.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
+				"contribution_id": map[string]any{
+					"type":        "integer",
+					"description": "The contribution branch this vote targets (from contribution_list).",
+				},
 				"value": map[string]any{
 					"type":        "string",
-					"enum":        []string{"approve", "request_changes", "abstain"},
-					"description": "Vote outcome.",
+					"enum":        []string{"approve", "reject", "abstain"},
+					"description": "Vote outcome. reject means this branch should not merge as-is — the author revises by pushing a new versioned branch.",
 				},
 				"reason": map[string]any{
 					"type":        "string",
 					"description": "Free-text rationale shown on the timeline. Recommended even for 'approve'.",
 				},
-				"contribution_id": map[string]any{
-					"type":        "integer",
-					"description": "Optional: the contribution branch this vote targets (from contribution_list). Omit for an issue-level vote.",
-				},
 			},
-			"required": []string{"value"},
+			"required": []string{"contribution_id", "value"},
 		},
 		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
@@ -128,45 +128,32 @@ func (r *Registry) issueReviewVoteTool() *agentapidomain.Tool {
 			}
 			value := issuedomain.ReviewVoteValue(strings.TrimSpace(req.Value))
 			if !value.Valid() {
-				return errorResult("value must be approve|request_changes|abstain"), nil
+				return errorResult("value must be approve|reject|abstain"), nil
+			}
+			if req.ContributionID <= 0 {
+				return errorResult("contribution_id is required — votes target a contribution branch (see contribution_list)"), nil
 			}
 
-			payload := issuedomain.ReviewVotePayload{Value: value, Reason: req.Reason}
-			if req.ContributionID > 0 {
-				// Contribution vote: bind to the contribution head.
-				c, err := r.deps.Contributions.GetContribution(ctx, req.ContributionID)
-				if err != nil {
-					return errorResult("get contribution: " + err.Error()), nil
-				}
-				if c.IssueID != scope.issue.ID {
-					return errorResult("contribution does not belong to the current issue"), nil
-				}
-				if c.HeadSHA == "" {
-					return errorResult("contribution branch has no commits yet"), nil
-				}
-				// No self-review: a role cannot approve its own contribution.
-				if value == issuedomain.ReviewVoteApprove && c.AgentRole == sess.RoleKey {
-					return errorResult("you cannot approve your own contribution"), nil
-				}
-				payload.ContributionID = c.ID
-				payload.ReviewedSHA = c.HeadSHA
-				// A request_changes vote flips the contribution status so the
-				// list / timeline reflect it; approve leaves status to the gate.
-				if value == issuedomain.ReviewVoteRequestChanges {
-					_, _ = r.deps.Contributions.SetContributionStatus(ctx, c.ID, issuedomain.ContribStatusChangesRequested)
-					reqPayload, _ := json.Marshal(issuedomain.ContributionEventPayload{
-						ContributionID: c.ID, AgentRole: c.AgentRole, RefName: c.RefName, Reason: req.Reason,
-					})
-					_, _ = r.deps.Issues.CreateAgentEvent(ctx, scope.issue.ID, issuedomain.EventContributionChangesRequested, reqPayload, sess.RoleKey)
-				}
-			} else {
-				// Issue-level vote: bind to the issue head.
-				if scope.issue.HeadSHA == "" {
-					return errorResult("cannot vote on an issue with no commits — push first"), nil
-				}
-				payload.HeadSHA = scope.issue.HeadSHA
+			c, err := r.deps.Contributions.GetContribution(ctx, req.ContributionID)
+			if err != nil {
+				return errorResult("get contribution: " + err.Error()), nil
 			}
-
+			if c.IssueID != scope.issue.ID {
+				return errorResult("contribution does not belong to the current issue"), nil
+			}
+			if c.HeadSHA == "" {
+				return errorResult("contribution branch has no commits yet"), nil
+			}
+			// No self-review: a role cannot approve its own contribution.
+			if value == issuedomain.ReviewVoteApprove && c.AgentRole == sess.RoleKey {
+				return errorResult("you cannot approve your own contribution"), nil
+			}
+			payload := issuedomain.ReviewVotePayload{
+				Value:          value,
+				Reason:         req.Reason,
+				ContributionID: c.ID,
+				ReviewedSHA:    c.HeadSHA,
+			}
 			payloadBytes, _ := json.Marshal(payload)
 			evt, err := r.deps.Issues.CreateAgentEvent(
 				ctx, scope.issue.ID, issuedomain.EventReviewVote, payloadBytes, sess.RoleKey,
@@ -174,6 +161,20 @@ func (r *Registry) issueReviewVoteTool() *agentapidomain.Tool {
 			if err != nil {
 				return errorResult("create vote event: " + err.Error()), nil
 			}
+
+			// A reject also emits a timeline event so the rejection (and its
+			// rationale) renders distinctly from the raw vote.
+			if value == issuedomain.ReviewVoteReject {
+				reqPayload, _ := json.Marshal(issuedomain.ContributionEventPayload{
+					ContributionID: c.ID, AgentRole: c.AgentRole, RefName: c.RefName, Reason: req.Reason,
+				})
+				_, _ = r.deps.Issues.CreateAgentEvent(ctx, scope.issue.ID, issuedomain.EventContributionRejected, reqPayload, sess.RoleKey)
+			}
+
+			// Recompute the contribution's cached status now that a new vote
+			// landed: pending → approved (all required reviewers voted, none
+			// rejected) or rejected (any reject).
+			r.recomputeContributionStatus(ctx, scope.repo.ID, c)
 			// Fan out review_vote.posted so maintainer wakes.
 			if r.deps.Spawner != nil {
 				triggerPayload, _ := json.Marshal(map[string]any{
@@ -280,18 +281,12 @@ func (r *Registry) issueMergeTool() *agentapidomain.Tool {
 			if scope.issue.State != issuedomain.StateOpen {
 				return errorResult(fmt.Sprintf("issue is %s, not open", scope.issue.State)), nil
 			}
-			// Review gate: compute effective votes and block merge if
-			// requirements are not satisfied.
-			events, err := r.deps.Issues.ListEvents(ctx, scope.issue.ID)
-			if err != nil {
-				return errorResult("list events: " + err.Error()), nil
-			}
-			reviewStatus := issuedomain.ComputeReviewStatus(scope.issue, events)
-			if reviewStatus.MergeBlocked {
-				blockJSON, _ := json.Marshal(map[string]any{
-					"error":        "merge blocked",
-					"block_reason": reviewStatus.BlockReason,
-				})
+			// Second-level gate (issue → base): every contribution must be
+			// resolved and the issue branch must actually carry changes. This
+			// is what stops merging an empty issue branch before any
+			// contribution has been applied into it.
+			if block := r.issueMergeBlock(ctx, scope); block != "" {
+				blockJSON, _ := json.Marshal(map[string]any{"error": "merge blocked", "block_reason": block})
 				return agentapidomain.Result{Text: string(blockJSON), IsError: true}, nil
 			}
 

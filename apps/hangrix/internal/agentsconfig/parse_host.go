@@ -16,15 +16,26 @@ import (
 // against an older agent server without bricking the parser). The wire
 // type is private so domain stays free of yaml struct tags.
 type hostWire struct {
-	Version   int                       `yaml:"version"`
-	Container *containerWire            `yaml:"container"`
-	LLM       *llmWire                  `yaml:"llm"`
-	Issues    *issuesWire               `yaml:"issues"`
-	Roles     map[string]*roleWire      `yaml:"roles"`
+	Version   int                  `yaml:"version"`
+	Container *containerWire       `yaml:"container"`
+	LLM       *llmWire             `yaml:"llm"`
+	Issues    *issuesWire          `yaml:"issues"`
+	Reviewers *reviewersWire       `yaml:"reviewers"`
+	Roles     map[string]*roleWire `yaml:"roles"`
 }
 
 type issuesWire struct {
 	DeleteBranchOnMerge *bool `yaml:"delete_branch_on_merge"`
+}
+
+type reviewersWire struct {
+	Rules    []reviewerRuleWire `yaml:"rules"`
+	Fallback []string           `yaml:"fallback"`
+}
+
+type reviewerRuleWire struct {
+	Paths     []string `yaml:"paths"`
+	Reviewers []string `yaml:"reviewers"`
 }
 
 type containerWire struct {
@@ -163,13 +174,95 @@ func ParseHostConfig(body []byte) (*HostConfig, error) {
 
 	issues := buildIssues(wire.Issues)
 
+	reviewers, err := buildReviewers(wire.Reviewers, roles)
+	if err != nil {
+		return nil, err
+	}
+
 	return &HostConfig{
 		Version:   wire.Version,
 		Container: container,
 		LLM:       teamLLM,
 		Issues:    issues,
+		Reviewers: reviewers,
 		Roles:     roles,
 	}, nil
+}
+
+// buildReviewers validates and lifts the optional `reviewers:` block. An
+// absent block yields nil (no review gate). When present, every referenced
+// reviewer role must exist and be able to cast review votes, every rule must
+// declare both paths and reviewers, and `fallback:` must be non-empty (so a
+// contribution can never be left with no possible reviewer).
+func buildReviewers(w *reviewersWire, roles map[string]*Role) (*ReviewersConfig, error) {
+	if w == nil {
+		return nil, nil
+	}
+	validReviewer := func(field, key string) error {
+		role, ok := roles[key]
+		if !ok {
+			return fmt.Errorf("%w: %s references unknown role %q", ErrInvalidReviewers, field, key)
+		}
+		if !roleCanVote(role) {
+			return fmt.Errorf("%w: %s reviewer %q lacks the issue_review_vote capability", ErrInvalidReviewers, field, key)
+		}
+		return nil
+	}
+
+	cfg := &ReviewersConfig{}
+	for i, rw := range w.Rules {
+		field := fmt.Sprintf("reviewers.rules[%d]", i)
+		if len(rw.Paths) == 0 {
+			return nil, fmt.Errorf("%w: %s.paths is required", ErrInvalidReviewers, field)
+		}
+		if len(rw.Reviewers) == 0 {
+			return nil, fmt.Errorf("%w: %s.reviewers is required", ErrInvalidReviewers, field)
+		}
+		for _, p := range rw.Paths {
+			if strings.TrimSpace(p) == "" {
+				return nil, fmt.Errorf("%w: %s.paths contains an empty pattern", ErrInvalidReviewers, field)
+			}
+		}
+		for _, rv := range rw.Reviewers {
+			if err := validReviewer(field+".reviewers", rv); err != nil {
+				return nil, err
+			}
+		}
+		cfg.Rules = append(cfg.Rules, ReviewerRule{
+			Paths:     append([]string(nil), rw.Paths...),
+			Reviewers: append([]string(nil), rw.Reviewers...),
+		})
+	}
+	if len(w.Fallback) == 0 {
+		return nil, fmt.Errorf("%w: reviewers.fallback is required (used when no rule matches)", ErrInvalidReviewers)
+	}
+	for _, rv := range w.Fallback {
+		if err := validReviewer("reviewers.fallback", rv); err != nil {
+			return nil, err
+		}
+	}
+	cfg.Fallback = append([]string(nil), w.Fallback...)
+	return cfg, nil
+}
+
+// roleCanVote reports whether a role is permitted to call issue_review_vote.
+// A `can:` whitelist must list it explicitly; in the `not:` blacklist mode
+// (empty Can) the role gets every tool except those blacklisted.
+func roleCanVote(role *Role) bool {
+	const tool = "issue_review_vote"
+	if len(role.Can) > 0 {
+		return containsStringFold(role.Can, tool)
+	}
+	return !containsStringFold(role.Not, tool)
+}
+
+func containsStringFold(list []string, want string) bool {
+	for _, s := range list {
+		if strings.TrimSpace(s) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // buildContainer validates and lifts the container block.

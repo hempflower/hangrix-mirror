@@ -29,6 +29,23 @@ llm:
   max_context_tokens: 1000000
   max_output_tokens: 256000
 
+# Per-contribution review gate (docs/contribution-branches.md). Each rule maps
+# a contribution branch's changed paths to the reviewer roles that must vote on
+# it; a branch collects the union of every matching rule's reviewers. A branch
+# leaves `pending` only once all its required reviewers have voted — approve/
+# abstain → approved, any reject → rejected. `fallback` reviews branches that
+# match no rule (kept as the maintainer so nothing ever lands unreviewed).
+# Only roles that can cast votes (issue_review_vote in `can:`) may be listed.
+reviewers:
+  rules:
+    - paths: ["apps/hangrix/**", "pkg/**", "go.work", "go.work.sum"]
+      reviewers: [server-reviewer, tester]
+    - paths: ["apps/hangrix-agent/**", "apps/hangrix-runner/**"]
+      reviewers: [runtime-reviewer, tester]
+    - paths: ["apps/web/**"]
+      reviewers: [web-reviewer, tester]
+  fallback: [maintainer]
+
 roles:
   maintainer:
     triggers:

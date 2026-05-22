@@ -257,10 +257,12 @@ WHERE id = sqlc.arg('id') AND status <> 'deleted';
 -- ---- contributions ----
 
 -- name: UpsertContributionOnPush :one
--- Insert a contribution for a freshly-pushed namespace ref, or update the
--- existing one (keyed by issue_id+ref_name) with the new head/diff. When the
--- head SHA actually changed, the status resets to 'open' (a new push dismisses
--- prior approvals — GitHub-style) and mergeable is recomputed by the caller.
+-- Insert a contribution for a freshly-pushed namespace ref. New rows start in
+-- 'pending'; the caller recomputes the real status from the branch's required
+-- reviewers afterwards. Contribution branches are immutable once pushed (the
+-- git layer rejects re-pushes to an existing ref), so the ON CONFLICT path
+-- only fires on idempotent re-delivery of the same push — it refreshes the
+-- diff snapshot but leaves the review status untouched.
 INSERT INTO contributions (
     repo_id, issue_id, session_id, agent_role, ref_name,
     head_sha, base_sha, changed_paths, files, additions, deletions, status
@@ -277,7 +279,7 @@ VALUES (
     sqlc.arg('files'),
     sqlc.arg('additions'),
     sqlc.arg('deletions'),
-    'open'
+    'pending'
 )
 ON CONFLICT (issue_id, ref_name) DO UPDATE SET
     session_id    = EXCLUDED.session_id,
@@ -288,12 +290,6 @@ ON CONFLICT (issue_id, ref_name) DO UPDATE SET
     files         = EXCLUDED.files,
     additions     = EXCLUDED.additions,
     deletions     = EXCLUDED.deletions,
-    status        = CASE
-                        WHEN contributions.head_sha IS DISTINCT FROM EXCLUDED.head_sha
-                             AND contributions.status IN ('open','changes_requested')
-                        THEN 'open'
-                        ELSE contributions.status
-                    END,
     updated_at    = NOW()
 RETURNING id;
 

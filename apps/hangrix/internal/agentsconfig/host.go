@@ -1,5 +1,91 @@
 package agentsconfig
 
+import "github.com/bmatcuk/doublestar/v4"
+
+// ReviewersConfig declares which reviewer roles must approve a contribution
+// branch, matched by the branch's changed paths. It is the single source of
+// truth for the per-contribution review gate (docs/contribution-branches.md):
+// every rule whose `paths` glob matches any changed file contributes its
+// reviewer roles to the required set; when no rule matches, Fallback is used.
+//
+// The required reviewers determine when a contribution leaves `pending`
+// (every required reviewer has voted) and whether it is `approved` (all
+// approve/abstain) or `rejected` (any reject). Wake-up of reviewers is a
+// separate concern, driven by each role's `commit.pushed` trigger.
+type ReviewersConfig struct {
+	// Rules is the ordered list of path→reviewer mappings. A contribution
+	// collects the union of reviewers from every rule it matches.
+	Rules []ReviewerRule
+
+	// Fallback is the reviewer role set used only when no rule matches a
+	// contribution's changed paths. Conventionally the maintainer role.
+	// The parser requires it to be non-empty whenever a `reviewers:` block
+	// is present, so a contribution can never end up with no possible
+	// reviewer by accident.
+	Fallback []string
+}
+
+// ReviewerRule is one path→reviewers mapping inside ReviewersConfig.
+type ReviewerRule struct {
+	// Paths are doublestar glob patterns matched against a contribution's
+	// changed files. The rule matches if at least one changed file matches
+	// at least one pattern. Parser requires this to be non-empty.
+	Paths []string
+
+	// Reviewers are the role keys that must review a contribution this rule
+	// matches. Each must name a role that exists and can cast review votes
+	// (has issue_review_vote in its tool ACL). Parser requires non-empty.
+	Reviewers []string
+}
+
+// RequiredReviewers returns the role keys that must vote on a contribution
+// touching changedPaths: the union of reviewers from every matching rule, or
+// Fallback when no rule matched. Returns nil when there is no `reviewers:`
+// block (the host has not opted into the review gate). The result preserves
+// first-seen order and is de-duplicated. Author exclusion (a role cannot be
+// required to review its own contribution) is the caller's responsibility.
+func (c *HostConfig) RequiredReviewers(changedPaths []string) []string {
+	if c == nil || c.Reviewers == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(role string) {
+		if role != "" && !seen[role] {
+			seen[role] = true
+			out = append(out, role)
+		}
+	}
+	for _, rule := range c.Reviewers.Rules {
+		if anyPathMatchesAnyGlob(rule.Paths, changedPaths) {
+			for _, rv := range rule.Reviewers {
+				add(rv)
+			}
+		}
+	}
+	if len(out) == 0 {
+		for _, rv := range c.Reviewers.Fallback {
+			add(rv)
+		}
+	}
+	return out
+}
+
+// anyPathMatchesAnyGlob reports whether at least one path matches at least one
+// glob pattern. Uses doublestar (`**` crosses `/`, `*` does not) — the same
+// matcher the spawner's push filters use, so reviewer matching and wake-up
+// paths agree. Malformed patterns are treated as non-matching.
+func anyPathMatchesAnyGlob(patterns, paths []string) bool {
+	for _, p := range paths {
+		for _, pat := range patterns {
+			if ok, err := doublestar.PathMatch(pat, p); err == nil && ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // IssuesConfig collects issue-level behaviour switches. Defaults (below)
 // are chosen so that an absent `issues:` block yields the platform's
 // recommended behaviour; hosts that need to opt out set the relevant flag
@@ -30,6 +116,12 @@ type HostConfig struct {
 	// Issues holds issue-level behaviour switches. nil means "use
 	// defaults for every switch".
 	Issues *IssuesConfig
+
+	// Reviewers maps contribution changed-paths to the reviewer roles that
+	// must approve the branch, with a fallback. nil means the host did not
+	// declare a `reviewers:` block — RequiredReviewers then returns nil and
+	// contributions have no required reviewers (the gate is a no-op).
+	Reviewers *ReviewersConfig
 
 	// Roles maps role-key → Role. The map is guaranteed non-empty by
 	// the parser; an empty `roles:` is a misconfiguration. Iteration

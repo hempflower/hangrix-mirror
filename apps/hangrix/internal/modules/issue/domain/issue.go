@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -41,7 +42,7 @@ const (
 	EventTitleChanged EventKind = "title_changed"
 
 	// EventReviewVote records a reviewer (agent or human) voting
-	// approve / request_changes / abstain on an issue. The payload
+	// approve / reject / abstain on a contribution branch. The payload
 	// follows ReviewVotePayload. Maintainer roles subscribe to the
 	// corresponding spawner trigger (review_vote.posted) so they wake
 	// when a vote lands.
@@ -58,9 +59,10 @@ const (
 	// contribution branch into the issue branch (first-level gate).
 	EventContributionMerged EventKind = "contribution_merged"
 
-	// EventContributionChangesRequested fires when a reviewer requests
-	// changes on a contribution branch.
-	EventContributionChangesRequested EventKind = "contribution_changes_requested"
+	// EventContributionRejected fires when a reviewer rejects a
+	// contribution branch (votes reject). Because branches are immutable,
+	// a rejected branch is revised by pushing a new versioned branch.
+	EventContributionRejected EventKind = "contribution_rejected"
 
 	// EventContributionClosed fires when the owning role abandons a
 	// contribution branch.
@@ -73,15 +75,15 @@ const (
 type ReviewVoteValue string
 
 const (
-	ReviewVoteApprove        ReviewVoteValue = "approve"
-	ReviewVoteRequestChanges ReviewVoteValue = "request_changes"
-	ReviewVoteAbstain        ReviewVoteValue = "abstain"
+	ReviewVoteApprove ReviewVoteValue = "approve"
+	ReviewVoteReject  ReviewVoteValue = "reject"
+	ReviewVoteAbstain ReviewVoteValue = "abstain"
 )
 
 // Valid reports whether v is one of the three documented values.
 func (v ReviewVoteValue) Valid() bool {
 	switch v {
-	case ReviewVoteApprove, ReviewVoteRequestChanges, ReviewVoteAbstain:
+	case ReviewVoteApprove, ReviewVoteReject, ReviewVoteAbstain:
 		return true
 	}
 	return false
@@ -89,20 +91,14 @@ func (v ReviewVoteValue) Valid() bool {
 
 // ReviewVotePayload is the JSON shape stored in Event.Payload for
 // EventReviewVote. Value is the outcome; Reason is the reviewer's free-text
-// rationale.
-//
-// A vote can target either the issue branch (legacy / second-level gate) or a
-// specific contribution branch:
-//   - ContributionID == 0: an issue-level vote. HeadSHA records the issue
-//     branch tip it was cast against; effective iff HeadSHA == issue.HeadSHA.
-//   - ContributionID  > 0: a contribution vote. ReviewedSHA records the
-//     contribution head it was cast against; effective iff
-//     ReviewedSHA == contribution.HeadSHA. A new push to the branch changes
-//     the head and silently dismisses prior approvals.
+// rationale. Every vote targets a contribution branch: ContributionID names
+// it and ReviewedSHA records the contribution head it was cast against.
+// Contribution branches are immutable once pushed, so ReviewedSHA always
+// equals the contribution head — the field is retained for audit and to
+// defend against the rare stale event.
 type ReviewVotePayload struct {
 	Value          ReviewVoteValue `json:"value"`
 	Reason         string          `json:"reason,omitempty"`
-	HeadSHA        string          `json:"head_sha,omitempty"`
 	ContributionID int64           `json:"contribution_id,omitempty"`
 	ReviewedSHA    string          `json:"reviewed_sha,omitempty"`
 }
@@ -116,16 +112,16 @@ type ContributionEventPayload struct {
 	HeadSHA        string `json:"head_sha,omitempty"`
 	Title          string `json:"title,omitempty"`
 	MergeCommitSHA string `json:"merge_commit_sha,omitempty"` // set on contribution_merged
-	Reason         string `json:"reason,omitempty"`           // set on changes_requested / closed
+	Reason         string `json:"reason,omitempty"`           // set on contribution_rejected / closed
 }
 
 // ReviewVerdict summarises the collective review state for an issue.
 type ReviewVerdict string
 
 const (
-	ReviewVerdictApproved         ReviewVerdict = "approved"
-	ReviewVerdictChangesRequested ReviewVerdict = "changes_requested"
-	ReviewVerdictPending          ReviewVerdict = "pending"
+	ReviewVerdictApproved ReviewVerdict = "approved"
+	ReviewVerdictRejected ReviewVerdict = "rejected"
+	ReviewVerdictPending  ReviewVerdict = "pending"
 )
 
 // EffectiveVote is a single reviewer's latest vote whose head_sha matches
@@ -159,145 +155,67 @@ type ReviewStatus struct {
 	BlockReason  string          `json:"block_reason,omitempty"`
 	Votes        []EffectiveVote `json:"votes"`
 	StaleVotes   []StaleVote     `json:"stale_votes"`
+	// RequiredReviewers is the set of reviewer role keys that must vote on
+	// this contribution (path-matched from the host config, minus the
+	// author). PendingReviewers is the subset that has not yet voted — the
+	// contribution stays `pending` until this is empty (or a reject lands).
+	RequiredReviewers []string `json:"required_reviewers"`
+	PendingReviewers  []string `json:"pending_reviewers"`
 }
 
-// ErrReviewNotSatisfied is returned by merge gates when the review status
-// blocks the merge.
-var ErrReviewNotSatisfied = errors.New("review requirements not satisfied")
-
-// ComputeReviewStatus is the single-source-of-truth review computation. It
-// takes the issue and its events, finds the latest review_vote per reviewer,
-// and determines which are effective (payload.head_sha == issue.HeadSHA) vs
-// stale. The verdict is "approved" when every effective vote is approve,
-// "changes_requested" when any effective vote is request_changes, and
-// "pending" when there are no effective votes or HeadSHA is empty. Merge is
-// blocked unless the verdict is "approved".
-func ComputeReviewStatus(issue *Issue, events []*Event) *ReviewStatus {
-	rs := &ReviewStatus{
-		HeadSHA:      issue.HeadSHA,
-		Verdict:      ReviewVerdictPending,
-		MergeBlocked: true,
-		Votes:        []EffectiveVote{},
-		StaleVotes:   []StaleVote{},
-	}
-
-	if issue.HeadSHA == "" {
-		rs.BlockReason = "issue branch has no commits yet"
-		return rs
-	}
-
-	// Latest vote per reviewer (by agent_role or by actor_id for humans).
-	type latestVote struct {
-		event   *Event
-		payload ReviewVotePayload
-	}
-	latest := make(map[string]*latestVote) // key is "agent:<role>" or "user:<id>"
-
-	for _, e := range events {
-		if e.Kind != EventReviewVote {
-			continue
-		}
-		var p ReviewVotePayload
-		if err := jsonUnmarshalPayload(e.Payload, &p); err != nil {
-			continue
-		}
-		key := reviewerKey(e)
-		if key == "" {
-			continue
-		}
-		if cur, ok := latest[key]; !ok || e.CreatedAt.After(cur.event.CreatedAt) {
-			latest[key] = &latestVote{event: e, payload: p}
+// IssueMergeBlock reports why an issue branch is NOT ready to merge into its
+// base, or "" when it is ready. Merge is blocked while any contribution is
+// still `pending` (awaiting review — its required reviewers have not all
+// voted), and while the issue branch carries no changes (branchAhead false).
+//
+// Only `pending` blocks: an `approved` contribution the maintainer chose not
+// to apply, a `rejected` one, and merged/closed ones are all resolved
+// decisions. The branchAhead check ensures at least one contribution was
+// applied (the issue branch starts empty, identical to base).
+//
+// This is the second-level gate; per-contribution review is the first level
+// (ComputeContributionReviewStatus).
+func IssueMergeBlock(contributions []*Contribution, branchAhead bool) string {
+	pending := 0
+	for _, c := range contributions {
+		if c.Status == ContribStatusPending {
+			pending++
 		}
 	}
-
-	if len(latest) == 0 {
-		rs.BlockReason = "no review votes yet"
-		return rs
+	if pending > 0 {
+		return fmt.Sprintf("%d contribution(s) still pending review — every contribution must be reviewed (approved/rejected) before merging the issue branch into base", pending)
 	}
-
-	hasChangesRequested := false
-	hasApprove := false
-
-	// Sort keys for deterministic output.
-	keys := make([]string, 0, len(latest))
-	for k := range latest {
-		keys = append(keys, k)
+	if !branchAhead {
+		return "issue branch has no changes to merge — it starts empty and only fills as contributions are applied into it; apply at least one approved contribution first"
 	}
-	sort.Strings(keys)
-
-	for _, k := range keys {
-		lv := latest[k]
-		if lv.payload.HeadSHA == issue.HeadSHA {
-			// Effective vote
-			switch lv.payload.Value {
-			case ReviewVoteRequestChanges:
-				hasChangesRequested = true
-				rs.Votes = append(rs.Votes, EffectiveVote{
-					Reviewer: reviewerDisplay(lv.event),
-					Value:    lv.payload.Value,
-					Reason:   lv.payload.Reason,
-					VotedAt:  lv.event.CreatedAt,
-					IsAgent:  lv.event.AgentRole != "",
-				})
-			case ReviewVoteApprove:
-				hasApprove = true
-				rs.Votes = append(rs.Votes, EffectiveVote{
-					Reviewer: reviewerDisplay(lv.event),
-					Value:    lv.payload.Value,
-					Reason:   lv.payload.Reason,
-					VotedAt:  lv.event.CreatedAt,
-					IsAgent:  lv.event.AgentRole != "",
-				})
-			default:
-				// Abstain — not included in effective votes
-			}
-		} else {
-			// Stale vote
-			rs.StaleVotes = append(rs.StaleVotes, StaleVote{
-				Reviewer:    reviewerDisplay(lv.event),
-				Value:       lv.payload.Value,
-				VotedAt:     lv.event.CreatedAt,
-				VoteHeadSHA: lv.payload.HeadSHA,
-				IsAgent:     lv.event.AgentRole != "",
-			})
-		}
-	}
-
-	if hasChangesRequested {
-		rs.Verdict = ReviewVerdictChangesRequested
-		rs.MergeBlocked = true
-		rs.BlockReason = "changes requested by reviewer"
-	} else if hasApprove {
-		rs.Verdict = ReviewVerdictApproved
-		rs.MergeBlocked = false
-	} else {
-		// All effective votes are abstain, or only stale votes exist
-		rs.Verdict = ReviewVerdictPending
-		rs.MergeBlocked = true
-		if len(rs.StaleVotes) > 0 {
-			rs.BlockReason = "all review votes are stale — re-review required after latest push"
-		} else {
-			rs.BlockReason = "waiting for review"
-		}
-	}
-
-	return rs
+	return ""
 }
 
-// ComputeContributionReviewStatus is the per-contribution analogue of
-// ComputeReviewStatus. It considers only review_vote events whose payload
-// targets this contribution (ContributionID == c.ID), takes the latest vote
-// per reviewer, and treats a vote as effective only when its ReviewedSHA
-// matches the contribution's current head — so a new push (which changes the
-// head) silently dismisses prior approvals. The verdict + merge-block rules
-// match ComputeReviewStatus.
-func ComputeContributionReviewStatus(c *Contribution, events []*Event) *ReviewStatus {
+// ComputeContributionReviewStatus is the single-source-of-truth review
+// computation for a contribution branch (the first-level gate).
+//
+// requiredReviewers is the set of reviewer role keys that must vote on this
+// contribution — path-matched from the host config and with the contribution
+// author already removed (a role cannot be required to review its own branch).
+//
+// The verdict follows the immutable-branch model:
+//
+//   - rejected: ANY vote on this contribution is `reject` (a reject is
+//     dominant — the branch is dead; the author pushes a new version).
+//   - approved: no reject, AND every required reviewer has voted
+//     (approve/abstain). An empty required set is vacuously approved.
+//   - pending:  no reject, but some required reviewer has not voted yet.
+//
+// Merge into the issue branch is allowed only when approved.
+func ComputeContributionReviewStatus(c *Contribution, requiredReviewers []string, events []*Event) *ReviewStatus {
 	rs := &ReviewStatus{
-		HeadSHA:      c.HeadSHA,
-		Verdict:      ReviewVerdictPending,
-		MergeBlocked: true,
-		Votes:        []EffectiveVote{},
-		StaleVotes:   []StaleVote{},
+		HeadSHA:           c.HeadSHA,
+		Verdict:           ReviewVerdictPending,
+		MergeBlocked:      true,
+		Votes:             []EffectiveVote{},
+		StaleVotes:        []StaleVote{},
+		RequiredReviewers: append([]string{}, requiredReviewers...),
+		PendingReviewers:  []string{},
 	}
 	if c.HeadSHA == "" {
 		rs.BlockReason = "contribution branch has no commits yet"
@@ -328,64 +246,73 @@ func ComputeContributionReviewStatus(c *Contribution, events []*Event) *ReviewSt
 			latest[key] = &latestVote{event: e, payload: p}
 		}
 	}
-	if len(latest) == 0 {
-		rs.BlockReason = "no review votes yet"
-		return rs
-	}
 
-	hasChangesRequested := false
-	hasApprove := false
+	// votesByRole indexes effective (current-head) votes by agent role so we
+	// can tell which required reviewers have spoken. hasReject is set by any
+	// reject vote, from any voter.
+	votesByRole := make(map[string]ReviewVoteValue)
+	hasReject := false
+
 	keys := make([]string, 0, len(latest))
 	for k := range latest {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-
 	for _, k := range keys {
 		lv := latest[k]
-		if lv.payload.ReviewedSHA == c.HeadSHA {
-			switch lv.payload.Value {
-			case ReviewVoteRequestChanges:
-				hasChangesRequested = true
-				rs.Votes = append(rs.Votes, EffectiveVote{
-					Reviewer: reviewerDisplay(lv.event), Value: lv.payload.Value,
-					Reason: lv.payload.Reason, VotedAt: lv.event.CreatedAt, IsAgent: lv.event.AgentRole != "",
-				})
-			case ReviewVoteApprove:
-				hasApprove = true
-				rs.Votes = append(rs.Votes, EffectiveVote{
-					Reviewer: reviewerDisplay(lv.event), Value: lv.payload.Value,
-					Reason: lv.payload.Reason, VotedAt: lv.event.CreatedAt, IsAgent: lv.event.AgentRole != "",
-				})
-			default:
-				// abstain — not counted
-			}
-		} else {
+		if lv.payload.ReviewedSHA != "" && lv.payload.ReviewedSHA != c.HeadSHA {
 			rs.StaleVotes = append(rs.StaleVotes, StaleVote{
 				Reviewer: reviewerDisplay(lv.event), Value: lv.payload.Value,
 				VotedAt: lv.event.CreatedAt, VoteHeadSHA: lv.payload.ReviewedSHA, IsAgent: lv.event.AgentRole != "",
 			})
+			continue
+		}
+		rs.Votes = append(rs.Votes, EffectiveVote{
+			Reviewer: reviewerDisplay(lv.event), Value: lv.payload.Value,
+			Reason: lv.payload.Reason, VotedAt: lv.event.CreatedAt, IsAgent: lv.event.AgentRole != "",
+		})
+		if lv.payload.Value == ReviewVoteReject {
+			hasReject = true
+		}
+		if lv.event.AgentRole != "" {
+			votesByRole[lv.event.AgentRole] = lv.payload.Value
+		}
+	}
+
+	for _, rv := range requiredReviewers {
+		if _, voted := votesByRole[rv]; !voted {
+			rs.PendingReviewers = append(rs.PendingReviewers, rv)
 		}
 	}
 
 	switch {
-	case hasChangesRequested:
-		rs.Verdict = ReviewVerdictChangesRequested
+	case hasReject:
+		rs.Verdict = ReviewVerdictRejected
 		rs.MergeBlocked = true
-		rs.BlockReason = "changes requested by reviewer"
-	case hasApprove:
+		rs.BlockReason = "rejected by a reviewer — push a new contribution branch addressing the feedback"
+	case len(rs.PendingReviewers) == 0:
 		rs.Verdict = ReviewVerdictApproved
 		rs.MergeBlocked = false
 	default:
 		rs.Verdict = ReviewVerdictPending
 		rs.MergeBlocked = true
-		if len(rs.StaleVotes) > 0 {
-			rs.BlockReason = "all review votes are stale — re-review required after latest push"
-		} else {
-			rs.BlockReason = "waiting for review"
-		}
+		rs.BlockReason = fmt.Sprintf("waiting for review from: %s", strings.Join(rs.PendingReviewers, ", "))
 	}
 	return rs
+}
+
+// ContributionStatus maps a computed review verdict to the non-terminal
+// contribution status to cache on the row. Terminal statuses (merged/closed)
+// are decided by the apply/close paths and never produced here.
+func (rs *ReviewStatus) ContributionStatus() ContributionStatus {
+	switch rs.Verdict {
+	case ReviewVerdictApproved:
+		return ContribStatusApproved
+	case ReviewVerdictRejected:
+		return ContribStatusRejected
+	default:
+		return ContribStatusPending
+	}
 }
 
 // reviewerKey returns a stable key for a review_vote event's actor: either
@@ -663,31 +590,38 @@ type AttachmentUploader interface {
 
 // ---- contributions (branch-based merge requests) ----
 
-// ContributionStatus models the lifecycle of a contribution branch.
+// ContributionStatus models the lifecycle of a contribution branch. Status is
+// derived from the branch's required reviewers and their votes (see
+// ComputeContributionReviewStatus) and cached on the row; it is recomputed on
+// push and on every vote.
 //
-//	open:               pushed and under review (default; a new push resets to this)
-//	changes_requested:  a reviewer asked for changes
-//	merged:             the server merged this branch into the issue branch (terminal)
-//	closed:             the owning role abandoned the branch (terminal)
+//	pending:   pushed; not all required reviewers have voted yet (default)
+//	approved:  every required reviewer voted (approve/abstain), none rejected
+//	rejected:  a reviewer rejected the branch (revise via a new versioned branch)
+//	merged:    the server merged this branch into the issue branch (terminal)
+//	closed:    the owning role abandoned the branch (terminal)
 type ContributionStatus string
 
 const (
-	ContribStatusOpen             ContributionStatus = "open"
-	ContribStatusChangesRequested ContributionStatus = "changes_requested"
-	ContribStatusMerged           ContributionStatus = "merged"
-	ContribStatusClosed           ContributionStatus = "closed"
+	ContribStatusPending  ContributionStatus = "pending"
+	ContribStatusApproved ContributionStatus = "approved"
+	ContribStatusRejected ContributionStatus = "rejected"
+	ContribStatusMerged   ContributionStatus = "merged"
+	ContribStatusClosed   ContributionStatus = "closed"
 )
 
 // Valid reports whether s is one of the documented statuses.
 func (s ContributionStatus) Valid() bool {
 	switch s {
-	case ContribStatusOpen, ContribStatusChangesRequested, ContribStatusMerged, ContribStatusClosed:
+	case ContribStatusPending, ContribStatusApproved, ContribStatusRejected, ContribStatusMerged, ContribStatusClosed:
 		return true
 	}
 	return false
 }
 
-// Terminal reports whether the contribution can no longer change.
+// Terminal reports whether the contribution can no longer change. A rejected
+// branch is NOT terminal — a reviewer can revise their vote, and the row stays
+// addressable — but it is also never applied while rejected.
 func (s ContributionStatus) Terminal() bool {
 	return s == ContribStatusMerged || s == ContribStatusClosed
 }
@@ -740,9 +674,10 @@ type ContributionUpsertParams struct {
 // ContributionStore is the persistence abstraction for contribution branches.
 type ContributionStore interface {
 	// UpsertContributionOnPush inserts a contribution for a freshly-pushed
-	// namespace ref or refreshes the existing one (by issue_id+ref_name).
-	// Returns the resulting row. When the head SHA changed and the
-	// contribution was open/changes_requested, status is reset to 'open'.
+	// namespace ref. New rows start in status 'pending'. Branches are
+	// immutable once pushed (the git layer rejects re-pushes), so the
+	// ON CONFLICT path only fires on idempotent re-delivery of the same
+	// push — it refreshes the diff snapshot but leaves status untouched.
 	UpsertContributionOnPush(ctx context.Context, p ContributionUpsertParams) (*Contribution, error)
 	GetContribution(ctx context.Context, id int64) (*Contribution, error)
 	GetContributionByRef(ctx context.Context, issueID int64, refName string) (*Contribution, error)

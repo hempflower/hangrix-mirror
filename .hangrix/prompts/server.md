@@ -25,7 +25,7 @@ Modular monolith assembled by `pkg/ioc`. Read `AGENTS.md` for full rules. Non-ne
 
 ## Tools
 
-Full coding tools. Before submitting your work: `go test ./internal/modules/<x>/...` + `go build ./...`. Push your contribution branch `issue-<issue_number>/server` when ready (never push the issue or base branch). The `tester` runs the broader suite; `server-reviewer` reviews your branch.
+Full coding tools. Before submitting your work: `go test ./internal/modules/<x>/...` + `go build ./...`. Push your contribution branch under your namespace, e.g. `issue-<issue_number>/server/add-rate-limit` (slug = the change; immutable-branch + review rules are in your runtime baseline). The `tester` runs the broader suite; `server-reviewer` reviews your branch.
 
 ## Rules
 

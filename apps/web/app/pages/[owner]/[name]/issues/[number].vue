@@ -168,7 +168,7 @@ const mergeBlocked = computed(() => reviewStatus.value?.merge_blocked ?? false)
 const mergeBlockReason = computed(() => {
   if (!mergeBlocked.value) return ''
   const reason = reviewStatus.value?.block_reason
-  if (reason === 'review_required' || reason === 'changes_requested') {
+  if (reason === 'review_required') {
     return t(`issue.review.blockReason.${reason}`)
   }
   return t('issue.review.blocked')
@@ -442,8 +442,8 @@ function eventLabel(e: any): string {
         title: e.payload?.title ?? '',
         sha: shortSha(e.payload?.merge_commit_sha ?? ''),
       })
-    case 'contribution_changes_requested':
-      return t('issue.contributions.timeline.contributionChangesRequested', {
+    case 'contribution_rejected':
+      return t('issue.contributions.timeline.contributionRejected', {
         name,
         ref: e.payload?.ref_name ?? '',
         reason: e.payload?.reason ?? '',
@@ -463,28 +463,28 @@ function eventLabel(e: any): string {
 function voteValueClass(v: ReviewVoteValue) {
   switch (v) {
     case 'approve': return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-    case 'request_changes': return 'bg-red-500/15 text-red-700 dark:text-red-300'
+    case 'reject': return 'bg-red-500/15 text-red-700 dark:text-red-300'
     case 'abstain': return 'bg-slate-500/15 text-slate-700 dark:text-slate-300'
   }
 }
 function voteValueIcon(v: ReviewVoteValue) {
   switch (v) {
     case 'approve': return ThumbsUp
-    case 'request_changes': return ThumbsDown
+    case 'reject': return ThumbsDown
     case 'abstain': return MinusCircle
   }
 }
 function verdictClass(v: ReviewVerdict) {
   switch (v) {
     case 'approved': return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-    case 'changes_requested': return 'bg-red-500/15 text-red-700 dark:text-red-300'
+    case 'rejected': return 'bg-red-500/15 text-red-700 dark:text-red-300'
     case 'pending': return 'bg-slate-500/15 text-slate-700 dark:text-slate-300'
   }
 }
 function verdictIcon(v: ReviewVerdict) {
   switch (v) {
     case 'approved': return ThumbsUp
-    case 'changes_requested': return ThumbsDown
+    case 'rejected': return ThumbsDown
     case 'pending': return CircleSlash
   }
 }
@@ -943,7 +943,7 @@ onUnmounted(() => {
 
   <!-- Reviews: server-computed review_status is the single source of
   truth. The verdict shows the current gate outcome (approved /
-  changes_requested / pending) against the issue's current
+  rejected / pending) against the issue's current
   head_sha. Valid votes are those cast on the current head_sha;
   stale votes are recorded in the timeline but no longer count. -->
   <Card class="gap-0 py-0">

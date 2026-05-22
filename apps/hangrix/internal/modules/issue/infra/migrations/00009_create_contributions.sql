@@ -18,8 +18,11 @@ CREATE TABLE contributions (
     base_sha          TEXT        NOT NULL DEFAULT '', -- issue head this was diffed against
     title             TEXT        NOT NULL DEFAULT '',
     description       TEXT        NOT NULL DEFAULT '',
-    status            TEXT        NOT NULL DEFAULT 'open'
-                          CHECK (status IN ('open','changes_requested','merged','closed')),
+    -- Status is derived from the branch's required reviewers + votes and
+    -- cached here (see ComputeContributionReviewStatus). Branches are
+    -- immutable once pushed, so 'pending' is the create-time default.
+    status            TEXT        NOT NULL DEFAULT 'pending'
+                          CHECK (status IN ('pending','approved','rejected','merged','closed')),
     mergeable         BOOLEAN     NOT NULL DEFAULT TRUE,
     merge_mode        TEXT        NOT NULL DEFAULT '',  -- last CheckAutoMerge mode
     changed_paths     TEXT[]      NOT NULL DEFAULT '{}',

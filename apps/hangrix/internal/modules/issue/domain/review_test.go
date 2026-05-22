@@ -2,396 +2,187 @@ package domain
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
 
 // helpers ------------------------------------------------------------
 
-func mustPayload(t *testing.T, v ReviewVoteValue, headSHA string) []byte {
+func contribVote(t *testing.T, v ReviewVoteValue, contribID int64, reviewedSHA, reason string) []byte {
 	t.Helper()
-	b, err := json.Marshal(ReviewVotePayload{Value: v, HeadSHA: headSHA})
+	b, err := json.Marshal(ReviewVotePayload{Value: v, ContributionID: contribID, ReviewedSHA: reviewedSHA, Reason: reason})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
 	return b
 }
 
-func mustPayloadWithReason(t *testing.T, v ReviewVoteValue, headSHA, reason string) []byte {
-	t.Helper()
-	b, err := json.Marshal(ReviewVotePayload{Value: v, HeadSHA: headSHA, Reason: reason})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
-	return b
+func agentVoteEvent(role string, at time.Time, payload []byte) *Event {
+	return &Event{Kind: EventReviewVote, AgentRole: role, CreatedAt: at, Payload: payload}
 }
 
-func agentEvent(role string, at time.Time, payload []byte) *Event {
-	return &Event{
-		Kind:      EventReviewVote,
-		AgentRole: role,
-		CreatedAt: at,
-		Payload:   payload,
+// ComputeContributionReviewStatus ------------------------------------
+
+func TestContribReview_EmptyHead(t *testing.T) {
+	rs := ComputeContributionReviewStatus(&Contribution{ID: 1, HeadSHA: ""}, []string{"server-reviewer"}, nil)
+	if rs.Verdict != ReviewVerdictPending || !rs.MergeBlocked {
+		t.Fatalf("verdict=%s blocked=%v, want pending+blocked", rs.Verdict, rs.MergeBlocked)
+	}
+	if rs.BlockReason != "contribution branch has no commits yet" {
+		t.Errorf("BlockReason = %q", rs.BlockReason)
 	}
 }
 
-func userEvent(id int64, name string, at time.Time, payload []byte) *Event {
-	return &Event{
-		Kind:      EventReviewVote,
-		ActorID:   id,
-		ActorName: name,
-		CreatedAt: at,
-		Payload:   payload,
+func TestContribReview_PendingUntilAllRequiredVote(t *testing.T) {
+	now := time.Now()
+	c := &Contribution{ID: 7, HeadSHA: "head1"}
+	// Two required reviewers, only one has voted → still pending.
+	events := []*Event{
+		agentVoteEvent("server-reviewer", now, contribVote(t, ReviewVoteApprove, 7, "head1", "")),
+	}
+	rs := ComputeContributionReviewStatus(c, []string{"server-reviewer", "tester"}, events)
+	if rs.Verdict != ReviewVerdictPending || !rs.MergeBlocked {
+		t.Fatalf("verdict=%s blocked=%v, want pending+blocked", rs.Verdict, rs.MergeBlocked)
+	}
+	if len(rs.PendingReviewers) != 1 || rs.PendingReviewers[0] != "tester" {
+		t.Errorf("PendingReviewers = %v, want [tester]", rs.PendingReviewers)
+	}
+	if !strings.Contains(rs.BlockReason, "tester") {
+		t.Errorf("BlockReason = %q, want mention of tester", rs.BlockReason)
 	}
 }
 
-// tests --------------------------------------------------------------
+func TestContribReview_ApprovedWhenAllRequiredVote(t *testing.T) {
+	now := time.Now()
+	c := &Contribution{ID: 7, HeadSHA: "head1"}
+	events := []*Event{
+		agentVoteEvent("server-reviewer", now.Add(-2*time.Minute), contribVote(t, ReviewVoteApprove, 7, "head1", "")),
+		agentVoteEvent("tester", now.Add(-time.Minute), contribVote(t, ReviewVoteAbstain, 7, "head1", "")),
+	}
+	rs := ComputeContributionReviewStatus(c, []string{"server-reviewer", "tester"}, events)
+	if rs.Verdict != ReviewVerdictApproved || rs.MergeBlocked {
+		t.Fatalf("verdict=%s blocked=%v, want approved+unblocked (all voted approve/abstain)", rs.Verdict, rs.MergeBlocked)
+	}
+	if len(rs.PendingReviewers) != 0 {
+		t.Errorf("PendingReviewers = %v, want empty", rs.PendingReviewers)
+	}
+}
 
-func TestComputeReviewStatus_EmptyHeadSHA(t *testing.T) {
-	issue := &Issue{HeadSHA: ""}
-	rs := ComputeReviewStatus(issue, nil)
+func TestContribReview_NoRequiredReviewersAutoApproves(t *testing.T) {
+	c := &Contribution{ID: 7, HeadSHA: "head1"}
+	rs := ComputeContributionReviewStatus(c, nil, nil)
+	if rs.Verdict != ReviewVerdictApproved || rs.MergeBlocked {
+		t.Fatalf("verdict=%s blocked=%v, want approved (no required reviewers)", rs.Verdict, rs.MergeBlocked)
+	}
+}
 
+func TestContribReview_AnyRejectIsDominant(t *testing.T) {
+	now := time.Now()
+	c := &Contribution{ID: 7, HeadSHA: "head1"}
+	// A reject lands even before the other required reviewer voted → rejected.
+	events := []*Event{
+		agentVoteEvent("tester", now, contribVote(t, ReviewVoteReject, 7, "head1", "tests red")),
+	}
+	rs := ComputeContributionReviewStatus(c, []string{"server-reviewer", "tester"}, events)
+	if rs.Verdict != ReviewVerdictRejected || !rs.MergeBlocked {
+		t.Fatalf("verdict=%s blocked=%v, want rejected+blocked", rs.Verdict, rs.MergeBlocked)
+	}
+}
+
+func TestContribReview_RejectFromNonRequiredStillRejects(t *testing.T) {
+	now := time.Now()
+	c := &Contribution{ID: 7, HeadSHA: "head1"}
+	// A reject from a role that is not in the required set still rejects.
+	events := []*Event{
+		agentVoteEvent("server-reviewer", now.Add(-time.Minute), contribVote(t, ReviewVoteApprove, 7, "head1", "")),
+		agentVoteEvent("web-reviewer", now, contribVote(t, ReviewVoteReject, 7, "head1", "concern")),
+	}
+	rs := ComputeContributionReviewStatus(c, []string{"server-reviewer"}, events)
+	if rs.Verdict != ReviewVerdictRejected {
+		t.Fatalf("verdict=%s, want rejected (any reject is dominant)", rs.Verdict)
+	}
+}
+
+func TestContribReview_LatestVoteWins(t *testing.T) {
+	now := time.Now()
+	c := &Contribution{ID: 7, HeadSHA: "head1"}
+	events := []*Event{
+		// Reviewer flips reject -> approve; latest (approve) wins.
+		agentVoteEvent("server-reviewer", now.Add(-2*time.Minute), contribVote(t, ReviewVoteReject, 7, "head1", "")),
+		agentVoteEvent("server-reviewer", now.Add(-time.Minute), contribVote(t, ReviewVoteApprove, 7, "head1", "")),
+	}
+	rs := ComputeContributionReviewStatus(c, []string{"server-reviewer"}, events)
+	if rs.Verdict != ReviewVerdictApproved || rs.MergeBlocked {
+		t.Fatalf("verdict=%s blocked=%v, want approved (latest vote wins)", rs.Verdict, rs.MergeBlocked)
+	}
+}
+
+func TestContribReview_IgnoresOtherContribution(t *testing.T) {
+	now := time.Now()
+	c := &Contribution{ID: 7, HeadSHA: "head1"}
+	events := []*Event{
+		agentVoteEvent("server-reviewer", now, contribVote(t, ReviewVoteApprove, 99, "head1", "")), // different contribution
+	}
+	rs := ComputeContributionReviewStatus(c, []string{"server-reviewer"}, events)
 	if rs.Verdict != ReviewVerdictPending {
-		t.Errorf("verdict = %s, want pending", rs.Verdict)
+		t.Fatalf("verdict=%s, want pending (vote belongs to another contribution)", rs.Verdict)
 	}
-	if !rs.MergeBlocked {
-		t.Error("MergeBlocked should be true")
-	}
-	if rs.BlockReason != "issue branch has no commits yet" {
-		t.Errorf("BlockReason = %q, want %q", rs.BlockReason, "issue branch has no commits yet")
-	}
-	if len(rs.Votes) != 0 {
-		t.Errorf("got %d effective votes, want 0", len(rs.Votes))
+	if len(rs.PendingReviewers) != 1 || rs.PendingReviewers[0] != "server-reviewer" {
+		t.Errorf("PendingReviewers = %v, want [server-reviewer]", rs.PendingReviewers)
 	}
 }
 
-func TestComputeReviewStatus_NoVotes(t *testing.T) {
-	issue := &Issue{HeadSHA: "abc123"}
-	rs := ComputeReviewStatus(issue, nil)
-
-	if rs.Verdict != ReviewVerdictPending {
-		t.Errorf("verdict = %s, want pending", rs.Verdict)
+func TestContribReview_StatusMapping(t *testing.T) {
+	cases := []struct {
+		verdict ReviewVerdict
+		want    ContributionStatus
+	}{
+		{ReviewVerdictApproved, ContribStatusApproved},
+		{ReviewVerdictRejected, ContribStatusRejected},
+		{ReviewVerdictPending, ContribStatusPending},
 	}
-	if !rs.MergeBlocked {
-		t.Error("MergeBlocked should be true")
-	}
-	if rs.BlockReason != "no review votes yet" {
-		t.Errorf("BlockReason = %q, want %q", rs.BlockReason, "no review votes yet")
-	}
-}
-
-func TestComputeReviewStatus_AllApprove(t *testing.T) {
-	now := time.Now()
-	sha := "abc123"
-	issue := &Issue{HeadSHA: sha}
-
-	events := []*Event{
-		agentEvent("tester", now.Add(-2*time.Minute), mustPayload(t, ReviewVoteApprove, sha)),
-		agentEvent("server", now.Add(-1*time.Minute), mustPayload(t, ReviewVoteApprove, sha)),
-	}
-	rs := ComputeReviewStatus(issue, events)
-
-	if rs.Verdict != ReviewVerdictApproved {
-		t.Errorf("verdict = %s, want approved", rs.Verdict)
-	}
-	if rs.MergeBlocked {
-		t.Error("MergeBlocked should be false")
-	}
-	if rs.BlockReason != "" {
-		t.Errorf("BlockReason = %q, want empty", rs.BlockReason)
-	}
-	if len(rs.Votes) != 2 {
-		t.Fatalf("got %d effective votes, want 2", len(rs.Votes))
-	}
-	// Sorted alphabetically by reviewer key.
-	if rs.Votes[0].Reviewer != "server" {
-		t.Errorf("votes[0].Reviewer = %q, want server", rs.Votes[0].Reviewer)
-	}
-	if rs.Votes[1].Reviewer != "tester" {
-		t.Errorf("votes[1].Reviewer = %q, want tester", rs.Votes[1].Reviewer)
-	}
-	if !rs.Votes[0].IsAgent {
-		t.Errorf("votes[0].IsAgent = false, want true (agent vote)")
-	}
-	if !rs.Votes[1].IsAgent {
-		t.Errorf("votes[1].IsAgent = false, want true (agent vote)")
+	for _, tc := range cases {
+		got := (&ReviewStatus{Verdict: tc.verdict}).ContributionStatus()
+		if got != tc.want {
+			t.Errorf("verdict %s → %s, want %s", tc.verdict, got, tc.want)
+		}
 	}
 }
 
-func TestComputeReviewStatus_ChangesRequested(t *testing.T) {
-	now := time.Now()
-	sha := "abc123"
-	issue := &Issue{HeadSHA: sha}
+// IssueMergeBlock -----------------------------------------------------
 
-	events := []*Event{
-		agentEvent("tester", now.Add(-2*time.Minute), mustPayload(t, ReviewVoteApprove, sha)),
-		agentEvent("server", now.Add(-1*time.Minute), mustPayload(t, ReviewVoteRequestChanges, sha)),
-	}
-	rs := ComputeReviewStatus(issue, events)
+func TestIssueMergeBlock(t *testing.T) {
+	merged := &Contribution{Status: ContribStatusMerged}
+	closed := &Contribution{Status: ContribStatusClosed}
+	approved := &Contribution{Status: ContribStatusApproved}
+	rejected := &Contribution{Status: ContribStatusRejected}
+	pending := &Contribution{Status: ContribStatusPending}
 
-	if rs.Verdict != ReviewVerdictChangesRequested {
-		t.Errorf("verdict = %s, want changes_requested", rs.Verdict)
+	cases := []struct {
+		name        string
+		contribs    []*Contribution
+		branchAhead bool
+		wantBlocked bool
+		wantSubstr  string
+	}{
+		{"empty branch, no contribs", nil, false, true, "no changes to merge"},
+		{"ahead, no contribs (human push)", nil, true, false, ""},
+		{"ahead, all resolved", []*Contribution{merged, closed, rejected}, true, false, ""},
+		{"pending blocks", []*Contribution{merged, pending}, true, true, "still pending"},
+		{"approved-but-unapplied does not block", []*Contribution{approved}, true, false, ""},
+		{"rejected does not block", []*Contribution{rejected}, true, false, ""},
+		{"all resolved but branch empty", []*Contribution{merged}, false, true, "no changes to merge"},
 	}
-	if !rs.MergeBlocked {
-		t.Error("MergeBlocked should be true")
-	}
-	if rs.BlockReason != "changes requested by reviewer" {
-		t.Errorf("BlockReason = %q, want %q", rs.BlockReason, "changes requested by reviewer")
-	}
-	if len(rs.Votes) != 2 {
-		t.Fatalf("got %d effective votes, want 2", len(rs.Votes))
-	}
-}
-
-func TestComputeReviewStatus_AllAbstain(t *testing.T) {
-	now := time.Now()
-	sha := "abc123"
-	issue := &Issue{HeadSHA: sha}
-
-	events := []*Event{
-		agentEvent("tester", now, mustPayload(t, ReviewVoteAbstain, sha)),
-	}
-	rs := ComputeReviewStatus(issue, events)
-
-	if rs.Verdict != ReviewVerdictPending {
-		t.Errorf("verdict = %s, want pending", rs.Verdict)
-	}
-	if !rs.MergeBlocked {
-		t.Error("MergeBlocked should be true")
-	}
-	if rs.BlockReason != "waiting for review" {
-		t.Errorf("BlockReason = %q, want %q", rs.BlockReason, "waiting for review")
-	}
-	// Abstain votes are NOT included in effective votes
-	if len(rs.Votes) != 0 {
-		t.Errorf("got %d effective votes, want 0 (abstain excluded)", len(rs.Votes))
-	}
-}
-
-func TestComputeReviewStatus_StaleVotesOnly(t *testing.T) {
-	now := time.Now()
-	sha := "abc123"
-	oldSHA := "old456"
-	issue := &Issue{HeadSHA: sha}
-
-	events := []*Event{
-		agentEvent("tester", now, mustPayload(t, ReviewVoteApprove, oldSHA)),
-	}
-	rs := ComputeReviewStatus(issue, events)
-
-	if rs.Verdict != ReviewVerdictPending {
-		t.Errorf("verdict = %s, want pending", rs.Verdict)
-	}
-	if !rs.MergeBlocked {
-		t.Error("MergeBlocked should be true")
-	}
-	if rs.BlockReason != "all review votes are stale — re-review required after latest push" {
-		t.Errorf("BlockReason = %q, want %q", rs.BlockReason, "all review votes are stale — re-review required after latest push")
-	}
-	if len(rs.Votes) != 0 {
-		t.Errorf("got %d effective votes, want 0", len(rs.Votes))
-	}
-	if len(rs.StaleVotes) != 1 {
-		t.Fatalf("got %d stale votes, want 1", len(rs.StaleVotes))
-	}
-	if rs.StaleVotes[0].VoteHeadSHA != oldSHA {
-		t.Errorf("StaleVotes[0].VoteHeadSHA = %q, want %q", rs.StaleVotes[0].VoteHeadSHA, oldSHA)
-	}
-	if rs.StaleVotes[0].Reviewer != "tester" {
-		t.Errorf("StaleVotes[0].Reviewer = %q, want tester", rs.StaleVotes[0].Reviewer)
-	}
-	if !rs.StaleVotes[0].IsAgent {
-		t.Errorf("StaleVotes[0].IsAgent = false, want true (agent vote)")
-	}
-}
-
-func TestComputeReviewStatus_LatestVotePerReviewerWins(t *testing.T) {
-	now := time.Now()
-	sha := "abc123"
-	issue := &Issue{HeadSHA: sha}
-
-	// Same reviewer (tester) votes twice — only latest should count
-	events := []*Event{
-		agentEvent("tester", now.Add(-2*time.Minute), mustPayload(t, ReviewVoteRequestChanges, sha)),
-		agentEvent("tester", now, mustPayload(t, ReviewVoteApprove, sha)),
-	}
-	rs := ComputeReviewStatus(issue, events)
-
-	if rs.Verdict != ReviewVerdictApproved {
-		t.Errorf("verdict = %s, want approved (latest vote wins)", rs.Verdict)
-	}
-	if rs.MergeBlocked {
-		t.Error("MergeBlocked should be false")
-	}
-	if len(rs.Votes) != 1 {
-		t.Fatalf("got %d effective votes, want 1", len(rs.Votes))
-	}
-	if rs.Votes[0].Value != ReviewVoteApprove {
-		t.Errorf("effective vote = %s, want approve", rs.Votes[0].Value)
-	}
-}
-
-func TestComputeReviewStatus_StaleBecomesEffectiveAfterReVote(t *testing.T) {
-	now := time.Now()
-	sha := "abc123"
-	oldSHA := "old456"
-	issue := &Issue{HeadSHA: sha}
-
-	// Tester first voted on oldSHA (stale), then re-voted on current sha
-	events := []*Event{
-		agentEvent("tester", now.Add(-2*time.Minute), mustPayload(t, ReviewVoteApprove, oldSHA)),
-		agentEvent("tester", now, mustPayload(t, ReviewVoteApprove, sha)),
-	}
-	rs := ComputeReviewStatus(issue, events)
-
-	if rs.Verdict != ReviewVerdictApproved {
-		t.Errorf("verdict = %s, want approved", rs.Verdict)
-	}
-	if len(rs.Votes) != 1 {
-		t.Fatalf("got %d effective votes, want 1", len(rs.Votes))
-	}
-	if len(rs.StaleVotes) != 0 {
-		t.Errorf("got %d stale votes, want 0 (latest is effective)", len(rs.StaleVotes))
-	}
-}
-
-func TestComputeReviewStatus_MixedEffectiveAndStale(t *testing.T) {
-	now := time.Now()
-	sha := "abc123"
-	oldSHA := "old456"
-	issue := &Issue{HeadSHA: sha}
-
-	events := []*Event{
-		agentEvent("tester", now.Add(-2*time.Minute), mustPayload(t, ReviewVoteApprove, sha)),
-		agentEvent("server", now, mustPayload(t, ReviewVoteApprove, oldSHA)),
-	}
-	rs := ComputeReviewStatus(issue, events)
-
-	// tester's vote is effective (matches sha), server's is stale
-	if rs.Verdict != ReviewVerdictApproved {
-		t.Errorf("verdict = %s, want approved", rs.Verdict)
-	}
-	if len(rs.Votes) != 1 {
-		t.Fatalf("got %d effective votes, want 1", len(rs.Votes))
-	}
-	if rs.Votes[0].Reviewer != "tester" {
-		t.Errorf("effective reviewer = %q, want tester", rs.Votes[0].Reviewer)
-	}
-	if len(rs.StaleVotes) != 1 {
-		t.Fatalf("got %d stale votes, want 1", len(rs.StaleVotes))
-	}
-	if rs.StaleVotes[0].Reviewer != "server" {
-		t.Errorf("stale reviewer = %q, want server", rs.StaleVotes[0].Reviewer)
-	}
-}
-
-func TestComputeReviewStatus_HumanReviewer(t *testing.T) {
-	now := time.Now()
-	sha := "abc123"
-	issue := &Issue{HeadSHA: sha}
-
-	events := []*Event{
-		userEvent(42, "alice", now, mustPayload(t, ReviewVoteApprove, sha)),
-	}
-	rs := ComputeReviewStatus(issue, events)
-
-	if rs.Verdict != ReviewVerdictApproved {
-		t.Errorf("verdict = %s, want approved", rs.Verdict)
-	}
-	if len(rs.Votes) != 1 {
-		t.Fatalf("got %d effective votes, want 1", len(rs.Votes))
-	}
-	if rs.Votes[0].Reviewer != "alice" {
-		t.Errorf("Reviewer = %q, want alice", rs.Votes[0].Reviewer)
-	}
-	if rs.Votes[0].IsAgent {
-		t.Errorf("IsAgent = true, want false (human vote)")
-	}
-}
-
-func TestComputeReviewStatus_ReasonPreserved(t *testing.T) {
-	now := time.Now()
-	sha := "abc123"
-	issue := &Issue{HeadSHA: sha}
-
-	events := []*Event{
-		agentEvent("tester", now, mustPayloadWithReason(t, ReviewVoteApprove, sha, "LGTM!")),
-	}
-	rs := ComputeReviewStatus(issue, events)
-
-	if len(rs.Votes) != 1 {
-		t.Fatalf("got %d effective votes, want 1", len(rs.Votes))
-	}
-	if rs.Votes[0].Reason != "LGTM!" {
-		t.Errorf("Reason = %q, want LGTM!", rs.Votes[0].Reason)
-	}
-}
-
-func TestComputeReviewStatus_IgnoresNonReviewVoteEvents(t *testing.T) {
-	now := time.Now()
-	sha := "abc123"
-	issue := &Issue{HeadSHA: sha}
-
-	events := []*Event{
-		{Kind: EventCommitPushed, CreatedAt: now},
-		{Kind: EventStateChanged, CreatedAt: now},
-		agentEvent("tester", now, mustPayload(t, ReviewVoteApprove, sha)),
-	}
-	rs := ComputeReviewStatus(issue, events)
-
-	if rs.Verdict != ReviewVerdictApproved {
-		t.Errorf("verdict = %s, want approved", rs.Verdict)
-	}
-}
-
-func TestComputeReviewStatus_InvalidPayloadSkipped(t *testing.T) {
-	now := time.Now()
-	sha := "abc123"
-	issue := &Issue{HeadSHA: sha}
-
-	events := []*Event{
-		{Kind: EventReviewVote, AgentRole: "tester", CreatedAt: now, Payload: []byte("not json")},
-		agentEvent("tester", now, mustPayload(t, ReviewVoteApprove, sha)),
-	}
-	rs := ComputeReviewStatus(issue, events)
-
-	// Only the valid payload should count
-	if rs.Verdict != ReviewVerdictApproved {
-		t.Errorf("verdict = %s, want approved (invalid payload skipped)", rs.Verdict)
-	}
-}
-
-func TestComputeReviewStatus_EmptyReviewerKeySkipped(t *testing.T) {
-	now := time.Now()
-	sha := "abc123"
-	issue := &Issue{HeadSHA: sha}
-
-	// Event with no ActorID and no AgentRole — should produce empty key
-	events := []*Event{
-		{Kind: EventReviewVote, CreatedAt: now, Payload: mustPayload(t, ReviewVoteApprove, sha)},
-	}
-	rs := ComputeReviewStatus(issue, events)
-
-	if rs.Verdict != ReviewVerdictPending {
-		t.Errorf("verdict = %s, want pending (empty key skipped)", rs.Verdict)
-	}
-	if rs.BlockReason != "no review votes yet" {
-		t.Errorf("BlockReason = %q, want %q", rs.BlockReason, "no review votes yet")
-	}
-}
-
-func TestComputeReviewStatus_EmptyPayloadSkipped(t *testing.T) {
-	now := time.Now()
-	sha := "abc123"
-	issue := &Issue{HeadSHA: sha}
-
-	events := []*Event{
-		{Kind: EventReviewVote, AgentRole: "tester", CreatedAt: now, Payload: nil},
-		agentEvent("tester", now, mustPayload(t, ReviewVoteApprove, sha)),
-	}
-	rs := ComputeReviewStatus(issue, events)
-
-	if rs.Verdict != ReviewVerdictApproved {
-		t.Errorf("verdict = %s, want approved (nil payload skipped)", rs.Verdict)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IssueMergeBlock(tc.contribs, tc.branchAhead)
+			if (got != "") != tc.wantBlocked {
+				t.Fatalf("IssueMergeBlock = %q, wantBlocked=%v", got, tc.wantBlocked)
+			}
+			if tc.wantSubstr != "" && !strings.Contains(got, tc.wantSubstr) {
+				t.Errorf("IssueMergeBlock = %q, want substring %q", got, tc.wantSubstr)
+			}
+		})
 	}
 }

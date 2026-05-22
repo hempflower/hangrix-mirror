@@ -840,25 +840,24 @@
       "noReason": "未填写理由。",
       "vote": {
       "approve": "通过",
-      "request_changes": "需要修改",
+      "reject": "拒绝",
       "abstain": "弃权"
       },
       "verdict": {
       "approved": "已通过",
-      "changes_requested": "需要修改",
+      "rejected": "已拒绝",
       "pending": "待评审"
       },
       "summary": {
       "approve": "{n} 个通过",
-      "requestChanges": "{n} 个要求修改",
+      "reject": "{n} 个拒绝",
       "abstain": "{n} 个弃权"
       },
       "basedOn": "基于 {sha}",
       "staleWarning": "{n} 条旧评审已因新提交而失效",
       "blocked": "合并被评审门禁阻止",
       "blockReason": {
-      "review_required": "最新提交需要通过评审后才能合并",
-      "changes_requested": "最新提交仍有要求修改的评审意见，请处理后重新提交评审"
+      "review_required": "最新提交需要通过评审后才能合并"
       }
       },
     "attachment": {
@@ -890,8 +889,9 @@
       "confirmApply": "确定将贡献「{title}」合入 issue 分支？",
       "confirmClose": "确定关闭贡献「{title}」？",
       "status": {
-        "open": "进行中",
-        "changes_requested": "需要修改",
+        "pending": "待评审",
+        "approved": "已通过",
+        "rejected": "已拒绝",
         "merged": "已合入",
         "closed": "已关闭"
       },
@@ -913,7 +913,7 @@
       "timeline": {
         "contributionPushed": "{name} 推送了贡献分支 {ref}",
         "contributionMerged": "{name} 的贡献 {title} 已合入 → {sha}",
-        "contributionChangesRequested": "{name} 对贡献 {ref} 要求修改 —— {reason}",
+        "contributionRejected": "{name} 拒绝了贡献 {ref} —— {reason}",
         "contributionClosed": "{name} 关闭了贡献 {ref}"
       }
     }
