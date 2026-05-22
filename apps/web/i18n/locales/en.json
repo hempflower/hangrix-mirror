@@ -883,7 +883,7 @@
       "apply": "Apply",
       "applying": "Applying…",
       "applyFailed": "Apply failed",
-      "applyRequested": "Apply request submitted — the patch will be applied by an agent shortly.",
+      "applyRequested": "Apply request submitted. The patch will be processed shortly.",
       "applyOk": "Patch applied as commit {sha}",
       "reject": "Reject",
       "rejecting": "Rejecting…",
