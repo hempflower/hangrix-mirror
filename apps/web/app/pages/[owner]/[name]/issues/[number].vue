@@ -594,7 +594,7 @@ onUnmounted(() => {
   {{ t('issue.openedBy', { name: issue.author_username, time: rel(issue.created_at) }) }}
   </p>
   </header>
-  <div class="border-b border-border pb-2">
+  <div class="border-b border-border overflow-x-auto pb-2">
   <TabsList>
   <TabsTrigger value="conversation">
   <MessageSquare class="size-4" />
