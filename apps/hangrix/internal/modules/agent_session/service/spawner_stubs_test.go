@@ -185,6 +185,10 @@ func (g *stubGit) CheckAutoMerge(string, string, string) (bool, string, string, 
 	panic("CheckAutoMerge not stubbed")
 }
 
+func (g *stubGit) ApplyPatch(string, string, string, string, gitdomain.Signature, gitdomain.Signature) (string, error) {
+	panic("ApplyPatch not stubbed")
+}
+
 
 
 // stubRunnerRepo satisfies runnerdomain.Repo for the spawner / archiver /

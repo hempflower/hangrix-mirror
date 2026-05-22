@@ -30,6 +30,7 @@ type Registry struct {
 
 type RegistryDeps struct {
 	Issues      issuedomain.Store
+	Patches     issuedomain.PatchStore
 	Repos       repodomain.Store
 	Storage     repodomain.PathResolver
 	Git         gitdomain.Git
@@ -68,6 +69,12 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 		r.issueCloseTool(),
 		r.issueMergeTool(),
 		r.sessionRecoverTool(),
+		// Patch tools — read-first then mutating.
+		r.issuePatchListTool(),
+		r.issuePatchReadTool(),
+		r.issuePatchSubmitTool(),
+		r.issuePatchApplyTool(),
+		r.issuePatchRejectTool(),
 		r.releaseCreateTool(),
 		r.releaseUploadAssetTool(),
 		r.releasePublishTool(),

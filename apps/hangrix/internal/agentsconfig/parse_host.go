@@ -402,7 +402,7 @@ func buildTriggerSpec(roleKey string, t Trigger, value *yaml.Node) (*TriggerSpec
 			FromUsers:     cw.FromUsers,
 		}}, nil
 
-	case TriggerCommitPushed:
+	case TriggerCommitPushed, TriggerPatchSubmitted:
 		if emptyBlock {
 			return &TriggerSpec{Push: &PushFilter{}}, nil
 		}

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -1609,5 +1610,107 @@ func (g *GoGit) CheckAutoMerge(path, baseRef, headRef string) (bool, string, str
 		return false, "unknown", err.Error(), nil
 	}
 	return true, "merge-commit", "will create a merge commit on " + baseRef, nil
+}
+
+// ApplyPatch applies a unified diff patchText onto branch at the bare
+// repo path, creating a new commit. Uses git apply --cached with a
+// temporary index so the bare repo doesn't need a worktree.
+// The author identifies the original patch submitter; the committer
+// identifies who is applying it.
+func (g *GoGit) ApplyPatch(path, branch, patchText, message string, author, committer domain.Signature) (string, error) {
+	if patchText == "" {
+		return "", fmt.Errorf("apply patch: empty patch text")
+	}
+	if branch == "" {
+		return "", fmt.Errorf("apply patch: empty branch")
+	}
+
+	repo, err := openRepo(path)
+	if err != nil {
+		return "", fmt.Errorf("apply patch: %w", err)
+	}
+
+	branchRef := plumbing.NewBranchReferenceName(branch)
+	baseRef, err := repo.Reference(branchRef, false)
+	if err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return "", fmt.Errorf("apply patch: branch %q not found", branch)
+		}
+		return "", fmt.Errorf("apply patch: resolve branch: %w", err)
+	}
+	baseHash := baseRef.Hash()
+
+	// Create a temporary index file for the apply.
+	tmpIndex, err := os.CreateTemp("", "hangrix-git-index-")
+	if err != nil {
+		return "", fmt.Errorf("apply patch: create tmp index: %w", err)
+	}
+	indexPath := tmpIndex.Name()
+	tmpIndex.Close()
+	defer os.Remove(indexPath)
+
+	// Read the base tree into the temporary index.
+	readTreeCmd := exec.Command("git", "read-tree", baseHash.String())
+	readTreeCmd.Dir = path
+	readTreeCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+indexPath, "GIT_DIR="+path)
+	if out, err := readTreeCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("apply patch: read-tree: %w\n%s", err, string(out))
+	}
+
+	// Apply the patch to the temporary index.
+	applyCmd := exec.Command("git", "apply", "--cached")
+	applyCmd.Dir = path
+	applyCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+indexPath, "GIT_DIR="+path)
+	applyCmd.Stdin = strings.NewReader(patchText)
+	if out, err := applyCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("apply patch: git apply --cached: %w\n%s", err, string(out))
+	}
+
+	// Write the resulting tree.
+	writeTreeCmd := exec.Command("git", "write-tree")
+	writeTreeCmd.Dir = path
+	writeTreeCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+indexPath, "GIT_DIR="+path)
+	treeOut, err := writeTreeCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("apply patch: write-tree: %w", err)
+	}
+	treeHash := strings.TrimSpace(string(treeOut))
+
+	// Create the commit with commit-tree (reads message from stdin).
+	now := time.Now()
+	if author.When.IsZero() {
+		author.When = now
+	}
+	if committer.When.IsZero() {
+		committer.When = now
+	}
+
+	commitCmd := exec.Command("git", "commit-tree", treeHash,
+		"-p", baseHash.String(),
+	)
+	commitCmd.Dir = path
+	commitCmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME="+author.Name,
+		"GIT_AUTHOR_EMAIL="+author.Email,
+		"GIT_AUTHOR_DATE="+author.When.Format(time.RFC3339),
+		"GIT_COMMITTER_NAME="+committer.Name,
+		"GIT_COMMITTER_EMAIL="+committer.Email,
+		"GIT_COMMITTER_DATE="+committer.When.Format(time.RFC3339),
+		"GIT_DIR="+path,
+	)
+	commitCmd.Stdin = strings.NewReader(message)
+	commitOut, err := commitCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("apply patch: commit-tree: %w", err)
+	}
+	commitHash := strings.TrimSpace(string(commitOut))
+
+	// Update the branch ref.
+	parsedHash := plumbing.NewHash(commitHash)
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(branchRef, parsedHash)); err != nil {
+		return "", fmt.Errorf("apply patch: set ref: %w", err)
+	}
+
+	return commitHash, nil
 }
 

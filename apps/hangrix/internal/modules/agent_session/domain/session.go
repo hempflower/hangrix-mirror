@@ -51,6 +51,9 @@ const (
 	// CauseKindReviewVote — a reviewer voted approve / reject.
 	CauseKindReviewVote CauseKind = "review_vote"
 
+	// CauseKindPatchSubmitted — an agent submitted a patch to the issue.
+	CauseKindPatchSubmitted CauseKind = "patch_submitted"
+
 	// CauseKindManual — admin spawn path (smoke / debug tooling).
 	CauseKindManual CauseKind = "manual"
 )

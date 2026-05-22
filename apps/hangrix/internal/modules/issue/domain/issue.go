@@ -46,6 +46,18 @@ const (
 	// corresponding spawner trigger (review_vote.posted) so they wake
 	// when a vote lands.
 	EventReviewVote EventKind = "review_vote"
+
+	// EventPatchSubmitted fires when an agent submits a patch to the
+	// issue. Payload follows PatchEventPayload.
+	EventPatchSubmitted EventKind = "patch_submitted"
+
+	// EventPatchApplied fires when a maintainer applies a patch to the
+	// issue branch. Payload follows PatchEventPayload.
+	EventPatchApplied EventKind = "patch_applied"
+
+	// EventPatchRejected fires when a maintainer rejects a patch.
+	// Payload follows PatchEventPayload.
+	EventPatchRejected EventKind = "patch_rejected"
 )
 
 // ReviewVoteValue enumerates the three vote outcomes a reviewer (agent or
@@ -77,6 +89,16 @@ type ReviewVotePayload struct {
 	Value   ReviewVoteValue `json:"value"`
 	Reason  string          `json:"reason,omitempty"`
 	HeadSHA string          `json:"head_sha,omitempty"`
+}
+
+// PatchEventPayload is the JSON shape stored in Event.Payload for
+// EventPatchSubmitted, EventPatchApplied, and EventPatchRejected.
+type PatchEventPayload struct {
+	SubmissionID int64  `json:"submission_id"`
+	Title        string `json:"title,omitempty"`
+	AgentRole    string `json:"agent_role,omitempty"`
+	CommitSHA    string `json:"commit_sha,omitempty"` // set on patch_applied
+	Reason       string `json:"reason,omitempty"`      // set on patch_rejected
 }
 
 // ReviewVerdict summarises the collective review state for an issue.
@@ -516,6 +538,71 @@ type AttachmentUploadParams struct {
 type AttachmentUploader interface {
 	UploadAttachment(ctx context.Context, params *AttachmentUploadParams) (*Attachment, error)
 }
+
+
+	
+	// ---- patch submissions ----
+
+	// PatchStatus models the lifecycle of a patch submission.
+	// submitted: freshly submitted, awaiting review
+	// stale: base_head_sha no longer matches issue.head_sha
+	// applied: maintainer applied the patch to the issue branch
+	// rejected: maintainer rejected the patch
+	// superseded: a newer patch from the same role superseded this one
+	type PatchStatus string
+
+	const (
+		PatchStatusSubmitted   PatchStatus = "submitted"
+		PatchStatusStale       PatchStatus = "stale"
+		PatchStatusApplied     PatchStatus = "applied"
+		PatchStatusRejected    PatchStatus = "rejected"
+		PatchStatusSuperseded  PatchStatus = "superseded"
+	)
+
+	// PatchSubmission is a single patch contributed by an agent to an issue.
+	type PatchSubmission struct {
+		ID               int64
+		RepoID           int64
+		IssueID          int64
+		SessionID        int64
+		AgentRole        string
+		BaseHeadSHA      string
+		Title            string
+		Description      string
+		PatchText        string
+		ChangedPaths     []string
+		FileCount        int32
+		Additions        int32
+		Deletions        int32
+		Status           PatchStatus
+		AppliedCommitSHA string
+		AppliedAt        *time.Time
+		RejectedReason   string
+		CreatedAt        time.Time
+		UpdatedAt        time.Time
+	}
+
+	// PatchStore is the persistence abstraction for patch submissions.
+	type PatchStore interface {
+		CreatePatch(ctx context.Context, p *PatchSubmission) (*PatchSubmission, error)
+		GetPatch(ctx context.Context, id int64) (*PatchSubmission, error)
+		ListPatches(ctx context.Context, issueID int64) ([]*PatchSubmission, error)
+		UpdatePatchStatus(ctx context.Context, id int64, status PatchStatus, appliedCommitSHA, rejectedReason string) (*PatchSubmission, error)
+		// MarkStalePatches marks every submitted patch whose base_head_sha
+		// does not match the given newHeadSHA as stale. Returns the count
+		// of rows updated.
+		MarkStalePatches(ctx context.Context, issueID int64, newHeadSHA string) (int64, error)
+		// SupersedePatches marks every submitted patch from the given
+		// (issue_id, agent_role) as superseded. Called when a new patch is
+		// submitted by the same role.
+		SupersedePatches(ctx context.Context, issueID int64, agentRole string, exceptID int64) (int64, error)
+	}
+
+	var (
+		ErrPatchNotFound    = errors.New("patch submission not found")
+		ErrPatchNotApplied  = errors.New("patch is not in 'submitted' or is stale; cannot apply")
+		ErrPatchNotRejected = errors.New("patch is not in 'submitted' state; cannot reject")
+	)
 
 
 var (

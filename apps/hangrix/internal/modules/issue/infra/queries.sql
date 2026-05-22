@@ -253,3 +253,80 @@ UPDATE issue_attachments
 SET status = 'deleted', deleted_at = NOW()
 WHERE id = sqlc.arg('id') AND status <> 'deleted';
 
+
+-- ---- issue_patches ----
+
+-- name: CreatePatch :one
+INSERT INTO issue_patches (
+    repo_id, issue_id, session_id, agent_role, base_head_sha,
+    title, description, patch_text, changed_paths,
+    file_count, additions, deletions, status
+)
+VALUES (
+    sqlc.arg('repo_id'),
+    sqlc.arg('issue_id'),
+    sqlc.arg('session_id'),
+    sqlc.arg('agent_role'),
+    sqlc.arg('base_head_sha'),
+    sqlc.arg('title'),
+    sqlc.arg('description'),
+    sqlc.arg('patch_text'),
+    sqlc.arg('changed_paths'),
+    sqlc.arg('file_count'),
+    sqlc.arg('additions'),
+    sqlc.arg('deletions'),
+    sqlc.arg('status')
+)
+RETURNING id, created_at, updated_at;
+
+-- name: GetPatch :one
+SELECT id, repo_id, issue_id, session_id, agent_role,
+       base_head_sha, title, description, patch_text,
+       changed_paths, file_count, additions, deletions,
+       status, applied_commit_sha, applied_at, rejected_reason,
+       created_at, updated_at
+FROM issue_patches
+WHERE id = sqlc.arg('id');
+
+-- name: ListPatches :many
+SELECT id, repo_id, issue_id, session_id, agent_role,
+       base_head_sha, title, description, patch_text,
+       changed_paths, file_count, additions, deletions,
+       status, applied_commit_sha, applied_at, rejected_reason,
+       created_at, updated_at
+FROM issue_patches
+WHERE issue_id = sqlc.arg('issue_id')
+ORDER BY created_at DESC, id DESC;
+
+-- name: UpdatePatchStatus :one
+UPDATE issue_patches
+SET status = sqlc.arg('status'),
+    applied_commit_sha = CASE WHEN sqlc.arg('status') = 'applied'
+                              THEN sqlc.arg('applied_commit_sha')
+                              ELSE applied_commit_sha
+                         END,
+    applied_at = CASE WHEN sqlc.arg('status') = 'applied' THEN NOW() ELSE applied_at END,
+    rejected_reason = CASE WHEN sqlc.arg('status') = 'rejected'
+                           THEN sqlc.arg('rejected_reason')
+                           ELSE rejected_reason
+                      END,
+    updated_at = NOW()
+WHERE id = sqlc.arg('id')
+RETURNING repo_id, issue_id;
+
+-- name: MarkStalePatches :execrows
+UPDATE issue_patches
+SET status = 'stale', updated_at = NOW()
+WHERE issue_id = sqlc.arg('issue_id')
+  AND status = 'submitted'
+  AND base_head_sha <> sqlc.arg('new_head_sha');
+
+-- name: SupersedePatches :execrows
+UPDATE issue_patches
+SET status = 'superseded', updated_at = NOW()
+WHERE issue_id = sqlc.arg('issue_id')
+  AND agent_role = sqlc.arg('agent_role')
+  AND status = 'submitted'
+  AND id <> sqlc.arg('except_id');
+
+

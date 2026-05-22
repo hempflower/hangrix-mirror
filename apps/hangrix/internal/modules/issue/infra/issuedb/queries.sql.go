@@ -265,6 +265,75 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Creat
 	return i, err
 }
 
+const createPatch = `-- name: CreatePatch :one
+
+INSERT INTO issue_patches (
+    repo_id, issue_id, session_id, agent_role, base_head_sha,
+    title, description, patch_text, changed_paths,
+    file_count, additions, deletions, status
+)
+VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    $10,
+    $11,
+    $12,
+    $13
+)
+RETURNING id, created_at, updated_at
+`
+
+type CreatePatchParams struct {
+	RepoID       int64
+	IssueID      int64
+	SessionID    int64
+	AgentRole    string
+	BaseHeadSha  string
+	Title        string
+	Description  string
+	PatchText    string
+	ChangedPaths []string
+	FileCount    int32
+	Additions    int32
+	Deletions    int32
+	Status       string
+}
+
+type CreatePatchRow struct {
+	ID        int64
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
+// ---- issue_patches ----
+func (q *Queries) CreatePatch(ctx context.Context, arg CreatePatchParams) (CreatePatchRow, error) {
+	row := q.db.QueryRow(ctx, createPatch,
+		arg.RepoID,
+		arg.IssueID,
+		arg.SessionID,
+		arg.AgentRole,
+		arg.BaseHeadSha,
+		arg.Title,
+		arg.Description,
+		arg.PatchText,
+		arg.ChangedPaths,
+		arg.FileCount,
+		arg.Additions,
+		arg.Deletions,
+		arg.Status,
+	)
+	var i CreatePatchRow
+	err := row.Scan(&i.ID, &i.CreatedAt, &i.UpdatedAt)
+	return i, err
+}
+
 const getAttachment = `-- name: GetAttachment :one
 SELECT a.id, a.repo_id, a.issue_id,
        COALESCE(a.comment_id, 0)::BIGINT AS comment_id,
@@ -463,6 +532,43 @@ func (q *Queries) GetIssueByNumber(ctx context.Context, arg GetIssueByNumberPara
 		&i.MergedAt,
 		&i.ParentID,
 		&i.ParentNumber,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPatch = `-- name: GetPatch :one
+SELECT id, repo_id, issue_id, session_id, agent_role,
+       base_head_sha, title, description, patch_text,
+       changed_paths, file_count, additions, deletions,
+       status, applied_commit_sha, applied_at, rejected_reason,
+       created_at, updated_at
+FROM issue_patches
+WHERE id = $1
+`
+
+func (q *Queries) GetPatch(ctx context.Context, id int64) (IssuePatch, error) {
+	row := q.db.QueryRow(ctx, getPatch, id)
+	var i IssuePatch
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.IssueID,
+		&i.SessionID,
+		&i.AgentRole,
+		&i.BaseHeadSha,
+		&i.Title,
+		&i.Description,
+		&i.PatchText,
+		&i.ChangedPaths,
+		&i.FileCount,
+		&i.Additions,
+		&i.Deletions,
+		&i.Status,
+		&i.AppliedCommitSha,
+		&i.AppliedAt,
+		&i.RejectedReason,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -846,6 +952,57 @@ func (q *Queries) ListOpenIssueNumbers(ctx context.Context, repoID int64) ([]int
 	return items, nil
 }
 
+const listPatches = `-- name: ListPatches :many
+SELECT id, repo_id, issue_id, session_id, agent_role,
+       base_head_sha, title, description, patch_text,
+       changed_paths, file_count, additions, deletions,
+       status, applied_commit_sha, applied_at, rejected_reason,
+       created_at, updated_at
+FROM issue_patches
+WHERE issue_id = $1
+ORDER BY created_at DESC, id DESC
+`
+
+func (q *Queries) ListPatches(ctx context.Context, issueID int64) ([]IssuePatch, error) {
+	rows, err := q.db.Query(ctx, listPatches, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []IssuePatch{}
+	for rows.Next() {
+		var i IssuePatch
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepoID,
+			&i.IssueID,
+			&i.SessionID,
+			&i.AgentRole,
+			&i.BaseHeadSha,
+			&i.Title,
+			&i.Description,
+			&i.PatchText,
+			&i.ChangedPaths,
+			&i.FileCount,
+			&i.Additions,
+			&i.Deletions,
+			&i.Status,
+			&i.AppliedCommitSha,
+			&i.AppliedAt,
+			&i.RejectedReason,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markAttachmentAttached = `-- name: MarkAttachmentAttached :exec
 UPDATE issue_attachments
 SET status = 'attached', comment_id = $1
@@ -860,6 +1017,27 @@ type MarkAttachmentAttachedParams struct {
 func (q *Queries) MarkAttachmentAttached(ctx context.Context, arg MarkAttachmentAttachedParams) error {
 	_, err := q.db.Exec(ctx, markAttachmentAttached, arg.CommentID, arg.ID)
 	return err
+}
+
+const markStalePatches = `-- name: MarkStalePatches :execrows
+UPDATE issue_patches
+SET status = 'stale', updated_at = NOW()
+WHERE issue_id = $1
+  AND status = 'submitted'
+  AND base_head_sha <> $2
+`
+
+type MarkStalePatchesParams struct {
+	IssueID    int64
+	NewHeadSha string
+}
+
+func (q *Queries) MarkStalePatches(ctx context.Context, arg MarkStalePatchesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markStalePatches, arg.IssueID, arg.NewHeadSha)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const nextIssueNumber = `-- name: NextIssueNumber :one
@@ -891,6 +1069,29 @@ WHERE id = $1 AND status <> 'deleted'
 func (q *Queries) SoftDeleteAttachment(ctx context.Context, id int64) error {
 	_, err := q.db.Exec(ctx, softDeleteAttachment, id)
 	return err
+}
+
+const supersedePatches = `-- name: SupersedePatches :execrows
+UPDATE issue_patches
+SET status = 'superseded', updated_at = NOW()
+WHERE issue_id = $1
+  AND agent_role = $2
+  AND status = 'submitted'
+  AND id <> $3
+`
+
+type SupersedePatchesParams struct {
+	IssueID   int64
+	AgentRole string
+	ExceptID  int64
+}
+
+func (q *Queries) SupersedePatches(ctx context.Context, arg SupersedePatchesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, supersedePatches, arg.IssueID, arg.AgentRole, arg.ExceptID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateIssueHeadSHA = `-- name: UpdateIssueHeadSHA :exec
@@ -964,5 +1165,46 @@ func (q *Queries) UpdateIssueTitleBody(ctx context.Context, arg UpdateIssueTitle
 	row := q.db.QueryRow(ctx, updateIssueTitleBody, arg.Title, arg.Body, arg.ID)
 	var i UpdateIssueTitleBodyRow
 	err := row.Scan(&i.RepoID, &i.Number)
+	return i, err
+}
+
+const updatePatchStatus = `-- name: UpdatePatchStatus :one
+UPDATE issue_patches
+SET status = $1,
+    applied_commit_sha = CASE WHEN $1 = 'applied'
+                              THEN $2
+                              ELSE applied_commit_sha
+                         END,
+    applied_at = CASE WHEN $1 = 'applied' THEN NOW() ELSE applied_at END,
+    rejected_reason = CASE WHEN $1 = 'rejected'
+                           THEN $3
+                           ELSE rejected_reason
+                      END,
+    updated_at = NOW()
+WHERE id = $4
+RETURNING repo_id, issue_id
+`
+
+type UpdatePatchStatusParams struct {
+	Status           string
+	AppliedCommitSha pgtype.Text
+	RejectedReason   pgtype.Text
+	ID               int64
+}
+
+type UpdatePatchStatusRow struct {
+	RepoID  int64
+	IssueID int64
+}
+
+func (q *Queries) UpdatePatchStatus(ctx context.Context, arg UpdatePatchStatusParams) (UpdatePatchStatusRow, error) {
+	row := q.db.QueryRow(ctx, updatePatchStatus,
+		arg.Status,
+		arg.AppliedCommitSha,
+		arg.RejectedReason,
+		arg.ID,
+	)
+	var i UpdatePatchStatusRow
+	err := row.Scan(&i.RepoID, &i.IssueID)
 	return i, err
 }

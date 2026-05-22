@@ -43,6 +43,7 @@ import (
 
 type Handler struct {
 	issues      domain.Store
+	patches     domain.PatchStore
 	repos       repodomain.Store
 	storage     *repoinfra.Storage
 	git         gitdomain.Git
@@ -67,6 +68,7 @@ type Handler struct {
 
 type HandlerDeps struct {
 	Issues      domain.Store
+	Patches     domain.PatchStore
 	Repos       repodomain.Store
 	Storage     *repoinfra.Storage
 	Git         gitdomain.Git
@@ -97,6 +99,7 @@ type HandlerDeps struct {
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
 		issues:     deps.Issues,
+		patches:    deps.Patches,
 		repos:      deps.Repos,
 		storage:    deps.Storage,
 		git:        deps.Git,
@@ -150,6 +153,10 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Post("/{number}/agent-sessions/{sid}/stop", h.stopAgentSession)
 		r.Post("/{number}/agent-sessions/{sid}/resume", h.resumeAgentSession)
 		r.Delete("/{number}/agent-sessions/{sid}", h.deleteAgentSession)
+
+		// Patch submissions (patch-first contribution model, issue #102).
+		r.Get("/{number}/patches", h.listPatches)
+		r.Get("/{number}/patches/{patchID}", h.getPatch)
 	})
 	// Mention-suggestion list: the comment editor reads this once per
 	// issue page load to populate the `@` autocomplete dropdown with
@@ -1223,3 +1230,104 @@ func parseInt32(raw string, def int32) int32 {
 	}
 	return int32(n)
 }
+
+
+// --- patch handlers ---
+
+type publicPatch struct {
+	ID               int64      `json:"id"`
+	IssueID          int64      `json:"issue_id"`
+	SessionID        int64      `json:"session_id"`
+	AgentRole        string     `json:"agent_role"`
+	BaseHeadSHA      string     `json:"base_head_sha"`
+	Title            string     `json:"title"`
+	Description      string     `json:"description"`
+	PatchText        string     `json:"patch_text,omitempty"`
+	ChangedPaths     []string   `json:"changed_paths"`
+	FileCount        int32      `json:"file_count"`
+	Additions        int32      `json:"additions"`
+	Deletions        int32      `json:"deletions"`
+	Status           string     `json:"status"`
+	AppliedCommitSHA string     `json:"applied_commit_sha,omitempty"`
+	AppliedAt        *time.Time `json:"applied_at,omitempty"`
+	RejectedReason   string     `json:"rejected_reason,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+func toPublicPatch(p *domain.PatchSubmission) publicPatch {
+	return publicPatch{
+		ID:               p.ID,
+		IssueID:          p.IssueID,
+		SessionID:        p.SessionID,
+		AgentRole:        p.AgentRole,
+		BaseHeadSHA:      p.BaseHeadSHA,
+		Title:            p.Title,
+		Description:      p.Description,
+		ChangedPaths:     p.ChangedPaths,
+		FileCount:        p.FileCount,
+		Additions:        p.Additions,
+		Deletions:        p.Deletions,
+		Status:           string(p.Status),
+		AppliedCommitSHA: p.AppliedCommitSHA,
+		AppliedAt:        p.AppliedAt,
+		RejectedReason:   p.RejectedReason,
+		CreatedAt:        p.CreatedAt,
+		UpdatedAt:        p.UpdatedAt,
+	}
+}
+
+func (h *Handler) listPatches(w http.ResponseWriter, r *http.Request) {
+	rc, ok := h.resolveRepo(w, r)
+	if !ok {
+		return
+	}
+	iss, ok := h.loadIssue(w, r, rc.repo.ID)
+	if !ok {
+		return
+	}
+	patches, err := h.patches.ListPatches(r.Context(), iss.ID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	items := make([]publicPatch, 0, len(patches))
+	for _, p := range patches {
+		items = append(items, toPublicPatch(p))
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"patches": items})
+}
+
+func (h *Handler) getPatch(w http.ResponseWriter, r *http.Request) {
+	rc, ok := h.resolveRepo(w, r)
+	if !ok {
+		return
+	}
+	iss, ok := h.loadIssue(w, r, rc.repo.ID)
+	if !ok {
+		return
+	}
+	rawID := chi.URLParam(r, "patchID")
+	patchID, err := strconv.ParseInt(rawID, 10, 64)
+	if err != nil || patchID <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid patch id")
+		return
+	}
+	patch, err := h.patches.GetPatch(r.Context(), patchID)
+	if err != nil {
+		if errors.Is(err, domain.ErrPatchNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "patch not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if patch.IssueID != iss.ID {
+		httpx.WriteError(w, http.StatusNotFound, "patch not found")
+		return
+	}
+	pub := toPublicPatch(patch)
+	pub.PatchText = patch.PatchText // include full diff on detail
+	httpx.WriteJSON(w, http.StatusOK, pub)
+}
+

@@ -64,11 +64,14 @@ func (g *gitCaller) hasWriteScope() bool {
 		}
 		return g.token.HasScope(tokendomain.ScopeRepoWrite)
 	case "session":
-		// Session tokens are the agent's identity for everything the
-		// platform exposes — including git push. Per-repo scoping is
-		// enforced via canAccessRepo (session.RepoID match) rather
-		// than a scope flag.
-		return true
+		// Agent sessions no longer have direct git write access
+		// (issue #102: patch-first contribution model). Agents
+		// submit patches via the platform MCP tools; only the
+		// maintainer (human or agent with issue_patch_apply) can
+		// advance the issue branch. Per-repo scoping is enforced
+		// via canAccessRepo for read operations, but write is
+		// blocked here regardless.
+		return false
 	}
 	// Cookie and password sessions are equivalent to "full user".
 	return true

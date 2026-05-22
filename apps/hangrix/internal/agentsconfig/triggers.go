@@ -38,6 +38,12 @@ const (
 	// (queued → running → green/red). Maintainer uses this to gate
 	// auto-merge.
 	TriggerCIStatusChanged Trigger = "ci.status_changed"
+
+	// TriggerPatchSubmitted fires when an agent submits a patch to the
+	// issue. Reviewer / tester / maintainer roles consume this. The
+	// role's TriggerSpec accepts `paths` / `paths_ignore` glob lists
+	// (same PushFilter) to narrow which patches wake it.
+	TriggerPatchSubmitted Trigger = "patch.submitted"
 )
 
 // validTriggers is consulted by the parser; map lookup keeps the check
@@ -49,6 +55,7 @@ var validTriggers = map[Trigger]struct{}{
 	TriggerCommitPushed:     {},
 	TriggerReviewVotePosted: {},
 	TriggerCIStatusChanged:  {},
+	TriggerPatchSubmitted:   {},
 }
 
 // IsValidTrigger reports whether s is a platform-recognised event name.
@@ -95,13 +102,13 @@ type CommentFilter struct {
 	FromUsers []string
 }
 
-// PushFilter narrows which pushes wake a role subscribed to
-// `commit.pushed`. Semantics mirror GitHub Actions:
+// PushFilter narrows which pushes / patches wake a role subscribed to
+// `commit.pushed` or `patch.submitted`. Semantics mirror GitHub Actions:
 //
-//   - Paths: push matches if at least one changed file matches at
+//   - Paths: push/patch matches if at least one changed file matches at
 //     least one pattern in Paths. Empty = no include gate.
-//   - PathsIgnore: push matches if at least one changed file is NOT
-//     covered by any pattern in PathsIgnore (a push where every file
+//   - PathsIgnore: push/patch matches if at least one changed file is NOT
+//     covered by any pattern in PathsIgnore (a push/patch where every file
 //     is ignored is skipped). Empty = no ignore gate.
 //
 // When both are set, both gates must pass.

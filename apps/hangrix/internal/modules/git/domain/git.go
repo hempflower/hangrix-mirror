@@ -165,6 +165,14 @@ type Git interface {
 	// This is the shared pre-flight check used by both issue_mergeable
 	// and issue_merge.
 	CheckAutoMerge(path, baseRef, headRef string) (mergeable bool, mode string, hint string, err error)
+
+	// ApplyPatch applies a unified diff patchText onto branch at path,
+	// creating a new commit with the given message. The author identifies
+	// the original patch submitter; the committer identifies who is
+	// applying it. Returns the new commit SHA. Fails if the patch does not
+	// apply cleanly (the underlying git apply would reject it) or the
+	// branch cannot be resolved.
+	ApplyPatch(path, branch, patchText, message string, author, committer Signature) (sha string, err error)
 }
 
 // JSON tags are intentionally on these domain types because the repo handler
