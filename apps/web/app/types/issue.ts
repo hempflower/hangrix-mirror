@@ -159,14 +159,14 @@ export type PatchStatus = 'submitted' | 'stale' | 'applied' | 'rejected' | 'supe
 
 export interface IssuePatchSubmission {
   id: number
-  repo_id: number
   issue_id: number
   session_id: number
   agent_role: string
   base_head_sha: string
   title: string
   description: string
-  patch_text: string
+  // patch_text is only present on the detail endpoint; omitted from list.
+  patch_text?: string
   changed_paths: string[]
   file_count: number
   additions: number
@@ -177,7 +177,7 @@ export interface IssuePatchSubmission {
   rejected_reason: string
   created_at: string
   updated_at: string
-  // Server-parsed per-file diffs for rendering (available on detail endpoint)
+  // Per-file diffs parsed client-side from patch_text for FileDiffList rendering.
   files?: import('~/types/repo').FileDiff[]
 }
 

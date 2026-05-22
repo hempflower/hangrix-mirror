@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import FileDiffList from '@/components/repo/FileDiffList.vue'
 import type { IssuePatchSubmission, PatchStatus } from '~/types/issue'
+import { parseUnifiedDiffToFileDiffs } from '~/utils/patch'
 import { relativeTime } from '~/utils/time'
 
 const props = defineProps<{
@@ -59,11 +60,11 @@ const selected = computed(() =>
 async function loadPatches() {
   listError.value = null
   try {
-    const data = await $fetch<IssuePatchSubmission[]>(
+    const data = await $fetch<{ patches: IssuePatchSubmission[] }>(
       `/api/repos/${props.owner}/${props.name}/issues/${props.issueNumber}/patches`,
       { credentials: 'include' },
     )
-    patches.value = data ?? []
+    patches.value = data?.patches ?? []
     // auto-select first if nothing selected or selected patch disappeared
     if (selectedId.value && !patches.value.find((p) => p.id === selectedId.value)) {
       selectedId.value = null
@@ -87,6 +88,11 @@ async function loadDetail(id: number) {
       `/api/repos/${props.owner}/${props.name}/issues/${props.issueNumber}/patches/${id}`,
       { credentials: 'include' },
     )
+    // The server returns patch_text — a raw unified diff. Parse it into
+    // per-file FileDiff objects so FileDiffList can render them.
+    if (data.patch_text) {
+      data.files = parseUnifiedDiffToFileDiffs(data.patch_text)
+    }
     selectedDetail.value = data
   } catch (e: any) {
     detailError.value = e?.data?.error ?? t('issue.patches.detailLoadFailed')
