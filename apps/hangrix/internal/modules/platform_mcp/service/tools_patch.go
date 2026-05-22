@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -78,7 +79,11 @@ func (r *Registry) issuePatchSubmitTool() *platformmcpdomain.Tool {
 			var totalAdditions, totalDeletions, totalFileCount int32
 
 			for i, path := range req.PatchPaths {
-				data, err := os.ReadFile(path)
+				resolved, err := resolveWorkspacePath(scope.fsPath, path)
+				if err != nil {
+					return errorResult(fmt.Sprintf("invalid patch_paths[%d] %q: %v", i, path, err)), nil
+				}
+				data, err := os.ReadFile(resolved)
 				if err != nil {
 					return errorResult(fmt.Sprintf("cannot read patch_paths[%d] %q: %v", i, path, err)), nil
 				}
@@ -660,6 +665,27 @@ func parsePatchStats(patch string) (paths []string, fileCount, additions, deleti
 	fileCount = int32(len(paths))
 	return
 }
+
+// resolveWorkspacePath validates that the given path is a workspace-relative
+// path (not absolute) and resolves it to an absolute path anchored to the
+// workspace root. Returns an error if the path is absolute, attempts to
+// escape the workspace root via "..", or cannot be resolved.
+func resolveWorkspacePath(workspaceRoot, p string) (string, error) {
+	p = filepath.Clean(p)
+	if filepath.IsAbs(p) {
+		return "", fmt.Errorf("absolute paths are not allowed")
+	}
+	resolved := filepath.Join(workspaceRoot, p)
+	// filepath.Join + Clean handles ".." but we double-check we're still
+	// inside the workspace root (no symlink traversal here; symlinks
+	// require platform-level controls or os.Readdir).
+	rel, err := filepath.Rel(workspaceRoot, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes workspace root")
+	}
+	return resolved, nil
+}
+
 
 func patchSummary(p *issuedomain.PatchSubmission) map[string]any {
 	return map[string]any{

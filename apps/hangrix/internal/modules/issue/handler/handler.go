@@ -1255,7 +1255,7 @@ type publicPatch struct {
 	AppliedAt        *time.Time       `json:"applied_at,omitempty"`
 	RejectedReason   string           `json:"rejected_reason,omitempty"`
 	ApplyError       string           `json:"apply_error,omitempty"`
-	Files            []publicPatchFile `json:"files,omitempty"`
+	Patches          []publicPatchFile `json:"patches,omitempty"`
 	CreatedAt        time.Time        `json:"created_at"`
 	UpdatedAt        time.Time        `json:"updated_at"`
 }
@@ -1343,9 +1343,9 @@ func (h *Handler) getPatch(w http.ResponseWriter, r *http.Request) {
 	pub := toPublicPatch(patch)
 	// Include the patch file series on detail view.
 	if patchFiles, err := h.patches.GetPatchFiles(r.Context(), patch.ID); err == nil {
-		pub.Files = make([]publicPatchFile, len(patchFiles))
+		pub.Patches = make([]publicPatchFile, len(patchFiles))
 		for i, pf := range patchFiles {
-			pub.Files[i] = publicPatchFile{
+			pub.Patches[i] = publicPatchFile{
 				Seq:       pf.Seq,
 				FileName:  pf.FileName,
 				PatchText: pf.PatchText,
