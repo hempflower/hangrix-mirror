@@ -49,6 +49,9 @@ export type IssueEventKind =
   | 'state_changed'
   | 'title_changed'
   | 'review_vote'
+  | 'patch_submitted'
+  | 'patch_applied'
+  | 'patch_rejected'
 
 export interface IssueEvent {
   id: number
@@ -148,6 +151,54 @@ export interface StateChangedPayload {
 export interface TitleChangedPayload {
   from: string
   to: string
+}
+
+// --- Patch Submissions ---
+
+export type PatchStatus = 'submitted' | 'stale' | 'applied' | 'rejected' | 'superseded'
+
+export interface IssuePatchSubmission {
+  id: number
+  repo_id: number
+  issue_id: number
+  session_id: number
+  agent_role: string
+  base_head_sha: string
+  title: string
+  description: string
+  patch_text: string
+  changed_paths: string[]
+  file_count: number
+  additions: number
+  deletions: number
+  status: PatchStatus
+  applied_commit_sha: string
+  applied_at: string | null
+  rejected_reason: string
+  created_at: string
+  updated_at: string
+  // Server-parsed per-file diffs for rendering (available on detail endpoint)
+  files?: import('~/types/repo').FileDiff[]
+}
+
+export interface PatchSubmittedPayload {
+  submission_id: number
+  title: string
+  base_head_sha: string
+  changed_paths: string[]
+  file_count: number
+  additions: number
+  deletions: number
+}
+
+export interface PatchAppliedPayload {
+  submission_id: number
+  commit_sha: string
+}
+
+export interface PatchRejectedPayload {
+  submission_id: number
+  reason: string
 }
 
 export interface IssueAttachment {

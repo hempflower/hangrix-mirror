@@ -790,6 +790,7 @@
       "conversation": "Conversation",
       "commits": "Commits",
       "diff": "Diff",
+      "patches": "Patches",
       "agents": "Agents"
     },
     "commitsEmpty": "No commits yet. Push to {branch} to introduce changes.",
@@ -871,6 +872,45 @@
       "unknown": "Unknown attachment #{id}",
       "insertBtn": "Attach",
       "download": "Download"
+    },
+    "patches": {
+      "title": "Patches",
+      "empty": "No patches submitted yet.",
+      "emptyHint": "Agent workers submit patches instead of pushing directly. Each patch represents a single contribution that can be reviewed independently.",
+      "listLoadFailed": "Failed to load patches",
+      "detailLoadFailed": "Failed to load patch detail",
+      "detailNotFound": "Patch not found",
+      "apply": "Apply",
+      "applying": "Applying…",
+      "applyFailed": "Apply failed",
+      "applyOk": "Patch applied as commit {sha}",
+      "reject": "Reject",
+      "rejecting": "Rejecting…",
+      "rejectFailed": "Reject failed",
+      "rejected": "Patch rejected",
+      "rejectReason": "Reason for rejection",
+      "rejectReasonPlaceholder": "Explain why this patch cannot be applied…",
+      "rejectSubmit": "Reject patch",
+      "confirmApply": "Apply patch \"{title}\" to {branch}?",
+      "confirmReject": "Reject patch \"{title}\"?",
+      "status": {
+        "submitted": "Submitted",
+        "stale": "Stale",
+        "applied": "Applied",
+        "rejected": "Rejected",
+        "superseded": "Superseded"
+      },
+      "staleWarning": "This patch is stale — its base ({baseSha}) no longer matches the current issue head ({headSha}). It must be regenerated before it can be applied.",
+      "stats": "{files} files, +{additions} −{deletions}",
+      "basedOn": "Based on {sha}",
+      "submittedBy": "Submitted by {role}",
+      "description": "Description",
+      "noDescription": "No description provided.",
+      "timeline": {
+        "patchSubmitted": "{name} submitted a patch: {title}",
+        "patchApplied": "{name} applied patch \"{title}\" → commit {sha}",
+        "patchRejected": "{name} rejected patch \"{title}\" — {reason}"
+      }
     }
   },
   "release": {

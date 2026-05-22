@@ -790,6 +790,7 @@
       "conversation": "对话",
       "commits": "提交",
       "diff": "Diff",
+      "patches": "补丁",
       "agents": "智能体"
     },
     "commitsEmpty": "暂无提交。推送到 {branch} 来引入变更。",
@@ -871,6 +872,45 @@
       "unknown": "未知附件 #{id}",
       "insertBtn": "附件",
       "download": "下载"
+    },
+    "patches": {
+      "title": "补丁",
+      "empty": "暂无补丁提交。",
+      "emptyHint": "Agent 工作进程通过提交补丁来贡献代码，而不是直接推送。每个补丁代表一个可独立审查的贡献。",
+      "listLoadFailed": "加载补丁列表失败",
+      "detailLoadFailed": "加载补丁详情失败",
+      "detailNotFound": "补丁未找到",
+      "apply": "应用",
+      "applying": "应用中…",
+      "applyFailed": "应用失败",
+      "applyOk": "补丁已应用，提交 {sha}",
+      "reject": "拒绝",
+      "rejecting": "拒绝中…",
+      "rejectFailed": "拒绝失败",
+      "rejected": "补丁已被拒绝",
+      "rejectReason": "拒绝原因",
+      "rejectReasonPlaceholder": "请说明为什么不能应用此补丁…",
+      "rejectSubmit": "拒绝补丁",
+      "confirmApply": "确定将补丁「{title}」应用到 {branch}？",
+      "confirmReject": "确定拒绝补丁「{title}」？",
+      "status": {
+        "submitted": "已提交",
+        "stale": "已过期",
+        "applied": "已应用",
+        "rejected": "已拒绝",
+        "superseded": "已取代"
+      },
+      "staleWarning": "此补丁已过期 —— 其基线（{baseSha}）与当前 issue 最新提交（{headSha}）不一致。需要重新生成后才能应用。",
+      "stats": "{files} 个文件，+{additions} −{deletions}",
+      "basedOn": "基于 {sha}",
+      "submittedBy": "由 {role} 提交",
+      "description": "描述",
+      "noDescription": "暂无描述。",
+      "timeline": {
+        "patchSubmitted": "{name} 提交了一个补丁：{title}",
+        "patchApplied": "{name} 应用了补丁「{title}」→ 提交 {sha}",
+        "patchRejected": "{name} 拒绝了补丁「{title}」—— {reason}"
+      }
     }
   },
   "release": {
