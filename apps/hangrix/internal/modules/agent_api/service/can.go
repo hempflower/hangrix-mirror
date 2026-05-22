@@ -1,5 +1,5 @@
-// Package service implements the platform MCP tool surface. Each tool
-// is a small constructor returning *platformmcpdomain.Tool, bound to
+// Package service implements the agent HTTP API tool surface. Each tool
+// is a small constructor returning *agentapidomain.Tool, bound to
 // the domain.ToolProvider interface in module.go. The handler picks
 // them all up via the []ToolProvider slice dep.
 //

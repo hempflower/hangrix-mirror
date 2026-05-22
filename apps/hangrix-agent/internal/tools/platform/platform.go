@@ -10,7 +10,7 @@
 // as a 400 / 404 on the first call — not silent.
 //
 // Wire shape (one endpoint per tool, see
-// apps/hangrix/internal/modules/platform_mcp/handler/handler.go):
+// apps/hangrix/internal/modules/agent_api/handler/handler.go):
 //
 //	POST <base>/<tool-name>
 //	Authorization: Bearer hgxs_…
@@ -373,12 +373,106 @@ func (t *attachmentTool) Call(ctx context.Context, args json.RawMessage) (any, e
 	return text, nil
 }
 
+// maxPatchSeriesBytes bounds the combined size of every .patch file in a
+// single issue_patch_submit. The patch text travels inside the JSON
+// request body, so this must stay within the server's per-call body
+// budget for the patch-submit route (see maxPatchSubmitBody in the
+// platform handler).
+const maxPatchSeriesBytes = 16 << 20
+
+// patchSubmitTool reads the .patch files named in `patch_paths` from the
+// local workspace and submits their *contents* to the server, exactly as
+// attachmentTool does for uploads. The server is a separate process with
+// no access to the agent's working tree — handing it bare workspace paths
+// (the old behaviour) made it read from its own canonical repo storage,
+// where the agent's git-format-patch output does not exist. Reading the
+// files agent-side and shipping the bytes is the only correct split.
+//
+// The LLM-facing descriptor still takes `patch_paths`; the path→content
+// transform is invisible to the model.
+type patchSubmitTool struct {
+	name        string
+	description string
+	schema      map[string]any
+	client      *Client
+}
+
+func (t *patchSubmitTool) Name() string           { return t.name }
+func (t *patchSubmitTool) Description() string    { return t.description }
+func (t *patchSubmitTool) Schema() map[string]any { return t.schema }
+
+func (t *patchSubmitTool) Call(ctx context.Context, args json.RawMessage) (any, error) {
+	var req struct {
+		Title       string   `json:"title"`
+		Description string   `json:"description"`
+		BaseHeadSHA string   `json:"base_head_sha"`
+		PatchPaths  []string `json:"patch_paths"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, fmt.Errorf("issue_patch_submit: parse arguments: %w. Pass a JSON object with title, description, base_head_sha, and patch_paths.", err)
+	}
+	if len(req.PatchPaths) == 0 {
+		return nil, fmt.Errorf("issue_patch_submit: patch_paths is required and must list at least one .patch file (generate them with `git format-patch`).")
+	}
+
+	type patchFile struct {
+		FileName  string `json:"file_name"`
+		PatchText string `json:"patch_text"`
+	}
+	patches := make([]patchFile, 0, len(req.PatchPaths))
+	var total int
+	for i, p := range req.PatchPaths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return nil, fmt.Errorf("issue_patch_submit: patch_paths[%d] is empty.", i)
+		}
+		safePath, err := resolveWorkspacePath(p)
+		if err != nil {
+			return nil, fmt.Errorf("issue_patch_submit: %w. Only files inside the workspace can be submitted.", err)
+		}
+		data, err := os.ReadFile(safePath)
+		if err != nil {
+			return nil, fmt.Errorf("issue_patch_submit: cannot read patch_paths[%d] %q: %w. Check that the path exists in the workspace.", i, p, err)
+		}
+		total += len(data)
+		if total > maxPatchSeriesBytes {
+			return nil, fmt.Errorf("issue_patch_submit: patch series exceeds the %d MiB limit. Split the work into a smaller series.", maxPatchSeriesBytes>>20)
+		}
+		// Preserve the workspace-relative path as the file name so the
+		// server-side display (file_name / source_path) is unchanged.
+		patches = append(patches, patchFile{FileName: p, PatchText: string(data)})
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"title":         req.Title,
+		"description":   req.Description,
+		"base_head_sha": req.BaseHeadSHA,
+		"patches":       patches,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("issue_patch_submit: encode request: %w", err)
+	}
+
+	text, isError, err := t.client.Call(ctx, t.name, payload)
+	if err != nil {
+		return nil, err
+	}
+	if isError {
+		return map[string]any{"is_error": true, "text": text}, nil
+	}
+	var parsed any
+	if err := json.Unmarshal([]byte(text), &parsed); err == nil {
+		return parsed, nil
+	}
+	return text, nil
+}
+
 // All returns every platform tool the agent ships with, bound to the
 // supplied HTTP client. Order matters for catalogue stability — keep
 // read-only tools first then mutating ones, mirroring the order the
 // MCP server used to declare them.
 //
-// Schemas duplicate apps/hangrix/internal/modules/platform_mcp/service/
+// Schemas duplicate apps/hangrix/internal/modules/agent_api/service/
 // tools_{read,write}.go. The duplication is bounded (one block per
 // tool, ~10 lines each) and the cost — drift surfaces as a 4xx on
 // the first real call — is fine for v1. A future "fetch catalogue at
@@ -592,14 +686,22 @@ func All(client *Client) []local.Tool {
 	}
 	out := make([]local.Tool, 0, len(descriptors))
 	for _, d := range descriptors {
-		if d.name == "issue_attachment_upload" {
+		switch d.name {
+		case "issue_attachment_upload":
 			out = append(out, &attachmentTool{
 				name:        d.name,
 				description: d.description,
 				schema:      d.schema,
 				client:      client,
 			})
-		} else {
+		case "issue_patch_submit":
+			out = append(out, &patchSubmitTool{
+				name:        d.name,
+				description: d.description,
+				schema:      d.schema,
+				client:      client,
+			})
+		default:
 			out = append(out, &Tool{
 				name:        d.name,
 				description: d.description,

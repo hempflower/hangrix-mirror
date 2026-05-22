@@ -184,7 +184,7 @@ func (s *AttachmentService) Upload(
 }
 
 // UploadAttachment fulfills domain.AttachmentUploader. It accepts raw
-// file bytes (sent by the platform_mcp tool after decoding base64 from
+// file bytes (sent by the agent_api tool after decoding base64 from
 // the agent) together with metadata, validates the extension and size,
 // computes SHA256, writes the file to disk, and creates the DB row.
 // authorID is always 0 — agent uploads have no user author.

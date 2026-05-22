@@ -11,7 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	platformmcpdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_mcp/domain"
+	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
 
@@ -30,10 +30,10 @@ func (s *stubValidator) ValidateSessionToken(_ context.Context, token string) (*
 }
 
 type stubRegistry struct {
-	tools []*platformmcpdomain.Tool
+	tools []*agentapidomain.Tool
 }
 
-func (s *stubRegistry) ByName(name string) *platformmcpdomain.Tool {
+func (s *stubRegistry) ByName(name string) *agentapidomain.Tool {
 	for _, t := range s.tools {
 		if t.Name == name {
 			return t
@@ -42,16 +42,16 @@ func (s *stubRegistry) ByName(name string) *platformmcpdomain.Tool {
 	return nil
 }
 
-func (s *stubRegistry) FilterForSession(_ *runnerdomain.AgentSession) []*platformmcpdomain.Tool {
-	out := make([]*platformmcpdomain.Tool, 0, len(s.tools))
+func (s *stubRegistry) FilterForSession(_ *runnerdomain.AgentSession) []*agentapidomain.Tool {
+	out := make([]*agentapidomain.Tool, 0, len(s.tools))
 	for _, t := range s.tools {
 		out = append(out, t)
 	}
 	return out
 }
 
-func (s *stubRegistry) UploadAttachment(_ context.Context, _ *runnerdomain.AgentSession, _ []byte, _, _ string, _ bool, _ int64) (platformmcpdomain.Result, error) {
-	return platformmcpdomain.Result{Text: `{"uploaded":true}`}, nil
+func (s *stubRegistry) UploadAttachment(_ context.Context, _ *runnerdomain.AgentSession, _ []byte, _, _ string, _ bool, _ int64) (agentapidomain.Result, error) {
+	return agentapidomain.Result{Text: `{"uploaded":true}`}, nil
 }
 
 func newTestRouter(h *Handler) http.Handler {
@@ -60,7 +60,7 @@ func newTestRouter(h *Handler) http.Handler {
 	return r
 }
 
-func newTestHandler(tools []*platformmcpdomain.Tool, canList []string) (*Handler, *runnerdomain.AgentSession) {
+func newTestHandler(tools []*agentapidomain.Tool, canList []string) (*Handler, *runnerdomain.AgentSession) {
 	roleCfg, _ := json.Marshal(map[string]any{"can": canList})
 	sess := &runnerdomain.AgentSession{
 		ID:         42,
@@ -105,12 +105,12 @@ func TestCallRejectsInvalidToken(t *testing.T) {
 }
 
 func TestListReturnsRegistry(t *testing.T) {
-	tool := &platformmcpdomain.Tool{
+	tool := &agentapidomain.Tool{
 		Name:        "issue_read",
 		Description: "read issue",
 		InputSchema: map[string]any{"type": "object"},
 	}
-	h, _ := newTestHandler([]*platformmcpdomain.Tool{tool}, []string{"issue_read"})
+	h, _ := newTestHandler([]*agentapidomain.Tool{tool}, []string{"issue_read"})
 	req := httptest.NewRequest(http.MethodGet, "/api/agent/tools/", nil)
 	req.Header.Set("Authorization", "Bearer hgxs_TESTTEST_secretsecretsecretsecretsecre")
 	rr := httptest.NewRecorder()
@@ -131,16 +131,16 @@ func TestListReturnsRegistry(t *testing.T) {
 
 func TestCallDispatchesToImpl(t *testing.T) {
 	called := false
-	echoTool := &platformmcpdomain.Tool{
+	echoTool := &agentapidomain.Tool{
 		Name:        "issue_comment",
 		Description: "post",
 		InputSchema: map[string]any{"type": "object"},
-		Call: func(_ context.Context, _ *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
+		Call: func(_ context.Context, _ *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
 			called = true
-			return platformmcpdomain.Result{Text: `{"echoed":` + string(args) + `}`}, nil
+			return agentapidomain.Result{Text: `{"echoed":` + string(args) + `}`}, nil
 		},
 	}
-	h, _ := newTestHandler([]*platformmcpdomain.Tool{echoTool}, []string{"issue_comment"})
+	h, _ := newTestHandler([]*agentapidomain.Tool{echoTool}, []string{"issue_comment"})
 	rr := postCall(t, newTestRouter(h), "issue_comment", map[string]any{"body": "hello"}, "hgxs_TESTTEST_secretsecretsecretsecretsecre")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("got status %d, want 200, body=%s", rr.Code, rr.Body.String())
@@ -161,18 +161,18 @@ func TestCallDispatchesToImpl(t *testing.T) {
 }
 
 func TestCallDeniedByRoleCanList(t *testing.T) {
-	mergeTool := &platformmcpdomain.Tool{
+	mergeTool := &agentapidomain.Tool{
 		Name:        "issue_merge",
 		Description: "merge",
 		InputSchema: map[string]any{"type": "object"},
-		Call: func(_ context.Context, _ *runnerdomain.AgentSession, _ json.RawMessage) (platformmcpdomain.Result, error) {
+		Call: func(_ context.Context, _ *runnerdomain.AgentSession, _ json.RawMessage) (agentapidomain.Result, error) {
 			t.Fatalf("issue_merge should not have been invoked")
-			return platformmcpdomain.Result{}, nil
+			return agentapidomain.Result{}, nil
 		},
 	}
 	// Role only grants issue_read — issue_merge must be rejected by the
 	// per-role ACL even though it lives in the registry.
-	h, _ := newTestHandler([]*platformmcpdomain.Tool{mergeTool}, []string{"issue_read"})
+	h, _ := newTestHandler([]*agentapidomain.Tool{mergeTool}, []string{"issue_read"})
 	rr := postCall(t, newTestRouter(h), "issue_merge", map[string]any{}, "hgxs_TESTTEST_secretsecretsecretsecretsecre")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("got status %d, want 200 (soft errors come back as is_error)", rr.Code)

@@ -12,7 +12,7 @@ import (
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
-	platformmcpdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_mcp/domain"
+	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
@@ -22,8 +22,8 @@ import (
 // agent_role carries the role key from the session's snapshot. Mentions
 // inside the body fan out the same way human comments do — re-using the
 // spawner pipeline so the wakeup behaviour is identical.
-func (r *Registry) issueCommentTool() *platformmcpdomain.Tool {
-	return &platformmcpdomain.Tool{
+func (r *Registry) issueCommentTool() *agentapidomain.Tool {
+	return &agentapidomain.Tool{
 		Name:        "issue_comment",
 		Description: "Post a comment on the current issue. `body` is markdown; @agent-<role-key> mentions wake other roles.",
 		InputSchema: map[string]any{
@@ -44,7 +44,7 @@ func (r *Registry) issueCommentTool() *platformmcpdomain.Tool {
 			},
 			"required": []string{"body"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -87,8 +87,8 @@ func (r *Registry) issueCommentTool() *platformmcpdomain.Tool {
 // Persistence: an issue_events row of kind=review_vote with
 // payload={value, reason}. Side-effect: fires the review_vote.posted
 // trigger so maintainer roles wake.
-func (r *Registry) issueReviewVoteTool() *platformmcpdomain.Tool {
-	return &platformmcpdomain.Tool{
+func (r *Registry) issueReviewVoteTool() *agentapidomain.Tool {
+	return &agentapidomain.Tool{
 		Name:        "issue_review_vote",
 		Description: "Cast a structured review vote on the current issue (approve / request_changes / abstain).",
 		InputSchema: map[string]any{
@@ -106,7 +106,7 @@ func (r *Registry) issueReviewVoteTool() *platformmcpdomain.Tool {
 			},
 			"required": []string{"value"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -167,8 +167,8 @@ func (r *Registry) issueReviewVoteTool() *platformmcpdomain.Tool {
 // archives all sessions on it. Idempotent — closing an already-closed
 // issue returns a "no change" result. Re-opening is intentionally not
 // available to agents.
-func (r *Registry) issueCloseTool() *platformmcpdomain.Tool {
-	return &platformmcpdomain.Tool{
+func (r *Registry) issueCloseTool() *agentapidomain.Tool {
+	return &agentapidomain.Tool{
 		Name:        "issue_close",
 		Description: "Close the current issue without merging. Archives every active agent session on it.",
 		InputSchema: map[string]any{
@@ -180,7 +180,7 @@ func (r *Registry) issueCloseTool() *platformmcpdomain.Tool {
 				},
 			},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -222,8 +222,8 @@ func (r *Registry) issueCloseTool() *platformmcpdomain.Tool {
 // canManage permission check here because the `can: [issue_merge]`
 // ACL on the role is the authorization gate — only roles the operator
 // explicitly grants merge get to call this tool.
-func (r *Registry) issueMergeTool() *platformmcpdomain.Tool {
-	return &platformmcpdomain.Tool{
+func (r *Registry) issueMergeTool() *agentapidomain.Tool {
+	return &agentapidomain.Tool{
 		Name:        "issue_merge",
 		Description: "Merge the issue branch into its base using a merge-commit strategy: fast-forward if possible, otherwise create a merge commit. Fails if there are no commits or the merge would conflict.",
 		InputSchema: map[string]any{
@@ -235,7 +235,7 @@ func (r *Registry) issueMergeTool() *platformmcpdomain.Tool {
 				},
 			},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -255,7 +255,7 @@ func (r *Registry) issueMergeTool() *platformmcpdomain.Tool {
 					"error":        "merge blocked",
 					"block_reason": reviewStatus.BlockReason,
 				})
-				return platformmcpdomain.Result{Text: string(blockJSON), IsError: true}, nil
+				return agentapidomain.Result{Text: string(blockJSON), IsError: true}, nil
 			}
 
 			headSHA, err := r.deps.Git.ResolveCommit(scope.fsPath, scope.issue.BranchName)
@@ -371,7 +371,7 @@ func (r *Registry) tryDeleteIssueBranch(ctx context.Context, repoID int64, fsPat
 }
 
 // mergeCleanupResult duplicates mergeCleanup from the issue HTTP handler
-// so the platform_mcp module stays decoupled from the issue handler package.
+// so the agent_api module stays decoupled from the issue handler package.
 type mergeCleanupResult struct {
 	Deleted bool   `json:"deleted"`
 	Reason  string `json:"reason,omitempty"`
@@ -386,8 +386,8 @@ type mergeCleanupResult struct {
 // Uses Controller.Recover() (not Resume) so the target session receives a
 // manual.recover event whose payload carries the caller's role key
 // (recovered_by), as required by spec AC 5.
-func (r *Registry) sessionRecoverTool() *platformmcpdomain.Tool {
-	return &platformmcpdomain.Tool{
+func (r *Registry) sessionRecoverTool() *agentapidomain.Tool {
+	return &agentapidomain.Tool{
 		Name:        "session_recover",
 		Description: "Recover a failed / succeeded / cancelled / idle agent session on the current issue back to pending so a runner picks it up again. `session_id` is required. Only sessions on the same issue can be recovered; cross-issue and archived sessions are rejected. Requires `session_recover` in the role's `can:` whitelist.",
 		InputSchema: map[string]any{
@@ -400,7 +400,7 @@ func (r *Registry) sessionRecoverTool() *platformmcpdomain.Tool {
 			},
 			"required": []string{"session_id"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -471,8 +471,8 @@ func (r *Registry) sessionRecoverTool() *platformmcpdomain.Tool {
 // File bytes arrive via multipart/form-data (handled by the HTTP handler,
 // which calls Registry.UploadAttachment). The JSON code path returns a
 // clear error directing callers to use multipart.
-func (r *Registry) issueAttachmentUploadTool() *platformmcpdomain.Tool {
-	return &platformmcpdomain.Tool{
+func (r *Registry) issueAttachmentUploadTool() *agentapidomain.Tool {
+	return &agentapidomain.Tool{
 		Name:        "issue_attachment_upload",
 		Description: "Upload a file from the workspace as an issue attachment. Use multipart/form-data with parts: `file` (binary, required), `display_name` (optional), `inline` (boolean, default false), `comment_id` (optional). Returns attachment metadata including an `attachment_id` and `markdown_snippet` — use `issue_comment` to insert the snippet into a comment body.",
 		InputSchema: map[string]any{
@@ -497,7 +497,7 @@ func (r *Registry) issueAttachmentUploadTool() *platformmcpdomain.Tool {
 			},
 			"required": []string{"name"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
 			return errorResult("issue_attachment_upload requires multipart/form-data — send file bytes as a `file` part, not JSON"), nil
 		},
 	}
@@ -514,7 +514,7 @@ func (r *Registry) UploadAttachment(
 	name, displayName string,
 	inline bool,
 	commentID int64,
-) (platformmcpdomain.Result, error) {
+) (agentapidomain.Result, error) {
 	scope, err := r.loadScope(ctx, sess)
 	if err != nil {
 		return errorResult(err.Error()), nil
@@ -568,8 +568,8 @@ func attachmentMarkdownSnippet(id int64, kind issuedomain.AttachmentKind, inline
 // current issue). When parent=true the new issue's base_branch is set
 // to the current issue's branch so merging a child fast-forwards into
 // the parent's working line. Author is the agent (authorID=0).
-func (r *Registry) issueCreateTool() *platformmcpdomain.Tool {
-	return &platformmcpdomain.Tool{
+func (r *Registry) issueCreateTool() *agentapidomain.Tool {
+	return &agentapidomain.Tool{
 		Name:        "issue_create",
 		Description: "Create a new issue (optionally as a child of the current one). Returns the new issue's number, title, state, and branch_name.",
 		InputSchema: map[string]any{
@@ -590,7 +590,7 @@ func (r *Registry) issueCreateTool() *platformmcpdomain.Tool {
 			},
 			"required": []string{"title"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (platformmcpdomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil

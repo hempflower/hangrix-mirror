@@ -12,7 +12,7 @@ import (
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
-	platformmcpdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_mcp/domain"
+	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
 	releasedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/domain"
 	releaseinfra "github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/infra"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
@@ -20,11 +20,11 @@ import (
 )
 
 // Registry is the platform-tool catalogue. It exposes every tool a
-// session's role may invoke via MCP. Per-role filtering happens via the
-// session's role_config snapshot (see RoleCanList) — the catalogue
+// session's role may invoke over the agent HTTP API. Per-role filtering
+// happens via the session's role_config snapshot (see RoleCanList) — the catalogue
 // itself is global.
 type Registry struct {
-	tools []*platformmcpdomain.Tool
+	tools []*agentapidomain.Tool
 	deps  *RegistryDeps
 }
 
@@ -53,7 +53,7 @@ type RegistryDeps struct {
 // catalogues, and "look before you act" is the safer default ordering).
 func NewRegistry(deps *RegistryDeps) *Registry {
 	r := &Registry{deps: deps}
-	r.tools = []*platformmcpdomain.Tool{
+	r.tools = []*agentapidomain.Tool{
 		r.issueReadTool(),
 		r.issueReadByNumberTool(),
 		r.issueDiffTool(),
@@ -86,13 +86,13 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 	return r
 }
 
-// All returns the full tool catalogue. The MCP handler intersects this
+// All returns the full tool catalogue. The HTTP handler intersects this
 // with the per-role `can:` filter before returning to the agent.
-func (r *Registry) All() []*platformmcpdomain.Tool { return r.tools }
+func (r *Registry) All() []*agentapidomain.Tool { return r.tools }
 
 // ByName looks up a tool by its wire name. nil when unknown — callers
-// surface "unknown tool" as a structured MCP error rather than crashing.
-func (r *Registry) ByName(name string) *platformmcpdomain.Tool {
+// surface "unknown tool" as a structured tool error rather than crashing.
+func (r *Registry) ByName(name string) *agentapidomain.Tool {
 	for _, t := range r.tools {
 		if t.Name == name {
 			return t
@@ -106,8 +106,8 @@ func (r *Registry) ByName(name string) *platformmcpdomain.Tool {
 // frozen at spawn time — host yaml changes mid-session don't affect
 // a running agent. Whitelist (`can:`) wins over blacklist (`not:`)
 // when both are set; an entirely empty ACL fails closed.
-func (r *Registry) FilterForSession(sess *runnerdomain.AgentSession) []*platformmcpdomain.Tool {
-	out := make([]*platformmcpdomain.Tool, 0, len(r.tools))
+func (r *Registry) FilterForSession(sess *runnerdomain.AgentSession) []*agentapidomain.Tool {
+	out := make([]*agentapidomain.Tool, 0, len(r.tools))
 	for _, t := range r.tools {
 		if CanCallTool(sess, t.Name) {
 			out = append(out, t)
@@ -150,19 +150,19 @@ func (r *Registry) loadScope(ctx context.Context, sess *runnerdomain.AgentSessio
 	return &sessionScope{repo: repo, fsPath: fsPath, issue: iss}, nil
 }
 
-func textResult(v any) platformmcpdomain.Result {
+func textResult(v any) agentapidomain.Result {
 	body, err := json.Marshal(v)
 	if err != nil {
-		return platformmcpdomain.Result{
+		return agentapidomain.Result{
 			Text:    fmt.Sprintf(`{"error":"marshal: %s"}`, err),
 			IsError: true,
 		}
 	}
-	return platformmcpdomain.Result{Text: string(body)}
+	return agentapidomain.Result{Text: string(body)}
 }
 
-func errorResult(msg string) platformmcpdomain.Result {
-	return platformmcpdomain.Result{Text: msg, IsError: true}
+func errorResult(msg string) agentapidomain.Result {
+	return agentapidomain.Result{Text: msg, IsError: true}
 }
 
 // stableTime serialises a time.Time as RFC3339 so JSON output is

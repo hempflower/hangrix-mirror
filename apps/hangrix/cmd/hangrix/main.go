@@ -18,7 +18,7 @@ import (
 	llmprovider "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider"
 	llmproxy "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_proxy"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/org"
-	platformmcp "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_mcp"
+	agentapi "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/release"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner"
@@ -53,7 +53,7 @@ func main() {
 		runner.Module(),
 		agentsession.Module(),
 			dashboard.Module(),
-		platformmcp.Module(),
+		agentapi.Module(),
 		automation.Module(),
 		workflow.Module(),
 		web.Module(),

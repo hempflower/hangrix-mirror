@@ -266,7 +266,7 @@ Phase 2 把 Phase 1 接到 issue 生命周期上。退出条件已通过 Playwri
 
 **两种工具来源**：
 - **本地工具**由 agent 二进制内置，容器内 in-process 执行，**不经过 HTTP**。
-- **平台工具**由 `modules/platform_mcp` 通过 HTTP MCP server 暴露；session-scope bearer token 鉴权。
+- **平台工具**由 `modules/agent_api` 通过标准 HTTP API（`POST /api/agent/tools/{name}`，非 MCP/JSON-RPC）暴露；session-scope bearer token 鉴权。
 
 git 凭证由 runner 在容器启动时预配置（credential helper），agent 用 `bash` 调 `git push` 即可 —— **没有 git 专用工具**。
 
@@ -291,7 +291,7 @@ Agent stdin 看到的具体 prose 格式由 agent 二进制决定，**不进 sch
 #### 需要做的
 - [x] Mention 解析：`agentsconfig.ParseMentions` tokenize body 跳过代码块 / 引用块；issue handler.createComment 加载 host yaml、按 `mention_by` 校验后通过 `Spawner.OnTrigger(RoleKey=...)` 投递 `issue.comment.mentioned` + `issue.comment.any`。
 - [x] Spawner v1 编排（替代独立事件总线 v0）：`TriggerInput` 增加 `RoleKey` / `Payload` 字段；同 (role, cause_kind, cause_id) 幂等；非 archived live session 走 EnqueueInput 复用容器；archived 角色静默跳过。`commit.pushed` 由 `SyncIssueBranch` 触发。**独立 event_log 表延后到 M7c**（v1 piggy-back 在 `issue_events` + agent_session_messages 上 —— audit 闭环可用，但还没有 UI 监听 / webhook stub 的统一表）。
-- [x] `modules/platform_mcp`：JSON-RPC over `/api/mcp/v1`，`hgxs_` session-token bearer 鉴权；按 session.role_config 的 `can:` 过滤 `tools/list`，未授权工具的 `tools/call` 返 `isError:true`。
+- [x] `modules/agent_api`（M7b 时为 `platform_mcp`，JSON-RPC over `/api/mcp/v1`；后续重写为标准 HTTP API `/api/agent/tools`）：`hgxs_` session-token bearer 鉴权；按 session.role_config 的 `can:` 过滤工具列表，未授权工具调用返 `isError:true`。
 - [x] 平台工具实现（9 个 v1）：`issue_read` / `issue_diff` / `issue_children` / `issue_checks`（M8 前返空）/ `issue_comment` / `issue_review_vote` / `issue_merge` / `issue_close` / `roster_list`。Identity 用 spawner 的 `IdentityForRole` 落 agent commit author。
 - [x] Issue 持久化扩展：`issue_comments.author_id` nullable + 新 `agent_role` 列；同名列加在 `issue_events`；CHECK XOR 强制 human/agent 二选一。新 `EventReviewVote` event kind + `ReviewVotePayload`。Issue infra 整体迁到 sqlc。
 - [x] Agent ↔ 事件桥接（v1）：`runner.EnqueueInput` 是事件喂 agent stdin 的渠道；反向 tool call 的事件回流由各 tool 直接调 `Spawner.OnTrigger`（`issue_review_vote` → `review_vote.posted`、`issue_merge` → archive）。统一的事件总线抽象延后到 M7c 跟 swim-lane UI 一起做。

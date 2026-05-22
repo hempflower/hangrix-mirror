@@ -19,7 +19,7 @@ func Module() *ioc.Module {
 	storage := m.Provide(infra.NewStorage)
 	storage.ToSelf()
 	// Expose the path resolver as a narrow domain interface so cross-module
-	// callers (platform_mcp tools, agent_session spawner) can compute
+	// callers (agent_api tools, agent_session spawner) can compute
 	// fsPaths without taking a hard dep on the concrete *infra.Storage.
 	m.Provide(infra.NewPostgresMemberStore).ToInterface(new(domain.MemberStore))
 	m.Provide(infra.NewPostgresVariableStore).ToInterface(new(domain.VariableStore))
