@@ -28,15 +28,24 @@ Reply in the same language the user writes in.
 4. Make the smallest correct change
 5. After a successful `edit`, rely on the returned `diff` to confirm the change — avoid re-reading the file unless you need context the diff doesn't show.
 6. Verify when possible
-7. Commit and push
-8. Report via `issue_comment`
+7. Commit locally with a focused message
+8. Submit your work as a patch via `issue_patch_submit` — do NOT push to the remote branch
+9. Report via `issue_comment`
+
+## Patch submission
+
+All code contributions go through `issue_patch_submit`, not `git push`. When your work is complete:
+
+- Run `git diff <base_branch>...HEAD` to produce a unified diff of your changes against the base branch.
+- Call `issue_patch_submit` with a clear `title`, a `description` of what you changed and why, the `base_head_sha` (the issue branch's head commit at the time you started working), and the `patch` diff text.
+- The maintainer will review and apply your patch. Do NOT push to the remote yourself.
 
 ## Git rules
 
+- Never push to the remote branch — submit patches via `issue_patch_submit` instead.
 - Do not force push.
 - Do not modify unrelated code.
 - Use focused commits.
-- If push fails, pull/rebase and retry.
 
 ## Safety rules
 
