@@ -52,6 +52,8 @@ export type IssueEventKind =
   | 'patch_submitted'
   | 'patch_applied'
   | 'patch_rejected'
+  | 'patch_withdrawn'
+  | 'patch_voided'
 
 export interface IssueEvent {
   id: number
@@ -155,7 +157,25 @@ export interface TitleChangedPayload {
 
 // --- Patch Submissions ---
 
-export type PatchStatus = 'submitted' | 'stale' | 'applied' | 'rejected' | 'superseded'
+export type PatchStatus =
+  | 'submitted'
+  | 'applying'
+  | 'applied'
+  | 'rejected'
+  | 'superseded'
+  | 'withdrawn'
+  | 'voided'
+
+// PatchFile represents a single patch file within a submission series.
+// These are produced by `git format-patch` and stored in the order the
+// author intended them to be applied.
+export interface PatchFile {
+  index: number
+  file_name: string
+  source_path: string
+  patch_text: string
+  subject?: string
+}
 
 export interface IssuePatchSubmission {
   id: number
@@ -165,8 +185,13 @@ export interface IssuePatchSubmission {
   base_head_sha: string
   title: string
   description: string
-  // patch_text is only present on the detail endpoint; omitted from list.
+  // patches is the new patch-files array from the detail endpoint.
+  // patch_text (single unified diff) is kept for a transitional period
+  // while the backend is being upgraded; both are optional.
+  patches?: PatchFile[]
   patch_text?: string
+  // patch_count is present on list responses; detail omits it.
+  patch_count?: number
   changed_paths: string[]
   file_count: number
   additions: number
@@ -177,7 +202,8 @@ export interface IssuePatchSubmission {
   rejected_reason: string
   created_at: string
   updated_at: string
-  // Per-file diffs parsed client-side from patch_text for FileDiffList rendering.
+  // Per-file diffs parsed client-side from patches[] or patch_text for
+  // FileDiffList rendering.
   files?: import('~/types/repo').FileDiff[]
 }
 
@@ -197,6 +223,15 @@ export interface PatchAppliedPayload {
 }
 
 export interface PatchRejectedPayload {
+  submission_id: number
+  reason: string
+}
+
+export interface PatchWithdrawnPayload {
+  submission_id: number
+}
+
+export interface PatchVoidedPayload {
   submission_id: number
   reason: string
 }

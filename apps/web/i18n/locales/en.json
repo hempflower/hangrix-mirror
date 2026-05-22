@@ -883,6 +883,7 @@
       "apply": "Apply",
       "applying": "Applying…",
       "applyFailed": "Apply failed",
+      "applyRequested": "Apply request submitted — the patch will be applied by an agent shortly.",
       "applyOk": "Patch applied as commit {sha}",
       "reject": "Reject",
       "rejecting": "Rejecting…",
@@ -895,21 +896,26 @@
       "confirmReject": "Reject patch \"{title}\"?",
       "status": {
         "submitted": "Submitted",
-        "stale": "Stale",
+        "applying": "Applying",
         "applied": "Applied",
         "rejected": "Rejected",
-        "superseded": "Superseded"
+        "superseded": "Superseded",
+        "withdrawn": "Withdrawn",
+        "voided": "Voided"
       },
-      "staleWarning": "This patch is stale — its base ({baseSha}) no longer matches the current issue head ({headSha}). It must be regenerated before it can be applied.",
+      "baseMismatchHint": "This patch was generated from an older base ({baseSha}) than the current issue head ({headSha}). It will be applied if there are no conflicts.",
       "stats": "{files} files, +{additions} −{deletions}",
       "basedOn": "Based on {sha}",
       "submittedBy": "Submitted by {role}",
+      "patchFiles": "{count} patch files",
       "description": "Description",
       "noDescription": "No description provided.",
       "timeline": {
         "patchSubmitted": "{name} submitted a patch: {title}",
         "patchApplied": "{name} applied patch \"{title}\" → commit {sha}",
-        "patchRejected": "{name} rejected patch \"{title}\" — {reason}"
+        "patchRejected": "{name} rejected patch \"{title}\" — {reason}",
+        "patchWithdrawn": "{name} withdrew patch \"{title}\"",
+        "patchVoided": "{name} voided patch \"{title}\" — {reason}"
       }
     }
   },

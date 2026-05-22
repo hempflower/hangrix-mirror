@@ -1,4 +1,5 @@
 import type { FileDiff, DiffStatus } from '~/types/repo'
+import type { PatchFile } from '~/types/issue'
 
 /**
  * Parse a unified diff (from `git diff`) into per-file FileDiff objects.
@@ -67,4 +68,27 @@ export function parseUnifiedDiffToFileDiffs(patchText: string): FileDiff[] {
   }
 
   return files
+}
+
+/**
+ * Parse an ordered array of patch files (from `git format-patch`) into
+ * per-file FileDiff objects.
+ *
+ * Each PatchFile is a single .patch file produced by `git format-patch`.
+ * Its `patch_text` is a complete mail-format patch including commit
+ * metadata. We concatenate all patch texts in order and feed the result
+ * through the same unified diff parser.
+ *
+ * The concatenation works because `git format-patch` output is a
+ * concatenation of valid unified diffs prefixed by mail headers; the
+ * parser only looks at `diff --git` headers and ignores everything else.
+ */
+export function parsePatchFilesToFileDiffs(patchFiles: PatchFile[]): FileDiff[] {
+  if (!patchFiles || patchFiles.length === 0) return []
+
+  const combined = patchFiles
+    .map((pf) => pf.patch_text)
+    .join('\n')
+
+  return parseUnifiedDiffToFileDiffs(combined)
 }

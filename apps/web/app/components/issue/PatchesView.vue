@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import FileDiffList from '@/components/repo/FileDiffList.vue'
 import type { IssuePatchSubmission, PatchStatus } from '~/types/issue'
-import { parseUnifiedDiffToFileDiffs } from '~/utils/patch'
+import { parsePatchFilesToFileDiffs, parseUnifiedDiffToFileDiffs } from '~/utils/patch'
 import { relativeTime } from '~/utils/time'
 
 const props = defineProps<{
@@ -88,9 +88,11 @@ async function loadDetail(id: number) {
       `/api/repos/${props.owner}/${props.name}/issues/${props.issueNumber}/patches/${id}`,
       { credentials: 'include' },
     )
-    // The server returns patch_text — a raw unified diff. Parse it into
-    // per-file FileDiff objects so FileDiffList can render them.
-    if (data.patch_text) {
+    // New API returns patches[] (patch files series). Prefer it over the
+    // transitional patch_text single-diff field.
+    if (data.patches && data.patches.length > 0) {
+      data.files = parsePatchFilesToFileDiffs(data.patches)
+    } else if (data.patch_text) {
       data.files = parseUnifiedDiffToFileDiffs(data.patch_text)
     }
     selectedDetail.value = data
@@ -123,7 +125,7 @@ async function applyPatch() {
       `/api/repos/${props.owner}/${props.name}/issues/${props.issueNumber}/patches/${p.id}/apply`,
       { method: 'POST', credentials: 'include' },
     )
-    actionInfo.value = t('issue.patches.applyOk', { sha: '' })
+    actionInfo.value = t('issue.patches.applyRequested')
     emit('applied', p.id)
     await loadPatches()
     // reload detail of the same patch (now 'applied')
@@ -216,7 +218,7 @@ function statusVariant(s: PatchStatus) {
   switch (s) {
     case 'submitted':
       return 'secondary' as const
-    case 'stale':
+    case 'applying':
       return 'outline' as const
     case 'applied':
       return 'default' as const
@@ -224,6 +226,10 @@ function statusVariant(s: PatchStatus) {
       return 'destructive' as const
     case 'superseded':
       return 'outline' as const
+    case 'withdrawn':
+      return 'outline' as const
+    case 'voided':
+      return 'destructive' as const
   }
 }
 
@@ -231,29 +237,36 @@ function statusIcon(s: PatchStatus) {
   switch (s) {
     case 'submitted':
       return Clock
-    case 'stale':
-      return AlertTriangle
+    case 'applying':
+      return Clock
     case 'applied':
       return CheckCircle2
     case 'rejected':
       return XCircle
     case 'superseded':
       return XCircle
+    case 'withdrawn':
+      return XCircle
+    case 'voided':
+      return XCircle
   }
 }
 
-const isStale = computed(
+// Informational: the patch was generated against an older head. This no
+// longer blocks apply — the backend decides via real git-am conflict check.
+const baseMismatch = computed(
   () =>
-    selectedDetail.value?.status === 'stale' ||
-    (selectedDetail.value?.status === 'submitted' &&
-      selectedDetail.value.base_head_sha !== props.issueHeadSha),
+    selectedDetail.value?.status === 'submitted' &&
+    selectedDetail.value.base_head_sha !== props.issueHeadSha,
 )
 
 const canApply = computed(() => {
   if (!props.canManage) return false
   const p = selectedDetail.value
   if (!p) return false
-  return p.status === 'submitted' && p.base_head_sha === props.issueHeadSha
+  // Only submitted patches can be applied. base_head_sha mismatch is
+  // informational — the backend will check real conflicts via git am.
+  return p.status === 'submitted'
 })
 </script>
 
@@ -295,6 +308,10 @@ const canApply = computed(() => {
             <Badge :variant="statusVariant(p.status)" class="px-1.5 py-0 text-[10px] leading-none">
               {{ t(`issue.patches.status.${p.status}`) }}
             </Badge>
+            <span v-if="p.patch_count && p.patch_count > 1" class="flex items-center gap-1">
+              <FileDiffIcon class="size-3" />
+              {{ p.patch_count }}
+            </span>
             <span class="font-mono">
               +{{ p.additions }}<span class="text-red-500">−{{ p.deletions }}</span>
             </span>
@@ -363,13 +380,31 @@ const canApply = computed(() => {
               {{ selectedDetail.rejected_reason }}
             </div>
 
-            <!-- Stale warning -->
+            <!-- Base mismatch informational warning (no longer blocks apply) -->
             <div
-              v-if="isStale"
+              v-if="baseMismatch"
               class="rounded bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300"
             >
               <AlertTriangle class="mr-1 inline size-4" />
-              {{ t('issue.patches.staleWarning', { baseSha: shortSha(selectedDetail.base_head_sha), headSha: shortSha(issueHeadSha) }) }}
+              {{ t('issue.patches.baseMismatchHint', { baseSha: shortSha(selectedDetail.base_head_sha), headSha: shortSha(issueHeadSha) }) }}
+            </div>
+
+            <!-- Patch files sequence -->
+            <div
+              v-if="selectedDetail.patches && selectedDetail.patches.length > 0"
+              class="space-y-1"
+            >
+              <p class="text-xs font-medium text-muted-foreground">
+                {{ t('issue.patches.patchFiles', { count: selectedDetail.patches.length }) }}
+              </p>
+              <ol class="list-inside list-decimal space-y-0.5 pl-1 text-xs text-muted-foreground">
+                <li v-for="pf in selectedDetail.patches" :key="pf.index" class="truncate font-mono">
+                  {{ pf.file_name }}
+                  <span v-if="pf.subject" class="ml-1 text-muted-foreground/60">
+                    — {{ pf.subject }}
+                  </span>
+                </li>
+              </ol>
             </div>
 
             <!-- Description -->
@@ -391,7 +426,7 @@ const canApply = computed(() => {
                 {{ applyBusy ? t('issue.patches.applying') : t('issue.patches.apply') }}
               </Button>
               <Button
-                v-if="selectedDetail.status === 'submitted'"
+                v-if="selectedDetail.status === 'submitted' || selectedDetail.status === 'applying'"
                 size="sm"
                 variant="outline"
                 :disabled="rejectBusy"

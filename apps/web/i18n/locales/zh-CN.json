@@ -883,6 +883,7 @@
       "apply": "应用",
       "applying": "应用中…",
       "applyFailed": "应用失败",
+      "applyRequested": "应用请求已提交 — 补丁将由 agent 在 workspace 中应用。",
       "applyOk": "补丁已应用，提交 {sha}",
       "reject": "拒绝",
       "rejecting": "拒绝中…",
@@ -895,21 +896,26 @@
       "confirmReject": "确定拒绝补丁「{title}」？",
       "status": {
         "submitted": "已提交",
-        "stale": "已过期",
+        "applying": "应用中",
         "applied": "已应用",
         "rejected": "已拒绝",
-        "superseded": "已取代"
+        "superseded": "已取代",
+        "withdrawn": "已撤回",
+        "voided": "已作废"
       },
-      "staleWarning": "此补丁已过期 —— 其基线（{baseSha}）与当前 issue 最新提交（{headSha}）不一致。需要重新生成后才能应用。",
+      "baseMismatchHint": "此补丁基于较早的提交（{baseSha}）生成，与当前 issue 最新提交（{headSha}）不一致。若无冲突仍可应用。",
       "stats": "{files} 个文件，+{additions} −{deletions}",
       "basedOn": "基于 {sha}",
       "submittedBy": "由 {role} 提交",
+      "patchFiles": "{count} 个补丁文件",
       "description": "描述",
       "noDescription": "暂无描述。",
       "timeline": {
         "patchSubmitted": "{name} 提交了一个补丁：{title}",
         "patchApplied": "{name} 应用了补丁「{title}」→ 提交 {sha}",
-        "patchRejected": "{name} 拒绝了补丁「{title}」—— {reason}"
+        "patchRejected": "{name} 拒绝了补丁「{title}」—— {reason}",
+        "patchWithdrawn": "{name} 撤回了补丁「{title}」",
+        "patchVoided": "{name} 作废了补丁「{title}」—— {reason}"
       }
     }
   },

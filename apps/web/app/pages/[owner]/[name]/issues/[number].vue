@@ -447,6 +447,17 @@ function eventLabel(e: any): string {
         title: e.payload?.title ?? '',
         reason: e.payload?.reason ?? '',
       })
+    case 'patch_withdrawn':
+      return t('issue.patches.timeline.patchWithdrawn', {
+        name,
+        title: e.payload?.title ?? '',
+      })
+    case 'patch_voided':
+      return t('issue.patches.timeline.patchVoided', {
+        name,
+        title: e.payload?.title ?? '',
+        reason: e.payload?.reason ?? '',
+      })
     default:
       return e.kind
   }
