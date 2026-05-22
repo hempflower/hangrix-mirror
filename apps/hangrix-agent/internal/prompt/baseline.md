@@ -36,9 +36,10 @@ Reply in the same language the user writes in.
 
 All code contributions go through `issue_patch_submit`, not `git push`. When your work is complete:
 
-- Run `git diff <base_branch>...HEAD` to produce a unified diff of your changes against the base branch.
-- Call `issue_patch_submit` with a clear `title`, a `description` of what you changed and why, the `base_head_sha` (the issue branch's head commit at the time you started working), and the `patch` diff text.
+- Run `git format-patch <base_branch>` to generate one or more `.patch` files in the workspace.
+- Call `issue_patch_submit` with a clear `title`, a `description` of what you changed and why, the `base_head_sha` (the issue branch's head commit at the time you started working), and `patch_paths` — an array of workspace-relative paths to the generated `.patch` files, in the order they should be applied.
 - The maintainer will review and apply your patch. Do NOT push to the remote yourself.
+- If you need to retract a submitted patch before it is applied or rejected, call `issue_patch_withdraw` with the submission ID. Only the original submitter (same role) can withdraw their own submission.
 
 ## Patch application (apply-agent role only)
 
