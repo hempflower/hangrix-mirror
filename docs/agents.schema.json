@@ -13,6 +13,7 @@
     "container": { "$ref": "#/$defs/container" },
     "llm": { "$ref": "#/$defs/llm" },
     "issues": { "$ref": "#/$defs/issues" },
+    "reviewers": { "$ref": "#/$defs/reviewers" },
     "roles": {
       "description": "Map of role-key to Role. At least one role is required.",
       "type": "object",
@@ -222,6 +223,49 @@
           "type": "boolean",
           "default": true,
           "description": "When true, the issue branch is automatically deleted after a successful merge. Set false to keep merged branches for post-hoc inspection."
+        }
+      }
+    },
+    "reviewers": {
+      "type": "object",
+      "description": "Per-contribution review gate. A contribution branch (issue-<N>/<role>/<slug>) is matched against `rules` by its changed paths: it collects the union of reviewers from every rule whose globs match any changed file. When no rule matches, `fallback` reviews it. The required reviewers determine when the contribution leaves `pending` (every required reviewer has voted) and whether it becomes `approved` (all approve/abstain) or `rejected` (any reject). Omit this block to run no review gate. Reviewer wake-up is a separate concern, driven by each role's `commit.pushed` trigger.",
+      "required": ["fallback"],
+      "properties": {
+        "rules": {
+          "type": "array",
+          "description": "Ordered path-to-reviewers mappings. A contribution unions the reviewers of every rule it matches.",
+          "items": {
+            "type": "object",
+            "required": ["paths", "reviewers"],
+            "properties": {
+              "paths": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "minLength": 1 },
+                "description": "Doublestar globs (GitHub Actions semantics) matched against a contribution's changed files. The rule matches if at least one changed file matches at least one pattern."
+              },
+              "reviewers": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,38}$"
+                },
+                "description": "Role keys that must review a contribution this rule matches. Each must name a role that exists AND can cast review votes (has issue_review_vote in its tool ACL). The Go parser enforces both cross-references; JSON Schema cannot."
+              }
+            }
+          }
+        },
+        "fallback": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,38}$"
+          },
+          "description": "Reviewer role(s) used only when no rule matches a contribution's changed paths (conventionally the maintainer). Required and non-empty whenever a `reviewers:` block is present, so a contribution can never be left with no possible reviewer. Same role-exists + can-vote constraints as rule reviewers."
         }
       }
     },
