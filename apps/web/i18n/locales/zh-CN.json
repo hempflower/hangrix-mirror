@@ -883,7 +883,7 @@
       "apply": "应用",
       "applying": "应用中…",
       "applyFailed": "应用失败",
-      "applyRequested": "应用请求已提交 — 补丁将由 agent 在 workspace 中应用。",
+      "applyRequested": "应用请求已提交，系统将稍后处理该补丁。",
       "applyOk": "补丁已应用，提交 {sha}",
       "reject": "拒绝",
       "rejecting": "拒绝中…",
