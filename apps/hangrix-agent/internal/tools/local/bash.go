@@ -72,11 +72,25 @@ func SetForegroundPromoteAfterForTest(d time.Duration) (restore func()) {
 //
 // Each entry is "KEY=VALUE". Order doesn't matter; lookups are by key.
 var agentEnvDefaults = []string{
-	// A real terminfo name. PTY makes isatty() true, but if TERM is unset
-	// or "dumb" then `less`/`vim`/`git diff` fall back to the
-	// "WARNING: terminal is not fully functional / Press RETURN" branch
-	// and hang the turn.
-	"TERM=xterm-256color",
+	// TERM=dumb tells every program the terminal has minimal capabilities
+	// — no colour, no cursor movement. Combined with PAGER=cat (which
+	// diverts pagers before they reach terminfo) and CI=true, this makes
+	// CLI output plain and predictable. The PTY still makes isatty()
+	// true so programs that gate line-buffering or progress spinners on
+	// it still behave naturally, but they won't emit escape sequences
+	// that pollute logs.
+	//
+	// Trade-off: "dumb" is a valid terminfo entry and ncurses queries
+	// (tput, infocmp) complete instantly, but less(1) will display a
+	// "terminal is not fully functional / Press RETURN" warning and hang
+	// if invoked directly — even with LESS=-FRX. The mitigation is that
+	// PAGER=cat, GIT_PAGER=cat, MANPAGER=cat, and SYSTEMD_PAGER=cat
+	// (set below) prevent less from being invoked as a pager by git,
+	// man, systemctl, and any tool that honours PAGER. Only an explicit
+	// `less foo.txt` in a bash command would trigger the hang, and
+	// agents use `read` / `grep` for file inspection, not pagers.
+	// See TestBashTermDumbSafeForPTY and TestBashTermDumbInteractiveInput.
+	"TERM=dumb",
 
 	// Kill pagers across the ecosystem. `cat` is the universal "just dump
 	// it" pager. LESS=-FRX is the belt-and-suspenders backup for anything
@@ -114,7 +128,7 @@ var agentEnvDefaults = []string{
 
 // agentEnv returns the parent process environment with agentEnvDefaults
 // layered on top *only for keys not already set*. Parent env wins, so a
-// user who deliberately exports e.g. TERM=dumb in their runtime config
+// user who deliberately exports e.g. TERM=xterm-256color in their runtime config
 // keeps that value.
 func agentEnv() []string {
 	parent := os.Environ()
@@ -372,9 +386,9 @@ func (b *bashTool) spawnJob(a bashArgs) *bashJob {
 	if a.WorkingDir != "" {
 		cmd.Dir = a.WorkingDir
 	}
-	// Inject agent-friendly defaults (no pagers, no TUI dialogs, real
-	// TERM, CI=true) on top of the parent env. Without this, things like
-	// `git diff` route through less and block on "Press RETURN".
+	// Inject agent-friendly defaults (no pagers via PAGER=cat,
+	// no TUI dialogs, TERM=dumb for clean output, CI=true) on top
+	// of the parent env.
 	cmd.Env = agentEnv()
 	// On context cancel/timeout, take down the whole session, not just
 	// bash. pty.Start sets Setsid, so the child is its own session leader
