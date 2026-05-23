@@ -19,17 +19,34 @@ import (
 )
 
 // bash runs commands in `bash -c` under a PTY. Allocating a PTY (rather
-// than wiring stdout/stderr to plain pipes) buys us two things the LLM
+// than wiring stdout/stderr to plain pipes) buys us three things the LLM
 // genuinely needs:
-//   - Programs that probe isatty() — most TUIs, many CLIs that switch to
-//     line-buffered output, colour-on-a-terminal toggles — behave the
-//     same way they would in a human shell. Without a PTY, things like
-//     `apt`, `npm`, or any progress-bar tool degrade to weird modes
-//     ("running in a non-interactive shell") that produce surprising
-//     output the agent then has to reason around.
-//   - It gives us a real stdin we can write to mid-flight. The
-//     `bash_input` tool uses that to answer interactive prompts
-//     (y/N confirmations, password fields, etc.) on a background task.
+//
+//  1. isatty() = true — programs that probe it (progress-bar tools,
+//     CLIs that switch to line-buffered output, etc.) see a real
+//     terminal and behave naturally instead of degrading to weird modes
+//     ("running in a non-interactive shell").
+//
+//  2. Clean, predictable output — the agent default is TERM=dumb (see
+//     agentEnvDefaults below), so programs that check terminfo see a
+//     minimal terminal that advertises NO colour and NO cursor
+//     addressing.  They still produce output (no hangs, no "terminal is
+//     not fully functional" warnings for terminfo-aware programs), but
+//     they won't emit ANSI escape sequences that pollute agent-visible
+//     logs.  PAGER=cat and friends divert pagers before they can react
+//     to the dumb terminal.
+//
+//     This is a deliberate narrowing of the PTY contract: we guarantee
+//     isatty()=true, line-buffered output, and stdin for interactive
+//     prompts (bash_input), but we do NOT promise full colour or
+//     cursor-addressing capabilities by default.  Users who need richer
+//     terminal features (e.g. TUI-heavy workloads) can export
+//     TERM=xterm-256color in their runtime config — the parent
+//     environment wins over agentEnvDefaults.
+//
+//  3. A real stdin we can write to mid-flight. The `bash_input` tool
+//     uses that to answer interactive prompts (y/N confirmations,
+//     password fields, etc.) on a background task.
 //
 // All output (merged at the kernel level by the PTY) is streamed into a
 // per-job temp file. The synchronous (foreground) path waits for the
