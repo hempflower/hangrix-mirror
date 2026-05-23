@@ -69,6 +69,7 @@ roles:
       - issue_close
       - issue_attachment_upload
       - roster_list
+      - session_recover
       - release_create
       - release_publish
       - release_update
