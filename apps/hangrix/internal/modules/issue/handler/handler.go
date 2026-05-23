@@ -1428,7 +1428,9 @@ func (h *Handler) listContributions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	contribs, err := h.contributions.ListContributions(r.Context(), iss.ID)
+	includeClosed := r.URL.Query().Get("include_closed") == "true"
+	includeMerged := r.URL.Query().Get("include_merged") == "true"
+	contribs, err := h.contributions.ListContributions(r.Context(), iss.ID, includeClosed, includeMerged)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1645,7 +1647,7 @@ func (h *Handler) closeContribution(w http.ResponseWriter, r *http.Request) {
 // contribution on the issue except exceptID, against the current issue head.
 // Best-effort: errors are swallowed so a stale sibling never blocks an apply.
 func (h *Handler) refreshSiblingMergeability(ctx context.Context, fsPath string, iss *domain.Issue, exceptID int64) {
-	contribs, err := h.contributions.ListContributions(ctx, iss.ID)
+	contribs, err := h.contributions.ListContributions(ctx, iss.ID, true, true)
 	if err != nil {
 		return
 	}

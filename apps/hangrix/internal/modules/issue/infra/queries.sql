@@ -310,12 +310,18 @@ FROM contributions
 WHERE issue_id = sqlc.arg('issue_id') AND ref_name = sqlc.arg('ref_name');
 
 -- name: ListContributions :many
+-- include_closed / include_merged are optional booleans that control
+-- whether terminal (closed / merged) contributions appear in the result.
+-- When both are false (the default), only non-terminal contributions
+-- (pending, approved, rejected) are returned — the "active" view.
 SELECT id, repo_id, issue_id, session_id, agent_role, ref_name,
        head_sha, base_sha, title, description, status, mergeable,
        merge_mode, changed_paths, files, additions, deletions,
        merged_commit_sha, merged_at, created_at, updated_at
 FROM contributions
 WHERE issue_id = sqlc.arg('issue_id')
+  AND (sqlc.arg('include_closed')::BOOLEAN OR status <> 'closed')
+  AND (sqlc.arg('include_merged')::BOOLEAN OR status <> 'merged')
 ORDER BY created_at, id;
 
 -- name: SetContributionMeta :one

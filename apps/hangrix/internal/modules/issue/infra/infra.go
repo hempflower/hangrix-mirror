@@ -624,8 +624,12 @@ func (s *PostgresStore) GetContributionByRef(ctx context.Context, issueID int64,
 	return contributionFromRow(row), nil
 }
 
-func (s *PostgresStore) ListContributions(ctx context.Context, issueID int64) ([]*domain.Contribution, error) {
-	rows, err := s.q.ListContributions(ctx, issueID)
+func (s *PostgresStore) ListContributions(ctx context.Context, issueID int64, includeClosed, includeMerged bool) ([]*domain.Contribution, error) {
+	rows, err := s.q.ListContributions(ctx, issuedb.ListContributionsParams{
+		IssueID:       issueID,
+		IncludeClosed: includeClosed,
+		IncludeMerged: includeMerged,
+	})
 	if err != nil {
 		return nil, err
 	}

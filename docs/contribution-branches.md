@@ -211,7 +211,7 @@ issue 详情下新增「贡献 / 分支」视图,**左右布局**:
 | 现状工具 | 新模型 |
 | --- | --- |
 | `issue_patch_submit` | **移除** —— push 到自己命名空间 ref 即隐式创建/更新 contribution;title/description 由 `contribution_set_meta`(或贡献分支上的约定 commit / PR-body 评论)提供 |
-| `issue_patch_list` | `contribution_list` —— 列出 issue 下各贡献,带 status / mergeable / head_sha / role |
+| `issue_patch_list` | `contribution_list` —— 列出 issue 下各贡献,带 status / mergeable / head_sha / role。默认仅返回非终态贡献(pending/approved/rejected);传 `include_closed=true` 可包含已关闭贡献,传 `include_merged=true` 可包含已合并贡献 |
 | `issue_patch_read` | `contribution_read` —— 返回 ref + 服务端算的 diff + reviews |
 | `issue_patch_apply` | `contribution_apply` —— 服务端合入(第一级闸门),不再发 trigger 等回调 |
 | `issue_patch_apply_result` | **移除** —— 服务端自己 apply,无需 agent 回报 commit_sha |
