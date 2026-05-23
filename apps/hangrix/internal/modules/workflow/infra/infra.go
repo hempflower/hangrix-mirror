@@ -62,12 +62,18 @@ func (r *PostgresRepo) CreateRun(ctx context.Context, params domain.CreateRunPar
 		return nil, nil, fmt.Errorf("marshal container snapshot: %w", err)
 	}
 
-	triggerJSON, err := json.Marshal(map[string]any{
-		"event_name":      params.EventName,
-		"dispatch_inputs": params.DispatchInputs,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("marshal trigger payload: %w", err)
+	var triggerJSON []byte
+	if params.TriggerPayloadJSON != nil {
+		triggerJSON = params.TriggerPayloadJSON
+	} else {
+		var err error
+		triggerJSON, err = json.Marshal(map[string]any{
+			"event_name":      params.EventName,
+			"dispatch_inputs": params.DispatchInputs,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("marshal trigger payload: %w", err)
+		}
 	}
 
 	var causeID pgtype.Int8
