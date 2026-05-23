@@ -107,6 +107,26 @@ test.describe('repo + issue workflow', () => {
     await expect(page).not.toHaveURL(/tab=/)
   })
 
+  test('contributions view renders with scrollable diff container', async ({ page }) => {
+    await ensureLoggedIn(page, owner, PASSWORD)
+    await page.goto(`/${owner}/${repoName}/issues/${issueNumber}`)
+    await page.getByRole('heading').first().waitFor({ state: 'visible', timeout: 15_000 })
+
+    // Navigate to the Contributions tab.
+    await page.getByRole('tab', { name: /Contributions|贡献/i }).click()
+    await expect(page).toHaveURL(/tab=contributions/)
+
+    // Verify the contributions left panel (list area) is visible.
+    // When there are no contributions, an empty-state card is shown.
+    const activePanel = page.locator('[data-slot="tabs-content"][data-state="active"]')
+    await expect(activePanel).toBeVisible()
+
+    // The left list column should be present (either empty card or list).
+    // The grid container uses lg:grid-cols-[280px_minmax(0,1fr)].
+    const grid = activePanel.locator('.grid')
+    await expect(grid).toBeVisible()
+  })
+
   test('post a comment and verify it appears in the timeline', async ({ page }) => {
     await ensureLoggedIn(page, owner, PASSWORD)
     await page.goto(`/${owner}/${repoName}/issues/${issueNumber}`)

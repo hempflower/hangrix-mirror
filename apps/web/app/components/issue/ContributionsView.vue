@@ -471,14 +471,19 @@ const canApply = computed(() => {
                 {{ t('issue.contributions.empty') }}
               </CardContent>
             </Card>
-            <FileDiffList
+            <div
               v-else
-              :diffs="detail.diff"
-              :owner="owner"
-              :name="name"
-              :ref-before="detail.contribution.base_sha"
-              :ref-after="detail.contribution.head_sha"
-            />
+              data-contributions-diff-scroll
+              class="overflow-y-auto max-h-[60vh]"
+            >
+              <FileDiffList
+                :diffs="detail.diff"
+                :owner="owner"
+                :name="name"
+                :ref-before="detail.contribution.base_sha"
+                :ref-after="detail.contribution.head_sha"
+              />
+            </div>
           </TabsContent>
 
           <!-- Reviews -->
