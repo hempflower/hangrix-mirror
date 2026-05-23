@@ -233,6 +233,14 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Check whether the client negotiated sideband capability. This gates
+	// sideband-2 progress injection in runReceivePackWithSideband: injecting
+	// sideband-encoded output into a stream the client doesn't expect to be
+	// sideband-multiplexed would corrupt the protocol. While git always
+	// negotiates sideband under --stateless-rpc, an explicit check is a
+	// defence-in-depth against non-standard clients.
+	sidebandCapable := hasReceivePackSideband(bodyBytes)
+
 	// Replay the original (now decompressed) body to the git receive-pack
 	// subprocess. Objects already exist from the unpack above, so
 	// receive-pack will skip re-storing them and proceed to ref updates.
@@ -244,7 +252,7 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 	// pack data is on stdin, not stdout.
 	r.Header.Del("Content-Encoding")
 	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-	h.runReceivePackWithSideband(w, r, fsPath, repo, caller, refUpdates)
+	h.runReceivePackWithSideband(w, r, fsPath, repo, caller, refUpdates, sidebandCapable)
 
 	// Push may have changed refs (branch / tag updates, force-pushes,
 	// etc.) — drop every git-read cache key for this repo so the next
@@ -306,7 +314,7 @@ func (h *Handler) runStatelessRPC(w http.ResponseWriter, r *http.Request, sub, f
 // recognised — injects extra sideband-2 progress messages into the response
 // before the terminating flush pkt. The caller's response writer receives the
 // complete, possibly augmented pkt-line stream.
-func (h *Handler) runReceivePackWithSideband(w http.ResponseWriter, r *http.Request, fsPath string, repo *domain.Repo, caller *gitCaller, refUpdates []domain.PushRefUpdate) {
+func (h *Handler) runReceivePackWithSideband(w http.ResponseWriter, r *http.Request, fsPath string, repo *domain.Repo, caller *gitCaller, refUpdates []domain.PushRefUpdate, sidebandCapable bool) {
 	body, err := decodeRequestBody(r)
 	if err != nil {
 		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
@@ -340,8 +348,10 @@ func (h *Handler) runReceivePackWithSideband(w http.ResponseWriter, r *http.Requ
 
 	// Inject contribution hints as sideband-2 progress messages before the
 	// terminating flush pkt so the pusher sees `remote:` lines with
-	// contribution IDs and next-step hints.
-	if len(allContribs) > 0 {
+	// contribution IDs and next-step hints. Only done when the client
+	// negotiated sideband capability — injecting sideband-encoded data
+	// into a non-multiplexed stream would corrupt the protocol.
+	if sidebandCapable && len(allContribs) > 0 {
 		h.injectContributionHints(&stdout, allContribs)
 	}
 
@@ -727,6 +737,47 @@ func parseReceivePackRefs(data []byte) ([]domain.PushRefUpdate, int) {
 	}
 	return refs, pos
 }
+
+// hasReceivePackSideband checks whether the first pkt-line of a git
+// receive-pack request negotiated the sideband capability. The data must be the
+// decoded (decompressed) request body. When the client negotiates side-band or
+// side-band-64k, the server may inject sideband-2 progress messages into the
+// response stream; without this negotiation, sideband-encoded output would
+// corrupt the protocol.
+func hasReceivePackSideband(data []byte) bool {
+	if len(data) < 4 {
+		return false
+	}
+	// Read the first pkt-line length.
+	lenHex := string(data[:4])
+	if lenHex == "0000" {
+		return false
+	}
+	pktLen, err := hex.DecodeString(lenHex)
+	if err != nil || len(pktLen) != 2 {
+		return false
+	}
+	pl := int(pktLen[0])<<8 | int(pktLen[1])
+	if pl < 4 || pl+4 > len(data) {
+		return false
+	}
+	payload := data[4 : pl+4]
+
+	// The first ref command is: <old-sha> <new-sha> <refname>\0<capabilities>
+	// Capabilities are space-separated after the NUL byte.
+	idx := bytes.IndexByte(payload, 0)
+	if idx < 0 {
+		return false
+	}
+	caps := string(payload[idx+1:])
+	for _, c := range strings.Fields(caps) {
+		if c == "side-band" || c == "side-band-64k" {
+			return true
+		}
+	}
+	return false
+}
+
 
 // packetLine encodes one Git wire-protocol packet line: 4-hex-digit length
 // prefix (covering the prefix itself) followed by the payload.
