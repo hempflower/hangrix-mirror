@@ -42,7 +42,7 @@ test.describe('admin runners', () => {
 
     // Either the table or the empty state should be visible.
     const table = page.locator('table')
-    const emptyState = page.locator('text=No runners')
+    const emptyState = page.getByText(/No runners|暂无 Runner/i)
     await expect(table.or(emptyState).first()).toBeVisible({ timeout: 10_000 })
   })
 
@@ -53,8 +53,8 @@ test.describe('admin runners', () => {
 
     const runnerName = uniqueName('e2erunner')
 
-    // Click "Add runner" / "添加运行器" button.
-    const addBtn = page.getByRole('button', { name: /Add runner|添加运行器|新建/i }).first()
+    // Click "Add runner" / "添加 Runner" button.
+    const addBtn = page.getByRole('button', { name: /Add runner|添加\s*Runner|新建/i }).first()
     await addBtn.click()
 
     // The create dialog should appear.
@@ -89,7 +89,7 @@ test.describe('admin runners', () => {
     }
 
     // Acknowledge and close.
-    const ackBtn = page.getByRole('button', { name: /saved|acknowledge|知道了|确认/i }).first()
+    const ackBtn = page.getByRole('button', { name: /saved|acknowledge|我已|记下|保存/i }).first()
     await ackBtn.click()
 
     // Dialog should close.

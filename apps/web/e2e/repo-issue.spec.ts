@@ -72,7 +72,7 @@ test.describe('repo + issue workflow', () => {
     await expect(page.getByRole('tab', { name: /Commits|提交/i })).toBeVisible()
     await expect(page.getByRole('tab', { name: /Diff|差异/i })).toBeVisible()
     await expect(page.getByRole('tab', { name: /Contributions|贡献/i })).toBeVisible()
-    await expect(page.getByRole('tab', { name: /Agents|代理/i })).toBeVisible()
+    await expect(page.getByRole('tab', { name: /Agents|智能体/i })).toBeVisible()
   })
 
   test('switch between issue tabs and verify URL updates', async ({ page }) => {
@@ -98,7 +98,7 @@ test.describe('repo + issue workflow', () => {
     await expect(page).toHaveURL(/tab=contributions/)
 
     // Click agents tab.
-    await page.getByRole('tab', { name: /Agents|代理/i }).click()
+    await page.getByRole('tab', { name: /Agents|智能体/i }).click()
     await expect(page).toHaveURL(/tab=agents/)
 
     // Back to conversation.
@@ -124,7 +124,7 @@ test.describe('repo + issue workflow', () => {
     await textarea.fill(commentText)
 
     // Click the submit button.
-    const submitBtn = page.getByRole('button', { name: /Comment|评论/i }).last()
+    const submitBtn = page.getByRole('button', { name: /Comment|评论|提交/i }).last()
     await submitBtn.click()
 
     // Wait for the comment to appear in the timeline.
