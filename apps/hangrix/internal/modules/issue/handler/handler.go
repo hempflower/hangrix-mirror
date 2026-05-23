@@ -464,7 +464,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Invalidate the /refs cache for this repo so the new branch is
-	// visible immediately — no waiting for the 15s TTL to expire.
+	// visible immediately — cache TTL is long-term (24h).
 	if h.cache != nil {
 		h.cache.InvalidateRepo(r.Context(), rc.repo.ID)
 	}
