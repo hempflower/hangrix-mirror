@@ -161,6 +161,70 @@ func TestMockRawIsValidJSON(t *testing.T) {
 	}
 }
 
+// TestMockDeterminism verifies that identical inputs produce identical
+// outputs — including the response ID and tool call IDs. This is the
+// key acceptance criterion for e2e/snapshot/replay use.
+func TestMockDeterminism(t *testing.T) {
+	m := upstream.NewMock()
+
+	input := &upstream.Request{
+		Model: "mock-model",
+		Input: []upstream.InputItem{
+			{Kind: upstream.KindMessage, Role: "user", Text: "deterministic test input"},
+		},
+	}
+
+	a, err := m.Respond(context.Background(), input)
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	b, err := m.Respond(context.Background(), input)
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+
+	if a.ID != b.ID {
+		t.Errorf("response IDs differ: %q vs %q", a.ID, b.ID)
+	}
+	if a.Text != b.Text {
+		t.Errorf("text differs: %q vs %q", a.Text, b.Text)
+	}
+	if string(a.Raw) != string(b.Raw) {
+		t.Errorf("Raw differs:\n  %s\n  %s", a.Raw, b.Raw)
+	}
+}
+
+// TestMockToolCallDeterminism verifies that identical !!!MOCK_TOOL:
+// inputs produce identical tool call IDs.
+func TestMockToolCallDeterminism(t *testing.T) {
+	m := upstream.NewMock()
+
+	input := &upstream.Request{
+		Model: "mock-model",
+		Input: []upstream.InputItem{
+			{Kind: upstream.KindMessage, Role: "user",
+				Text: `!!!MOCK_TOOL:{"name":"issue_comment","arguments":"{\"body\":\"hello\"}"}`},
+		},
+	}
+
+	a, err := m.Respond(context.Background(), input)
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	b, err := m.Respond(context.Background(), input)
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+
+	if len(a.ToolCalls) != 1 || len(b.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call each, got %d / %d", len(a.ToolCalls), len(b.ToolCalls))
+	}
+	if a.ToolCalls[0].ID != b.ToolCalls[0].ID {
+		t.Errorf("tool call IDs differ: %q vs %q", a.ToolCalls[0].ID, b.ToolCalls[0].ID)
+	}
+}
+
+
 func contains(s, sub string) bool {
 	for i := 0; i <= len(s)-len(sub); i++ {
 		if s[i:i+len(sub)] == sub {

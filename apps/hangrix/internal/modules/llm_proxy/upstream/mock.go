@@ -26,9 +26,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"strings"
-
-	"github.com/google/uuid"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider/domain"
 )
@@ -75,7 +74,7 @@ func (m *Mock) Respond(_ context.Context, req *Request) (*Response, error) {
 			text = fmt.Sprintf("mock: invalid tool call payload: %v", err)
 		} else {
 			toolCalls = []ToolCall{{
-				ID:        "mock_tc_" + uuid.NewString()[:8],
+				ID:        stableID("mock_tc", tc.Name+"|"+tc.Args),
 				Name:      tc.Name,
 				Arguments: tc.Args,
 			}}
@@ -92,7 +91,7 @@ func (m *Mock) Respond(_ context.Context, req *Request) (*Response, error) {
 		text = fmt.Sprintf("This is a mock LLM response. The last user message was: %q", truncated)
 	}
 
-	mockID := "mock_" + uuid.NewString()
+	mockID := stableID("mock_resp", lastUser)
 
 	// Build a minimal Raw body that looks like a plausible Responses-API
 	// response so audit logs stay self-describing.
@@ -135,4 +134,13 @@ func lastUserText(items []InputItem) string {
 		}
 	}
 	return ""
+}
+
+// stableID returns a deterministic, content-based identifier by hashing s
+// with FNV-64a. Same (prefix, s) → same ID every time, enabling reproducible
+// e2e / snapshot / replay scenarios.
+func stableID(prefix, s string) string {
+	h := fnv.New64a()
+	h.Write([]byte(s))
+	return fmt.Sprintf("%s_%x", prefix, h.Sum64())
 }
