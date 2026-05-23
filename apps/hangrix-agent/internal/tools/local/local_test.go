@@ -2174,6 +2174,79 @@ func TestEditFormattingMissingFormatter(t *testing.T) {
 		t.Errorf("file should have been written despite formatting failure; got: %q", string(body))
 	}
 }
+// TestEditFormattingJsxTsxMjsCjs verifies that .jsx / .tsx / .mjs / .cjs
+// extensions are mapped to prettier rather than reported as unsupported.
+func TestEditFormattingJsxTsxMjsCjs(t *testing.T) {
+	t.Parallel()
+
+	for _, ext := range []string{".jsx", ".tsx", ".mjs", ".cjs"} {
+		ext := ext
+		t.Run(ext, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "component"+ext)
+
+			content := "const x = 1;\n"
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			toolSet := byName(local.All())
+			readTool := toolSet["read"]
+			editTool := toolSet["edit"]
+
+			if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+				t.Fatalf("read: %v", err)
+			}
+
+			res, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+				"path": path, "mode": "replace",
+				"find": "const x = 1;\n", "replace": "const y = 2;\n",
+				"formatting": true,
+			}))
+			if err != nil {
+				t.Fatalf("edit with formatting on %s should NOT fail: %v", ext, err)
+			}
+
+			var fields struct {
+				Formatting struct {
+					Attempted bool   `json:"attempted"`
+					Ok        bool   `json:"ok"`
+					Formatter string `json:"formatter"`
+					Error     string `json:"error"`
+				} `json:"formatting"`
+			}
+			if err := json.Unmarshal(mustReJSON(res), &fields); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+
+			if !fields.Formatting.Attempted {
+				t.Error("formatting.attempted should be true")
+			}
+
+			// The file must have been written regardless.
+			body, _ := os.ReadFile(path)
+			if !strings.Contains(string(body), "const y = 2;") {
+				t.Errorf("file should have been written; got: %q", string(body))
+			}
+
+			// If formatting succeeded, the formatter must be prettier — not
+			// empty/unsupported.  If it failed (prettier not in CI), the error
+			// must NOT be the "unsupported extension" message.
+			if fields.Formatting.Ok {
+				if fields.Formatting.Formatter != "prettier" {
+					t.Errorf("formatter = %q, want prettier", fields.Formatting.Formatter)
+				}
+			} else {
+				if strings.Contains(fields.Formatting.Error, "不支持") {
+					t.Errorf("error must not be unsupported-extension for %s; got: %q", ext, fields.Formatting.Error)
+				}
+			}
+		})
+	}
+}
+
+
 
 // ----- edit mid-line coexistence tests ----------------------------------------
 

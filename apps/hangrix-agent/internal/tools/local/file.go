@@ -724,7 +724,7 @@ func formatterName(path string) string {
 	switch ext {
 	case ".go":
 		return "gofmt"
-	case ".js", ".ts", ".vue", ".json", ".md", ".yaml", ".yml":
+	case ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".vue", ".json", ".md", ".yaml", ".yml":
 		return "prettier"
 	case ".rs":
 		return "rustfmt"
