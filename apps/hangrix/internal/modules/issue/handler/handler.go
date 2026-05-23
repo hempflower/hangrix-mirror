@@ -749,7 +749,13 @@ func (h *Handler) commits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	const cap = 200
-	all, err := h.git.ListCommits(rc.fsPath, iss.BranchName, 0, cap)
+	// For merged issues the branch may have been deleted; fall
+	// back to the snapshot SHA, which is immutable.
+	startRef := iss.BranchName
+	if iss.State == domain.StateMerged {
+		startRef = iss.HeadSHA
+	}
+	all, err := h.git.ListCommits(rc.fsPath, startRef, 0, cap)
 	if err != nil {
 		if errors.Is(err, gitdomain.ErrEmptyRepo) || errors.Is(err, gitdomain.ErrRefNotFound) {
 			httpx.WriteJSON(w, http.StatusOK, []*gitdomain.Commit{})
@@ -841,7 +847,7 @@ func (h *Handler) diff(w http.ResponseWriter, r *http.Request) {
 	)
 	if iss.State == domain.StateMerged {
 		if pre := h.preMergeBaseRef(r.Context(), rc.fsPath, iss); pre != "" {
-			diffs, err = h.git.DiffRefs(rc.fsPath, pre, iss.BranchName)
+			diffs, err = h.git.DiffRefs(rc.fsPath, pre, iss.HeadSHA)
 		}
 	}
 	if diffs == nil && err == nil {
