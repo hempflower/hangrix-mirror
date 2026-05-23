@@ -1073,6 +1073,9 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	// Try to delete the issue branch unless the host config disables it.
 	cleanup := h.tryDeleteIssueBranch(r.Context(), rc.repo.ID, rc.fsPath, iss.BranchName)
 
+	// Try to delete contribution branches under the issue namespace.
+	contribCleanup := h.tryDeleteContributionBranches(r.Context(), rc.repo.ID, rc.fsPath, iss.Number)
+
 	// Archive every live session on this issue. The parent issue is the
 	// only thing that can archive sessions — admin "stop this agent" is
 	// "remove the role from host yaml", not a per-session button.
@@ -1085,6 +1088,9 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	}
 	if cleanup != nil {
 		resp["cleanup"] = cleanup
+	}
+	if contribCleanup != nil {
+		resp["contrib_cleanup"] = contribCleanup
 	}
 	httpx.WriteJSON(w, http.StatusOK, resp)
 }
@@ -1120,6 +1126,15 @@ type mergeCleanup struct {
 	Deleted bool   `json:"deleted"`
 	Reason  string `json:"reason,omitempty"`
 }
+
+// contribCleanupResult is a single contribution branch deletion outcome
+// reported as part of the post-merge cleanup response.
+type contribCleanupResult struct {
+	Branch  string `json:"branch"`
+	Deleted bool   `json:"deleted"`
+	Reason  string `json:"reason,omitempty"`
+}
+
 
 // tryDeleteIssueBranch attempts to delete the issue branch after a successful
 // merge. It consults the host config first: if delete_branch_on_merge is
@@ -1164,6 +1179,77 @@ func (h *Handler) tryDeleteIssueBranch(ctx context.Context, repoID int64, fsPath
 		return &mergeCleanup{Deleted: false, Reason: "delete_failed"}
 	}
 	return &mergeCleanup{Deleted: true}
+}
+
+// tryDeleteContributionBranches attempts to delete every contribution branch
+// under the issue's namespace (issue-<N>/...) after a successful issue merge.
+// It is best-effort: failures are logged but never prevent the merge from
+// succeeding.  Returns nil when there are no matching branches or ListRefs
+// failed (the caller still treats the merge as successful).
+func (h *Handler) tryDeleteContributionBranches(ctx context.Context, repoID int64, fsPath string, issueNumber int64) []contribCleanupResult {
+	refs, err := h.git.ListRefs(fsPath)
+	if err != nil {
+		log.Printf("issue: list refs for contribution cleanup repo=%d issue=%d: %v", repoID, issueNumber, err)
+		return nil
+	}
+
+	prefix := fmt.Sprintf("issue-%d/", issueNumber)
+	var results []contribCleanupResult
+
+	for _, ref := range refs.Branches {
+		if !strings.HasPrefix(ref.Name, prefix) {
+			continue
+		}
+		result := contribCleanupResult{Branch: ref.Name}
+
+		blocked := false
+
+		// Check branch protections.
+		if h.protections != nil {
+			rules, err := h.protections.List(ctx, repoID)
+			if err == nil {
+				if rule := repodomain.MatchProtection(rules, ref.Name); rule != nil && rule.ForbidDelete {
+					result.Deleted = false
+					result.Reason = "protected"
+					blocked = true
+				}
+			}
+		}
+
+		// Run branch-write guards.
+		if !blocked {
+			for _, g := range h.guards {
+				if err := g.CheckBranchWrite(ctx, repodomain.BranchWriteOp{
+					RepoID:     repoID,
+					Branch:     ref.Name,
+					OldSHA:     ref.SHA,
+					IsDelete:   true,
+					IsInternal: true,
+				}); err != nil {
+					result.Deleted = false
+					result.Reason = "denied"
+					blocked = true
+					break
+				}
+			}
+		}
+
+		if !blocked {
+			if err := h.git.DeleteBranch(fsPath, ref.Name); err != nil {
+				log.Printf("issue: delete contribution branch %s repo=%d issue=%d: %v", ref.Name, repoID, issueNumber, err)
+				result.Deleted = false
+				result.Reason = "delete_failed"
+			} else {
+				result.Deleted = true
+			}
+		}
+		results = append(results, result)
+	}
+
+	if len(results) == 0 {
+		return nil
+	}
+	return results
 }
 
 // mentionSuggestions feeds the comment editor's `@` autocomplete. Returns the
