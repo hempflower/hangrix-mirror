@@ -39,6 +39,7 @@ import (
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	repoinfra "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/infra"
 	userdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/user/domain"
+	workflowservice "github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/service"
 )
 
 type Handler struct {
@@ -63,7 +64,8 @@ type Handler struct {
 	attachments *issueservice.AttachmentService
 	// guards are BranchWriteGuard implementations. When nil (tests
 	// without the repo module) the handler skips guard checks.
-	guards []repodomain.BranchWriteGuard
+	guards      []repodomain.BranchWriteGuard
+	workflowSvc *workflowservice.Service
 }
 
 type HandlerDeps struct {
@@ -94,6 +96,10 @@ type HandlerDeps struct {
 	// Guards are BranchWriteGuard implementations. When nil (tests
 	// without the repo module) the handler skips guard checks.
 	Guards []repodomain.BranchWriteGuard
+	// WorkflowSvc is the workflow service for dispatching repo.push
+	// workflows on issue merge. Nil-safe — the handler skips dispatch
+	// when absent (tests).
+	WorkflowSvc *workflowservice.Service
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
@@ -113,6 +119,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		controller:    deps.Controller,
 		attachments:   deps.Attachments,
 		guards:        deps.Guards,
+		workflowSvc:   deps.WorkflowSvc,
 	}
 }
 
@@ -1080,6 +1087,35 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	// only thing that can archive sessions — admin "stop this agent" is
 	// "remove the role from host yaml", not a per-session button.
 	h.fireIssueClosed(r.Context(), rc.repo.ID, int32(iss.Number))
+
+		// Dispatch repo.push workflow runs for any matching workflow configs.
+		// Best-effort: failures are logged but never roll back the merge.
+		if h.workflowSvc != nil && preMergeBaseSHA != "" {
+			changedPaths := collectChangedPaths(h.git, rc.fsPath, preMergeBaseSHA, mergeSHA)
+			triggerPayload, _ := json.Marshal(map[string]any{
+				"event":              "issue.merge",
+				"issue_number":       iss.Number,
+				"issue_title":        iss.Title,
+				"base_branch":        iss.BaseBranch,
+				"issue_branch":       iss.BranchName,
+				"merge_sha":          mergeSHA,
+				"merge_mode":         mode,
+				"pre_merge_base_sha": preMergeBaseSHA,
+			})
+			h.workflowSvc.DispatchRepoPush(r.Context(),
+				workflowservice.Ref{
+					ID:            rc.repo.ID,
+					Name:          rc.repo.Name,
+					DefaultBranch: rc.repo.DefaultBranch,
+					OwnerName:     rc.repo.OwnerName,
+				},
+				iss.BaseBranch,
+				changedPaths,
+				triggerPayload,
+				mergeSHA,
+			)
+		}
+
 
 	resp := map[string]any{
 		"issue":     toPublic(updated),
