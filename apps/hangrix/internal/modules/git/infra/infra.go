@@ -253,9 +253,15 @@ func (g *GoGit) ListRefs(path string) (*domain.Refs, error) {
 				out.DefaultBranchSHA = ref.Hash().String()
 			}
 		case name.IsTag():
+			// Peel annotated tags so the SHA exposed to callers is
+			// always the underlying commit hash, not the tag object.
+			peeled, err := peelHashToCommit(repo, ref.Hash())
+			if err != nil {
+				return nil // skip unresolvable tags
+			}
 			out.Tags = append(out.Tags, &domain.Ref{
 				Name: name.Short(),
-				SHA:  ref.Hash().String(),
+				SHA:  peeled.String(),
 			})
 		}
 		return nil
