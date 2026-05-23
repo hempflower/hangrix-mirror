@@ -63,6 +63,7 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 		r.issueChecksTool(),
 		r.rosterListTool(),
 		r.issueCreateTool(),
+		r.issueEditTool(),
 		r.issueCommentTool(),
 		r.issueAttachmentUploadTool(),
 		r.issueReviewVoteTool(),

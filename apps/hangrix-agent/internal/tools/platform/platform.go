@@ -449,6 +449,11 @@ func All(client *Client) []local.Tool {
 			}, []string{"body"}),
 		},
 		{
+			name:        "issue_edit",
+			description: "Edit the current issue's title and/or body. At least one of `title` or `body` must be provided. When the title changes a `title_changed` event is written to the timeline; a body-only edit is silent. Title must be non-empty and ≤200 characters.",
+			schema:      issueEditSchema(),
+		},
+		{
 			name:        "issue_review_vote",
 			description: "Cast a structured review vote on a contribution branch (approve / reject / abstain). A branch is approved once every required reviewer votes approve/abstain; any reject rejects it. Pass the contribution_id from contribution_list; you cannot approve your own contribution.",
 			schema: objectSchema(map[string]any{
@@ -620,3 +625,26 @@ func enumProp(desc string, values []string) map[string]any {
 func boolProp(desc string) map[string]any {
 	return map[string]any{"type": "boolean", "description": desc}
 }
+
+func issueEditSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"title": map[string]any{
+				"type":        "string",
+				"description": "New title for the current issue. Must be non-empty and ≤200 characters. Omit to leave unchanged.",
+				"minLength":   1,
+				"maxLength":   200,
+			},
+			"body": map[string]any{
+				"type":        "string",
+				"description": "New body (markdown) for the current issue. Omit to leave unchanged.",
+			},
+		},
+		"anyOf": []map[string]any{
+			{"required": []string{"title"}},
+			{"required": []string{"body"}},
+		},
+	}
+}
+

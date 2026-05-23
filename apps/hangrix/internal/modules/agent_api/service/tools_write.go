@@ -686,6 +686,82 @@ func (r *Registry) issueCreateTool() *agentapidomain.Tool {
 	}
 }
 
+// issueEditTool edits the current issue's title and/or body. At least one
+// of title/body must be supplied. When title changes, a title_changed
+// timeline event is emitted. Body-only changes do not create an event.
+// Access is gated by the role's `can:` whitelist (issue_edit).
+func (r *Registry) issueEditTool() *agentapidomain.Tool {
+	return &agentapidomain.Tool{
+		Name:        "issue_edit",
+		Description: "Edit the current issue's title and/or body. At least one of `title` or `body` is required. Title changes write a `title_changed` timeline event. Requires `issue_edit` in the role's `can:` whitelist.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"title": map[string]any{
+					"type":        "string",
+					"description": "Optional new title (1-200 chars). If omitted, the title is unchanged.",
+				},
+				"body": map[string]any{
+					"type":        "string",
+					"description": "Optional new body (markdown). If omitted, the body is unchanged.",
+				},
+			},
+		},
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+			scope, err := r.loadScope(ctx, sess)
+			if err != nil {
+				return errorResult(err.Error()), nil
+			}
+			var req struct {
+				Title *string `json:"title"`
+				Body  *string `json:"body"`
+			}
+			if err := unmarshalArgs(args, &req); err != nil {
+				return errorResult("invalid arguments: " + err.Error()), nil
+			}
+			if req.Title == nil && req.Body == nil {
+				return errorResult("at least one of 'title' or 'body' is required"), nil
+			}
+
+			title := scope.issue.Title
+			if req.Title != nil {
+				title = strings.TrimSpace(*req.Title)
+				if title == "" || len(title) > 200 {
+					return errorResult("title is required (1-200 chars)"), nil
+				}
+			}
+			body := scope.issue.Body
+			if req.Body != nil {
+				body = *req.Body
+			}
+
+			titleChanged := title != scope.issue.Title
+
+			updated, err := r.deps.Issues.UpdateTitleBody(ctx, scope.issue.ID, title, body)
+			if err != nil {
+				return errorResult("update issue: " + err.Error()), nil
+			}
+
+			if titleChanged {
+				payload, _ := json.Marshal(issuedomain.TitleChangedPayload{
+					From: scope.issue.Title,
+					To:   title,
+				})
+				_, _ = r.deps.Issues.CreateAgentEvent(
+					ctx, scope.issue.ID, issuedomain.EventTitleChanged, payload, sess.RoleKey,
+				)
+			}
+
+			return textResult(map[string]any{
+				"title":         updated.Title,
+				"body":          updated.Body,
+				"title_changed": titleChanged,
+			}), nil
+		},
+	}
+}
+
+
 // unmarshalArgs accepts an empty body as the empty object — LLMs
 // occasionally emit `""` for no-arg tools and we don't want that to
 // reject the call.
