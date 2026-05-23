@@ -233,14 +233,6 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Check whether the client negotiated sideband capability. This gates
-	// sideband-2 progress injection in runReceivePackWithSideband: injecting
-	// sideband-encoded output into a stream the client doesn't expect to be
-	// sideband-multiplexed would corrupt the protocol. While git always
-	// negotiates sideband under --stateless-rpc, an explicit check is a
-	// defence-in-depth against non-standard clients.
-	sidebandCapable := hasReceivePackSideband(bodyBytes)
-
 	// Replay the original (now decompressed) body to the git receive-pack
 	// subprocess. Objects already exist from the unpack above, so
 	// receive-pack will skip re-storing them and proceed to ref updates.
@@ -249,10 +241,13 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 	// We buffer stdout (rather than wiring it directly to w) so that we can
 	// inject sideband progress messages after PostReceive runs. A typical
 	// receive-pack response is a few hundred bytes of pkt-line status; the
-	// pack data is on stdin, not stdout.
+	// pack data is on stdin, not stdout. Sideband gating is done inside
+	// runReceivePackWithSideband by inspecting the actual receive-pack
+	// stdout (hasSidebandResponse), which is more reliable than checking
+	// push capabilities.
 	r.Header.Del("Content-Encoding")
 	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-	h.runReceivePackWithSideband(w, r, fsPath, repo, caller, refUpdates, sidebandCapable)
+	h.runReceivePackWithSideband(w, r, fsPath, repo, caller, refUpdates)
 
 	// Push may have changed refs (branch / tag updates, force-pushes,
 	// etc.) — drop every git-read cache key for this repo so the next
@@ -314,7 +309,7 @@ func (h *Handler) runStatelessRPC(w http.ResponseWriter, r *http.Request, sub, f
 // recognised — injects extra sideband-2 progress messages into the response
 // before the terminating flush pkt. The caller's response writer receives the
 // complete, possibly augmented pkt-line stream.
-func (h *Handler) runReceivePackWithSideband(w http.ResponseWriter, r *http.Request, fsPath string, repo *domain.Repo, caller *gitCaller, refUpdates []domain.PushRefUpdate, sidebandCapable bool) {
+func (h *Handler) runReceivePackWithSideband(w http.ResponseWriter, r *http.Request, fsPath string, repo *domain.Repo, caller *gitCaller, refUpdates []domain.PushRefUpdate) {
 	body, err := decodeRequestBody(r)
 	if err != nil {
 		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
@@ -348,10 +343,13 @@ func (h *Handler) runReceivePackWithSideband(w http.ResponseWriter, r *http.Requ
 
 	// Inject contribution hints as sideband-2 progress messages before the
 	// terminating flush pkt so the pusher sees `remote:` lines with
-	// contribution IDs and next-step hints. Only done when the client
-	// negotiated sideband capability — injecting sideband-encoded data
-	// into a non-multiplexed stream would corrupt the protocol.
-	if sidebandCapable && len(allContribs) > 0 {
+	// contribution IDs and next-step hints. Gated on a response-side check:
+	// if the stdout stream's first pkt-line payload starts with a sideband
+	// channel marker (0x01/0x02/0x03), the response is multiplexed and we
+	// can safely inject. Checking the actual output is more reliable than
+	// parsing push capabilities because receive-pack's capability set does
+	// not include side-band/side-band-64k (fetch-side / upload-pack only).
+	if hasSidebandResponse(stdout.Bytes()) && len(allContribs) > 0 {
 		h.injectContributionHints(&stdout, allContribs)
 	}
 
@@ -738,19 +736,24 @@ func parseReceivePackRefs(data []byte) ([]domain.PushRefUpdate, int) {
 	return refs, pos
 }
 
-// hasReceivePackSideband checks whether the first pkt-line of a git
-// receive-pack request negotiated the sideband capability. The data must be the
-// decoded (decompressed) request body. When the client negotiates side-band or
-// side-band-64k, the server may inject sideband-2 progress messages into the
-// response stream; without this negotiation, sideband-encoded output would
-// corrupt the protocol.
-func hasReceivePackSideband(data []byte) bool {
-	if len(data) < 4 {
+// hasSidebandResponse checks whether the stdout from `git receive-pack
+// --stateless-rpc` is sideband-multiplexed by inspecting the first pkt-line's
+// payload. Under --stateless-rpc, receive-pack unconditionally uses sideband
+// for its response: the first byte after each pkt-line's 4-hex-digit length
+// prefix is a channel marker (0x01=pack, 0x02=progress, 0x03=error). A plain
+// (non-multiplexed) pkt-line would start with printable text instead, so
+// looking for channel bytes in the initial output is more reliable than
+// checking the push request's capabilities — the request-side receive-pack
+// capability set does not include side-band/side-band-64k (those are
+// upload-pack / fetch-side).
+func hasSidebandResponse(data []byte) bool {
+	if len(data) < 5 {
 		return false
 	}
-	// Read the first pkt-line length.
+	// Read the first pkt-line's 4-byte hex length prefix.
 	lenHex := string(data[:4])
 	if lenHex == "0000" {
+		// Empty stream — nothing to multiplex, but also nothing to inject into.
 		return false
 	}
 	pktLen, err := hex.DecodeString(lenHex)
@@ -758,24 +761,14 @@ func hasReceivePackSideband(data []byte) bool {
 		return false
 	}
 	pl := int(pktLen[0])<<8 | int(pktLen[1])
-	if pl < 4 || pl+4 > len(data) {
+	if pl < 5 || pl > len(data) {
+		// Need at least 5 bytes: 4-byte prefix + 1 data byte (channel marker).
 		return false
 	}
-	payload := data[4 : pl+4]
-
-	// The first ref command is: <old-sha> <new-sha> <refname>\0<capabilities>
-	// Capabilities are space-separated after the NUL byte.
-	idx := bytes.IndexByte(payload, 0)
-	if idx < 0 {
-		return false
-	}
-	caps := string(payload[idx+1:])
-	for _, c := range strings.Fields(caps) {
-		if c == "side-band" || c == "side-band-64k" {
-			return true
-		}
-	}
-	return false
+	// The first data byte after the length prefix is the payload's first byte.
+	// In sideband mode this is a channel marker (0x01, 0x02, or 0x03).
+	ch := data[4]
+	return ch == 1 || ch == 2 || ch == 3
 }
 
 
