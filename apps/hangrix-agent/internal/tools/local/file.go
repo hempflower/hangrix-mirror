@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -173,6 +174,8 @@ type editArgs struct {
 	All          bool   `json:"all"`           // replace: replace every occurrence (default first only)
 	Anchor       string `json:"anchor"`        // optional: text to locate as a proximity anchor; search for 'find' within ±anchor_radius lines
 	AnchorRadius int    `json:"anchor_radius"` // default 80; lines to search on each side of the anchor
+	Formatting   bool   `json:"formatting"`    // optional: run language formatter on the result before writing (default false)
+
 }
 
 type editTool struct{ tracker *ReadTracker }
@@ -196,6 +199,7 @@ func (editTool) Schema() map[string]any {
 			"all":           map[string]any{"type": "boolean", "description": "replace: replace every occurrence; default false (first only)."},
 			"anchor":        map[string]any{"type": "string", "description": "optional: nearby text that unambiguously identifies the region. When set, 'find' is only searched within ±anchor_radius lines of the anchor."},
 			"anchor_radius": map[string]any{"type": "integer", "description": "lines to search on each side of the anchor. Default 80."},
+				"formatting":    map[string]any{"type": "boolean", "description": "optional: run language formatter (gofmt/prettier/rustfmt) on the result before writing. Default false."},
 		},
 		"required": []string{"path", "mode"},
 	}
@@ -235,6 +239,32 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 		a.AnchorRadius = 80
 	}
 
+	// ----- line-level edit constraints -----
+	// All find/anchor/replace/insert must sit on complete line boundaries
+	// (starts at BOF or after \n, ends at EOF or before \n).  Validation
+	// runs after CRLF→LF normalisation so the checks always use \n.
+
+	if a.Find != "" {
+		if err := validateFindLineBlock(original, a.Find); err != nil {
+			return nil, err
+		}
+	}
+	if a.Anchor != "" {
+		if err := validateFindLineBlock(original, a.Anchor); err != nil {
+			return nil, err
+		}
+	}
+	if a.Mode == "replace" && a.Find != "" {
+		if err := validateReplaceLineBlock(a.Replace, a.Find); err != nil {
+			return nil, err
+		}
+	}
+	if a.Mode == "insert" {
+		if err := validateInsertText(a.Text); err != nil {
+			return nil, err
+		}
+	}
+
 	var updated string
 	var changed int
 	switch a.Mode {
@@ -260,10 +290,31 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 		}
 
 		if a.All {
-			// All: replace every occurrence in the full file. Anchor
-			// is irrelevant because we match everywhere.
-			updated = strings.ReplaceAll(original, a.Find, a.Replace)
-			changed = strings.Count(original, a.Find)
+			// All: replace every complete-line-boundary occurrence.
+			// Mid-line occurrences are left untouched — only positions
+			// where isCompleteLineBlock returns true are replaced.
+			var buf strings.Builder
+			idx := 0
+			for {
+				pos := strings.Index(original[idx:], a.Find)
+				if pos < 0 {
+					buf.WriteString(original[idx:])
+					break
+				}
+				absPos := idx + pos
+				if isCompleteLineBlock(original, absPos, a.Find) {
+					buf.WriteString(original[idx:absPos])
+					buf.WriteString(a.Replace)
+					changed++
+					idx = absPos + len(a.Find)
+				} else {
+					// Skip this mid-line occurrence but advance past
+					// its first character so we don't loop forever.
+					buf.WriteString(original[idx : absPos+1])
+					idx = absPos + 1
+				}
+			}
+			updated = buf.String()
 		} else if a.Anchor != "" {
 			// Single hit within the anchor region: find every
 			// occurrence and pick the one closest to the anchor line.
@@ -273,9 +324,10 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 				changed = 1
 			}
 		} else {
-			// Full file, first match.
-			updated = strings.Replace(original, a.Find, a.Replace, 1)
-			if updated != original {
+			// Full file, first complete-line-boundary match.
+			matchPos := findFirstCompleteLineOccurrence(original, a.Find)
+			if matchPos >= 0 {
+				updated = original[:matchPos] + a.Replace + original[matchPos+len(a.Find):]
 				changed = 1
 			}
 		}
@@ -290,9 +342,12 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 		if a.After < 0 || a.After > len(lines) {
 			return nil, fmt.Errorf("edit (insert): 'after'=%d is outside the file's line range [0, %d]. Use 0 to prepend at the top, a 1-based line number to insert immediately after that line, or %d to append at the end.", a.After, len(lines), len(lines))
 		}
+		// Text has been validated (non-empty, ends with \n).  Strip the
+		// trailing newline, split into individual lines, and insert.
+		insertLines := strings.Split(strings.TrimSuffix(a.Text, "\n"), "\n")
 		head := append([]string{}, lines[:a.After]...)
 		tail := append([]string{}, lines[a.After:]...)
-		head = append(head, a.Text)
+		head = append(head, insertLines...)
 		head = append(head, tail...)
 		updated = strings.Join(head, "\n")
 		changed = 1
@@ -322,9 +377,12 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 				updated = original[:matchPos] + original[matchPos+len(a.Find):]
 				found = true
 			}
-		} else if strings.Contains(original, a.Find) {
-			updated = strings.Replace(original, a.Find, "", 1)
-			found = true
+		} else {
+			matchPos := findFirstCompleteLineOccurrence(original, a.Find)
+			if matchPos >= 0 {
+				updated = original[:matchPos] + original[matchPos+len(a.Find):]
+				found = true
+			}
 		}
 
 		if !found {
@@ -337,6 +395,43 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("edit: unknown mode %q. Supported modes are 'replace' (find/replace text), 'insert' (add text at/after a line number), and 'delete' (remove a piece of text). Set 'mode' to one of those.", a.Mode)
 	}
 
+	// ----- formatting -----
+	// Run language formatter on the result before write when requested.
+	// If the formatter is unavailable or fails we write the unformatted
+	// content and report the problem in the result — formatting errors
+	// are advisory, never fatal.
+	var fmtResult map[string]any
+	if a.Formatting {
+		fmtName := formatterName(a.Path)
+		if fmtName == "" {
+			fmtResult = map[string]any{
+				"attempted": true,
+				"ok":        false,
+				"path":      a.Path,
+				"error":     fmt.Sprintf("该文件类型 (%s) 不支持自动格式化", filepath.Ext(a.Path)),
+			}
+		} else {
+			formatted, fmtErr := runFormatter(a.Path, []byte(updated))
+			if fmtErr != nil {
+				fmtResult = map[string]any{
+					"attempted": true,
+					"ok":        false,
+					"formatter": fmtName,
+					"path":      a.Path,
+					"error":     fmtErr.Error(),
+				}
+			} else {
+				updated = string(formatted)
+				fmtResult = map[string]any{
+					"attempted": true,
+					"ok":        true,
+					"formatter": fmtName,
+					"path":      a.Path,
+				}
+			}
+		}
+	}
+
 	// Restore the original line ending style before writing back.
 	if usesCRLF {
 		updated = strings.ReplaceAll(updated, "\n", "\r\n")
@@ -345,33 +440,64 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 	if err := os.WriteFile(a.Path, []byte(updated), 0o644); err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	result := map[string]any{
 		"path":         a.Path,
 		"mode":         a.Mode,
 		"occurrences":  changed,
 		"bytes_before": len(original),
 		"bytes_after":  len(updated),
 		"diff":         computeUnifiedDiff(original, updated, a.Path),
-	}, nil
+	}
+	if fmtResult != nil {
+		result["formatting"] = fmtResult
+	}
+	return result, nil
 }
 
 // ----- edit helpers -----------------------------------------------------------
 
-// findSubstringLine returns the 0-based line number of the first occurrence
-// of needle in the original string. Returns -1 if not found.
+// findSubstringLine returns the 0-based line number of the first
+// complete-line-boundary occurrence of needle in original.
+// Returns -1 if no such occurrence exists.
 func findSubstringLine(original, needle string) int {
-	pos := strings.Index(original, needle)
-	if pos < 0 {
-		return -1
+	idx := 0
+	for {
+		pos := strings.Index(original[idx:], needle)
+		if pos < 0 {
+			return -1
+		}
+		absPos := idx + pos
+		if isCompleteLineBlock(original, absPos, needle) {
+			return strings.Count(original[:absPos], "\n")
+		}
+		idx = absPos + 1
 	}
-	return strings.Count(original[:pos], "\n")
+}
+
+// findFirstCompleteLineOccurrence returns the byte offset of the first
+// complete-line-boundary occurrence of needle in original.
+// Returns -1 if no such occurrence exists.
+func findFirstCompleteLineOccurrence(original, needle string) int {
+	idx := 0
+	for {
+		pos := strings.Index(original[idx:], needle)
+		if pos < 0 {
+			return -1
+		}
+		absPos := idx + pos
+		if isCompleteLineBlock(original, absPos, needle) {
+			return absPos
+		}
+		idx = absPos + 1
+	}
 }
 
 // findOccurrenceInRegion returns the byte offset of the occurrence of `find`
 // in `original` that is closest to `anchorLine` among those whose starting
-// line is within [lineStart, lineEnd). When anchorLine is -1 the first
-// match in the region is returned. Returns -1 when find is empty or no
-// occurrence falls within the region.
+// line is within [lineStart, lineEnd) AND that sit on complete line
+// boundaries. When anchorLine is -1 the first match in the region is
+// returned. Returns -1 when find is empty or no qualifying occurrence falls
+// within the region.
 func findOccurrenceInRegion(original, find string, lineStart, lineEnd, anchorLine int) int {
 	if find == "" {
 		return -1
@@ -386,7 +512,7 @@ func findOccurrenceInRegion(original, find string, lineStart, lineEnd, anchorLin
 		}
 		absPos := idx + pos
 		lineNo := strings.Count(original[:absPos], "\n")
-		if lineNo >= lineStart && lineNo < lineEnd {
+		if lineNo >= lineStart && lineNo < lineEnd && isCompleteLineBlock(original, absPos, find) {
 			// Signed distance: positive = after anchor, negative = before.
 			// When two occurrences are equally distant in absolute terms,
 			// prefer the one at or after the anchor.
@@ -511,8 +637,153 @@ func computeUnifiedDiff(original, updated, path string) string {
 	return buf.String()
 }
 
-// ----- glob -----
+// ----- edit line-boundary validators -------------------------------------------
 
+// isCompleteLineBlock reports whether text at position pos in original sits
+// on complete line boundaries: starts at position 0 or after \n, ends at a
+// line boundary (either text ends with \n, or the character after it is \n
+// or EOF).
+func isCompleteLineBlock(original string, pos int, text string) bool {
+	// Must start at BOF or after \n.
+	if pos > 0 && original[pos-1] != '\n' {
+		return false
+	}
+	// Must end at a line boundary.  If the text itself ends with \n it
+	// already includes the boundary; otherwise the character immediately
+	// after the match must be \n or EOF.
+	if !strings.HasSuffix(text, "\n") {
+		end := pos + len(text)
+		if end < len(original) && original[end] != '\n' {
+			return false
+		}
+	}
+	return true
+}
+
+// validateFindLineBlock checks that at least one occurrence of text in
+// original sits on complete line boundaries.  Mid-line occurrences are
+// acceptable as long as there is at least one complete-line match — the
+// actual edit logic (findOccurrenceInRegion / findSubstringLine) will
+// select only complete-line-boundary occurrences.
+//
+// When text does not appear in original at all, validateFindLineBlock
+// returns nil — the edit logic will surface a richer match-failure error
+// with file-context previews.
+func validateFindLineBlock(original, text string) error {
+	if text == "" {
+		return nil
+	}
+	foundAny := false
+	idx := 0
+	for {
+		pos := strings.Index(original[idx:], text)
+		if pos < 0 {
+			break
+		}
+		foundAny = true
+		absPos := idx + pos
+		if isCompleteLineBlock(original, absPos, text) {
+			return nil // at least one complete-line occurrence found
+		}
+		idx = absPos + 1
+	}
+	if !foundAny {
+		return nil // text not in file — let edit logic produce a contextual error
+	}
+	return fmt.Errorf("edit: 'find' text must match complete lines (start at beginning of file or after a newline, end at end of file or before a newline). No occurrence sits on complete line boundaries — use a full line or include surrounding line context (e.g. \"\\n%s\" or \"%s\\n\").", text, text)
+}
+
+// validateReplaceLineBlock enforces that when find ends with \n, replace
+// also ends with \n (empty replace is allowed).  This keeps the file's
+// line structure intact.
+func validateReplaceLineBlock(replace, find string) error {
+	if strings.HasSuffix(find, "\n") && !strings.HasSuffix(replace, "\n") && replace != "" {
+		return fmt.Errorf("edit: 'find' ends with a newline but 'replace' does not. Add a trailing newline to 'replace' or remove it from 'find' to keep line boundaries consistent.")
+	}
+	return nil
+}
+
+// validateInsertText enforces that insert-mode text is non-empty and ends
+// with a newline.
+func validateInsertText(text string) error {
+	if text == "" {
+		return fmt.Errorf("edit: 'text' must not be empty in insert mode. Provide the content to insert, ending with a newline.")
+	}
+	if !strings.HasSuffix(text, "\n") {
+		return fmt.Errorf("edit: 'text' must end with a newline in insert mode. Add \\n at the end.")
+	}
+	return nil
+}
+
+// ----- formatting helpers -----------------------------------------------------
+
+// formatterName returns the canonical formatter name for a given file path,
+// or "" when the extension is not supported.
+func formatterName(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".go":
+		return "gofmt"
+	case ".js", ".ts", ".vue", ".json", ".md", ".yaml", ".yml":
+		return "prettier"
+	case ".rs":
+		return "rustfmt"
+	default:
+		return ""
+	}
+}
+
+// runFormatter dispatches to the right formatter for path.  It returns
+// the formatted content or the first error (missing binary / non-zero exit).
+func runFormatter(path string, content []byte) ([]byte, error) {
+	name := formatterName(path)
+	switch name {
+	case "gofmt":
+		return runGofmt(content)
+	case "prettier":
+		return runPrettier(path, content)
+	case "rustfmt":
+		return runRustfmt(content)
+	default:
+		return nil, fmt.Errorf("no formatter for %q", filepath.Ext(path))
+	}
+}
+
+func runGofmt(content []byte) ([]byte, error) {
+	cmd := exec.Command("gofmt")
+	cmd.Stdin = bytes.NewReader(content)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("gofmt: %w", err)
+	}
+	return out.Bytes(), nil
+}
+
+func runPrettier(path string, content []byte) ([]byte, error) {
+	cmd := exec.Command("prettier", "--stdin-filepath", path)
+	cmd.Stdin = bytes.NewReader(content)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("prettier: %w", err)
+	}
+	return out.Bytes(), nil
+}
+
+func runRustfmt(content []byte) ([]byte, error) {
+	cmd := exec.Command("rustfmt", "--emit=stdout")
+	cmd.Stdin = bytes.NewReader(content)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("rustfmt: %w", err)
+	}
+	return out.Bytes(), nil
+}
 
 // ----- glob -----
 

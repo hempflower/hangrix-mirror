@@ -20,7 +20,7 @@ func TestEditRequiresPriorRead(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
-	if err := os.WriteFile(path, []byte("hello world"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("hello world\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -33,7 +33,7 @@ func TestEditRequiresPriorRead(t *testing.T) {
 	// self-correct, so stripping the explanation regresses behaviour even
 	// though the refusal itself still happens.
 	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
-		"path": path, "mode": "replace", "find": "hello", "replace": "hi",
+		"path": path, "mode": "replace", "find": "hello world\n", "replace": "hi world\n",
 	}))
 	if err == nil || !strings.Contains(err.Error(), "was not read") {
 		t.Fatalf("expected read-first refusal, got %v", err)
@@ -50,12 +50,12 @@ func TestEditRequiresPriorRead(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 	if _, err := editTool.Call(context.Background(), mustJSON(map[string]any{
-		"path": path, "mode": "replace", "find": "hello", "replace": "hi",
+		"path": path, "mode": "replace", "find": "hello world\n", "replace": "hi world\n",
 	})); err != nil {
 		t.Fatalf("edit after read: %v", err)
 	}
 	body, _ := os.ReadFile(path)
-	if string(body) != "hi world" {
+	if string(body) != "hi world\n" {
 		t.Errorf("edit not applied: %q", string(body))
 	}
 }
@@ -276,7 +276,7 @@ func TestEditInsertVerbatim(t *testing.T) {
 	// Insert a line with 4-space indentation — should be kept verbatim.
 	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
 		"path": path, "mode": "insert", "after": 1,
-		"text": "    y := 2",
+		"text": "    y := 2\n",
 	}))
 	if err != nil {
 		t.Fatalf("edit insert: %v", err)
@@ -335,8 +335,8 @@ func TestEditAnchorDisambiguatesExactMatch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
 
-	// "duplicate" appears twice — anchor disambiguates.
-	content := "first duplicate\n...\nmarker here\n...\nsecond duplicate\n"
+	// "duplicate\n" appears twice — anchor disambiguates.
+	content := "duplicate\n...\nmarker here\n...\nduplicate\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -349,12 +349,12 @@ func TestEditAnchorDisambiguatesExactMatch(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 
-	// Replace the SECOND "duplicate" (near "marker here").
+	// Replace the SECOND "duplicate\n" (near "marker here").
 	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
 		"path":    path,
 		"mode":    "replace",
-		"find":    "duplicate",
-		"replace": "changed",
+		"find":    "duplicate\n",
+		"replace": "changed\n",
 		"anchor":  "marker here",
 	}))
 	if err != nil {
@@ -363,10 +363,10 @@ func TestEditAnchorDisambiguatesExactMatch(t *testing.T) {
 
 	body, _ := os.ReadFile(path)
 	got := string(body)
-	if !strings.Contains(got, "first duplicate") {
+	if !strings.Contains(got, "duplicate\n...\nmarker") {
 		t.Errorf("first 'duplicate' should be unchanged, got: %q", got)
 	}
-	if !strings.Contains(got, "second changed") {
+	if !strings.Contains(got, "changed\n") {
 		t.Errorf("second 'duplicate' should be changed to 'changed', got: %q", got)
 	}
 }
@@ -378,7 +378,7 @@ func TestEditDeleteWithAnchor(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
 
-	content := "keep me\n...\nunique anchor\n...\ndelete me\n"
+	content := "keep\nme\n...\n...\nunique anchor\n...\ndelete\nme\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -391,12 +391,12 @@ func TestEditDeleteWithAnchor(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 
-	// Delete "me" near "unique anchor" — should delete the SECOND "me",
-	// leaving "keep me" intact.
+	// Delete "me\n" near "unique anchor" — should delete the SECOND "me\n",
+	// leaving the first "me\n" intact.
 	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
 		"path":   path,
 		"mode":   "delete",
-		"find":   "me",
+		"find":   "me\n",
 		"anchor": "unique anchor",
 	}))
 	if err != nil {
@@ -405,10 +405,10 @@ func TestEditDeleteWithAnchor(t *testing.T) {
 
 	body, _ := os.ReadFile(path)
 	got := string(body)
-	if !strings.Contains(got, "keep me") {
+	if !strings.Contains(got, "keep\nme") {
 		t.Errorf("first 'me' should be unchanged, got: %q", got)
 	}
-	if strings.Contains(got, "delete me") {
+	if strings.Contains(got, "delete\nme") {
 		t.Errorf("second 'me' should be deleted, got: %q", got)
 	}
 }
@@ -609,7 +609,7 @@ func TestEditReturnsDiffOnInsert(t *testing.T) {
 
 	res, err := editTool.Call(context.Background(), mustJSON(map[string]any{
 		"path": path, "mode": "insert", "after": 2,
-		"text": "line three",
+		"text": "line three\n",
 	}))
 	if err != nil {
 		t.Fatalf("edit insert: %v", err)
@@ -1748,6 +1748,605 @@ func TestBashTermDumbCursorCapabilities(t *testing.T) {
 		})
 	}
 }
+
+// ----- edit line-constraint tests -------------------------------------------
+
+// TestEditFindNotAtLineBoundary verifies that find text matching mid-line
+// (not starting/ending at a line boundary) is rejected.
+func TestEditFindNotAtLineBoundary(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "hello world\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// "ello" sits mid-line — should be rejected.
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace", "find": "ello", "replace": "ELLO",
+	}))
+	if err == nil {
+		t.Fatal("expected error for find not at line boundary")
+	}
+	if !strings.Contains(err.Error(), "complete lines") {
+		t.Errorf("error should mention line boundary constraint; got: %v", err)
+	}
+}
+
+// TestEditAnchorNotAtLineBoundary verifies that anchor text matching mid-line
+// is rejected.
+func TestEditAnchorNotAtLineBoundary(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "hello world\nfoo bar\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Anchor "foo" sits mid-line — should be rejected.
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace",
+		"find": "bar", "replace": "BAR",
+		"anchor": "foo",
+	}))
+	if err == nil {
+		t.Fatal("expected error for anchor not at line boundary")
+	}
+	if !strings.Contains(err.Error(), "complete lines") {
+		t.Errorf("error should mention line boundary constraint; got: %v", err)
+	}
+}
+
+// TestEditReplaceMissingNewline verifies that when find ends with \n, replace
+// must also end with \n (unless empty).
+func TestEditReplaceMissingNewline(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "line one\nline two\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// find ends with \n, replace does not — error.
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace",
+		"find": "line one\n", "replace": "LINE ONE",
+	}))
+	if err == nil {
+		t.Fatal("expected error for replace without trailing newline")
+	}
+	if !strings.Contains(err.Error(), "newline") {
+		t.Errorf("error should mention newline; got: %v", err)
+	}
+}
+
+// TestEditInsertMissingNewline verifies that insert text without trailing \n
+// is rejected.
+func TestEditInsertMissingNewline(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "line one\nline two\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "insert", "after": 1,
+		"text": "new line without newline",
+	}))
+	if err == nil {
+		t.Fatal("expected error for insert text without trailing newline")
+	}
+	if !strings.Contains(err.Error(), "newline") {
+		t.Errorf("error should mention newline requirement; got: %v", err)
+	}
+}
+
+// TestEditInsertEmpty verifies that empty insert text is rejected.
+func TestEditInsertEmpty(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "line one\nline two\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "insert", "after": 1,
+		"text": "",
+	}))
+	if err == nil {
+		t.Fatal("expected error for empty insert text")
+	}
+	if !strings.Contains(err.Error(), "must not be empty") {
+		t.Errorf("error should mention empty text; got: %v", err)
+	}
+}
+
+// TestEditValidCompleteLineFindReplace verifies that a full-line find+replace
+// (both ending with \n) succeeds.
+func TestEditValidCompleteLineFindReplace(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "line one\nline two\nline three\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace",
+		"find": "line two\n", "replace": "LINE TWO\n",
+	}))
+	if err != nil {
+		t.Fatalf("edit with complete-line find+replace: %v", err)
+	}
+
+	body, _ := os.ReadFile(path)
+	got := string(body)
+	if !strings.Contains(got, "LINE TWO") {
+		t.Errorf("line should be replaced; got: %q", got)
+	}
+	if strings.Contains(got, "line two") {
+		t.Errorf("original line should be gone; got: %q", got)
+	}
+}
+
+// TestEditCRLFLineConstraints verifies that line-boundary validation works
+// correctly on CRLF files (after normalisation).
+func TestEditCRLFLineConstraints(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crlf.txt")
+
+	content := []byte("hello\r\nworld\r\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Full-line find should succeed on CRLF file after normalisation.
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace",
+		"find": "hello\n", "replace": "hi\n",
+	}))
+	if err != nil {
+		t.Fatalf("edit with complete-line find on CRLF file: %v", err)
+	}
+
+	// Mid-line find should still be rejected on CRLF file.
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	_, err = editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace",
+		"find": "ell", "replace": "ELL",
+	}))
+	if err == nil {
+		t.Fatal("expected error for mid-line find on CRLF file")
+	}
+}
+
+// ----- edit formatting tests -------------------------------------------------
+
+// TestEditFormattingGoFile verifies that formatting=true on a .go file runs
+// gofmt and the formatting result is returned.
+func TestEditFormattingGoFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.go")
+
+	// Deliberately unformatted Go code.
+	content := "package main\n\nfunc main(){x:=1\n}\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	res, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace",
+		"find": "func main(){x:=1", "replace": "func main() { x := 1",
+		"formatting": true,
+	}))
+	if err != nil {
+		t.Fatalf("edit with formatting: %v", err)
+	}
+
+	var fields struct {
+		Formatting struct {
+			Attempted bool   `json:"attempted"`
+			Ok        bool   `json:"ok"`
+			Formatter string `json:"formatter"`
+			Path      string `json:"path"`
+			Error     string `json:"error"`
+		} `json:"formatting"`
+	}
+	if err := json.Unmarshal(mustReJSON(res), &fields); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if !fields.Formatting.Attempted {
+		t.Error("formatting.attempted should be true")
+	}
+	if !fields.Formatting.Ok {
+		t.Logf("formatting did not succeed (gofmt may not be installed): error=%q", fields.Formatting.Error)
+		// Don't fail on missing gofmt — CI may not have it.
+		return
+	}
+	if fields.Formatting.Formatter != "gofmt" {
+		t.Errorf("formatter = %q, want gofmt", fields.Formatting.Formatter)
+	}
+
+	body, _ := os.ReadFile(path)
+	got := string(body)
+	// gofmt should produce well-formatted code.
+	if !strings.Contains(got, "func main() {") {
+		t.Errorf("expected gofmt-formatted code; got: %q", got)
+	}
+}
+
+// TestEditFormattingUnsupportedExtension verifies that formatting=true on an
+// unsupported extension writes the file anyway and reports the failure.
+func TestEditFormattingUnsupportedExtension(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "readme.txt")
+
+	content := "hello world\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	res, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace",
+		"find": "hello world\n", "replace": "hi world\n",
+		"formatting": true,
+	}))
+	if err != nil {
+		t.Fatalf("edit with unsupported formatting extension should NOT fail: %v", err)
+	}
+
+	var fields struct {
+		Formatting struct {
+			Attempted bool   `json:"attempted"`
+			Ok        bool   `json:"ok"`
+			Error     string `json:"error"`
+		} `json:"formatting"`
+	}
+	if err := json.Unmarshal(mustReJSON(res), &fields); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if !fields.Formatting.Attempted {
+		t.Error("formatting.attempted should be true")
+	}
+	if fields.Formatting.Ok {
+		t.Error("formatting.ok should be false for unsupported extension")
+	}
+	if !strings.Contains(fields.Formatting.Error, "不支持") {
+		t.Errorf("error should mention unsupported; got: %q", fields.Formatting.Error)
+	}
+
+	// File must still be written.
+	body, _ := os.ReadFile(path)
+	if !strings.Contains(string(body), "hi") {
+		t.Errorf("file should have been written despite formatting failure; got: %q", string(body))
+	}
+}
+
+// TestEditFormattingMissingFormatter verifies that when the formatter binary
+// is missing, the file is still written and the error is reported.
+func TestEditFormattingMissingFormatter(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lib.rs")
+
+	content := "fn main(){}\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	res, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace",
+		"find": "fn main(){}", "replace": "fn main() {}",
+		"formatting": true,
+	}))
+	if err != nil {
+		t.Fatalf("edit with missing formatter should NOT fail: %v", err)
+	}
+
+	var fields struct {
+		Formatting struct {
+			Attempted bool   `json:"attempted"`
+			Ok        bool   `json:"ok"`
+			Error     string `json:"error"`
+		} `json:"formatting"`
+	}
+	if err := json.Unmarshal(mustReJSON(res), &fields); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if !fields.Formatting.Attempted {
+		t.Error("formatting.attempted should be true")
+	}
+	// rustfmt may or may not be installed; if it is, ok is true; if not, ok is false.
+	// Either way, the file must have been written.
+	if fields.Formatting.Ok {
+		t.Log("rustfmt was available and succeeded")
+	} else {
+		t.Logf("rustfmt not available or failed (expected in CI): %s", fields.Formatting.Error)
+	}
+
+	body, _ := os.ReadFile(path)
+	if !strings.Contains(string(body), "fn main() {}") {
+		t.Errorf("file should have been written despite formatting failure; got: %q", string(body))
+	}
+}
+
+// ----- edit mid-line coexistence tests ----------------------------------------
+
+// TestEditFindMidLineElsewhereCompleteLineTarget verifies the fix for the bug
+// where validateFindLineBlock rejected find text that had mid-line occurrences
+// elsewhere, even though a complete-line occurrence exists within the anchor
+// region.  Scenario: "hello world\nworld\n" with find="world", anchor="world\n"
+// — the first "world" is mid-line but the second is a complete line matching
+// the anchor, so the edit must succeed.
+func TestEditFindMidLineElsewhereCompleteLineTarget(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "hello world\nworld\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// find="world" appears mid-line in "hello world" AND as the complete
+	// line "world\n".  The anchor "world\n" narrows to the second occurrence.
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path":    path,
+		"mode":    "replace",
+		"find":    "world",
+		"replace": "earth",
+		"anchor":  "world\n",
+	}))
+	if err != nil {
+		t.Fatalf("edit with mid-line coexistence: %v", err)
+	}
+
+	body, _ := os.ReadFile(path)
+	got := string(body)
+	if !strings.Contains(got, "hello world") {
+		t.Errorf("first line should be unchanged; got: %q", got)
+	}
+	if !strings.Contains(got, "earth\n") {
+		t.Errorf("second line should be 'earth'; got: %q", got)
+	}
+}
+
+// TestEditFindMidLineOnlyStillRejected verifies that find text with ONLY
+// mid-line occurrences (no complete-line match anywhere) is still rejected.
+func TestEditFindMidLineOnlyStillRejected(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "hello world\nfoo bar\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// "orld" appears only once, mid-line in "hello world" — no complete-line
+	// occurrence exists anywhere, so validation must reject.
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace",
+		"find": "orld", "replace": "ORLD",
+	}))
+	if err == nil {
+		t.Fatal("expected error for find with no complete-line occurrence")
+	}
+	if !strings.Contains(err.Error(), "complete lines") {
+		t.Errorf("error should mention line boundary constraint; got: %v", err)
+	}
+}
+
+// TestEditAnchorMidLineElsewhereCompleteLineAnchor verifies that an anchor
+// with mid-line occurrences elsewhere but at least one complete-line match
+// is accepted.
+func TestEditAnchorMidLineElsewhereCompleteLineAnchor(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	// "bar" appears mid-line in "foo bar" and as a complete line "bar\n".
+	// anchor="bar\n" should be accepted (at least one complete-line match).
+	content := "foo bar\n...\nbar\n...\ntarget here\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path":    path,
+		"mode":    "replace",
+		"find":    "target here",
+		"replace": "changed here",
+		"anchor":  "bar\n",
+	}))
+	if err != nil {
+		t.Fatalf("edit with anchor having mid-line coexistence: %v", err)
+	}
+
+	body, _ := os.ReadFile(path)
+	got := string(body)
+	if !strings.Contains(got, "foo bar") {
+		t.Errorf("'foo bar' should be unchanged; got: %q", got)
+	}
+	if !strings.Contains(got, "changed here") {
+		t.Errorf("'target here' should be changed; got: %q", got)
+	}
+}
+
+// TestEditReplaceAllCompleteLineOnly verifies that all=true only replaces
+// complete-line-boundary occurrences, leaving mid-line occurrences intact.
+// Reproduction from review: file "hello world\nworld\n", find="world",
+// replace="earth", all=true → "hello world\nearth\n" (first "world" in
+// "hello world" is mid-line and must not be replaced).
+func TestEditReplaceAllCompleteLineOnly(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	content := "hello world\nworld\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	readTool := tools["read"]
+	editTool := tools["edit"]
+
+	if _, err := readTool.Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	_, err := editTool.Call(context.Background(), mustJSON(map[string]any{
+		"path":    path,
+		"mode":    "replace",
+		"find":    "world",
+		"replace": "earth",
+		"all":     true,
+	}))
+	if err != nil {
+		t.Fatalf("edit all=true with mid-line coexistence: %v", err)
+	}
+
+	body, _ := os.ReadFile(path)
+	got := string(body)
+	if got != "hello world\nearth\n" {
+		t.Errorf("expected 'hello world\\nearth\\n', got: %q", got)
+	}
+}
+
+
+
+
+
 
 
 
