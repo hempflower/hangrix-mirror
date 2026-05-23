@@ -170,12 +170,27 @@ func (r *Registry) issueDiffTool() *agentapidomain.Tool {
 			if scope.issue.HeadSHA == "" {
 				return textResult(map[string]any{"files": []any{}}), nil
 			}
-			diffs, err := r.deps.Git.DiffMergeBase(scope.fsPath, scope.issue.BaseBranch, scope.issue.BranchName)
-			if err != nil {
-				if errors.Is(err, gitdomain.ErrRefNotFound) {
+			var (
+				diffs []*gitdomain.FileDiff
+				derr  error
+			)
+			// After the issue is merged the issue branch may have been deleted;
+			// recover the pre-merge base tip from the branch_merged event so the
+			// diff continues to show what the issue introduced. (Mirrors the web
+			// handler diff() post-merge path.)
+			if scope.issue.State == issuedomain.StateMerged {
+				if pre := r.preMergeBaseRef(ctx, scope); pre != "" {
+					diffs, derr = r.deps.Git.DiffRefs(scope.fsPath, pre, scope.issue.HeadSHA)
+				}
+			}
+			if diffs == nil && derr == nil {
+				diffs, derr = r.deps.Git.DiffMergeBase(scope.fsPath, scope.issue.BaseBranch, scope.issue.BranchName)
+			}
+			if derr != nil {
+				if errors.Is(derr, gitdomain.ErrRefNotFound) {
 					return textResult(map[string]any{"files": []any{}}), nil
 				}
-				return errorResult("diff: " + err.Error()), nil
+				return errorResult("diff: " + derr.Error()), nil
 			}
 			return textResult(map[string]any{"files": diffs}), nil
 		},
@@ -431,3 +446,38 @@ func (r *Registry) issueMergeableTool() *agentapidomain.Tool {
 		},
 	}
 }
+
+// preMergeBaseRef recovers the base-branch tip as of the moment the issue was
+// merged, by reading the BaseSHA stamped onto the branch_merged event payload.
+// Returns "" if the event is missing or the payload doesn't carry BaseSHA.
+// Mirrors the web handler's preMergeBaseRef.
+func (r *Registry) preMergeBaseRef(ctx context.Context, scope *sessionScope) string {
+	events, err := r.deps.Issues.ListEvents(ctx, scope.issue.ID)
+	if err != nil {
+		return ""
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		e := events[i]
+		if e.Kind != issuedomain.EventBranchMerged {
+			continue
+		}
+		var p issuedomain.BranchMergedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return ""
+		}
+		if p.BaseSHA != "" {
+			return p.BaseSHA
+		}
+		// Legacy merge-commit events without BaseSHA: reconstruct from the merge
+		// commit's first parent.
+		if p.Mode == "merge-commit" && scope.issue.MergeCommitSHA != "" {
+			mc, err := r.deps.Git.ListCommits(scope.fsPath, scope.issue.MergeCommitSHA, 0, 1)
+			if err == nil && len(mc) == 1 && len(mc[0].ParentSHAs) > 0 {
+				return mc[0].ParentSHAs[0]
+			}
+		}
+		return ""
+	}
+	return ""
+}
+
