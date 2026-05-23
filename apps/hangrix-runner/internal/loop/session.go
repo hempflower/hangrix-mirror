@@ -38,17 +38,17 @@ const (
 // containers, "one session" means "container start → events processed
 // while alive → idle timeout → control:shutdown → container exit":
 //
-//	1. Resolve host paths (workdir, addendum file).
-//	2. Start container via orchestrator.
-//	3. Fan out IO goroutines:
-//	     stdin shipper:  poll /inputs → write to container stdin
-//	     stdout drain:   read container stdout, forward to /messages,
-//	                     intercept `idle` to drive retirement
-//	     stderr drain:   read container stderr → log frames
-//	     idle watcher:   on `idle` start retirement timer; on timer
-//	                     fire, write control:shutdown to stdin so the
-//	                     agent cleans up background tasks and exits.
-//	4. Wait for container exit, mark terminal.
+//  1. Resolve host paths (workdir, addendum file).
+//  2. Start container via orchestrator.
+//  3. Fan out IO goroutines:
+//     stdin shipper:  poll /inputs → write to container stdin
+//     stdout drain:   read container stdout, forward to /messages,
+//     intercept `idle` to drive retirement
+//     stderr drain:   read container stderr → log frames
+//     idle watcher:   on `idle` start retirement timer; on timer
+//     fire, write control:shutdown to stdin so the
+//     agent cleans up background tasks and exits.
+//  4. Wait for container exit, mark terminal.
 //
 // One driver per session; goroutines fan out internally and join before
 // Run returns.
@@ -757,6 +757,9 @@ func buildAgentEnv(task *client.Task, baseURL string) map[string]string {
 	}
 	if task.Model != "" {
 		env["HANGRIX_LLM_MODEL"] = task.Model
+	}
+	if task.IssueNumber > 0 {
+		env["HANGRIX_ISSUE_NUMBER"] = strconv.FormatInt(int64(task.IssueNumber), 10)
 	}
 	if task.WorkingBranch != "" {
 		env["HANGRIX_WORKING_BRANCH"] = task.WorkingBranch

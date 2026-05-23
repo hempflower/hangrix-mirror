@@ -49,10 +49,10 @@ type EnrollRequest struct {
 }
 
 type EnrollResponse struct {
-	RunnerID   int64             `json:"runner_id"`
-	RunnerName string            `json:"runner_name"`
-	AgentToken string            `json:"agent_token"`
-	Bootstrap  BootstrapPayload  `json:"bootstrap"`
+	RunnerID   int64            `json:"runner_id"`
+	RunnerName string           `json:"runner_name"`
+	AgentToken string           `json:"agent_token"`
+	Bootstrap  BootstrapPayload `json:"bootstrap"`
 }
 
 // BootstrapPayload is the side of the enroll/bootstrap responses that
@@ -128,7 +128,7 @@ type Task struct {
 	// WorkflowJob is populated when Kind == "workflow_job".
 	WorkflowJob *WorkflowJob `json:"workflow_job,omitempty"`
 
-	SessionID  int64  `json:"session_id"`
+	SessionID int64 `json:"session_id"`
 	// HostRepoID is the repository id the session belongs to. The runner
 	// uses it to namespace named Docker volumes (e.g. "pnpm-store" becomes
 	// "repo-6-pnpm-store") so caches from different repos never collide.
@@ -154,7 +154,12 @@ type Task struct {
 	// session (role.llm.model > host.llm.model). Surfaced into the
 	// container as HANGRIX_LLM_MODEL so the agent's LLM client knows
 	// which model to ask the proxy for.
-	Model         string            `json:"model"`
+	Model string `json:"model"`
+	// IssueNumber is the per-repo issue this session is bound to. Surfaced
+	// into the container as HANGRIX_ISSUE_NUMBER so the agent can construct
+	// its contribution-branch ref (issue-<N>/<role>/<slug>). Zero for
+	// non-issue sessions (the env var is then left unset).
+	IssueNumber   int32             `json:"issue_number,omitempty"`
 	WorkingBranch string            `json:"working_branch"`
 	BaseBranch    string            `json:"base_branch"`
 	HostAddendum  string            `json:"host_addendum"`
@@ -242,7 +247,6 @@ type WorkflowStep struct {
 	Name string `json:"name,omitempty"`
 	Run  string `json:"run"`
 }
-
 
 // PollTasks returns (task, true, nil) on a real assignment, (nil, false, nil)
 // when the server returned 204 (no work), or (nil, false, err) on transport /
@@ -375,7 +379,6 @@ type WorkflowJobTerminateRequest struct {
 func (c *Client) TerminateWorkflowJob(ctx context.Context, jobRunID int64, req WorkflowJobTerminateRequest) error {
 	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/runner/workflow-jobs/%d/terminate", jobRunID), req, nil, true)
 }
-
 
 // ---- message + input forwarding ----
 

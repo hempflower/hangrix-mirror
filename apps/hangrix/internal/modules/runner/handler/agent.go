@@ -96,7 +96,7 @@ func (h *AgentHandler) RegisterRoutes(r chi.Router) {
 			r.Get("/sessions/{sid}/history", h.getHistory)
 			r.Post("/sessions/{sid}/terminate", h.terminate)
 			r.Put("/sessions/{sid}/container", h.setContainer)
-		r.Post("/sessions/{sid}/ping", h.pingSession)
+			r.Post("/sessions/{sid}/ping", h.pingSession)
 			r.Get("/cleanup-tasks", h.listCleanupTasks)
 			r.Post("/cleanup-tasks/{sid}/done", h.markCleanupDone)
 		})
@@ -372,12 +372,18 @@ type taskResp struct {
 
 	// ---- agent_session fields ----
 
-	SessionID       int64             `json:"session_id"`
-	AgentImage      string            `json:"agent_image"`
-	AgentEntrypoint []string          `json:"agent_entrypoint,omitempty"`
-	AgentBuild      *agentBuildSpec   `json:"agent_build,omitempty"`
-	Role            string            `json:"role"`
-	Model         string            `json:"model,omitempty"`
+	SessionID       int64           `json:"session_id"`
+	AgentImage      string          `json:"agent_image"`
+	AgentEntrypoint []string        `json:"agent_entrypoint,omitempty"`
+	AgentBuild      *agentBuildSpec `json:"agent_build,omitempty"`
+	Role            string          `json:"role"`
+	Model           string          `json:"model,omitempty"`
+	// IssueNumber is the per-repo issue this session is bound to. The runner
+	// surfaces it as HANGRIX_ISSUE_NUMBER so the agent can build its
+	// contribution-branch ref (issue-<N>/<role>/<slug>) — the same number
+	// feeds the git ACL namespace, so the agent's branch always matches the
+	// ref prefix it's allowed to push. Zero for non-issue sessions.
+	IssueNumber   int32             `json:"issue_number,omitempty"`
 	WorkingBranch string            `json:"working_branch"`
 	BaseBranch    string            `json:"base_branch"`
 	HostAddendum  string            `json:"host_addendum"`
@@ -415,23 +421,23 @@ type taskResp struct {
 
 // workflowJobDTO mirrors the runner's client.WorkflowJob wire shape.
 type workflowJobDTO struct {
-	JobRunID       int64                 `json:"job_run_id"`
-	WorkflowRunID  int64                 `json:"workflow_run_id"`
-	RepoID         int64                 `json:"repo_id"`
-	Owner          string                `json:"owner"`
-	Name           string                `json:"name"`
-	WorkflowName   string                `json:"workflow_name"`
-	JobKey         string                `json:"job_key"`
-	CheckoutRef    string                `json:"checkout_ref"`
-	CommitSHA      string                `json:"commit_sha"`
-	EventName      string                `json:"event_name,omitempty"`
-	EventCauseID   string                `json:"event_cause_id,omitempty"`
-	Container      workflowContainerDTO  `json:"container"`
-	WorkingDir     string                `json:"working_directory"`
-	Steps          []workflowStepDTO     `json:"steps"`
-	TimeoutMinutes int                   `json:"timeout_minutes"`
-	RepoVariables  map[string]string     `json:"repo_variables"`
-	Inputs         map[string]string     `json:"inputs,omitempty"`
+	JobRunID       int64                `json:"job_run_id"`
+	WorkflowRunID  int64                `json:"workflow_run_id"`
+	RepoID         int64                `json:"repo_id"`
+	Owner          string               `json:"owner"`
+	Name           string               `json:"name"`
+	WorkflowName   string               `json:"workflow_name"`
+	JobKey         string               `json:"job_key"`
+	CheckoutRef    string               `json:"checkout_ref"`
+	CommitSHA      string               `json:"commit_sha"`
+	EventName      string               `json:"event_name,omitempty"`
+	EventCauseID   string               `json:"event_cause_id,omitempty"`
+	Container      workflowContainerDTO `json:"container"`
+	WorkingDir     string               `json:"working_directory"`
+	Steps          []workflowStepDTO    `json:"steps"`
+	TimeoutMinutes int                  `json:"timeout_minutes"`
+	RepoVariables  map[string]string    `json:"repo_variables"`
+	Inputs         map[string]string    `json:"inputs,omitempty"`
 }
 
 // workflowContainerDTO mirrors the runner's client.WorkflowContainer.
@@ -500,6 +506,10 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 			if sess.RepoID != nil {
 				hostRepoID = *sess.RepoID
 			}
+			var issueNumber int32
+			if sess.IssueNumber != nil {
+				issueNumber = *sess.IssueNumber
+			}
 			httpx.WriteJSON(w, http.StatusOK, taskResp{
 				HostRepoID:      hostRepoID,
 				SessionID:       sess.ID,
@@ -508,6 +518,7 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 				AgentBuild:      extractBuild(sess.RoleConfig),
 				Role:            sess.Role,
 				Model:           sess.Model,
+				IssueNumber:     issueNumber,
 				WorkingBranch:   sess.WorkingBranch,
 				BaseBranch:      sess.BaseBranch,
 				HostAddendum:    sess.HostAddendum,
@@ -559,7 +570,6 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
-
 
 // buildWorkflowJobDTO assembles the workflow job dispatch payload from a
 // claimed WorkflowJobRun and its parent WorkflowRun. It deserialises the
