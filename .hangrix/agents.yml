@@ -19,7 +19,7 @@ container:
   env:
     NODE_ENV: development
   volumes:
-    - { name: pnpm-store, mount: /workspaces/.pnpm-store/v11 }
+    - { name: pnpm-store, mount: /caches/pnpm }
     - { name: go-mod, mount: /go/pkg/mod }
     - { name: go-build, mount: /home/vscode/.cache/go-build }
 
