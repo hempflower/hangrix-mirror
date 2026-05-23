@@ -45,7 +45,7 @@ test.describe('workflows', () => {
     await expect(tabs.first()).toBeVisible({ timeout: 5_000 })
 
     // Either the list or the empty state should be visible.
-    const emptyState = page.getByText(/No workflow runs|暂无工作流|empty/i)
+    const emptyState = page.getByText(/No workflow runs|暂无.*[wW]orkflow|empty/i)
     const listItems = page.locator('ul > li')
     await expect(emptyState.or(listItems.first()).first()).toBeVisible({ timeout: 10_000 })
   })
@@ -113,7 +113,7 @@ test.describe('workflows', () => {
     // Submit the dispatch — it may succeed or fail depending on backend
     // state, but we just verify the dialog closes or an error is shown.
     const submitBtn = dialog.getByRole('button', {
-      name: /Dispatch|Submit|提交|触发/i,
+      name: /Run workflow|执行|Dispatch|Submit|提交|触发/i,
     }).last()
     await submitBtn.click()
 
