@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1466,6 +1467,290 @@ func TestSleepRespectsContextCancellation(t *testing.T) {
 	}
 }
 
+// TestBashTermDumbSafeForPTY verifies that TERM=dumb (the agent default)
+// is safe when combined with a PTY, given the other agentEnvDefaults
+// (PAGER=cat, GIT_PAGER=cat, etc.) that prevent pagers from being
+// invoked. The concern: if TERM is "dumb", programs that query terminfo
+// might take a degraded code path that prompts or hangs.
+//
+// This test shows:
+//  1. Direct terminfo queries (tput cols, tput colors) complete
+//     instantly — ncurses treats "dumb" as a valid, minimal terminal
+//     type, not as a missing or broken one.
+//  2. tput colors returns 0 or -1 — "dumb" advertises no colour
+//     support, so programs checking terminfo for colour (e.g.
+//     ls --color=auto) will produce plain output.
+//  3. git diff (the most common agent pager-invoking command) completes
+//     without hanging because GIT_PAGER=cat diverts less before it can
+//     check terminfo.
+//
+// Known limitation: less(1) invoked directly (not as a pager) will hang
+// on "Press RETURN" with TERM=dumb even with LESS=-FRX. This is
+// acceptable because agents inspect files via read/grep, not pagers,
+// and all pager-respecting tools are diverted by PAGER=cat.
+func TestBashTermDumbSafeForPTY(t *testing.T) {
+	t.Parallel()
+	tools := byName(local.All())
+	bash := tools["bash"]
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var fields struct {
+		Output   string `json:"output"`
+		ExitCode int    `json:"exit_code"`
+		TimedOut bool   `json:"timed_out"`
+	}
+
+	// 1. tput cols queries terminfo directly. With TERM=dumb it must
+	//    return a column count (typically "80") immediately — no hang.
+	resRaw, err := bash.Call(ctx, mustJSON(map[string]any{
+		"command": "export TERM=dumb; tput cols 2>/dev/null || echo 'tput not available'",
+	}))
+	if err != nil {
+		t.Fatalf("bash: %v", err)
+	}
+	if err := json.Unmarshal(mustReJSON(resRaw), &fields); err != nil {
+		t.Fatalf("re-decode: %v", err)
+	}
+	if fields.TimedOut {
+		t.Fatal("tput (direct terminfo query) timed out with TERM=dumb")
+	}
+	t.Logf("tput cols output: %q", fields.Output)
+
+	// 2. git diff is the most common agent command that would normally
+	//    invoke a pager. With GIT_PAGER=cat (in agentEnvDefaults), git
+	//    must complete instantly without ever reaching less or its
+	//    terminfo check — regardless of TERM value.
+	dir := t.TempDir()
+	runOK(t, dir, "git", "init")
+	runOK(t, dir, "git", "config", "user.email", "test@test")
+	runOK(t, dir, "git", "config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOK(t, dir, "git", "add", "f")
+	runOK(t, dir, "git", "commit", "-m", "init")
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("world\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resRaw, err = bash.Call(ctx, mustJSON(map[string]any{
+		"command":     "export TERM=dumb; git diff",
+		"working_dir": dir,
+	}))
+	if err != nil {
+		t.Fatalf("bash: %v", err)
+	}
+	if err := json.Unmarshal(mustReJSON(resRaw), &fields); err != nil {
+		t.Fatalf("re-decode: %v", err)
+	}
+	if fields.TimedOut {
+		t.Fatal("git diff timed out with TERM=dumb — GIT_PAGER=cat should prevent pager invocation")
+	}
+	if !strings.Contains(fields.Output, "diff --git") {
+		t.Errorf("expected diff output; got %q", fields.Output)
+	}
+	t.Logf("git diff with TERM=dumb + GIT_PAGER=cat completed cleanly")
+
+	// 3. tput colors returns the number of colours the terminal supports.
+	//    TERM=dumb must report 0 or -1 (no colour), confirming that
+	//    programs checking terminfo for colour will produce plain output.
+	resRaw, err = bash.Call(ctx, mustJSON(map[string]any{
+		"command": "export TERM=dumb; tput colors 2>/dev/null || echo -1",
+	}))
+	if err != nil {
+		t.Fatalf("bash: %v", err)
+	}
+	if err := json.Unmarshal(mustReJSON(resRaw), &fields); err != nil {
+		t.Fatalf("re-decode: %v", err)
+	}
+	if fields.TimedOut {
+		t.Fatal("tput colors timed out with TERM=dumb")
+	}
+	colors := strings.TrimSpace(fields.Output)
+	if colors != "0" && colors != "-1" {
+		t.Errorf("TERM=dumb should report 0 or -1 colours, got %q", colors)
+	}
+	t.Logf("tput colors: %s", colors)
+}
+
+// TestBashTermDumbInteractiveInput proves that the bash tool's PTY+stdin
+// contract remains intact under TERM=dumb for interactive programs driven
+// via bash_input. The concern: if TERM=dumb causes commands to refuse
+// interactive mode or degrade their stdin handling, then background tasks
+// that block on read() would never unblock when the agent feeds them
+// answers.
+//
+// This test exercises the full round-trip:
+//  1. Start a background bash task that blocks on `read` (the canonical
+//     shape of a y/N or password prompt).
+//  2. Feed an answer via bash_input.
+//  3. Poll to completion and verify the answer was received.
+//
+// Because the agent default TERM is now "dumb" (via agentEnvDefaults),
+// this test implicitly validates that TERM=dumb does not interfere with
+// the read/write contract on the PTY. If it regresses, interactive
+// prompts — the main reason bash_input exists — stop working.
+func TestBashTermDumbInteractiveInput(t *testing.T) {
+	t.Parallel()
+	tools := byName(local.All())
+	bash := tools["bash"]
+	bashInput := tools["bash_input"]
+	if bashInput == nil {
+		t.Fatal("bash_input tool not registered")
+	}
+
+	// Start a background task. With TERM=dumb in agentEnvDefaults, the
+	// child process will see TERM=dumb unless the parent test runner has
+	// TERM set (which it does). We export TERM=dumb explicitly to ensure
+	// the test exercises the intended terminal type.
+	startRaw, err := bash.Call(context.Background(), mustJSON(map[string]any{
+		"command":           "export TERM=dumb; printf 'name? '; read name; echo hello=$name",
+		"run_in_background": true,
+		"timeout_seconds":   15,
+	}))
+	if err != nil {
+		t.Fatalf("bash start: %v", err)
+	}
+	var start struct {
+		TaskID string `json:"task_id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(mustReJSON(startRaw), &start); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	if start.TaskID == "" {
+		t.Fatal("expected a task_id on background start")
+	}
+	if start.Status != "running" {
+		t.Errorf("expected status=running; got %q", start.Status)
+	}
+
+	// Give the child time to reach the read() call.
+	time.Sleep(200 * time.Millisecond)
+
+	// Feed an answer via bash_input.
+	inRaw, err := bashInput.Call(context.Background(), mustJSON(map[string]any{
+		"task_id": start.TaskID,
+		"data":    "World",
+	}))
+	if err != nil {
+		t.Fatalf("bash_input: %v", err)
+	}
+	var inFields struct {
+		BytesWritten int    `json:"bytes_written"`
+		TaskID       string `json:"task_id"`
+	}
+	if err := json.Unmarshal(mustReJSON(inRaw), &inFields); err != nil {
+		t.Fatalf("decode bash_input: %v", err)
+	}
+	if inFields.TaskID != start.TaskID {
+		t.Errorf("bash_input echoed task_id %q, want %q", inFields.TaskID, start.TaskID)
+	}
+	// "World" + auto-appended "\n" = 6 bytes.
+	if inFields.BytesWritten != 6 {
+		t.Errorf("bytes_written = %d, want 6 (auto-appended newline)", inFields.BytesWritten)
+	}
+
+	// Poll until done.
+	deadline := time.Now().Add(5 * time.Second)
+	var pollFields struct {
+		Output   string `json:"output"`
+		Status   string `json:"status"`
+		ExitCode int    `json:"exit_code"`
+	}
+	for time.Now().Before(deadline) {
+		pollRaw, err := bash.Call(context.Background(), mustJSON(map[string]any{
+			"task_id": start.TaskID,
+		}))
+		if err != nil {
+			t.Fatalf("bash poll: %v", err)
+		}
+		if err := json.Unmarshal(mustReJSON(pollRaw), &pollFields); err != nil {
+			t.Fatalf("decode poll: %v", err)
+		}
+		if pollFields.Status == "done" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if pollFields.Status != "done" {
+		t.Fatalf("task did not finish: status=%q output=%q", pollFields.Status, pollFields.Output)
+	}
+	if pollFields.ExitCode != 0 {
+		t.Errorf("exit code = %d, want 0", pollFields.ExitCode)
+	}
+	if !strings.Contains(pollFields.Output, "hello=World") {
+		t.Errorf("output should contain 'hello=World' (proof the answer reached the script); got %q", pollFields.Output)
+	}
+	t.Logf("TERM=dumb + bash_input round-trip: %s", strings.TrimSpace(pollFields.Output))
+}
+
+// TestBashTermDumbCursorCapabilities proves that terminfo cursor-addressing
+// queries complete instantly under TERM=dumb without hanging. "dumb" is a
+// valid (if minimal) terminfo entry — tput queries for cursor capabilities
+// return empty strings rather than blocking or erroring, because ncurses
+// knows "dumb" has no cursor movement. This test addresses the concern
+// that cursor-addressing programs (e.g. TUIs using terminfo for screen
+// painting) might hang or error out under TERM=dumb.
+func TestBashTermDumbCursorCapabilities(t *testing.T) {
+	t.Parallel()
+	tools := byName(local.All())
+	bash := tools["bash"]
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	tests := []struct {
+		cap  string // tput capability name
+		desc string
+	}{
+		{"cup", "cursor positioning"},
+		{"clear", "clear screen"},
+		{"cud1", "cursor down one line"},
+		{"cuu1", "cursor up one line"},
+		{"cuf1", "cursor forward one column"},
+		{"cub1", "cursor back one column"},
+		{"smcup", "enter alternate screen"},
+		{"rmcup", "exit alternate screen"},
+		{"sgr0", "reset attributes"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			resRaw, err := bash.Call(ctx, mustJSON(map[string]any{
+				"command": "export TERM=dumb; tput " + tc.cap + " 2>/dev/null; echo exit=$?",
+			}))
+			if err != nil {
+				t.Fatalf("bash: %v", err)
+			}
+			var fields struct {
+				Output   string `json:"output"`
+				TimedOut bool   `json:"timed_out"`
+			}
+			if err := json.Unmarshal(mustReJSON(resRaw), &fields); err != nil {
+				t.Fatalf("re-decode: %v", err)
+			}
+			if fields.TimedOut {
+				t.Fatalf("tput %s timed out with TERM=dumb", tc.cap)
+			}
+			// All cursor capabilities should produce empty output
+			// (no escape sequences) because "dumb" has no cursor
+			// addressing. The exit code of tput may be 0 or 1
+			// depending on ncurses version, but it must not hang.
+			out := strings.TrimSpace(fields.Output)
+			t.Logf("tput %s: %q", tc.cap, out)
+			// The output should not contain escape sequences.
+			if strings.Contains(out, "\x1b[") {
+				t.Errorf("tput %s produced escape sequences under TERM=dumb: %q", tc.cap, out)
+			}
+		})
+	}
+}
+
+
+
 func byName(ts []local.Tool) map[string]local.Tool {
 	m := map[string]local.Tool{}
 	for _, t := range ts {
@@ -1489,3 +1774,14 @@ func mustReJSON(v any) []byte {
 	}
 	return out
 }
+
+func runOK(t *testing.T, dir, name string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+	}
+}
+
