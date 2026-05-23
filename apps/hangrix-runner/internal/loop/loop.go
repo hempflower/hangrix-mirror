@@ -20,6 +20,14 @@ type Loop struct {
 	Client       *client.Client
 	Orchestrator orchestrator.Orchestrator
 
+	// SessionOrchestrator is an optional orchestrator override used
+	// exclusively for SessionDriver. When nil, SessionDriver falls
+	// back to Orchestrator. This is how --mock mode wires a
+	// LocalOrchestrator for agent sessions while keeping
+	// DockerOrchestrator for workflow jobs — the two drivers never
+	// share the mock orchestrator.
+	SessionOrchestrator orchestrator.Orchestrator
+
 	AgentBinaryPath string
 	WorkspaceRoot   string
 
@@ -135,9 +143,13 @@ func (l *Loop) workerLoop(ctx context.Context, workerID int) {
 			}
 		default:
 			log.Printf("worker %d: claimed session %d (image=%s)", workerID, task.SessionID, task.AgentImage)
+			sessOrch := l.Orchestrator
+			if l.SessionOrchestrator != nil {
+				sessOrch = l.SessionOrchestrator
+			}
 			drv := &SessionDriver{
 				Client:          l.Client,
-				Orchestrator:    l.Orchestrator,
+				Orchestrator:    sessOrch,
 				AgentBinaryPath: l.AgentBinaryPath,
 				WorkspaceRoot:   l.WorkspaceRoot,
 				BaseURL:         l.BaseURL,
