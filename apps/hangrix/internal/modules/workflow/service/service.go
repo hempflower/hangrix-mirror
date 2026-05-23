@@ -165,6 +165,9 @@ type CreateRunParams struct {
 	CommitSHA      string
 	Container      *agentsconfig.Container
 	DispatchInputs []DispatchInput
+	// TriggerPayload, when non-nil, is stored verbatim in trigger_payload_json.
+	// When nil, the infra auto-generates a payload from EventName + DispatchInputs.
+	TriggerPayload []byte
 }
 
 // CreateRun creates a new workflow run and all associated pending job runs.
@@ -248,6 +251,7 @@ func (s *Service) CreateRun(ctx context.Context, params CreateRunParams) (*domai
 		ContainerVolumes:    snapVolumes,
 		JobDefs:             jobDefs,
 		DispatchInputs:      dispatchInputs,
+		TriggerPayloadJSON:  params.TriggerPayload,
 	})
 }
 
@@ -421,6 +425,55 @@ func (s *Service) Dispatch(ctx context.Context, repo Ref, workflowName string, i
 		DispatchInputs: inputs,
 	})
 }
+
+// DispatchRepoPush scans all workflow configs in a repo, finds every workflow
+// that matches repo.push for the given branch+paths, and creates a run for
+// each match. Failures for individual workflow configs are logged but do not
+// stop iteration. Returns the successfully-created runs. The caller should
+// call this as a best-effort side-effect — errors here must never roll back
+// the operation that triggered the dispatch.
+func (s *Service) DispatchRepoPush(ctx context.Context, repo Ref, branch string, changedPaths []string, triggerPayload []byte, commitSHA string) []*domain.WorkflowRun {
+	configs, err := s.ScanWorkflowConfigs(ctx, repo)
+	if err != nil {
+		log.Printf("workflow: DispatchRepoPush scan configs repo=%d: %v", repo.ID, err)
+		return nil
+	}
+
+	matches := s.FindMatchingWorkflows(configs, workflowsconfig.EventRepoPush, WorkflowEventFilter{
+		Branch:       branch,
+		ChangedPaths: changedPaths,
+	})
+
+	if len(matches) == 0 {
+		return nil
+	}
+
+	container, err := s.GetHostContainer(ctx, repo)
+	if err != nil {
+		log.Printf("workflow: DispatchRepoPush get container repo=%d: %v", repo.ID, err)
+		return nil
+	}
+
+	var runs []*domain.WorkflowRun
+	for _, cfg := range matches {
+		run, _, err := s.CreateRun(ctx, CreateRunParams{
+			Repo:           repo,
+			Config:         cfg,
+			EventName:      workflowsconfig.EventRepoPush,
+			Ref:            branch,
+			CommitSHA:      commitSHA,
+			Container:      container,
+			TriggerPayload: triggerPayload,
+		})
+		if err != nil {
+			log.Printf("workflow: DispatchRepoPush create run repo=%d workflow=%s: %v", repo.ID, cfg.Name, err)
+			continue
+		}
+		runs = append(runs, run)
+	}
+	return runs
+}
+
 
 // ---- helpers ----
 
