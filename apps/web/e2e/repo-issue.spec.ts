@@ -87,7 +87,8 @@ test.describe('repo + issue workflow', () => {
     await page.getByRole('tab', { name: /Commits|提交/i }).click()
     await expect(page).toHaveURL(/tab=commits/)
     // The commits tab should show empty state or content.
-    await expect(page.locator('[data-slot="tabs-content"]')).toBeVisible()
+    // Only the active tab panel is visible; filter by data-state.
+    await expect(page.locator('[data-slot="tabs-content"][data-state="active"]')).toBeVisible()
 
     // Click diff tab.
     await page.getByRole('tab', { name: /Diff|差异/i }).click()

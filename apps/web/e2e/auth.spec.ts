@@ -40,12 +40,13 @@ test.describe('auth', () => {
     await register(page, username, `${username}@test.local`, password)
 
     // Log out — the logout action lives inside a user dropdown menu in
-    // the sidebar footer. First open the menu by clicking the avatar/name
-    // trigger button, then click the "Logout" menuitem.
+    // the sidebar footer. The user menu button is wrapped in a
+    // DropdownMenuTrigger (as-child) whose data-slot attribute overwrites
+    // the SidebarMenuButton's data-slot via Vue fallthrough $attrs.
+    // Use aria-haspopup="menu" (added by reka-ui DropdownMenuTrigger) to
+    // locate it instead.
     await page.goto('/')
-    const userMenuTrigger = page
-      .locator('[data-slot="sidebar"] [data-slot="sidebar-footer"] [data-slot="sidebar-menu-button"]')
-      .first()
+    const userMenuTrigger = page.locator('[data-slot="sidebar-footer"] [aria-haspopup="menu"]').first()
     await userMenuTrigger.click()
 
     // The dropdown menu content is teleported to the top level.

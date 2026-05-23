@@ -112,6 +112,7 @@ test.describe('workflows', () => {
 
     // Submit the dispatch — it may succeed or fail depending on backend
     // state, but we just verify the dialog closes or an error is shown.
+    // The submit button text is "Run workflow" (en) / "执行" (zh-CN).
     const submitBtn = dialog.getByRole('button', {
       name: /Run workflow|执行|Dispatch|Submit|提交|触发/i,
     }).last()
