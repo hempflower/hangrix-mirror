@@ -102,7 +102,8 @@ const canEdit = computed(() => {
 })
 
 function editUrl() {
-  return `/${owner.value}/${name.value}/edit/${encodeURIComponent(refName.value)}/${filePath.value}`
+  const encPath = filePath.value.split('/').map(encodeURIComponent).join('/')
+  return `/${owner.value}/${name.value}/edit/${encodeURIComponent(refName.value)}/${encPath}`
 }
 
 // Tree links keep using the ?ref= query convention — they're served by

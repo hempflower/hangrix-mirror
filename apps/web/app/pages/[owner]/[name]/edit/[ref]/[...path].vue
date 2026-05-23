@@ -187,12 +187,14 @@ async function handleSubmit() {
 }
 
 function goToBlob() {
-  router.push(`/${owner.value}/${name.value}/blob/${encodeURIComponent(refName.value)}/${filePath.value}`)
+  const encPath = filePath.value.split('/').map(encodeURIComponent).join('/')
+  router.push(`/${owner.value}/${name.value}/blob/${encodeURIComponent(refName.value)}/${encPath}`)
 }
 
 function goToUpdatedBlob() {
   const targetRef = commitMode.value === 'new' ? newBranchName.value : refName.value
-  router.push(`/${owner.value}/${name.value}/blob/${encodeURIComponent(targetRef)}/${filePath.value}`)
+  const encPath = filePath.value.split('/').map(encodeURIComponent).join('/')
+  router.push(`/${owner.value}/${name.value}/blob/${encodeURIComponent(targetRef)}/${encPath}`)
 }
 
 const unchanged = computed(() => content.value === originalContent.value)
