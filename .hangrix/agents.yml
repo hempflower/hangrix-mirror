@@ -22,6 +22,7 @@ container:
     - { name: pnpm-store, mount: /caches/pnpm }
     - { name: go-mod, mount: /go/pkg/mod }
     - { name: go-build, mount: /home/vscode/.cache/go-build }
+    - { name: npx-cache, mount: /home/vscode/.npm/_npx }
 
 llm:
   model: deepseek-v4-pro
