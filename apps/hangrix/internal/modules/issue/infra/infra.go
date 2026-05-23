@@ -573,6 +573,16 @@ func attachmentFromList(r issuedb.ListAttachmentsRow) *domain.Attachment {
 // --- domain.ContributionStore implementation ---
 
 func (s *PostgresStore) UpsertContributionOnPush(ctx context.Context, p domain.ContributionUpsertParams) (*domain.Contribution, error) {
+	// changed_paths is TEXT[] NOT NULL. pgx encodes a nil []string as SQL
+	// NULL (not an empty array '{}'), so a nil here would fail the NOT NULL
+	// constraint and the whole upsert — meaning a pushed contribution branch
+	// with an empty/uncomputable diff (DiffMergeBase error or no changes)
+	// would never get a row and so never be recognised. Coalesce to an empty
+	// non-nil slice, which pgx encodes as '{}'.
+	changedPaths := p.ChangedPaths
+	if changedPaths == nil {
+		changedPaths = []string{}
+	}
 	id, err := s.q.UpsertContributionOnPush(ctx, issuedb.UpsertContributionOnPushParams{
 		RepoID:       p.RepoID,
 		IssueID:      p.IssueID,
@@ -581,7 +591,7 @@ func (s *PostgresStore) UpsertContributionOnPush(ctx context.Context, p domain.C
 		RefName:      p.RefName,
 		HeadSha:      p.HeadSHA,
 		BaseSha:      p.BaseSHA,
-		ChangedPaths: p.ChangedPaths,
+		ChangedPaths: changedPaths,
 		Files:        p.Files,
 		Additions:    p.Additions,
 		Deletions:    p.Deletions,

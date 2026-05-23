@@ -236,6 +236,10 @@ func (h *Handler) issueBranchAhead(fsPath string, iss *domain.Issue) bool {
 // contributionDiffStats derives changed paths + line counts from a real git
 // diff (FileDiff per file), so stats are exact rather than hand-parsed.
 func contributionDiffStats(diffs []*gitdomain.FileDiff) (changedPaths []string, files, additions, deletions int32) {
+	// Non-nil so callers (the NOT NULL changed_paths column, the timeline
+	// event payload, the reviewer trigger) never see a nil slice when the
+	// diff is empty or couldn't be computed.
+	changedPaths = []string{}
 	seen := make(map[string]struct{}, len(diffs))
 	for _, d := range diffs {
 		p := d.NewPath
