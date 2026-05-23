@@ -218,6 +218,7 @@ type WorkflowJob struct {
 	JobKey         string            `json:"job_key"`
 	CheckoutRef    string            `json:"checkout_ref"`
 	CommitSHA      string            `json:"commit_sha"`
+	Tag            string            `json:"tag,omitempty"`
 	EventName      string            `json:"event_name,omitempty"`
 	EventCauseID   string            `json:"event_cause_id,omitempty"`
 	Container      WorkflowContainer `json:"container"`

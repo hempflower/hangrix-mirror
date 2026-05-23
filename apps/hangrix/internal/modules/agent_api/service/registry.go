@@ -11,6 +11,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
+	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	releasedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/domain"
@@ -43,7 +44,7 @@ type RegistryDeps struct {
 	Releases      releasedomain.Store
 	ReleaseAssets releasedomain.AssetStore
 	AssetStorage  *releaseinfra.AssetStorage
-	Attachments   issuedomain.AttachmentUploader
+	Attachments   attachmentdomain.Uploader
 }
 
 // NewRegistry assembles the tool catalogue at startup. Tools share the

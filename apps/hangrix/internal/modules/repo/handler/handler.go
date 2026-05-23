@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os/exec"
 	"regexp"
@@ -33,6 +34,7 @@ import (
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 	tokendomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/token/domain"
 	userdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/user/domain"
+	workflowdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
 )
 
 // maxBlobBytes caps blob responses. The HTTP layer refuses to return a file
@@ -80,6 +82,9 @@ type Handler struct {
 	cache      *kv.RepoCache
 	guards     []domain.BranchWriteGuard
 	observers  []domain.PushObserver
+	// tagEventTrigger fires repo.push_tag workflow runs when a tag is
+	// created via REST API. Nil when the workflow module is not loaded.
+	tagEventTrigger workflowdomain.TagEventTrigger
 }
 
 type HandlerDeps struct {
@@ -113,6 +118,9 @@ type HandlerDeps struct {
 	// Cache provides the Redis-backed read cache for hot git endpoints
 	// (refs, tree-view, commits). Nil when not configured (e.g. tests).
 	Cache *kv.RepoCache
+	// TagEventTrigger fires repo.push_tag workflow runs on tag creation.
+	// Nil when the workflow module is not loaded.
+	TagEventTrigger workflowdomain.TagEventTrigger
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
@@ -131,7 +139,8 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		middleware:  deps.Middleware,
 		cache:       deps.Cache,
 		guards:      deps.Guards,
-		observers:   deps.Observers,
+		observers:       deps.Observers,
+		tagEventTrigger: deps.TagEventTrigger,
 	}
 }
 
@@ -1604,6 +1613,19 @@ func (h *Handler) createTag(w http.ResponseWriter, r *http.Request) {
 
 	sha := lookupTagSHA(h.git, path, name)
 	h.invalidateCache(r.Context(), repo.ID)
+
+	// Trigger repo.push_tag workflow runs in a detached context so a
+	// client disconnect does not cancel the DB writes.
+	if h.tagEventTrigger != nil {
+		go func() {
+			tagCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := h.tagEventTrigger.TriggerTagEvent(tagCtx, repo.ID, repo.OwnerName, repo.Name, repo.DefaultBranch, name, sha); err != nil {
+				log.Printf("repo: createTag trigger workflow for %s: %v", name, err)
+			}
+		}()
+	}
+
 	httpx.WriteJSON(w, http.StatusCreated, refMutationResp{Name: name, SHA: sha})
 }
 

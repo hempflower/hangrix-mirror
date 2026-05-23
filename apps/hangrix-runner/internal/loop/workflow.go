@@ -298,6 +298,9 @@ func (d *WorkflowJobDriver) buildWorkflowEnv(job *client.WorkflowJob) (map[strin
 	if job.EventName != "" {
 		env["HANGRIX_EVENT_NAME"] = job.EventName
 	}
+	if job.Tag != "" {
+		env["HANGRIX_TAG"] = job.Tag
+	}
 	if job.EventCauseID != "" {
 		env["HANGRIX_EVENT_CAUSE_ID"] = job.EventCauseID
 	}

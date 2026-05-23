@@ -26,14 +26,25 @@ import (
 func (r *Registry) contributionListTool() *agentapidomain.Tool {
 	return &agentapidomain.Tool{
 		Name:        "contribution_list",
-		Description: "List the contribution branches on the current issue. Each entry has id, agent_role, ref_name, status, mergeable, merge_mode, head_sha, and diff stats. A contribution is created automatically when you push to refs/heads/issue-<N>/<your-role> — the git push response includes the contribution_id directly, so you don't need this tool just to discover your ID.",
-		InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		Description: "List the contribution branches on the current issue. Each entry has id, agent_role, ref_name, status (pending/approved/rejected/merged/closed), mergeable, merge_mode, head_sha, and diff stats. By default only non-terminal contributions (pending, approved, rejected) are returned — use include_closed / include_merged to also see closed or merged contributions. A contribution is created automatically when you push to refs/heads/issue-<N>/<your-role> — the git push response includes the contribution_id directly, so you don't need this tool just to discover your ID.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"include_closed": map[string]any{"type": "boolean", "description": "When true, also return contributions with status 'closed'. Default false."},
+				"include_merged": map[string]any{"type": "boolean", "description": "When true, also return contributions with status 'merged'. Default false."},
+			},
+		},
 		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
 			}
-			contribs, err := r.deps.Contributions.ListContributions(ctx, scope.issue.ID)
+			var req struct {
+				IncludeClosed bool `json:"include_closed"`
+				IncludeMerged bool `json:"include_merged"`
+			}
+			_ = unmarshalArgs(args, &req)
+			contribs, err := r.deps.Contributions.ListContributions(ctx, scope.issue.ID, req.IncludeClosed, req.IncludeMerged)
 			if err != nil {
 				return errorResult("list contributions: " + err.Error()), nil
 			}
@@ -312,7 +323,7 @@ func (r *Registry) getContributionScoped(ctx context.Context, scope *sessionScop
 // refreshSiblingMergeability recomputes mergeability for the issue's other open
 // contributions against the (now-advanced) issue head. Best-effort.
 func (r *Registry) refreshSiblingMergeability(ctx context.Context, scope *sessionScope, exceptID int64) {
-	contribs, err := r.deps.Contributions.ListContributions(ctx, scope.issue.ID)
+	contribs, err := r.deps.Contributions.ListContributions(ctx, scope.issue.ID, true, true)
 	if err != nil {
 		return
 	}
@@ -380,7 +391,7 @@ func excludeRole(roles []string, role string) []string {
 // contribution is still pending review, or the issue branch carries no changes
 // (nothing applied into it yet). Empty string means ready.
 func (r *Registry) issueMergeBlock(ctx context.Context, scope *sessionScope) string {
-	contribs, err := r.deps.Contributions.ListContributions(ctx, scope.issue.ID)
+	contribs, err := r.deps.Contributions.ListContributions(ctx, scope.issue.ID, true, true)
 	if err != nil {
 		return "cannot evaluate contributions: " + err.Error()
 	}

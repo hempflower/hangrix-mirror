@@ -227,7 +227,7 @@ func excludeRole(roles []string, role string) []string {
 // contribution is still open, or the issue branch carries no changes. Empty
 // string means ready.
 func (h *Handler) issueMergeBlock(ctx context.Context, fsPath string, iss *domain.Issue) string {
-	contribs, err := h.contributions.ListContributions(ctx, iss.ID)
+	contribs, err := h.contributions.ListContributions(ctx, iss.ID, true, true)
 	if err != nil {
 		return "cannot evaluate contributions: " + err.Error()
 	}

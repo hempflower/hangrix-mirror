@@ -141,6 +141,63 @@ func TestBuildWorkflowEnv_EventFieldsOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestBuildWorkflowEnv_Tag(t *testing.T) {
+	// Verify HANGRIX_TAG is injected when Tag is set (repo.push_tag event).
+
+	driver := &WorkflowJobDriver{}
+	job := &client.WorkflowJob{
+		WorkflowRunID: 42,
+		WorkflowName:  "deploy",
+		JobKey:        "ship",
+		Owner:         "myorg",
+		Name:          "myrepo",
+		EventName:     "repo.push_tag",
+		Tag:           "v1.2.3",
+		Container: client.WorkflowContainer{
+			Image: "alpine:latest",
+			Env:   map[string]string{},
+		},
+		RepoVariables: map[string]string{},
+	}
+
+	env, err := driver.buildWorkflowEnv(job)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got, want := env["HANGRIX_TAG"], "v1.2.3"; got != want {
+		t.Errorf("HANGRIX_TAG = %q, want %q", got, want)
+	}
+}
+
+func TestBuildWorkflowEnv_TagOmittedWhenEmpty(t *testing.T) {
+	// When Tag is empty, HANGRIX_TAG should not be injected at all.
+
+	driver := &WorkflowJobDriver{}
+	job := &client.WorkflowJob{
+		WorkflowRunID: 1,
+		WorkflowName:  "ci",
+		JobKey:        "lint",
+		Owner:         "org",
+		Name:          "repo",
+		Tag:           "", // empty
+		Container: client.WorkflowContainer{
+			Image: "alpine:latest",
+			Env:   map[string]string{},
+		},
+	}
+
+	env, err := driver.buildWorkflowEnv(job)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := env["HANGRIX_TAG"]; ok {
+		t.Error("HANGRIX_TAG should not be set when Tag is empty")
+	}
+}
+
+
 func TestBuildWorkflowEnv_WorkflowInputs(t *testing.T) {
 	// Dispatch inputs are pre-transformed by the server to WORKFLOW_INPUT_*
 	// keys and injected as-is.

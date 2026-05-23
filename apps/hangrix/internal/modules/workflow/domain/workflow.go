@@ -1,3 +1,4 @@
+
 // Package domain declares the workflow module's types and interfaces.
 // Other modules depend only on this package; the Postgres implementation
 // and HTTP handler live in sibling packages.
@@ -52,6 +53,7 @@ type EventName string
 
 const (
 	EventRepoPush         EventName = "repo.push"
+	EventRepoPushTag      EventName = "repo.push_tag"
 	EventIssueOpened      EventName = "issue.opened"
 	EventIssueComment     EventName = "issue.comment"
 	EventWorkflowDispatch EventName = "workflow.dispatch"
@@ -174,6 +176,10 @@ type CreateRunParams struct {
 	// DispatchInputs carries the user-provided inputs for workflow.dispatch.
 	// Keys are already transformed to WORKFLOW_INPUT_UPPER_SNAKE.
 	DispatchInputs map[string]string
+	// TriggerPayloadJSON, when non-nil, is stored verbatim in the
+	// trigger_payload_json column. When nil, the infra auto-generates
+	// a payload from EventName + DispatchInputs.
+	TriggerPayloadJSON []byte
 }
 
 // JobDefInput is the input bag for a single job within a new workflow run.
@@ -260,6 +266,15 @@ type Dispatcher interface {
 	// GetRunForJob returns the workflow run that owns the given job.
 	GetRunForJob(ctx context.Context, jobRunID int64) (*WorkflowRun, error)
 }
+
+// TagEventTrigger is the cross-module interface for triggering workflow runs
+// in response to tag creation or push events. Modules that produce tag events
+// (repo REST API, git push observers) depend on this interface rather than
+// the concrete service.
+type TagEventTrigger interface {
+	TriggerTagEvent(ctx context.Context, repoID int64, ownerName, repoName, defaultBranch, tagName, commitSHA string) error
+}
+
 
 // ---- sentinel errors ----
 

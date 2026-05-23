@@ -681,7 +681,7 @@ type ContributionStore interface {
 	UpsertContributionOnPush(ctx context.Context, p ContributionUpsertParams) (*Contribution, error)
 	GetContribution(ctx context.Context, id int64) (*Contribution, error)
 	GetContributionByRef(ctx context.Context, issueID int64, refName string) (*Contribution, error)
-	ListContributions(ctx context.Context, issueID int64) ([]*Contribution, error)
+	ListContributions(ctx context.Context, issueID int64, includeClosed, includeMerged bool) ([]*Contribution, error)
 	SetContributionMeta(ctx context.Context, id int64, title, description string) (*Contribution, error)
 	SetContributionStatus(ctx context.Context, id int64, status ContributionStatus) (*Contribution, error)
 	SetContributionMergeable(ctx context.Context, id int64, mergeable bool, mode string) error

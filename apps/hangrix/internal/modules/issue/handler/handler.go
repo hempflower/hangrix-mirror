@@ -31,6 +31,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/kv"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
+	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
@@ -39,6 +40,7 @@ import (
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	repoinfra "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/infra"
 	userdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/user/domain"
+	workflowservice "github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/service"
 )
 
 type Handler struct {
@@ -61,9 +63,14 @@ type Handler struct {
 	auditor     agentsessiondomain.Auditor
 	controller  agentsessiondomain.Controller
 	attachments *issueservice.AttachmentService
+	// commentAttachments is the platform-level comment_attachments junction
+	// store. When a comment body references /api/attachments/{id} URLs, the
+	// handler links them via this store. Nil-safe (tests).
+	commentAttachments attachmentdomain.CommentAttachmentStore
 	// guards are BranchWriteGuard implementations. When nil (tests
 	// without the repo module) the handler skips guard checks.
-	guards []repodomain.BranchWriteGuard
+	guards      []repodomain.BranchWriteGuard
+	workflowSvc *workflowservice.Service
 }
 
 type HandlerDeps struct {
@@ -91,9 +98,16 @@ type HandlerDeps struct {
 	Controller agentsessiondomain.Controller
 	// Attachments is the attachment service (validation, hashing, storage).
 	Attachments *issueservice.AttachmentService
+	// CommentAttachments is the platform-level comment_attachments junction
+	// store. Wired from the attachment module.
+	CommentAttachments attachmentdomain.CommentAttachmentStore
 	// Guards are BranchWriteGuard implementations. When nil (tests
 	// without the repo module) the handler skips guard checks.
 	Guards []repodomain.BranchWriteGuard
+	// WorkflowSvc is the workflow service for dispatching repo.push
+	// workflows on issue merge. Nil-safe — the handler skips dispatch
+	// when absent (tests).
+	WorkflowSvc *workflowservice.Service
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
@@ -111,8 +125,10 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		archiver:      deps.Archiver,
 		auditor:       deps.Auditor,
 		controller:    deps.Controller,
-		attachments:   deps.Attachments,
+		attachments:        deps.Attachments,
+		commentAttachments: deps.CommentAttachments,
 		guards:        deps.Guards,
+		workflowSvc:   deps.WorkflowSvc,
 	}
 }
 
@@ -900,13 +916,25 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Scan the comment body for [attachment:N] / ![attachment:N] tokens
-	// and transition matching attachments from uploaded → attached.
-	// Best-effort — a missing or already-deleted attachment is not an error.
+	// (legacy issue-scoped attachments) and transition matching
+	// attachments from uploaded → attached. Best-effort.
 	if h.attachments != nil {
 		re := regexp.MustCompile(`!?\[attachment:(\d+)\]`)
 		for _, m := range re.FindAllStringSubmatch(body, -1) {
 			if attID, err := strconv.ParseInt(m[1], 10, 64); err == nil {
 				_ = h.attachments.MarkAttached(r.Context(), attID, c.ID)
+			}
+		}
+	}
+
+	// Scan for platform-level attachment URLs (/api/attachments/{id})
+	// and create comment_attachments rows so the junction is populated.
+	// Best-effort — a missing attachment is not an error.
+	if h.commentAttachments != nil {
+		re := regexp.MustCompile(`/api/attachments/(\d+)`)
+		for _, m := range re.FindAllStringSubmatch(body, -1) {
+			if attID, err := strconv.ParseInt(m[1], 10, 64); err == nil {
+				_ = h.commentAttachments.CreateCommentAttachment(r.Context(), c.ID, attID)
 			}
 		}
 	}
@@ -1080,6 +1108,35 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	// only thing that can archive sessions — admin "stop this agent" is
 	// "remove the role from host yaml", not a per-session button.
 	h.fireIssueClosed(r.Context(), rc.repo.ID, int32(iss.Number))
+
+		// Dispatch repo.push workflow runs for any matching workflow configs.
+		// Best-effort: failures are logged but never roll back the merge.
+		if h.workflowSvc != nil && preMergeBaseSHA != "" {
+			changedPaths := collectChangedPaths(h.git, rc.fsPath, preMergeBaseSHA, mergeSHA)
+			triggerPayload, _ := json.Marshal(map[string]any{
+				"event":              "issue.merge",
+				"issue_number":       iss.Number,
+				"issue_title":        iss.Title,
+				"base_branch":        iss.BaseBranch,
+				"issue_branch":       iss.BranchName,
+				"merge_sha":          mergeSHA,
+				"merge_mode":         mode,
+				"pre_merge_base_sha": preMergeBaseSHA,
+			})
+			h.workflowSvc.DispatchRepoPush(r.Context(),
+				workflowservice.Ref{
+					ID:            rc.repo.ID,
+					Name:          rc.repo.Name,
+					DefaultBranch: rc.repo.DefaultBranch,
+					OwnerName:     rc.repo.OwnerName,
+				},
+				iss.BaseBranch,
+				changedPaths,
+				triggerPayload,
+				mergeSHA,
+			)
+		}
+
 
 	resp := map[string]any{
 		"issue":     toPublic(updated),
@@ -1371,7 +1428,9 @@ func (h *Handler) listContributions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	contribs, err := h.contributions.ListContributions(r.Context(), iss.ID)
+	includeClosed := r.URL.Query().Get("include_closed") == "true"
+	includeMerged := r.URL.Query().Get("include_merged") == "true"
+	contribs, err := h.contributions.ListContributions(r.Context(), iss.ID, includeClosed, includeMerged)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1588,7 +1647,7 @@ func (h *Handler) closeContribution(w http.ResponseWriter, r *http.Request) {
 // contribution on the issue except exceptID, against the current issue head.
 // Best-effort: errors are swallowed so a stale sibling never blocks an apply.
 func (h *Handler) refreshSiblingMergeability(ctx context.Context, fsPath string, iss *domain.Issue, exceptID int64) {
-	contribs, err := h.contributions.ListContributions(ctx, iss.ID)
+	contribs, err := h.contributions.ListContributions(ctx, iss.ID, true, true)
 	if err != nil {
 		return
 	}

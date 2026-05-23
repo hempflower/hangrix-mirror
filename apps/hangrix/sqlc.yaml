@@ -210,3 +210,26 @@ sql:
         emit_exact_table_names: false
         emit_empty_slices: true
 
+  - engine: postgresql
+    queries: internal/modules/attachment/infra/queries.sql
+    # attachments FK users(id); comment_attachments FK issue_comments(id)
+    # and attachments(id). Union user + issue (and its transitive schemas)
+    # so sqlc can resolve all references at generate time.
+    schema:
+      - internal/modules/user/infra/migrations
+      - internal/modules/org/infra/migrations
+      - internal/modules/repo/infra/migrations
+      - internal/modules/issue/infra/migrations
+      - internal/modules/attachment/infra/migrations
+    gen:
+      go:
+        package: attachmentdb
+        out: internal/modules/attachment/infra/attachmentdb
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_empty_slices: true
+
+

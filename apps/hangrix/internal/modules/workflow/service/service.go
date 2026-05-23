@@ -121,6 +121,10 @@ func (s *Service) FindMatchingWorkflows(configs []*workflowsconfig.WorkflowConfi
 				if trigger.MatchesPushEvent(filter.Branch, filter.ChangedPaths) {
 					matched = append(matched, cfg)
 				}
+			case workflowsconfig.EventRepoPushTag:
+				if trigger.MatchesPushTagEvent(filter.Tag) {
+					matched = append(matched, cfg)
+				}
 			case workflowsconfig.EventIssueOpened:
 				matched = append(matched, cfg)
 			case workflowsconfig.EventIssueComment:
@@ -141,6 +145,7 @@ func (s *Service) FindMatchingWorkflows(configs []*workflowsconfig.WorkflowConfi
 type WorkflowEventFilter struct {
 	Branch            string
 	ChangedPaths      []string
+	Tag               string
 	FromRole          string
 	FromUser          string
 	MentionedWorkflow string
@@ -165,6 +170,9 @@ type CreateRunParams struct {
 	CommitSHA      string
 	Container      *agentsconfig.Container
 	DispatchInputs []DispatchInput
+	// TriggerPayload, when non-nil, is stored verbatim in trigger_payload_json.
+	// When nil, the infra auto-generates a payload from EventName + DispatchInputs.
+	TriggerPayload []byte
 }
 
 // CreateRun creates a new workflow run and all associated pending job runs.
@@ -248,6 +256,7 @@ func (s *Service) CreateRun(ctx context.Context, params CreateRunParams) (*domai
 		ContainerVolumes:    snapVolumes,
 		JobDefs:             jobDefs,
 		DispatchInputs:      dispatchInputs,
+		TriggerPayloadJSON:  params.TriggerPayload,
 	})
 }
 
@@ -326,6 +335,57 @@ func (s *Service) GetRunForJob(ctx context.Context, jobRunID int64) (*domain.Wor
 	}
 	return s.store.GetRun(ctx, job.WorkflowRunID)
 }
+
+
+// ---- event triggers ----
+
+// TriggerTagEvent implements domain.TagEventTrigger. It scans workflow
+// configs, finds those matching repo.push_tag with the given tag name,
+// and creates a workflow run for each match. This is the single entry
+// point used by both the git-push PushObserver and the REST create-tag
+// handler.
+func (s *Service) TriggerTagEvent(ctx context.Context, repoID int64, ownerName, repoName, defaultBranch, tagName, commitSHA string) error {
+	ref := Ref{
+		ID:            repoID,
+		Name:          repoName,
+		DefaultBranch: defaultBranch,
+		OwnerName:     ownerName,
+	}
+
+	configs, err := s.ScanWorkflowConfigs(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("trigger tag event: scan configs: %w", err)
+	}
+	if len(configs) == 0 {
+		return nil
+	}
+
+	matched := s.FindMatchingWorkflows(configs, workflowsconfig.EventRepoPushTag, WorkflowEventFilter{Tag: tagName})
+	if len(matched) == 0 {
+		return nil
+	}
+
+	container, err := s.GetHostContainer(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("trigger tag event: get container: %w", err)
+	}
+
+	tagRef := "refs/tags/" + tagName
+	for _, cfg := range matched {
+		if _, _, err := s.CreateRun(ctx, CreateRunParams{
+			Repo:      ref,
+			Config:    cfg,
+			EventName: workflowsconfig.EventRepoPushTag,
+			Ref:       tagRef,
+			CommitSHA: commitSHA,
+			Container: container,
+		}); err != nil {
+			log.Printf("workflow: trigger tag event: create run for %s: %v", cfg.Name, err)
+		}
+	}
+	return nil
+}
+
 
 // ---- dispatch ----
 
@@ -421,6 +481,55 @@ func (s *Service) Dispatch(ctx context.Context, repo Ref, workflowName string, i
 		DispatchInputs: inputs,
 	})
 }
+
+// DispatchRepoPush scans all workflow configs in a repo, finds every workflow
+// that matches repo.push for the given branch+paths, and creates a run for
+// each match. Failures for individual workflow configs are logged but do not
+// stop iteration. Returns the successfully-created runs. The caller should
+// call this as a best-effort side-effect — errors here must never roll back
+// the operation that triggered the dispatch.
+func (s *Service) DispatchRepoPush(ctx context.Context, repo Ref, branch string, changedPaths []string, triggerPayload []byte, commitSHA string) []*domain.WorkflowRun {
+	configs, err := s.ScanWorkflowConfigs(ctx, repo)
+	if err != nil {
+		log.Printf("workflow: DispatchRepoPush scan configs repo=%d: %v", repo.ID, err)
+		return nil
+	}
+
+	matches := s.FindMatchingWorkflows(configs, workflowsconfig.EventRepoPush, WorkflowEventFilter{
+		Branch:       branch,
+		ChangedPaths: changedPaths,
+	})
+
+	if len(matches) == 0 {
+		return nil
+	}
+
+	container, err := s.GetHostContainer(ctx, repo)
+	if err != nil {
+		log.Printf("workflow: DispatchRepoPush get container repo=%d: %v", repo.ID, err)
+		return nil
+	}
+
+	var runs []*domain.WorkflowRun
+	for _, cfg := range matches {
+		run, _, err := s.CreateRun(ctx, CreateRunParams{
+			Repo:           repo,
+			Config:         cfg,
+			EventName:      workflowsconfig.EventRepoPush,
+			Ref:            branch,
+			CommitSHA:      commitSHA,
+			Container:      container,
+			TriggerPayload: triggerPayload,
+		})
+		if err != nil {
+			log.Printf("workflow: DispatchRepoPush create run repo=%d workflow=%s: %v", repo.ID, cfg.Name, err)
+			continue
+		}
+		runs = append(runs, run)
+	}
+	return runs
+}
+
 
 // ---- helpers ----
 

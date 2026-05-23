@@ -256,3 +256,14 @@ export interface IssueAttachment {
   markdown_snippet: string
 }
 
+/** Platform-level attachment returned by POST /api/attachments. */
+export interface PlatformAttachment {
+  id: number
+  url: string
+  markdown_snippet: string
+  display_name?: string
+  original_name?: string
+  kind?: string
+  size_bytes?: number
+}
+
