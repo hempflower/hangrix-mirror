@@ -7,7 +7,7 @@ export type WorkflowRunStatus = 'pending' | 'running' | 'success' | 'failed' | '
 
 export type WorkflowJobStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'cancelled'
 
-export type WorkflowEventName = 'repo.push' | 'issue.opened' | 'issue.comment' | 'workflow.dispatch'
+export type WorkflowEventName = 'repo.push' | 'issue.opened' | 'issue.comment' | 'workflow.dispatch' | 'repo.push_tag'
 
 export interface WorkflowDispatchInput {
   name: string
