@@ -2,10 +2,6 @@
 import { computed } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { Download, ExternalLink, FileWarning } from 'lucide-vue-next'
-import type { IssueAttachment } from '~/types/issue'
-
-const { t } = useI18n()
 
 const props = withDefaults(defineProps<{
   source: string
@@ -13,99 +9,13 @@ const props = withDefaults(defineProps<{
   // where a newline becomes <br>. Long-form docs (READMEs) leave it `false`
   // so wrapped paragraphs render as one block.
   breaks?: boolean
-  // Attachments map (id -> attachment) for rendering [attachment:N] tokens.
-  attachments?: Record<number, IssueAttachment>
 }>(), {
   breaks: true,
 })
 
-// Regex to match [attachment:N] and ![attachment:N] tokens (N is an integer id).
-const ATTACH_RE = /(!?)\[attachment:(\d+)\]/g
-
-function buildAttachmentCard(att: IssueAttachment, inline: boolean): string {
-  const displayName = att.display_name || att.original_name
-  if (att.status === 'deleted') {
-    const msg = t('issue.attachment.deleted', { name: displayName })
-    return `<div class="attachment-card attachment-deleted flex items-center gap-2 rounded-md border border-dashed border-muted-foreground/40 bg-muted/20 px-3 py-2 my-1 text-xs text-muted-foreground">
-      <span class="inline-flex">⚠</span>
-      <span>${escapeHtml(msg)}</span>
-    </div>`
-  }
-
-  const isImage = att.kind === 'image'
-  const isVideo = att.kind === 'video'
-  const showPreview = inline && (isImage || isVideo)
-
-  if (showPreview && isImage && att.preview_url) {
-    return `<div class="attachment-card my-2">
-      <a href="${escapeHtml(att.download_url)}" target="_blank" rel="noopener" class="block">
-        <img src="${escapeHtml(att.preview_url)}" alt="${escapeHtml(displayName)}" class="max-w-full max-h-96 rounded-md border" loading="lazy" />
-      </a>
-      <div class="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
-        <span class="truncate">${escapeHtml(displayName)}</span>
-        <span>${formatSize(att.size_bytes)}</span>
-        <a href="${escapeHtml(att.download_url)}" class="hover:text-foreground underline" download>${t('issue.attachment.download')}</a>
-      </div>
-    </div>`
-  }
-
-  if (showPreview && isVideo && att.preview_url) {
-    return `<div class="attachment-card my-2">
-      <video src="${escapeHtml(att.preview_url)}" controls class="max-w-full max-h-96 rounded-md border" preload="metadata"></video>
-      <div class="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
-        <span class="truncate">${escapeHtml(displayName)}</span>
-        <span>${formatSize(att.size_bytes)}</span>
-        <a href="${escapeHtml(att.download_url)}" class="hover:text-foreground underline" download>${t('issue.attachment.download')}</a>
-      </div>
-    </div>`
-  }
-
-  // Generic card: file icon + name + size + download
-  const kindLabel = att.kind.charAt(0).toUpperCase() + att.kind.slice(1)
-  return `<div class="attachment-card flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 my-1 text-xs">
-    <span class="shrink-0 font-mono text-muted-foreground">${kindLabel}</span>
-    <span class="min-w-0 flex-1 truncate font-medium">${escapeHtml(displayName)}</span>
-    <span class="shrink-0 text-muted-foreground">${formatSize(att.size_bytes)}</span>
-    <a href="${escapeHtml(att.download_url)}" class="shrink-0 hover:text-foreground underline" download>${t('issue.attachment.download')}</a>
-  </div>`
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
-}
-
-const processedSource = computed(() => {
-  if (!props.source) return ''
-  const atts = props.attachments ?? {}
-  return props.source.replace(ATTACH_RE, (_match, bang: string, idStr: string) => {
-    const id = Number(idStr)
-    const att = atts[id]
-    if (!att) {
-      // Unknown attachment — show a placeholder
-      const msg = t('issue.attachment.unknown', { id })
-      return `<span class="attachment-card inline-flex items-center gap-1 rounded border border-dashed border-muted-foreground/40 bg-muted/20 px-1.5 py-0.5 text-xs text-muted-foreground">
-        <span>📎</span> ${escapeHtml(msg)}
-      </span>`
-    }
-    const inline = att.inline || (bang === '!')
-    return buildAttachmentCard(att, inline)
-  })
-})
-
 const html = computed(() => {
-  if (!processedSource.value) return ''
-  const raw = marked.parse(processedSource.value, { gfm: true, breaks: props.breaks, async: false }) as string
+  if (!props.source) return ''
+  const raw = marked.parse(props.source, { gfm: true, breaks: props.breaks, async: false }) as string
   return DOMPurify.sanitize(raw)
 })
 </script>

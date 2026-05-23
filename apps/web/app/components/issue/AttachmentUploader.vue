@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
 import {
   Paperclip,
   X,
@@ -13,43 +13,17 @@ import {
   AlertCircle,
 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
-import type { IssueAttachment } from '~/types/issue'
+import type { PlatformAttachment } from '~/types/issue'
 
 const { t } = useI18n()
 
-const props = defineProps<{
-  owner: string
-  name: string
-  issueNumber: number
-  existingAttachments?: IssueAttachment[]
-}>()
-
 const emit = defineEmits<{
   (e: 'insert', snippet: string): void
-  (e: 'uploaded', att: IssueAttachment): void
 }>()
 
 const uploading = ref(false)
 const uploadError = ref<string | null>(null)
-const attachments = ref<IssueAttachment[]>([])
-
-// Merge existing attachments (loaded from API) into the local list so the
-// uploader shows them after page refresh. Deduplicates by id so locally
-// uploaded items are not overwritten.
-watch(
-  () => props.existingAttachments,
-  (existing) => {
-    if (!existing || existing.length === 0) return
-    const existingIds = new Set(attachments.value.map((a) => a.id))
-    for (const att of existing) {
-      if (!existingIds.has(att.id)) {
-        attachments.value.push(att)
-        existingIds.add(att.id)
-      }
-    }
-  },
-  { immediate: true },
-)
+const attachments = ref<PlatformAttachment[]>([])
 
 // Hidden file input for triggering native picker
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -73,8 +47,8 @@ async function onFileSelected(e: Event) {
     const form = new FormData()
     form.append('file', file)
 
-    const res = await $fetch<IssueAttachment>(
-      `/api/repos/${props.owner}/${props.name}/issues/${props.issueNumber}/attachments`,
+    const res = await $fetch<PlatformAttachment>(
+      '/api/attachments',
       {
         method: 'POST',
         credentials: 'include',
@@ -82,7 +56,6 @@ async function onFileSelected(e: Event) {
       },
     )
     attachments.value.push(res)
-    emit('uploaded', res)
   } catch (e: any) {
     uploadError.value = e?.data?.error ?? t('issue.attachment.uploadFailed')
   } finally {
@@ -93,11 +66,11 @@ async function onFileSelected(e: Event) {
 const deleting = ref<Set<number>>(new Set())
 const deleteErrors = ref<Record<number, string>>({})
 
-async function removeAttachment(att: IssueAttachment) {
+async function removeAttachment(att: PlatformAttachment) {
   deleting.value.add(att.id)
   try {
     await $fetch(
-      `/api/repos/${props.owner}/${props.name}/issues/${props.issueNumber}/attachments/${att.id}`,
+      `/api/attachments/${att.id}`,
       { method: 'DELETE', credentials: 'include' },
     )
   attachments.value = attachments.value.filter((a) => a.id !== att.id)
@@ -111,11 +84,11 @@ async function removeAttachment(att: IssueAttachment) {
   }
 }
 
-function insertAttachment(att: IssueAttachment) {
-  emit('insert', att.markdown_snippet || `![attachment:${att.id}]`)
+function insertAttachment(att: PlatformAttachment) {
+  emit('insert', att.markdown_snippet || `[${att.display_name || att.original_name}](${att.url})`)
 }
 
-function kindIcon(kind: string) {
+function kindIcon(kind?: string) {
   switch (kind) {
     case 'image': return Image
     case 'video': return Video
@@ -170,7 +143,7 @@ function formatSize(bytes: number): string {
   <div class="flex items-center gap-2">
   <component :is="kindIcon(att.kind)" class="size-3.5 shrink-0 text-muted-foreground" />
   <span class="min-w-0 flex-1 truncate font-mono">{{ att.original_name }}</span>
-  <span class="shrink-0 text-muted-foreground">{{ formatSize(att.size_bytes) }}</span>
+  <span class="shrink-0 text-muted-foreground">{{ formatSize(att.size_bytes ?? 0) }}</span>
   <Button
   variant="ghost"
   size="icon"
