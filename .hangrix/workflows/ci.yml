@@ -1,0 +1,24 @@
+# CI workflow: runs go test on every push to main.
+# Only triggers when Go-related paths change.
+version: 1
+name: ci
+on:
+  repo.push:
+    branches: [main]
+    paths: ["apps/**", "pkg/**", "go.work", "go.work.sum"]
+
+jobs:
+  test:
+    timeout_minutes: 20
+    steps:
+      # Workspace root ./... does not expand across go.work members,
+      # so list each module tree explicitly — keep in sync with
+      # .github/workflows/ci.yml.
+      - name: Go test
+        run: |
+          go test ./apps/hangrix/... \
+                  ./apps/hangrix-agent/... \
+                  ./apps/hangrix-runner/... \
+                  ./pkg/common/... \
+                  ./pkg/cryptobox/... \
+                  ./pkg/ioc/...
