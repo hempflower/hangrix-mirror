@@ -140,3 +140,27 @@ Runner 在 `GET /api/runner/tasks` 拉到的 task 载荷中，除 `Env`（sessio
 - **podman / containerd：** v1 只支持 docker（`os/exec docker run`）。换运行时实现新的 `Orchestrator`。
 - **Runner-side autoscaling：** runner 不主动伸缩自己；admin / 用户自己起多个进程，server 端按 capabilities 调度。
 - **Inbound webhook：** runner 永远不开端口，所有通信 outbound。
+
+## Agent stdin 投喂与 mid-loop 吸收
+
+### 三个边界
+
+| 信号 | 含义 | 发送方 | 接收方动作 |
+|---|---|---|---|
+| `done` | **单次 turn/event 边界**。Agent 完成了一轮 LLM⇄tool 循环（assistant 返回无 `tool_calls` 且无新输入待处理）。 | agent stdout | runner 记录，等待下一个 `idle` 或新输出 |
+| `idle` | **容器可复用/可退役边界**。Agent 完成了当前事件的一切处理，park 在 inbox select 上等待下一个 frame。 | agent stdout | runner 启动退役计时器；若超时则 `control:shutdown` |
+| mid-loop 吸收 | Agent **非 idle 状态下**接收到的新 `event` / 异步通知，被折叠进当前上下文在安全边界（LLM 请求返回后、下一次请求前）被模型看见。 | (runner 投喂 stdin，agent 内部处理) | agent loop 在 `drainPending` 时消费，不影响 `idle` 语义 |
+
+### Runner 侧约束
+
+- `shipStdin` **不关心 agent 是否正在一轮 loop 内** —— 只要 session 存活且 poll context 未被取消，就持续 `POST /inputs` → 写容器 stdin。
+- `watchIdle` 退役语义**不变**：只有 agent 显式发出 `idle` 后，runner 才进入空闲退役计时。
+- 若退役已触发并停止 polling，新到输入仍留在平台 `/inputs` 队列中，后续由重启/重建的 agent 容器继续消费。
+
+### Agent 侧安全边界
+
+1. **LLM 请求进行中**：新 event 被 `applyInboxItem` 追加为 user-role 消息到上下文，**不取消**正在进行的 HTTP 调用。新输入在下一个 round 开始时被模型看见。
+2. **tool results 全部回填后、下一次 LLM 请求前**：`drainPending` 在每轮顶部消费所有已排队的 inbox items。
+3. **禁止插入点**：新输入**绝不会**插入到 `assistant(tool_calls=…)` 与紧随的 `tool(result)` 之间 —— `applyInboxItem` 追加到当前消息列表末尾，而 tool 结果在 `dispatch` 循环中紧随 assistant 消息被追加。
+4. **No-tool-call 扩轮**：若某轮 LLM 返回无 `tool_calls`，但该轮期间有新输入被折叠进上下文（`postCallLen > preCallLen`），agent **不会**立即输出 `done`，而是继续至少再跑一轮 LLM 以响应该新输入。
+

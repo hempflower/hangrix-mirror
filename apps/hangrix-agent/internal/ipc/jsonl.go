@@ -14,6 +14,25 @@
 // that this container can either receive the next queued event or be
 // retired via a `control:shutdown` inbound when its idle-timeout elapses.
 // `done` still bounds individual events; `idle` bounds the container.
+//
+// Mid-processing input absorption. The runner ships inbound frames (events,
+// control) on stdin regardless of whether the agent is currently processing
+// a turn or sitting idle. When the agent is mid-turn, new event frames are
+// folded into the conversation at safe boundaries:
+//
+//   - During an in-flight LLM call: new events are appended as user-role
+//     messages but do NOT cancel the call. They become visible on the next
+//     LLM round.
+//   - Between tool-result round-trips (drainPending at the top of each
+//     round): events land before the next LLM request.
+//   - Events are NEVER inserted between an assistant(tool_calls) entry and
+//     its corresponding tool results — that would violate the
+//     function-calling pairing the upstream API requires.
+//
+// The runner is not involved in this logic; it ships stdin continuously
+// (shipStdin) and only uses `idle` as the container-retirement signal.
+// `done` is the turn boundary; a turn may absorb multiple events if they
+// arrive while it's still mid-loop.
 package ipc
 
 import (

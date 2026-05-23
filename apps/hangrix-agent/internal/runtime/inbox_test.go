@@ -813,3 +813,147 @@ waitReady:
 	}
 }
 
+// TestLoopMidCallEventPreventsDone pins the no-tool-call + new-input
+// contract from the product spec: when the LLM returns no tool calls
+// (which would normally close the turn with `done`), but the loop
+// absorbed a fresh event frame while the LLM call was in flight, the
+// loop MUST NOT emit `done` — it must give the LLM another round so
+// it can react to the newly-arrived event. Without this, a second
+// event arriving mid-call would be silently deferred to the next
+// turn (or, worse, dropped entirely).
+func TestLoopMidCallEventPreventsDone(t *testing.T) {
+	t.Parallel()
+
+	var (
+		callCount atomic.Int32
+		call2Body atomic.Value // string
+	)
+
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch n {
+		case 1:
+			// First call: slow-walk (~200ms) and return NO tool calls —
+			// normally this would end the turn. But while we're slow-
+			// walking, the test goroutine pushes a second event frame
+			// onto stdin. The loop should see that new input arrived
+			// and NOT emit `done` — instead it should make call #2.
+			time.Sleep(200 * time.Millisecond)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "r1",
+				"output": []map[string]any{
+					{"type": "message", "role": "assistant",
+						"content": []map[string]any{{"type": "output_text", "text": "first round done"}}},
+				},
+				"usage": map[string]any{"input_tokens": 10, "output_tokens": 3, "total_tokens": 13},
+			})
+		case 2:
+			// Second call: the loop should have continued because the
+			// mid-call event was folded in. Capture the body so we can
+			// assert the new event is visible.
+			body, _ := io.ReadAll(r.Body)
+			call2Body.Store(string(body))
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "r2",
+				"output": []map[string]any{
+					{"type": "message", "role": "assistant",
+						"content": []map[string]any{{"type": "output_text", "text": "ack event 2"}}},
+				},
+				"usage": map[string]any{"input_tokens": 8, "output_tokens": 3, "total_tokens": 11},
+			})
+		default:
+			http.Error(w, "unexpected extra LLM call", http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(llmServer.Close)
+
+	llmClient := llm.New(llmServer.URL, "test-token")
+	bundle := local.Build()
+	registry := tools.Build(bundle.Tools, nil, nil, nil)
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdoutR.Close()
+
+	loop := runtime.NewLoop(
+		ipc.NewReader(stdinR),
+		ipc.NewWriter(stdoutW),
+		llmClient,
+		"gpt-4o-mini",
+		registry,
+		"system prompt",
+		bundle.Bash,
+		0,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	loopErr := make(chan error, 1)
+	go func() {
+		loopErr <- loop.Run(ctx)
+		stdoutW.Close()
+	}()
+
+	go func() {
+		_, _ = stdinW.Write([]byte(`{"kind":"history","messages":[]}` + "\n"))
+		_, _ = stdinW.Write([]byte(`{"kind":"event","event":"first","payload":{"marker":"first_event"}}` + "\n"))
+		// Wait until LLM call #1 is in flight (the handler sleeps 200ms),
+		// then push a second event. The agent's inbox should absorb it
+		// mid-call; since call #1 returns no tool calls, the loop must
+		// detect the postCallLen > preCallLen condition and run another
+		// round instead of emitting `done`.
+		time.Sleep(80 * time.Millisecond)
+		_, _ = stdinW.Write([]byte(`{"kind":"event","event":"second","payload":{"marker":"second_event"}}` + "\n"))
+		time.Sleep(500 * time.Millisecond)
+		_, _ = stdinW.Write([]byte(`{"kind":"control","op":"shutdown"}` + "\n"))
+		stdinW.Close()
+	}()
+
+	frames, err := drainFrames(stdoutR)
+	if err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if err := <-loopErr; err != nil {
+		t.Fatalf("loop: %v", err)
+	}
+
+	// Assertion 1: the second LLM call body must contain the absorbed
+	// mid-call event.
+	body, _ := call2Body.Load().(string)
+	if body == "" {
+		t.Fatal("LLM call #2 never happened; loop emitted `done` on call #1 despite new mid-call input")
+	}
+	if !strings.Contains(body, "second_event") {
+		t.Errorf("mid-call event should appear in the second LLM request body; body=%s", body)
+	}
+
+	// Assertion 2: exactly one `done` frame (the mid-call event was
+	// absorbed into the current turn, not deferred to a separate one).
+	var doneCount, idleCount int
+	for _, f := range frames {
+		switch f.Kind {
+		case "done":
+			doneCount++
+		case "idle":
+			idleCount++
+		}
+	}
+	if doneCount != 1 {
+		t.Errorf("mid-call event should be folded into the current turn (1 done); got %d", doneCount)
+	}
+	if idleCount != 1 {
+		t.Errorf("expected exactly 1 idle frame; got %d", idleCount)
+	}
+
+	// Assertion 3: two LLM calls total — call #1 returned no tool calls
+	// but the loop continued because of the absorbed event; call #2
+	// finalised after seeing it.
+	if got := callCount.Load(); got != 2 {
+		t.Errorf("expected 2 LLM calls (call #1 had no tools but mid-call input forced call #2); got %d", got)
+	}
+}
+
+
