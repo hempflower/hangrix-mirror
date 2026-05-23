@@ -25,7 +25,9 @@ export async function register(
   await page.fill('input[type="password"]', password)
   await page.click('button[type="submit"]')
   // After successful registration we should land on the home page.
-  await page.waitForURL(/\/(?!register|login)/, { timeout: 15_000 })
+  await page.waitForURL((url) => {
+		return !url.pathname.startsWith('/register') && !url.pathname.startsWith('/login')
+	}, { timeout: 15_000 })
 }
 
 /**
@@ -41,7 +43,9 @@ export async function login(
   await page.fill('input[type="text"]', username)
   await page.fill('input[type="password"]', password)
   await page.click('button[type="submit"]')
-  await page.waitForURL(/\/(?!login)/, { timeout: 15_000 })
+  await page.waitForURL((url) => {
+		return !url.pathname.startsWith('/login')
+	}, { timeout: 15_000 })
 }
 
 /**

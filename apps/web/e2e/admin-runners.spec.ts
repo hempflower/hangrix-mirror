@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { uniqueName, ensureLoggedIn } from './helpers'
+import { uniqueName, register, login } from './helpers'
 
 /**
  * admin-runners.spec (P1)
@@ -11,11 +11,14 @@ import { uniqueName, ensureLoggedIn } from './helpers'
  * - Verify the enrollment dialog shows the token, install one-liner, and
  *   manual enroll command.
  *
- * Prerequisites: the test account must have the "admin" role (the first
- * registered user on a fresh instance is automatically admin).
+ * Set E2E_ADMIN_USERNAME / E2E_ADMIN_PASSWORD env vars to use a
+ * pre-existing admin account. Otherwise the test registers a new
+ * user and assumes the first-registered-user-is-admin convention
+ * (only true on a fresh database).
  */
 
-const PASSWORD = 'testpass123'
+const ADMIN_USER = process.env.E2E_ADMIN_USERNAME || ''
+const ADMIN_PASS = process.env.E2E_ADMIN_PASSWORD || 'testpass123'
 
 test.describe('admin runners', () => {
   let adminUser = ''
@@ -23,14 +26,19 @@ test.describe('admin runners', () => {
   test.beforeAll(async ({ browser }) => {
     const ctx = await browser.newContext()
     const page = await ctx.newPage()
-    // On a fresh instance the first registered user is admin.
-    adminUser = uniqueName('e2eadmin')
-    await ensureLoggedIn(page, adminUser, PASSWORD)
+    if (ADMIN_USER) {
+      await login(page, ADMIN_USER, ADMIN_PASS)
+      adminUser = ADMIN_USER
+    } else {
+      // On a fresh instance the first registered user is admin.
+      adminUser = uniqueName('e2eadmin')
+      await register(page, adminUser, `${adminUser}@test.local`, ADMIN_PASS)
+    }
     await ctx.close()
   })
 
   test('navigate to runners page and verify it loads', async ({ page }) => {
-    await ensureLoggedIn(page, adminUser, PASSWORD)
+    await login(page, adminUser, ADMIN_PASS)
 
     await page.goto('/admin/runners')
     await page.getByRole('heading').first().waitFor({ state: 'visible', timeout: 15_000 })
@@ -42,19 +50,19 @@ test.describe('admin runners', () => {
 
     // Either the table or the empty state should be visible.
     const table = page.locator('table')
-    const emptyState = page.locator('text=No runners')
+    const emptyState = page.getByText(/No runners|暂无 Runner/i)
     await expect(table.or(emptyState).first()).toBeVisible({ timeout: 10_000 })
   })
 
   test('create a new runner and verify enrollment dialog', async ({ page }) => {
-    await ensureLoggedIn(page, adminUser, PASSWORD)
+    await login(page, adminUser, ADMIN_PASS)
     await page.goto('/admin/runners')
     await page.getByRole('heading').first().waitFor({ state: 'visible', timeout: 15_000 })
 
     const runnerName = uniqueName('e2erunner')
 
-    // Click "Add runner" / "添加运行器" button.
-    const addBtn = page.getByRole('button', { name: /Add runner|添加运行器|新建/i }).first()
+    // Click "Add runner" / "添加 Runner" button.
+    const addBtn = page.getByRole('button', { name: /Add runner|添加\s*Runner|新建/i }).first()
     await addBtn.click()
 
     // The create dialog should appear.
@@ -85,11 +93,13 @@ test.describe('admin runners', () => {
     const details = dialog.locator('details')
     if (await details.isVisible().catch(() => false)) {
       await details.click()
-      await expect(dialog.getByText(/enroll|enroll/i)).toBeVisible({ timeout: 3_000 })
+      // The dialog contains many "enroll" strings (heading, install label,
+      // code block). Use .first() to avoid strict-mode violation.
+      await expect(dialog.getByText(/enroll/i).first()).toBeVisible({ timeout: 3_000 })
     }
 
     // Acknowledge and close.
-    const ackBtn = page.getByRole('button', { name: /saved|acknowledge|知道了|确认/i }).first()
+    const ackBtn = page.getByRole('button', { name: /saved|acknowledge|我已|记下|保存/i }).first()
     await ackBtn.click()
 
     // Dialog should close.
