@@ -152,6 +152,19 @@ contributions
 
 ---
 
+## issue 分支与 base 冲突时的处理
+
+当 `issue_mergeable` 返回 `mode="conflicted"` 时，issue 分支无法直接合入 base。此时 **agent 不应尝试直接 push `issue/<n>` 分支**（`issue/<n>` 为服务端管理分支，agent 无 push 权限）。正确的修复路径是：
+
+1. 基于最新的 `origin/issue/<n>` 在本地解决与 `base_branch` 的冲突。
+2. 将结果 push 到一条**新的 contribution 分支**：`refs/heads/issue-<n>/<role>/<slug>`。
+3. 通过 contribution 评审 / `contribution_apply` 流程将该分支合入 issue 分支。
+4. 合入后重新运行 `issue_mergeable` / `issue_merge`。
+
+这一流程与 per-ref ACL（agent 只能 push 自己命名空间的 ref）和服务端管理 issue 分支的约束保持一致。
+
+---
+
 ## issue「完成」的定义【决策 1】
 
 **所有贡献分支都已审批并合入 issue 分支** ⇒ issue 视为内容就绪;随后 maintainer 走第二级 `issue_merge` 把 issue 分支合入 base 做最终拍板。issue 级不再单独承载投票,只做贡献分支的 rollup。

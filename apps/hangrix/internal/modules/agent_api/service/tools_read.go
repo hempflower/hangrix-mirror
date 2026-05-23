@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
@@ -400,6 +401,15 @@ func (r *Registry) issueMergeableTool() *agentapidomain.Tool {
 			mergeable, mode, hint, err := r.deps.Git.CheckAutoMerge(scope.fsPath, iss.BaseBranch, iss.HeadSHA)
 			if err != nil {
 				return errorResult("check auto-merge: " + err.Error()), nil
+			}
+			// When the issue branch conflicts with its base, rewrite the hint
+			// to guide the agent toward resolving via a new contribution branch
+			// rather than pushing the issue branch directly.
+			if mode == "conflicted" {
+				hint = fmt.Sprintf(
+					"merge would conflict with `%s` — create a new contribution branch from the latest `issue/%d`, resolve the conflict there, push it to `refs/heads/issue-%d/%s/<slug>`, then land it via the contribution review/apply flow; do not push the issue branch directly",
+					iss.BaseBranch, iss.Number, iss.Number, sess.RoleKey,
+				)
 			}
 			// Second-level (issue → base) gate: even when git says the branch
 			// is mergeable, block while contributions are still open or the
