@@ -430,6 +430,7 @@ type workflowJobDTO struct {
 	JobKey         string               `json:"job_key"`
 	CheckoutRef    string               `json:"checkout_ref"`
 	CommitSHA      string               `json:"commit_sha"`
+	Tag            string               `json:"tag,omitempty"`
 	EventName      string               `json:"event_name,omitempty"`
 	EventCauseID   string               `json:"event_cause_id,omitempty"`
 	Container      workflowContainerDTO `json:"container"`
@@ -667,6 +668,13 @@ func (h *AgentHandler) buildWorkflowJobDTO(ctx context.Context, job *workflowdom
 		causeID = strconv.FormatInt(*run.CauseID, 10)
 	}
 
+	// Extract short tag name for repo.push_tag events (run.Ref is
+	// "refs/tags/<name>" for tags, "refs/heads/<name>" for branches).
+	var tag string
+	if run.EventName == workflowdomain.EventRepoPushTag && strings.HasPrefix(run.Ref, "refs/tags/") {
+		tag = strings.TrimPrefix(run.Ref, "refs/tags/")
+	}
+
 	return &workflowJobDTO{
 		JobRunID:       job.ID,
 		WorkflowRunID:  run.ID,
@@ -677,6 +685,7 @@ func (h *AgentHandler) buildWorkflowJobDTO(ctx context.Context, job *workflowdom
 		JobKey:         job.JobKey,
 		CheckoutRef:    run.Ref,
 		CommitSHA:      run.CommitSHA,
+		Tag:            tag,
 		EventName:      string(run.EventName),
 		EventCauseID:   causeID,
 		Container:      container,
