@@ -40,11 +40,16 @@ const (
 	// ProviderTypeOpenAICompat is OpenAI Response API forwarded as-is to a
 	// caller-specified base_url (OpenRouter / vLLM / Together / Groq / ...).
 	ProviderTypeOpenAICompat ProviderType = "openai-compat"
+	// ProviderTypeMock is the built-in mock provider. It returns
+	// deterministic, text-only responses without making any external
+	// HTTP calls. Used for local testing and e2e agent-chain smoke
+	// without a real LLM key.
+	ProviderTypeMock ProviderType = "mock"
 )
 
 func (t ProviderType) Valid() bool {
 	switch t {
-	case ProviderTypeOpenAI, ProviderTypeAnthropic, ProviderTypeOpenAICompat:
+	case ProviderTypeOpenAI, ProviderTypeAnthropic, ProviderTypeOpenAICompat, ProviderTypeMock:
 		return true
 	}
 	return false

@@ -88,6 +88,14 @@ func Serve(ctx context.Context, cfg *config.Config) error {
 		Parallelism:     cfg.Parallelism,
 	}
 
+	// In --mock mode, wire a LocalOrchestrator for agent sessions only.
+	// Workflow jobs continue to use the DockerOrchestrator via
+	// l.Orchestrator; only l.SessionOrchestrator is overridden so the
+	// WorkflowJobDriver path is never touched.
+	if cfg.Mock {
+		l.SessionOrchestrator = orchestrator.NewLocal()
+	}
+
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 

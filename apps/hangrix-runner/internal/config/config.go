@@ -66,6 +66,15 @@ type Config struct {
 	// from a corrupted local binary or rolling out a build that reuses a
 	// previous SHA after an aborted swap.
 	Force bool
+
+	// serve-only: when true, agent sessions are executed as direct
+	// subprocesses (LocalOrchestrator) instead of Docker containers.
+	// All /api/runner/* protocol endpoints are still used (real enroll,
+	// real heartbeat, real task polling, real message shipping); only
+	// session-container orchestration is replaced. Workflow jobs are
+	// unaffected and continue using Docker. Defaults off — production
+	// runners always use Docker for everything.
+	Mock bool
 }
 
 func Parse(args []string) (sub string, cfg *Config, err error) {
@@ -79,6 +88,7 @@ func Parse(args []string) (sub string, cfg *Config, err error) {
 		DockerBin:   envOr("HANGRIX_RUNNER_DOCKER_BIN", "docker"),
 		AutoUpdate:  envTruthy("HANGRIX_RUNNER_AUTO_UPDATE"),
 		Parallelism: envInt("HANGRIX_RUNNER_PARALLELISM", 16),
+		Mock:        envTruthy("HANGRIX_RUNNER_MOCK"),
 	}
 	fs := flag.NewFlagSet(sub, flag.ContinueOnError)
 	fs.StringVar(&cfg.StateDir, "state-dir", cfg.StateDir, "persistent state directory")
@@ -90,6 +100,7 @@ func Parse(args []string) (sub string, cfg *Config, err error) {
 		fs.StringVar(&cfg.DockerBin, "docker", cfg.DockerBin, "docker CLI binary")
 		fs.BoolVar(&cfg.AutoUpdate, "auto-update", cfg.AutoUpdate, "self-update + exit on startup and every minute while serving when a new binary is available")
 		fs.IntVar(&cfg.Parallelism, "parallelism", cfg.Parallelism, "max concurrent sessions to drive (default 16)")
+		fs.BoolVar(&cfg.Mock, "mock", cfg.Mock, "run agent as direct subprocess without Docker (mock/local mode)")
 	case "update":
 		fs.BoolVar(&cfg.Force, "force", false, "redownload even when local SHA matches")
 	}

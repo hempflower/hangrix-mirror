@@ -149,8 +149,12 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.APIKey == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "api_key is required")
-		return
+		if domain.ProviderType(req.Type) == domain.ProviderTypeMock {
+			req.APIKey = "mock" // placeholder — mock provider never uses the key
+		} else {
+			httpx.WriteError(w, http.StatusBadRequest, "api_key is required")
+			return
+		}
 	}
 
 	in := &domain.Provider{
