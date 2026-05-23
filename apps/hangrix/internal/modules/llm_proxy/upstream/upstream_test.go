@@ -24,6 +24,7 @@ func TestDefaultRegistryCoversEveryProviderType(t *testing.T) {
 		domain.ProviderTypeOpenAI,
 		domain.ProviderTypeOpenAICompat,
 		domain.ProviderTypeAnthropic,
+		domain.ProviderTypeMock,
 	} {
 		p, ok := reg.Lookup(tp)
 		if !ok {

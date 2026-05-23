@@ -252,5 +252,6 @@ func Default() *Registry {
 		NewOpenAI(),
 		NewOpenAICompat(),
 		NewAnthropic(),
+		NewMock(),
 	)
 }

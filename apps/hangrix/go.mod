@@ -6,6 +6,7 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-git/go-git/v5 v5.19.0
+	github.com/google/uuid v1.6.0
 	github.com/hangrix/hangrix/pkg/common v0.0.0
 	github.com/hangrix/hangrix/pkg/cryptobox v0.0.0
 	github.com/hangrix/hangrix/pkg/ioc v0.0.0
@@ -18,7 +19,6 @@ require (
 	github.com/spf13/viper v1.21.0
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/crypto v0.51.0
-	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
