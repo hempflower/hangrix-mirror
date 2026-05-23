@@ -158,8 +158,9 @@ func (g *stubGit) DiffRefs(string, string, string) ([]*gitdomain.FileDiff, error
 func (g *stubGit) DiffMergeBase(string, string, string) ([]*gitdomain.FileDiff, error) {
 	panic("DiffMergeBase not stubbed")
 }
-func (g *stubGit) CreateBranch(string, string, string) error { panic("CreateBranch not stubbed") }
-func (g *stubGit) DeleteBranch(string, string) error         { panic("DeleteBranch not stubbed") }
+func (g *stubGit) CreateBranch(string, string, string) error     { panic("CreateBranch not stubbed") }
+func (g *stubGit) CreateBranchAt(string, string, string) error   { panic("CreateBranchAt not stubbed") }
+func (g *stubGit) DeleteBranch(string, string) error             { panic("DeleteBranch not stubbed") }
 func (g *stubGit) SetHEAD(string, string) error              { panic("SetHEAD not stubbed") }
 func (g *stubGit) CreateLightweightTag(string, string, string) error {
 	panic("CreateLightweightTag not stubbed")
@@ -188,7 +189,9 @@ func (g *stubGit) CheckAutoMerge(string, string, string) (bool, string, string, 
 func (g *stubGit) ApplyPatch(string, string, string, string, gitdomain.Signature, gitdomain.Signature) (string, error) {
 	panic("ApplyPatch not stubbed")
 }
-
+func (g *stubGit) EditAndCommit(string, string, string, string, []byte, string, gitdomain.Signature, gitdomain.Signature) (string, error) {
+	panic("EditAndCommit not stubbed")
+}
 
 
 // stubRunnerRepo satisfies runnerdomain.Repo for the spawner / archiver /

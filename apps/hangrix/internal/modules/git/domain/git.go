@@ -76,6 +76,13 @@ type Git interface {
 	// resolved.
 	CreateBranch(path, branchName, startRef string) error
 
+	// CreateBranchAt points branchName directly at commitSHA without resolving
+	// a ref name first. Returns ErrBranchExists if branchName already exists;
+	// ErrCommitNotFound if commitSHA cannot be resolved. Use this when you
+	// already have a validated commit SHA and want to avoid a re-resolution
+	// race (e.g. new-branch path in online edit).
+	CreateBranchAt(path, branchName, commitSHA string) error
+
 	// DeleteBranch removes the branch ref. Returns ErrRefNotFound when the
 	// branch doesn't exist and ErrCannotDeleteHEAD when the branch is the
 	// current HEAD (caller should switch HEAD first via SetHEAD).

@@ -665,6 +665,41 @@ func (g *GoGit) CreateBranch(path, branchName, startRef string) error {
 	return nil
 }
 
+// CreateBranchAt points branchName directly at commitSHA without resolving
+// a ref name first — the caller already holds a validated commit SHA.
+func (g *GoGit) CreateBranchAt(path, branchName, commitSHA string) error {
+	repo, err := openRepo(path)
+	if err != nil {
+		return err
+	}
+	if !domain.IsValidRefName(branchName) {
+		return domain.ErrInvalidRefName
+	}
+	refName := plumbing.NewBranchReferenceName(branchName)
+	if !refName.IsBranch() {
+		return domain.ErrInvalidRefName
+	}
+	if err := refName.Validate(); err != nil {
+		return domain.ErrInvalidRefName
+	}
+
+	if _, err := repo.Reference(refName, false); err == nil {
+		return domain.ErrBranchExists
+	} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return fmt.Errorf("create branch at: check existing: %w", err)
+	}
+
+	hash := plumbing.NewHash(commitSHA)
+	if _, err := repo.CommitObject(hash); err != nil {
+		return domain.ErrRefNotFound
+	}
+
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
+		return fmt.Errorf("create branch at: set ref: %w", err)
+	}
+	return nil
+}
+
 // DeleteBranch removes the named branch. Refuses to delete the branch that
 // HEAD currently points at — caller must SetHEAD elsewhere first.
 func (g *GoGit) DeleteBranch(path, branchName string) error {

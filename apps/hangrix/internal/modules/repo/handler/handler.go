@@ -1768,7 +1768,12 @@ func (h *Handler) commitFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := h.git.CreateBranch(path, req.NewBranchName, req.Ref); err != nil {
+		// Create the branch anchored to the already-resolved commit SHA,
+		// not req.Ref. Re-resolving by name would race: if the source
+		// branch advanced since the ResolveCommit check, the new branch
+		// would be created at the new tip but EditAndCommit would fail
+		// because base_commit_sha no longer matches, leaving an orphan.
+		if err := h.git.CreateBranchAt(path, req.NewBranchName, branchSHA); err != nil {
 			if mapGitErr(w, err) {
 				return
 			}
