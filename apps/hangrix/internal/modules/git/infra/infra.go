@@ -21,6 +21,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/storage"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 )
@@ -1713,4 +1714,213 @@ func (g *GoGit) ApplyPatch(path, branch, patchText, message string, author, comm
 
 	return commitHash, nil
 }
+
+// EditAndCommit replaces a single blob at filePath in the HEAD commit of
+// branch, builds a new tree, creates a commit, and advances the branch ref
+// using an atomic compare-and-swap against baseCommitSHA.
+func (g *GoGit) EditAndCommit(path, branch, baseCommitSHA, filePath string, newContent []byte, message string, author, committer domain.Signature) (string, error) {
+	repo, err := openRepo(path)
+	if err != nil {
+		return "", err
+	}
+	st := repo.Storer
+
+	// Resolve the branch to its HEAD commit and verify it matches baseCommitSHA.
+	branchRef := plumbing.NewBranchReferenceName(branch)
+	ref, err := repo.Reference(branchRef, false)
+	if err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return "", domain.ErrRefNotFound
+		}
+		return "", fmt.Errorf("edit: resolve branch: %w", err)
+	}
+	baseHash, err := peelHashToCommit(repo, ref.Hash())
+	if err != nil {
+		return "", fmt.Errorf("edit: peel branch: %w", err)
+	}
+	if baseHash.String() != baseCommitSHA {
+		return "", domain.ErrRefChanged
+	}
+
+	baseCommit, err := repo.CommitObject(baseHash)
+	if err != nil {
+		return "", fmt.Errorf("edit: commit object: %w", err)
+	}
+
+	// Get the root tree and find the target entry.
+	rootTree, err := baseCommit.Tree()
+	if err != nil {
+		return "", fmt.Errorf("edit: root tree: %w", err)
+	}
+
+	filePath = strings.Trim(filePath, "/")
+	if filePath == "" {
+		return "", domain.ErrPathNotFound
+	}
+	entry, err := rootTree.FindEntry(filePath)
+	if err != nil {
+		if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) || errors.Is(err, object.ErrFileNotFound) {
+			return "", domain.ErrPathNotFound
+		}
+		return "", fmt.Errorf("edit: find entry: %w", err)
+	}
+	if entry.Mode == filemode.Dir || entry.Mode == filemode.Submodule {
+		return "", domain.ErrNotABlob
+	}
+
+	// Write the new blob.
+	blobObj := st.NewEncodedObject()
+	blobObj.SetType(plumbing.BlobObject)
+	blobObj.SetSize(int64(len(newContent)))
+	w, err := blobObj.Writer()
+	if err != nil {
+		return "", fmt.Errorf("edit: blob writer: %w", err)
+	}
+	if _, err := w.Write(newContent); err != nil {
+		_ = w.Close()
+		return "", fmt.Errorf("edit: write blob: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return "", fmt.Errorf("edit: close blob: %w", err)
+	}
+	newBlobHash, err := st.SetEncodedObject(blobObj)
+	if err != nil {
+		return "", fmt.Errorf("edit: store blob: %w", err)
+	}
+
+	// Build a new root tree by replacing the target entry.
+	segments := strings.Split(filePath, "/")
+	newRootHash, err := replaceTreeEntry(repo, rootTree, segments, object.TreeEntry{
+		Name: segments[len(segments)-1],
+		Mode: entry.Mode,
+		Hash: newBlobHash,
+	})
+	if err != nil {
+		return "", fmt.Errorf("edit: replace tree: %w", err)
+	}
+
+	// Create the commit.
+	now := time.Now()
+	authSig := object.Signature{Name: author.Name, Email: author.Email, When: author.When}
+	if authSig.When.IsZero() {
+		authSig.When = now
+	}
+	commSig := object.Signature{Name: committer.Name, Email: committer.Email, When: committer.When}
+	if commSig.When.IsZero() {
+		commSig.When = now
+	}
+	commit := &object.Commit{
+		Author:       authSig,
+		Committer:    commSig,
+		Message:      message,
+		TreeHash:     newRootHash,
+		ParentHashes: []plumbing.Hash{baseHash},
+	}
+	commitObj := st.NewEncodedObject()
+	if err := commit.Encode(commitObj); err != nil {
+		return "", fmt.Errorf("edit: encode commit: %w", err)
+	}
+	newCommitHash, err := st.SetEncodedObject(commitObj)
+	if err != nil {
+		return "", fmt.Errorf("edit: store commit: %w", err)
+	}
+
+	// Atomic compare-and-swap: only advance the branch if it still points
+	// at baseCommitSHA. If another writer moved the ref in the meantime,
+	// this fails with ErrReferenceHasChanged.
+	oldRef := plumbing.NewHashReference(branchRef, baseHash)
+	newRef := plumbing.NewHashReference(branchRef, newCommitHash)
+	if err := st.CheckAndSetReference(newRef, oldRef); err != nil {
+		if errors.Is(err, storage.ErrReferenceHasChanged) {
+			return "", domain.ErrRefChanged
+		}
+		return "", fmt.Errorf("edit: set branch ref: %w", err)
+	}
+
+	return newCommitHash.String(), nil
+}
+
+// replaceTreeEntry returns a new tree hash where the entry at path segments
+// (relative to tree) is replaced with newEntry. Intermediate directories are
+// rebuilt; all other entries are preserved unchanged.
+func replaceTreeEntry(repo *git.Repository, tree *object.Tree, segments []string, newEntry object.TreeEntry) (plumbing.Hash, error) {
+	st := repo.Storer
+	target := segments[0]
+
+	if len(segments) == 1 {
+		// Leaf: rebuild this tree with the one entry replaced.
+		newEntries := make([]object.TreeEntry, 0, len(tree.Entries))
+		found := false
+		for _, e := range tree.Entries {
+			if e.Name == target {
+				newEntries = append(newEntries, newEntry)
+				found = true
+			} else {
+				newEntries = append(newEntries, e)
+			}
+		}
+		if !found {
+			return plumbing.ZeroHash, domain.ErrPathNotFound
+		}
+		return encodeAndStoreTree(st, newEntries)
+	}
+
+	// Intermediate: find the sub-tree, recurse, then rebuild this tree
+	// with the updated sub-tree entry.
+	var subEntry *object.TreeEntry
+	for i := range tree.Entries {
+		if tree.Entries[i].Name == target {
+			subEntry = &tree.Entries[i]
+			break
+		}
+	}
+	if subEntry == nil {
+		return plumbing.ZeroHash, domain.ErrPathNotFound
+	}
+	if subEntry.Mode != filemode.Dir {
+		return plumbing.ZeroHash, domain.ErrNotABlob
+	}
+
+	subTree, err := repo.TreeObject(subEntry.Hash)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("read subtree %q: %w", target, err)
+	}
+
+	newSubHash, err := replaceTreeEntry(repo, subTree, segments[1:], newEntry)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+
+	newEntries := make([]object.TreeEntry, 0, len(tree.Entries))
+	for _, e := range tree.Entries {
+		if e.Name == target {
+			newEntries = append(newEntries, object.TreeEntry{
+				Name: target,
+				Mode: filemode.Dir,
+				Hash: newSubHash,
+			})
+		} else {
+			newEntries = append(newEntries, e)
+		}
+	}
+	return encodeAndStoreTree(st, newEntries)
+}
+
+// encodeAndStoreTree writes a tree object from the given entries and returns its hash.
+func encodeAndStoreTree(storer storage.Storer, entries []object.TreeEntry) (plumbing.Hash, error) {
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name < entries[j].Name
+	})
+	treeObj := storer.NewEncodedObject()
+	t := &object.Tree{Entries: entries}
+	if err := t.Encode(treeObj); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("encode tree: %w", err)
+	}
+	h, err := storer.SetEncodedObject(treeObj)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("store tree: %w", err)
+	}
+	return h, nil
+}
+
 

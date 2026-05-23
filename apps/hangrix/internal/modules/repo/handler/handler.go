@@ -7,9 +7,12 @@ package handler
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os/exec"
@@ -165,6 +168,10 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Delete("/{owner}/{name}/branches/*", h.deleteBranch)
 		r.Post("/{owner}/{name}/tags", h.createTag)
 		r.Delete("/{owner}/{name}/tags/*", h.deleteTag)
+
+			// Online file edit — create a commit by replacing a single blob.
+			r.Post("/{owner}/{name}/contents/commit", h.commitFile)
+
 
 		// Branch protection rules. Listed by any repo reader; mutated only
 		// by owner / admin (resolveRepoForManage is called in each handler).
@@ -1348,6 +1355,9 @@ func mapGitErr(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, gitdomain.ErrInvalidRefName):
 		httpx.WriteError(w, http.StatusBadRequest, "invalid ref name")
 		return true
+	case errors.Is(err, gitdomain.ErrRefChanged):
+		httpx.WriteError(w, http.StatusConflict, "ref has changed concurrently")
+		return true
 	}
 	return false
 }
@@ -1623,6 +1633,225 @@ func (h *Handler) deleteTag(w http.ResponseWriter, r *http.Request) {
 	h.invalidateCache(r.Context(), repo.ID)
 	w.WriteHeader(http.StatusNoContent)
 }
+
+
+// ---- Online file edit ----
+
+// commitFileReq is the request body for POST .../contents/commit.
+type commitFileReq struct {
+	Ref             string `json:"ref"`                         // source branch name
+	Path            string `json:"path"`                        // repo-relative file path
+	PreviousBlobSHA string `json:"previous_blob_sha,omitempty"` // optional: current blob SHA for extra validation
+	BaseCommitSHA   string `json:"base_commit_sha"`             // required: branch HEAD when the editor loaded
+	ContentUTF8     string `json:"content_utf8"`                // complete new file content
+	CommitMessage   string `json:"commit_message"`              // commit summary
+	NewBranchName   string `json:"new_branch_name,omitempty"`   // optional: create a new branch first
+}
+
+// commitRef is a short commit reference returned after a successful edit.
+type commitRef struct {
+	SHA     string `json:"sha"`
+	Message string `json:"message"`
+}
+
+// commitFileResp is the response body for a successful online edit.
+type commitFileResp struct {
+	Branch   string    `json:"branch"`
+	Commit   commitRef `json:"commit"`
+	BlobPath string    `json:"blob_path"`
+}
+
+func (h *Handler) commitFile(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.resolveRepoForWrite(w, r)
+	if !ok {
+		return
+	}
+	path, ok := h.resolveFsPath(w, repo)
+	if !ok {
+		return
+	}
+
+	caller, _ := authdomain.UserFromRequest(r)
+	if caller == nil {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req commitFileReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+
+	// --- Validate inputs ---
+	req.Ref = strings.TrimSpace(req.Ref)
+	req.Path = strings.TrimSpace(req.Path)
+	req.BaseCommitSHA = strings.TrimSpace(req.BaseCommitSHA)
+	req.CommitMessage = strings.TrimSpace(req.CommitMessage)
+	req.NewBranchName = strings.TrimSpace(req.NewBranchName)
+
+	if req.Ref == "" || req.Path == "" || req.BaseCommitSHA == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "ref, path, and base_commit_sha are required")
+		return
+	}
+	if req.CommitMessage == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "commit_message is required")
+		return
+	}
+	if len(req.ContentUTF8) > maxBlobBytes {
+		httpx.WriteError(w, http.StatusRequestEntityTooLarge, "content exceeds maximum file size")
+		return
+	}
+
+	// Ref must be resolvable as a branch (not a tag or raw SHA).
+	branchSHA, err := h.git.ResolveCommit(path, req.Ref)
+	if err != nil {
+		if errors.Is(err, gitdomain.ErrRefNotFound) {
+			httpx.WriteError(w, http.StatusBadRequest, "ref does not resolve to a branch: "+req.Ref)
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if branchSHA == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "ref is not a branch with commits: "+req.Ref)
+		return
+	}
+
+	// Optimistic lock: base_commit_sha must match the current branch HEAD.
+	if req.BaseCommitSHA != branchSHA {
+		httpx.WriteError(w, http.StatusConflict, "branch has been updated since you loaded this file; please refresh and try again")
+		return
+	}
+
+	// If previous_blob_sha is supplied, verify it matches the current blob SHA.
+	if req.PreviousBlobSHA != "" {
+		blob, _, err := h.git.Blob(path, req.Ref, req.Path)
+		if err != nil {
+			if mapGitErr(w, err) {
+				return
+			}
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		currentBlobSHA := plumbingHex(blob)
+		if req.PreviousBlobSHA != currentBlobSHA {
+			httpx.WriteError(w, http.StatusConflict, "file has been modified since you loaded it; please refresh and try again")
+			return
+		}
+	}
+
+	targetBranch := req.Ref
+	// If new_branch_name is provided, create it first.
+	if req.NewBranchName != "" {
+		if !validateRefNameInput(req.NewBranchName) {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid new_branch_name")
+			return
+		}
+
+		// Resolve the start ref to get its SHA for the guard check.
+		startSHA := branchSHA
+
+		// Run guards for branch creation.
+		if err := h.runGuards(r.Context(), domain.BranchWriteOp{
+			RepoID:   repo.ID,
+			Branch:   req.NewBranchName,
+			OldSHA:   "",
+			NewSHA:   startSHA,
+			IsCreate: true,
+		}); err != nil {
+			if errors.Is(err, domain.ErrBranchWriteDenied) {
+				httpx.WriteError(w, http.StatusForbidden, err.Error())
+				return
+			}
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		if err := h.git.CreateBranch(path, req.NewBranchName, req.Ref); err != nil {
+			if mapGitErr(w, err) {
+				return
+			}
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		targetBranch = req.NewBranchName
+	} else {
+		// Direct commit to existing branch: run guards and check protections.
+		if err := h.runGuards(r.Context(), domain.BranchWriteOp{
+			RepoID:   repo.ID,
+			Branch:   req.Ref,
+			OldSHA:   branchSHA,
+			NewSHA:   "", // the new SHA is unknown until commit; guard can still block
+			IsCreate: false,
+		}); err != nil {
+			if errors.Is(err, domain.ErrBranchWriteDenied) {
+				httpx.WriteError(w, http.StatusForbidden, err.Error())
+				return
+			}
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		// Check branch protection: forbid_direct_push blocks online edit.
+		rule, err := h.matchedProtection(r, repo.ID, req.Ref)
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if rule != nil && rule.ForbidDirectPush {
+			httpx.WriteError(w, http.StatusConflict, "branch is protected against direct pushes")
+			return
+		}
+	}
+
+	// Build the author / committer identity.
+	author := gitdomain.Signature{
+		Name:  caller.Username,
+		Email: callerEmail(caller),
+	}
+	committer := author
+
+	// For the new-branch path, base_commit_sha represents the parent
+	// commit that the new branch is based on; pass it through so that
+	// EditAndCommit can do its own atomic CAS against the new branch.
+	// For the existing-branch path, base_commit_sha is the branch HEAD.
+	newSHA, err := h.git.EditAndCommit(path, targetBranch, req.BaseCommitSHA, req.Path, []byte(req.ContentUTF8), req.CommitMessage, author, committer)
+	if err != nil {
+		if mapGitErr(w, err) {
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	h.invalidateCache(r.Context(), repo.ID)
+	httpx.WriteJSON(w, http.StatusCreated, commitFileResp{
+		Branch:   targetBranch,
+		Commit:   commitRef{SHA: newSHA, Message: req.CommitMessage},
+		BlobPath: req.Path,
+	})
+}
+
+// callerEmail returns the caller's email for commit authoring. Falls back to
+// a platform noreply address when no public email is set.
+func callerEmail(u *userdomain.User) string {
+	if u.Email != "" {
+		return u.Email
+	}
+	return u.Username + "@users.noreply.hangrix.local"
+}
+
+// plumbingHex returns the Git blob SHA-1 hex string for the given content.
+// Git blob hashes are computed as sha1("blob <size>\0<content>").
+func plumbingHex(data []byte) string {
+	header := fmt.Sprintf("blob %d\x00", len(data))
+	h := sha1.New()
+	h.Write([]byte(header))
+	h.Write(data)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 
 // lookupBranchSHA / lookupTagSHA fetch the SHA of a freshly-created ref via
 // the public Git interface. Best-effort: on any failure we return "" and let

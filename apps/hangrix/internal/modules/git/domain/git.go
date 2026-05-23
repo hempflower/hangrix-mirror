@@ -173,6 +173,25 @@ type Git interface {
 	// apply cleanly (the underlying git apply would reject it) or the
 	// branch cannot be resolved.
 	ApplyPatch(path, branch, patchText, message string, author, committer Signature) (sha string, err error)
+
+	// EditAndCommit replaces the blob at filePath in the tree of the HEAD
+	// commit of branch with newContent, builds a new tree, creates a
+	// commit with the given message, and advances the branch ref to it.
+	//
+	// baseCommitSHA is the commit the caller believes is the branch tip;
+	// the method uses an atomic compare-and-swap on the branch ref —
+	// the ref is only advanced if it still points at baseCommitSHA.
+	// If the ref has moved, ErrRefChanged is returned.
+	//
+	// filePath is repo-relative, forward-slash separated (e.g. "docs/intro.md").
+	// newContent is the complete new file content as raw bytes (UTF-8 text).
+	// author and committer identify who made the change.
+	//
+	// Returns the new commit SHA. Possible errors: ErrRepoNotFound,
+	// ErrRefNotFound (branch doesn't exist or has no commits),
+	// ErrPathNotFound (filePath not in tree), ErrNotABlob (path exists
+	// but is not a regular file), ErrRefChanged (concurrent write).
+	EditAndCommit(path, branch, baseCommitSHA, filePath string, newContent []byte, message string, author, committer Signature) (newCommitSHA string, err error)
 }
 
 // JSON tags are intentionally on these domain types because the repo handler
@@ -284,4 +303,5 @@ var (
 	ErrCannotDeleteHEAD = errors.New("git: cannot delete current HEAD branch")
 	ErrInvalidRefName   = errors.New("git: invalid ref name")
 	ErrMergeConflict = errors.New("git: merge conflict")
+	ErrRefChanged    = errors.New("git: ref has changed concurrently")
 )
