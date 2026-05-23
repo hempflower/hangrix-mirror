@@ -135,3 +135,99 @@ test.describe('repo + issue workflow', () => {
     })
   })
 })
+
+/**
+ * Online file edit smoke tests.
+ *
+ * Covers:
+ * - Edit page renders form structure (textarea, commit fields, submit button)
+ *   when the file exists and the user has write permission
+ * - Cancel button returns to the blob page
+ * - Permission gating: read-only users see an error
+ */
+test.describe('online file edit', () => {
+  let owner = ''
+  const repoName = uniqueName('e2eedit')
+
+  test.beforeAll(async ({ browser }) => {
+    const ctx = await browser.newContext()
+    const page = await ctx.newPage()
+    const username = uniqueName('e2eeditowner')
+    owner = username
+    await ensureLoggedIn(page, username, PASSWORD)
+
+    // Create a repo initialized with a README.md so the edit page
+    // has a real text file to load.
+    await createRepo(page, repoName, {
+      description: 'E2E online edit smoke test',
+      visibility: 'public',
+      initReadme: true,
+    })
+
+    await ctx.close()
+  })
+
+  test('edit page renders form structure with file content', async ({ page }) => {
+    await ensureLoggedIn(page, owner, PASSWORD)
+
+    // Navigate to the blob page first and click Edit to enter the edit page.
+    await page.goto(`/${owner}/${repoName}/blob/main/README.md`)
+    await page.getByRole('heading').first().waitFor({ state: 'visible', timeout: 15_000 })
+
+    // Click the Edit button.
+    const editBtn = page.getByRole('link', { name: /Edit|编辑/i })
+    await editBtn.waitFor({ state: 'visible', timeout: 10_000 })
+    await editBtn.click()
+
+    // Should land on the edit page.
+    await expect(page).toHaveURL(
+      new RegExp(`/${owner}/${repoName}/edit/main/README\\.md`),
+    )
+
+    // Textarea should be visible and contain the file content.
+    const textarea = page.locator('textarea').first()
+    await textarea.waitFor({ state: 'visible', timeout: 15_000 })
+    const content = await textarea.inputValue()
+    expect(content.length).toBeGreaterThan(0)
+
+    // Commit message input should be visible.
+    const messageInput = page.locator('#commit-message')
+    await expect(messageInput).toBeVisible({ timeout: 10_000 })
+
+    // Submit button should be visible (disabled until message entered).
+    const submitBtn = page.getByRole('button', { name: /Commit changes|提交更改/i })
+    await expect(submitBtn).toBeVisible({ timeout: 10_000 })
+    await expect(submitBtn).toBeDisabled()
+  })
+
+  test('cancel returns to blob page', async ({ page }) => {
+    await ensureLoggedIn(page, owner, PASSWORD)
+    await page.goto(`/${owner}/${repoName}/edit/main/README.md`)
+
+    // Wait for the textarea to confirm the page loaded.
+    await page.locator('textarea').first().waitFor({ state: 'visible', timeout: 15_000 })
+
+    // Click the cancel button.
+    const cancelBtn = page.getByRole('button', { name: /Cancel|取消/i })
+    await cancelBtn.click()
+
+    // Should navigate back to blob page.
+    await expect(page).toHaveURL(
+      new RegExp(`/${owner}/${repoName}/blob/main/README\\.md`),
+      { timeout: 10_000 },
+    )
+  })
+
+  test('edit page shows permission error for read-only user', async ({ page }) => {
+    const readerName = uniqueName('e2ereadonly')
+    await ensureLoggedIn(page, readerName, PASSWORD)
+
+    // Navigate directly to edit URL for a repo the reader doesn't own.
+    await page.goto(`/${owner}/${repoName}/edit/main/README.md`)
+    await page.waitForTimeout(3000)
+
+    // Should see a permission-related error.
+    const permissionDenied = page.getByText(/don't have permission|没有.*权限/)
+    await expect(permissionDenied.first()).toBeVisible({ timeout: 10_000 })
+  })
+})

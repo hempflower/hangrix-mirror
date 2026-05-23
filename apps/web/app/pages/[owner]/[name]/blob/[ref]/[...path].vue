@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { ChevronRight, FileText } from 'lucide-vue-next'
+import { ChevronRight, FileText, PencilLine } from 'lucide-vue-next'
 import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import type { BlobResp } from '~/types/repo'
 
 definePageMeta({ layout: 'repo' })
@@ -28,6 +29,10 @@ setBreadcrumbs(() => {
 
 const owner = computed(() => String(route.params.owner ?? ''))
 const name = computed(() => String(route.params.name ?? ''))
+
+const { repo, load: loadRepo } = useRepo(() => owner.value, () => name.value)
+const { refs: repoRefs, load: loadRefs } = useRepoRefs(() => owner.value, () => name.value)
+
 useHead({ title: () => {
     const rawPath = route.params.path
     const segs = Array.isArray(rawPath)
@@ -90,6 +95,16 @@ const downloadName = computed(() => {
   return parts[parts.length - 1] || 'file'
 })
 
+const canEdit = computed(() => {
+  if (!blob.value || blob.value.binary) return false
+  const perm = repo.value?.viewer_permission ?? ''
+  return perm === 'write' || perm === 'manage'
+})
+
+function editUrl() {
+  return `/${owner.value}/${name.value}/edit/${encodeURIComponent(refName.value)}/${filePath.value}`
+}
+
 // Tree links keep using the ?ref= query convention — they're served by
 // /[owner]/[name]/index.vue which renders the file browser based on that
 // query state.
@@ -122,7 +137,7 @@ async function load() {
 }
 
 watch([refName, filePath], load)
-onMounted(load)
+onMounted(() => Promise.all([load(), loadRepo(), loadRefs()]))
 </script>
 
 <template>
@@ -177,14 +192,26 @@ onMounted(load)
               · {{ t('repo.files.size', { n: blob.size }) }}
             </span>
           </div>
-          <a
-            v-if="blob.binary"
-            :href="downloadHref"
-            :download="downloadName"
-            class="text-sm text-primary hover:underline"
-          >
-            {{ t('repo.files.download') }}
-          </a>
+          <div class="flex items-center gap-2">
+              <Button
+                v-if="canEdit"
+                variant="ghost"
+                size="sm"
+                as="NuxtLink"
+                :to="editUrl()"
+              >
+                <PencilLine class="size-4" />
+                {{ t('repo.edit.editButton') }}
+              </Button>
+              <a
+                v-if="blob.binary"
+                :href="downloadHref"
+                :download="downloadName"
+                class="text-sm text-primary hover:underline"
+              >
+                {{ t('repo.files.download') }}
+              </a>
+            </div>
         </div>
         <div v-if="blob.binary" class="p-4 text-sm text-muted-foreground">
           {{ t('repo.files.binary') }} · {{ t('repo.files.size', { n: blob.size }) }}

@@ -460,6 +460,29 @@
       "submoduleHint": "submodule (not browsable)",
       "symlinkHint": "symlink"
     },
+    "edit": {
+      "title": "Edit file",
+      "editButton": "Edit",
+      "fileInfo": "Editing {path} from {ref}",
+      "commitMessage": "Commit message",
+      "commitMessagePlaceholder": "Describe your changes…",
+      "commitToBranch": "Commit directly to {branch}",
+      "createNewBranch": "Create a new branch for this commit",
+      "newBranchName": "New branch name",
+      "newBranchNamePlaceholder": "e.g. feature/update-readme",
+      "submit": "Commit changes",
+      "cancel": "Cancel",
+      "loading": "Loading file…",
+      "loadFailed": "Failed to load file",
+      "noPermission": "You don't have permission to edit this file.",
+      "tooLarge": "File is too large to edit online (> 1 MiB).",
+      "binary": "Binary files cannot be edited online.",
+      "success": "Commit created",
+      "successDetail": "Committed as {sha} to {branch}",
+      "conflict": "This branch has been updated since you started editing.",
+      "conflictHint": "Please refresh the page and try again.",
+      "viewFile": "View file"
+    },
     "sidebarGroup": "This repo",
     "nav": {
       "code": "Code"

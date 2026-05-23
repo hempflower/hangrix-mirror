@@ -77,7 +77,7 @@ export async function ensureLoggedIn(
 export async function createRepo(
   page: Page,
   repoName: string,
-  options?: { description?: string; visibility?: 'public' | 'private' },
+  options?: { description?: string; visibility?: 'public' | 'private'; initReadme?: boolean },
 ): Promise<void> {
   await page.goto('/repos/new')
   // The checkbox is a shadcn-vue Checkbox (reka-ui), which renders as
@@ -97,6 +97,18 @@ export async function createRepo(
 
   if (options?.visibility === 'public') {
     await page.click('#visibility-public')
+  }
+
+  if (options?.initReadme !== undefined) {
+    // The init-readme checkbox is a reka-ui Checkbox rendered as
+    // <button role="checkbox">. Its initial value from the form schema
+    // is true, but we explicitly toggle to match the caller's intent.
+    const cb = page.locator('#init-readme')
+    const isChecked = await cb.getAttribute('aria-checked')
+    const wantChecked = String(options.initReadme)
+    if (isChecked !== wantChecked) {
+      await cb.click()
+    }
   }
 
   await page.click('button[type="submit"]')

@@ -159,3 +159,19 @@ export interface RepoVariableUpdateReq {
   kind?: VariableKind
 }
 
+export interface CommitContentsReq {
+  ref: string
+  path: string
+  previous_blob_sha?: string
+  base_commit_sha: string
+  content_utf8: string
+  commit_message: string
+  new_branch_name?: string
+}
+
+export interface CommitContentsResp {
+  branch: string
+  commit: Commit
+  blob_path: string
+}
+
