@@ -644,9 +644,24 @@ func (r *Registry) issueCreateTool() *agentapidomain.Tool {
 				parentNumber = scope.issue.Number
 			}
 
+			// Validate the base ref resolves before writing the row, so we
+			// never create an issue without its matching issue/<n> branch.
+			if _, err := r.deps.Git.ResolveCommit(scope.fsPath, baseBranch); err != nil {
+				return errorResult("base ref not resolvable (" + baseBranch + "): " + err.Error()), nil
+			}
+
 			iss, err := r.deps.Issues.Create(ctx, scope.repo.ID, 0, title, req.Body, baseBranch, sess.RoleKey, parentID, parentNumber)
 			if err != nil {
 				return errorResult("create issue: " + err.Error()), nil
+			}
+
+			// Create the issue/<n> branch ref on the server bare repo — the
+			// same step the web issue-create path performs. Without it the
+			// issue branch doesn't exist server-side, so a pushed contribution
+			// can't be diffed against it (DiffMergeBase fails) and is never
+			// recognised. Idempotent: an already-existing ref is fine.
+			if err := r.deps.Git.CreateBranch(scope.fsPath, iss.BranchName, baseBranch); err != nil && !errors.Is(err, gitdomain.ErrBranchExists) {
+				return errorResult("create issue branch " + iss.BranchName + ": " + err.Error()), nil
 			}
 
 			// Fire issue.opened so subscribing roles wake.
