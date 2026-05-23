@@ -28,7 +28,7 @@ import FileDiffList from '@/components/repo/FileDiffList.vue'
 import FoldableBody from '@/components/issue/FoldableBody.vue'
 import MentionTextarea from '@/components/issue/MentionTextarea.vue'
 import AttachmentUploader from '@/components/issue/AttachmentUploader.vue'
-import type { Issue, IssueAttachment, IssueState, IssueTimeline, IssueMergeResp, ReviewStatus, ReviewVerdict, ReviewVoteValue } from '~/types/issue'
+import type { Issue, IssueState, IssueTimeline, IssueMergeResp, ReviewStatus, ReviewVerdict, ReviewVoteValue } from '~/types/issue'
 import type { Commit, FileDiff } from '~/types/repo'
 import { relativeTime } from '~/utils/time'
 
@@ -84,13 +84,7 @@ const commentBusy = ref(false)
 const commentError = ref<string | null>(null)
 const mentionTextareaRef = ref<InstanceType<typeof MentionTextarea> | null>(null)
 
-// Attachment state
-const attachments = ref<IssueAttachment[]>([])
-const attachmentsMap = computed<Record<number, IssueAttachment>>(() => {
-  const m: Record<number, IssueAttachment> = {}
-  for (const a of attachments.value) m[a.id] = a
-  return m
-})
+
 
 // Mention suggestions for the comment editor's `@` autocomplete. The
 // list comes from the host yaml at the default-branch tip, which can
@@ -277,19 +271,6 @@ async function loadCommits() {
   }
 }
 
-async function loadAttachments() {
-  if (!issue.value) return
-  try {
-    const data = await $fetch<IssueAttachment[]>(
-      `/api/repos/${owner.value}/${name.value}/issues/${number.value}/attachments`,
-      { credentials: 'include' },
-    )
-    attachments.value = data ?? []
-  } catch {
-    attachments.value = []
-  }
-}
-
 async function submitComment() {
   const body = commentBody.value.trim()
   if (!body || !issue.value) return
@@ -305,7 +286,7 @@ async function submitComment() {
       },
     )
     commentBody.value = ''
-    await Promise.all([loadTimeline(), loadAttachments()])
+    await loadTimeline()
   } catch (e: any) {
     commentError.value = e?.data?.error ?? t('issue.commentForm.failed')
   } finally {
@@ -523,7 +504,7 @@ async function refreshLive() {
     stopRefreshTimer()
     return
   }
-  await Promise.all([loadIssue(), loadTimeline(), loadDiff(), loadCommits(), loadChildren(), loadMentionAgents(), loadAttachments()])
+  await Promise.all([loadIssue(), loadTimeline(), loadDiff(), loadCommits(), loadChildren(), loadMentionAgents()])
 }
 
 function startRefreshTimer() {
@@ -552,7 +533,6 @@ onMounted(async () => {
       loadParent(),
       loadChildren(),
   loadMentionAgents(),
-  loadAttachments(),
     ])
   }
   startRefreshTimer()
@@ -652,7 +632,7 @@ onUnmounted(() => {
                     </span>
                   </div>
                   <div class="px-4 py-3 text-sm">
-                    <MarkdownBody v-if="issue.body" :source="issue.body" :attachments="attachmentsMap" />
+                    <MarkdownBody v-if="issue.body" :source="issue.body"  />
                     <p v-else class="text-muted-foreground">—</p>
                   </div>
                 </CardContent>
@@ -682,7 +662,7 @@ onUnmounted(() => {
                       </span>
                     </div>
                     <div class="px-4 py-3 text-sm">
-                      <MarkdownBody :source="it.data.body" :attachments="attachmentsMap" />
+                      <MarkdownBody :source="it.data.body"  />
                     </div>
                   </CardContent>
                 </Card>
@@ -718,7 +698,7 @@ onUnmounted(() => {
                       </span>
                     </div>
                     <div class="px-4 py-3 text-sm">
-                      <MarkdownBody v-if="it.data.payload?.reason" :source="it.data.payload.reason" :attachments="attachmentsMap" />
+                      <MarkdownBody v-if="it.data.payload?.reason" :source="it.data.payload.reason"  />
                       <p v-else class="text-muted-foreground">{{ t('issue.review.noReason') }}</p>
                     </div>
                   </CardContent>
@@ -772,12 +752,7 @@ onUnmounted(() => {
                       {{ t('issue.commentForm.hostYamlError') }}: {{ hostYamlError }}
                     </p>
                     <AttachmentUploader
-                      :owner="owner"
-                      :name="name"
-                      :issue-number="Number(number)"
-                      :existing-attachments="attachments"
                       @insert="(snippet: string) => mentionTextareaRef?.insertAtCursor(snippet)"
-                      @uploaded="(att: IssueAttachment) => attachments.push(att)"
                     />
                     <MentionTextarea
                       ref="mentionTextareaRef"

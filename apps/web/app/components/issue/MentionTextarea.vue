@@ -11,10 +11,8 @@
 // trailing space so the user can keep typing).
 
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { Bot, Paperclip } from 'lucide-vue-next'
+import { Bot } from 'lucide-vue-next'
 import { cn } from '@/utils/utils'
-
-const { t } = useI18n()
 
 interface MentionAgent {
   role_key: string
@@ -263,24 +261,13 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="relative">
-    <!-- Toolbar row -->
-    <div class="flex items-center gap-1 rounded-t-md border border-b-0 bg-muted/40 px-2 py-1">
-      <button
-        type="button"
-        class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-        :title="t('issue.attachment.insert')"
-        @click="insertAtCursor('![attachment:ID]')"
-      >
-        <Paperclip class="size-3" />
-        {{ t('issue.attachment.insertBtn') }}
-      </button>
-    </div>
+
     <textarea
       ref="textareaRef"
       :value="modelValue"
       :rows="rows"
       :placeholder="placeholder"
-      :class="cn('border-input placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:bg-input/30 flex field-sizing-content min-h-16 w-full rounded-b-md rounded-t-none border border-t-0 bg-transparent px-3 py-2 text-base shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 md:text-sm', props.class)"
+      :class="cn('border-input placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:bg-input/30 flex field-sizing-content min-h-16 w-full rounded-md border bg-transparent px-3 py-2 text-base shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 md:text-sm', props.class)"
       @input="onInput"
       @keydown="onKeydown"
       @click="onSelectionChange"
