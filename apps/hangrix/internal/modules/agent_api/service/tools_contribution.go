@@ -26,7 +26,7 @@ import (
 func (r *Registry) contributionListTool() *agentapidomain.Tool {
 	return &agentapidomain.Tool{
 		Name:        "contribution_list",
-		Description: "List the contribution branches on the current issue. Each entry has id, agent_role, ref_name, status, mergeable, merge_mode, head_sha, and diff stats. A contribution is created automatically when you push to refs/heads/issue-<N>/<your-role>.",
+		Description: "List the contribution branches on the current issue. Each entry has id, agent_role, ref_name, status, mergeable, merge_mode, head_sha, and diff stats. A contribution is created automatically when you push to refs/heads/issue-<N>/<your-role> — the git push response includes the contribution_id directly, so you don't need this tool just to discover your ID.",
 		InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)

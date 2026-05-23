@@ -33,7 +33,11 @@ var contributionRefRe = regexp.MustCompile(`^refs/heads/issue-(\d+)/(.+)$`)
 //
 // Best-effort: any error short-circuits this single ref without affecting the
 // rest of the push (the client already has its response by PostReceive time).
-func (h *Handler) SyncContribution(ctx context.Context, repo *repodomain.Repo, fsPath string, u repodomain.PushRefUpdate) {
+//
+// Returns a PostReceiveContrib on success (so the HTTP handler can inject a
+// sideband message into the push response), or nil when this ref is not a
+// contribution branch or the upsert failed.
+func (h *Handler) SyncContribution(ctx context.Context, repo *repodomain.Repo, fsPath string, u repodomain.PushRefUpdate) *repodomain.PostReceiveContrib {
 	m := contributionRefRe.FindStringSubmatch(u.RefName)
 	if m == nil {
 		// Refs that look like a contribution attempt (issue-namespace-shaped)
@@ -42,17 +46,17 @@ func (h *Handler) SyncContribution(ctx context.Context, repo *repodomain.Repo, f
 		if strings.HasPrefix(u.RefName, "refs/heads/issue-") {
 			log.Printf("issue: contribution ref %q did not match issue-<N>/<role>/<slug>; not recognised", u.RefName)
 		}
-		return
+		return nil
 	}
 	number, err := strconv.ParseInt(m[1], 10, 64)
 	if err != nil || number <= 0 {
 		log.Printf("issue: contribution ref %q has unparseable issue number; not recognised", u.RefName)
-		return
+		return nil
 	}
 	role := strings.SplitN(m[2], "/", 2)[0]
 	if role == "" {
 		log.Printf("issue: contribution ref %q has empty role; not recognised", u.RefName)
-		return
+		return nil
 	}
 
 	// Branch deletion (new SHA is the zero oid) — drop the contribution out of
@@ -61,18 +65,18 @@ func (h *Handler) SyncContribution(ctx context.Context, repo *repodomain.Repo, f
 		if c, err := h.contributions.GetContributionByRef(ctx, contributionIssueID(ctx, h, repo.ID, number), u.RefName); err == nil && c != nil && !c.Status.Terminal() {
 			_, _ = h.contributions.SetContributionStatus(ctx, c.ID, domain.ContribStatusClosed)
 		}
-		return
+		return nil
 	}
 
 	iss, err := h.issues.GetByNumber(ctx, repo.ID, number)
 	if err != nil {
 		log.Printf("issue: contribution ref %s -> issue #%d not found in repo %d: %v; not recognised", u.RefName, number, repo.ID, err)
-		return
+		return nil
 	}
 	// Only accept contributions against an open issue.
 	if iss.State != domain.StateOpen {
 		log.Printf("issue: contribution ref %s -> issue #%d is %s (not open); not recognised", u.RefName, number, iss.State)
-		return
+		return nil
 	}
 	log.Printf("issue: recognising contribution ref=%s issue=#%d role=%s head=%s", u.RefName, number, role, u.NewSHA)
 
@@ -105,7 +109,7 @@ func (h *Handler) SyncContribution(ctx context.Context, repo *repodomain.Repo, f
 	})
 	if err != nil {
 		log.Printf("issue: upsert contribution repo=%d issue=%d ref=%s: %v", repo.ID, number, u.RefName, err)
-		return
+		return nil
 	}
 
 	// Cache mergeability against the current issue head for the gate + UI.
@@ -135,6 +139,13 @@ func (h *Handler) SyncContribution(ctx context.Context, repo *repodomain.Repo, f
 	// so per-role paths / paths_ignore filters are accurate. CauseID is the
 	// contribution head so re-deliveries of the same push dedupe.
 	h.fireContributionPushed(ctx, repo, iss, c, headSHA, changedPaths)
+
+	return &repodomain.PostReceiveContrib{
+		ContributionID: c.ID,
+		RefName:        c.RefName,
+		AgentRole:      role,
+		HeadSHA:        headSHA,
+	}
 }
 
 // fireContributionPushed fans a commit.pushed trigger for a contribution push.

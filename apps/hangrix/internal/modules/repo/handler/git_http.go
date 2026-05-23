@@ -237,24 +237,20 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 	// subprocess. Objects already exist from the unpack above, so
 	// receive-pack will skip re-storing them and proceed to ref updates.
 	// Clear Content-Encoding since we already decompressed above.
+	//
+	// We buffer stdout (rather than wiring it directly to w) so that we can
+	// inject sideband progress messages after PostReceive runs. A typical
+	// receive-pack response is a few hundred bytes of pkt-line status; the
+	// pack data is on stdin, not stdout.
 	r.Header.Del("Content-Encoding")
 	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-	h.runStatelessRPC(w, r, "receive-pack", fsPath)
+	h.runReceivePackWithSideband(w, r, fsPath, repo, caller, refUpdates)
 
-	// PostReceive observers run after the subprocess returns. The client has
-	// already received its response by this point so errors are swallowed —
-	// we accept temporarily losing a commit_pushed event over corrupting
-	// the wire protocol. Use a detached context so a client disconnect
-	// doesn't immediately cancel the observer DB writes.
-	postCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	pusher := pusherFromCaller(caller)
-	for _, obs := range h.observers {
-		_ = obs.PostReceive(postCtx, repo, fsPath, pusher, refUpdates)
-	}
 	// Push may have changed refs (branch / tag updates, force-pushes,
 	// etc.) — drop every git-read cache key for this repo so the next
 	// page load sees the new state.
+	postCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	h.invalidateCache(postCtx, repo.ID)
 }
 
@@ -303,6 +299,103 @@ func (h *Handler) runStatelessRPC(w http.ResponseWriter, r *http.Request, sub, f
 	// any subprocess error after that surfaces as a protocol-level error to
 	// the git client, which is fine.
 	_ = cmd.Run()
+}
+
+// runReceivePackWithSideband runs the git receive-pack subprocess with stdout
+// buffered, runs PostReceive observers, and — when contributions were
+// recognised — injects extra sideband-2 progress messages into the response
+// before the terminating flush pkt. The caller's response writer receives the
+// complete, possibly augmented pkt-line stream.
+func (h *Handler) runReceivePackWithSideband(w http.ResponseWriter, r *http.Request, fsPath string, repo *domain.Repo, caller *gitCaller, refUpdates []domain.PushRefUpdate) {
+	body, err := decodeRequestBody(r)
+	if err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer body.Close()
+
+	// Collect receive-pack stdout into a buffer so we can inject sideband
+	// messages before the terminating "0000" flush pkt.
+	var stdout bytes.Buffer
+	cmd := exec.CommandContext(r.Context(), "git", "receive-pack", "--stateless-rpc", fsPath)
+	cmd.Stdin = body
+	cmd.Stdout = &stdout
+	cmd.Stderr = io.Discard
+
+	w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
+	w.Header().Set("Cache-Control", "no-cache")
+	_ = cmd.Run()
+
+	// PostReceive observers run after the subprocess returns. Use a detached
+	// context so a client disconnect doesn't immediately cancel the observer
+	// DB writes.
+	postCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pusher := pusherFromCaller(caller)
+	var allContribs []domain.PostReceiveContrib
+	for _, obs := range h.observers {
+		contribs, _ := obs.PostReceive(postCtx, repo, fsPath, pusher, refUpdates)
+		allContribs = append(allContribs, contribs...)
+	}
+
+	// Inject contribution hints as sideband-2 progress messages before the
+	// terminating flush pkt so the pusher sees `remote:` lines with
+	// contribution IDs and next-step hints.
+	if len(allContribs) > 0 {
+		h.injectContributionHints(&stdout, allContribs)
+	}
+
+	_, _ = w.Write(stdout.Bytes())
+}
+
+// injectContributionHints prepends sideband-2 progress pkt-lines before the
+// last "0000" flush pkt in buf. The injected messages carry contribution_id
+// and next-step hints so the agent that pushed the branch doesn't need a
+// follow-up contribution_list call.
+func (h *Handler) injectContributionHints(buf *bytes.Buffer, contribs []domain.PostReceiveContrib) {
+	raw := buf.Bytes()
+	// Find the terminating flush pkt — it is the last "0000" in the stream.
+	idx := bytes.LastIndex(raw, []byte("0000"))
+	var head, tail []byte
+	if idx >= 0 {
+		head = raw[:idx]
+		tail = raw[idx:] // includes "0000"
+	} else {
+		head = raw
+		tail = nil
+	}
+
+	buf.Reset()
+	_, _ = buf.Write(head)
+
+	for _, c := range contribs {
+		shortSHA := c.HeadSHA
+		if len(shortSHA) > 7 {
+			shortSHA = shortSHA[:7]
+		}
+		msg := fmt.Sprintf("contribution_id: %d | ref: %s | role: %s | head: %s",
+			c.ContributionID, strings.TrimPrefix(c.RefName, "refs/heads/"), c.AgentRole, shortSHA)
+		hint := "Next: use contribution_set_meta to set title/description; " +
+			"contribution_read to view diff & review status. " +
+			"No need for contribution_list to discover this ID."
+		for _, line := range []string{msg, hint} {
+			buf.Write(sidebandPktLine(line))
+		}
+	}
+
+	if tail != nil {
+		_, _ = buf.Write(tail)
+	}
+}
+
+// sidebandPktLine encodes text as a sideband-2 (progress) pkt-line suitable for
+// injection into a git receive-pack response stream. The git client renders
+// sideband-2 as a `remote:` line.
+func sidebandPktLine(text string) []byte {
+	// Data is: sideband byte (0x02) + text + "\n"
+	data := "\x02" + text + "\n"
+	totalLen := 4 + len(data) // 4-byte hex length prefix + data
+	return fmt.Appendf(nil, "%04x%s", totalLen, data)
 }
 
 // authorizeGitRead — public repos: open to anyone. Private repos: require

@@ -61,6 +61,17 @@ type PushRefUpdate struct {
 	NewSHA  string
 }
 
+// PostReceiveContrib carries information about a contribution that was
+// recognised during PostReceive so the HTTP handler can inject a `remote:`
+// sideband message into the git push response, giving the pusher instant
+// feedback about the contribution ID and next steps.
+type PostReceiveContrib struct {
+	ContributionID int64
+	RefName        string
+	AgentRole      string
+	HeadSHA        string
+}
+
 // PushObserver is notified before and after each receive-pack run so other
 // modules can sync sidecars (the M4 issue-mode hook) and write
 // commit_pushed events. PreReceive runs after authorization but before the
@@ -74,9 +85,15 @@ type PushRefUpdate struct {
 // Pusher so observers writing audit events can attribute them correctly. The
 // pack data has already been extracted into the repo before PreReceive runs,
 // so the new SHA is resolvable; by PostReceive the refs themselves are updated.
+//
+// PostReceive returns a slice of PostReceiveContrib — one per contribution
+// branch that was successfully upserted. The HTTP handler encodes these as
+// sideband progress messages and injects them into the git push response
+// stream so the pusher sees contribution_id and next-step hints without
+// needing a follow-up API call.
 type PushObserver interface {
 	PreReceive(ctx context.Context, repo *Repo, fsPath string, refUpdates []PushRefUpdate) error
-	PostReceive(ctx context.Context, repo *Repo, fsPath string, pusher Pusher, refUpdates []PushRefUpdate) error
+	PostReceive(ctx context.Context, repo *Repo, fsPath string, pusher Pusher, refUpdates []PushRefUpdate) ([]PostReceiveContrib, error)
 }
 
 // ErrBranchDiverged is returned by PreReceive observers when a push is

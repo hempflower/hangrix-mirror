@@ -108,15 +108,18 @@ func (o *PushObserver) PreReceive(ctx context.Context, repo *repodomain.Repo, fs
 // actually pushed, and must not be starved (or skipped on a panic / consumed
 // 10s timeout) by the O(open_issues) reconciliation walk that follows. Repos
 // with many open issues see that walk per push — fine for current scale.
-func (o *PushObserver) PostReceive(ctx context.Context, repo *repodomain.Repo, fsPath string, pusher repodomain.Pusher, refUpdates []repodomain.PushRefUpdate) error {
+func (o *PushObserver) PostReceive(ctx context.Context, repo *repodomain.Repo, fsPath string, pusher repodomain.Pusher, refUpdates []repodomain.PushRefUpdate) ([]repodomain.PostReceiveContrib, error) {
 	// Contribution namespace refs first. Best-effort per ref.
 	refNames := make([]string, len(refUpdates))
 	for i, u := range refUpdates {
 		refNames[i] = u.RefName
 	}
 	log.Printf("issue: PostReceive repo=%d refs=%v", repo.ID, refNames)
+	var contribs []repodomain.PostReceiveContrib
 	for _, u := range refUpdates {
-		o.h.SyncContribution(ctx, repo, fsPath, u)
+		if c := o.h.SyncContribution(ctx, repo, fsPath, u); c != nil {
+			contribs = append(contribs, *c)
+		}
 	}
 
 	numbers, err := o.h.issues.ListOpenIssueNumbers(ctx, repo.ID)
@@ -133,5 +136,5 @@ func (o *PushObserver) PostReceive(ctx context.Context, repo *repodomain.Repo, f
 			}
 		}
 	}
-	return nil
+	return contribs, nil
 }

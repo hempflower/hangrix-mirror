@@ -193,6 +193,19 @@ issue 详情下新增「贡献 / 分支」视图,**左右布局**:
 
 ---
 
+### Push 响应中的 contribution 提示
+
+自 contribution-branch 模型上线起，`git push` 成功后，如果本次 push 的 ref 属于贡献分支命名空间（`refs/heads/issue-<N>/<role>/<slug>`），服务端会在 push 响应的 sideband 流中注入 `remote:` 提示行，包含：
+
+- 机器可提取的 `contribution_id`（例如 `contribution_id: 42`）
+- 人/agent 可读的下一步操作提示（可直接用 `contribution_set_meta` 设置标题描述；用 `contribution_read` 查看 diff 和 review 状态；无需再调 `contribution_list` 来获取 ID）
+
+这意味着 agent 不需要在 push 之后额外调用 `contribution_list` 工具来发现 contribution ID —— push 终端的 `remote:` 输出就是第一手来源。`contribution_list` 退化为「查看某个 issue 下所有 contribution」的补充查询工具。
+
+> 仅 contribution 分支 push 会触发此提示。普通分支 push、tag push、被 ACL 拒绝的 push 等不会产生 contribution 提示。当 contribution 同步未产出记录时（例如 push 成功但 DB 写入失败），push 仍保持原有成功/失败语义，不会因为提示缺失而额外失败，也不会返回错误 ID。
+
+---
+
 ## 工具变化(`modules/agent_api`)
 
 | 现状工具 | 新模型 |
