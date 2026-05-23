@@ -36,14 +36,22 @@ var contributionRefRe = regexp.MustCompile(`^refs/heads/issue-(\d+)/(.+)$`)
 func (h *Handler) SyncContribution(ctx context.Context, repo *repodomain.Repo, fsPath string, u repodomain.PushRefUpdate) {
 	m := contributionRefRe.FindStringSubmatch(u.RefName)
 	if m == nil {
+		// Refs that look like a contribution attempt (issue-namespace-shaped)
+		// but don't parse are logged — silent for ordinary refs (main, tags,
+		// the issue/<n> branch) so we don't spam the log on every push.
+		if strings.HasPrefix(u.RefName, "refs/heads/issue-") {
+			log.Printf("issue: contribution ref %q did not match issue-<N>/<role>/<slug>; not recognised", u.RefName)
+		}
 		return
 	}
 	number, err := strconv.ParseInt(m[1], 10, 64)
 	if err != nil || number <= 0 {
+		log.Printf("issue: contribution ref %q has unparseable issue number; not recognised", u.RefName)
 		return
 	}
 	role := strings.SplitN(m[2], "/", 2)[0]
 	if role == "" {
+		log.Printf("issue: contribution ref %q has empty role; not recognised", u.RefName)
 		return
 	}
 
@@ -58,12 +66,15 @@ func (h *Handler) SyncContribution(ctx context.Context, repo *repodomain.Repo, f
 
 	iss, err := h.issues.GetByNumber(ctx, repo.ID, number)
 	if err != nil {
+		log.Printf("issue: contribution ref %s -> issue #%d not found in repo %d: %v; not recognised", u.RefName, number, repo.ID, err)
 		return
 	}
 	// Only accept contributions against an open issue.
 	if iss.State != domain.StateOpen {
+		log.Printf("issue: contribution ref %s -> issue #%d is %s (not open); not recognised", u.RefName, number, iss.State)
 		return
 	}
+	log.Printf("issue: recognising contribution ref=%s issue=#%d role=%s head=%s", u.RefName, number, role, u.NewSHA)
 
 	contribBranch := strings.TrimPrefix(u.RefName, "refs/heads/")
 	headSHA := u.NewSHA

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 
@@ -97,15 +98,27 @@ func (o *PushObserver) PreReceive(ctx context.Context, repo *repodomain.Repo, fs
 
 // PostReceive does two things:
 //
-//  1. Walks every open issue in the repo and reconciles its on-disk branch
-//     tip (commit_pushed events on `issue/<n>` branches).
-//  2. For every pushed ref in a per-issue contribution namespace
+//  1. For every pushed ref in a per-issue contribution namespace
 //     (refs/heads/issue-<N>/<role>), upserts the contribution record from the
 //     real git diff and wakes reviewers. See SyncContribution.
+//  2. Walks every open issue in the repo and reconciles its on-disk branch
+//     tip (commit_pushed events on `issue/<n>` branches).
 //
-// Repos with many open issues see an O(open_issues) walk per push — fine for
-// current scale.
+// Contribution sync runs FIRST: it is the targeted work for the refs that were
+// actually pushed, and must not be starved (or skipped on a panic / consumed
+// 10s timeout) by the O(open_issues) reconciliation walk that follows. Repos
+// with many open issues see that walk per push — fine for current scale.
 func (o *PushObserver) PostReceive(ctx context.Context, repo *repodomain.Repo, fsPath string, pusher repodomain.Pusher, refUpdates []repodomain.PushRefUpdate) error {
+	// Contribution namespace refs first. Best-effort per ref.
+	refNames := make([]string, len(refUpdates))
+	for i, u := range refUpdates {
+		refNames[i] = u.RefName
+	}
+	log.Printf("issue: PostReceive repo=%d refs=%v", repo.ID, refNames)
+	for _, u := range refUpdates {
+		o.h.SyncContribution(ctx, repo, fsPath, u)
+	}
+
 	numbers, err := o.h.issues.ListOpenIssueNumbers(ctx, repo.ID)
 	if err == nil {
 		for _, n := range numbers {
@@ -119,11 +132,6 @@ func (o *PushObserver) PostReceive(ctx context.Context, repo *repodomain.Repo, f
 				continue
 			}
 		}
-	}
-
-	// Contribution namespace refs. Best-effort per ref.
-	for _, u := range refUpdates {
-		o.h.SyncContribution(ctx, repo, fsPath, u)
 	}
 	return nil
 }
