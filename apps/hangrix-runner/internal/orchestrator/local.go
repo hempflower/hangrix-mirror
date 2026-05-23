@@ -64,9 +64,12 @@ func (o *LocalOrchestrator) Start(ctx context.Context, t Task) (Handle, error) {
 	}
 
 	// Run the agent binary directly with its environment.
+	// Only the runner-constructed task environment is passed —
+	// matching the Docker session contract where the container
+	// starts with exactly the task env and nothing else.
 	cmd := exec.CommandContext(ctx, t.AgentBinaryPath)
 	cmd.Dir = t.HostWorkdir
-	cmd.Env = os.Environ()
+	cmd.Env = make([]string, 0, len(t.Env)+1)
 	for k, v := range t.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
