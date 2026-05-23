@@ -31,6 +31,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/kv"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
+	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
@@ -61,6 +62,10 @@ type Handler struct {
 	auditor     agentsessiondomain.Auditor
 	controller  agentsessiondomain.Controller
 	attachments *issueservice.AttachmentService
+	// commentAttachments is the platform-level comment_attachments junction
+	// store. When a comment body references /api/attachments/{id} URLs, the
+	// handler links them via this store. Nil-safe (tests).
+	commentAttachments attachmentdomain.CommentAttachmentStore
 	// guards are BranchWriteGuard implementations. When nil (tests
 	// without the repo module) the handler skips guard checks.
 	guards []repodomain.BranchWriteGuard
@@ -91,6 +96,9 @@ type HandlerDeps struct {
 	Controller agentsessiondomain.Controller
 	// Attachments is the attachment service (validation, hashing, storage).
 	Attachments *issueservice.AttachmentService
+	// CommentAttachments is the platform-level comment_attachments junction
+	// store. Wired from the attachment module.
+	CommentAttachments attachmentdomain.CommentAttachmentStore
 	// Guards are BranchWriteGuard implementations. When nil (tests
 	// without the repo module) the handler skips guard checks.
 	Guards []repodomain.BranchWriteGuard
@@ -111,7 +119,8 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		archiver:      deps.Archiver,
 		auditor:       deps.Auditor,
 		controller:    deps.Controller,
-		attachments:   deps.Attachments,
+		attachments:        deps.Attachments,
+		commentAttachments: deps.CommentAttachments,
 		guards:        deps.Guards,
 	}
 }
@@ -900,13 +909,25 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Scan the comment body for [attachment:N] / ![attachment:N] tokens
-	// and transition matching attachments from uploaded → attached.
-	// Best-effort — a missing or already-deleted attachment is not an error.
+	// (legacy issue-scoped attachments) and transition matching
+	// attachments from uploaded → attached. Best-effort.
 	if h.attachments != nil {
 		re := regexp.MustCompile(`!?\[attachment:(\d+)\]`)
 		for _, m := range re.FindAllStringSubmatch(body, -1) {
 			if attID, err := strconv.ParseInt(m[1], 10, 64); err == nil {
 				_ = h.attachments.MarkAttached(r.Context(), attID, c.ID)
+			}
+		}
+	}
+
+	// Scan for platform-level attachment URLs (/api/attachments/{id})
+	// and create comment_attachments rows so the junction is populated.
+	// Best-effort — a missing attachment is not an error.
+	if h.commentAttachments != nil {
+		re := regexp.MustCompile(`/api/attachments/(\d+)`)
+		for _, m := range re.FindAllStringSubmatch(body, -1) {
+			if attID, err := strconv.ParseInt(m[1], 10, 64); err == nil {
+				_ = h.commentAttachments.CreateCommentAttachment(r.Context(), c.ID, attID)
 			}
 		}
 	}
