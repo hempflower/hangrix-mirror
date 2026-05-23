@@ -10,6 +10,7 @@ import (
 	agentsession "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session"
 	automation "github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/dashboard"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/git"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/healthz"
@@ -39,6 +40,7 @@ func main() {
 		database.Module(),
 		kv.Module(),
 		healthz.Module(),
+		attachment.Module(),
 		hello.Module(),
 		user.Module(),
 		auth.Module(),

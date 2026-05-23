@@ -12,6 +12,7 @@ import (
 	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
+	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
@@ -505,7 +506,7 @@ func (r *Registry) sessionRecoverTool() *agentapidomain.Tool {
 func (r *Registry) issueAttachmentUploadTool() *agentapidomain.Tool {
 	return &agentapidomain.Tool{
 		Name:        "issue_attachment_upload",
-		Description: "Upload a file from the workspace as an issue attachment. Use multipart/form-data with parts: `file` (binary, required), `display_name` (optional), `inline` (boolean, default false), `comment_id` (optional). Returns attachment metadata including an `attachment_id` and `markdown_snippet` — use `issue_comment` to insert the snippet into a comment body.",
+		Description: "Upload a file from the workspace as an issue attachment. Use multipart/form-data with parts: `file` (binary, required), `display_name` (optional), `inline` (boolean, default false), `comment_id` (optional). Returns attachment metadata including an `attachment_id`, native `url` (/api/attachments/N/download), and `markdown_snippet` (standard Markdown `![](url)` or `[name](url)`) — use `issue_comment` to insert the snippet into a comment body.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -519,7 +520,7 @@ func (r *Registry) issueAttachmentUploadTool() *agentapidomain.Tool {
 				},
 				"inline": map[string]any{
 					"type":        "boolean",
-					"description": "When true, produces inline syntax `![attachment:N]` for images/videos. Default false.",
+					"description": "When true, produces inline syntax `![](/api/attachments/N/download)` for images/videos. Default false.",
 				},
 				"comment_id": map[string]any{
 					"type":        "integer",
@@ -546,7 +547,7 @@ func (r *Registry) UploadAttachment(
 	inline bool,
 	commentID int64,
 ) (agentapidomain.Result, error) {
-	scope, err := r.loadScope(ctx, sess)
+	_, err := r.loadScope(ctx, sess)
 	if err != nil {
 		return errorResult(err.Error()), nil
 	}
@@ -559,9 +560,7 @@ func (r *Registry) UploadAttachment(
 		displayName = name
 	}
 
-	att, err := r.deps.Attachments.UploadAttachment(ctx, &issuedomain.AttachmentUploadParams{
-		RepoID:      scope.repo.ID,
-		IssueID:     scope.issue.ID,
+	att, err := r.deps.Attachments.Upload(ctx, &attachmentdomain.AttachmentUploadParams{
 		Data:        fileBytes,
 		Name:        name,
 		DisplayName: displayName,
@@ -573,6 +572,7 @@ func (r *Registry) UploadAttachment(
 		return errorResult("upload attachment: " + err.Error()), nil
 	}
 
+	url := fmt.Sprintf("/api/attachments/%d/download", att.ID)
 	return textResult(map[string]any{
 		"attachment_id":    att.ID,
 		"display_name":     displayName,
@@ -580,16 +580,21 @@ func (r *Registry) UploadAttachment(
 		"size_bytes":       att.SizeBytes,
 		"mime_type":        att.DetectedMimeType,
 		"kind":             string(att.Kind),
-		"markdown_snippet": attachmentMarkdownSnippet(att.ID, att.Kind, inline),
+		"url":              url,
+		"markdown_snippet": attachmentMarkdownSnippet(att.ID, att.DisplayName, att.OriginalName, att.Kind, inline),
 	}), nil
 }
 
 // attachmentMarkdownSnippet returns the markdown token for an attachment.
-func attachmentMarkdownSnippet(id int64, kind issuedomain.AttachmentKind, inline bool) string {
-	if inline && (kind == issuedomain.AttachmentKindImage || kind == issuedomain.AttachmentKindVideo) {
-		return fmt.Sprintf("![attachment:%d]", id)
+func attachmentMarkdownSnippet(id int64, displayName, originalName string, kind attachmentdomain.AttachmentKind, inline bool) string {
+	if inline && (kind == attachmentdomain.AttachmentKindImage || kind == attachmentdomain.AttachmentKindVideo) {
+		return fmt.Sprintf("![](/api/attachments/%d/download)", id)
 	}
-	return fmt.Sprintf("[attachment:%d]", id)
+	name := displayName
+	if name == "" {
+		name = originalName
+	}
+	return fmt.Sprintf("[%s](/api/attachments/%d/download)", name, id)
 }
 
 // issueCreateTool creates a new issue (optionally as a child of the
