@@ -496,8 +496,11 @@ func All(client *Client) []local.Tool {
 
 		{
 			name:        "contribution_list",
-			description: "List the contribution branches on the current issue. Each entry has id, agent_role, ref_name, status (pending/approved/rejected/merged/closed), mergeable, merge_mode, head_sha, and diff stats. A contribution is created automatically when you push to issue-<N>/<your-role>/<slug>.",
-			schema:      objectSchema(nil, nil),
+			description: "List the contribution branches on the current issue. Each entry has id, agent_role, ref_name, status (pending/approved/rejected/merged/closed), mergeable, merge_mode, head_sha, and diff stats. By default excludes closed and merged contributions. Use include_closed and include_merged to optionally include them. A contribution is created automatically when you push to issue-<N>/<your-role>/<slug>.",
+			schema: objectSchema(map[string]any{
+				"include_closed": boolProp("When true, include contributions with status 'closed' in the results. Default: false (closed contributions are excluded)."),
+				"include_merged": boolProp("When true, include contributions with status 'merged' in the results. Default: false (merged contributions are excluded)."),
+			}, nil),
 		},
 		{
 			name:        "contribution_read",
