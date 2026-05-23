@@ -37,12 +37,15 @@ import (
 // big files) — 1 MiB is plenty for source code; larger payloads bloat JSON.
 const maxBlobBytes = 1 << 20 // 1 MiB
 
-// Cache TTLs per the product spec: short enough to keep the view fresh after
-// writes, long enough to absorb repeated reads from the same page load.
+// Cache TTLs for git read endpoints are now long-term (24h). Freshness is
+// maintained by write-side invalidation: every branch/tag mutation and every
+// git push calls invalidateCache, which drops all gitcache:{repoID}:* keys
+// via Redis SCAN. The long TTL ensures repeated reads from the same page hit
+// the cache; the invalidation ensures writes are immediately visible.
 const (
-	refsCacheTTL    = 15 * time.Second
-	treeViewCacheTTL = 30 * time.Second
-	commitsCacheTTL  = 20 * time.Second
+	refsCacheTTL     = 24 * time.Hour
+	treeViewCacheTTL = 24 * time.Hour
+	commitsCacheTTL  = 24 * time.Hour
 )
 
 // repoNameRe is the canonical repo-name regex. Must start with an
@@ -1884,8 +1887,10 @@ func (h *Handler) matchedProtection(r *http.Request, repoID int64, branchName st
 }
 
 // invalidateCache drops every cached git-read result for the given repo.
-// Best-effort — failures are swallowed because stale reads are acceptable
-// for the remaining TTL, and a Redis blip shouldn't fail the write.
+// Best-effort — failures are swallowed because a Redis blip shouldn't fail
+// the write. With long-term TTLs (24h), this invalidation is the primary
+// freshness mechanism; the next read after a successful write will always
+// recompute from the bare repo.
 func (h *Handler) invalidateCache(ctx context.Context, repoID int64) {
 	h.cache.InvalidateRepo(ctx, repoID)
 }
