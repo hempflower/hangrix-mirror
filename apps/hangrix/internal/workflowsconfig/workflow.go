@@ -40,6 +40,9 @@ type EventTrigger struct {
 	BranchesIgnore []string
 	Paths          []string
 	PathsIgnore    []string
+	// RepoPushTag filters (only meaningful for repo.push_tag).
+	Tags       []string
+	TagsIgnore []string
 	// IssueComment filters (only meaningful for issue.comment).
 	MentionedOnly bool
 	FromRoles     []string
@@ -53,6 +56,7 @@ type EventName string
 
 const (
 	EventRepoPush          EventName = "repo.push"
+	EventRepoPushTag       EventName = "repo.push_tag"
 	EventIssueOpened       EventName = "issue.opened"
 	EventIssueComment      EventName = "issue.comment"
 	EventWorkflowDispatch  EventName = "workflow.dispatch"
@@ -60,6 +64,7 @@ const (
 
 var validEventNames = map[EventName]bool{
 	EventRepoPush:         true,
+	EventRepoPushTag:      true,
 	EventIssueOpened:      true,
 	EventIssueComment:     true,
 	EventWorkflowDispatch: true,

@@ -121,6 +121,10 @@ func (s *Service) FindMatchingWorkflows(configs []*workflowsconfig.WorkflowConfi
 				if trigger.MatchesPushEvent(filter.Branch, filter.ChangedPaths) {
 					matched = append(matched, cfg)
 				}
+			case workflowsconfig.EventRepoPushTag:
+				if trigger.MatchesPushTagEvent(filter.Tag) {
+					matched = append(matched, cfg)
+				}
 			case workflowsconfig.EventIssueOpened:
 				matched = append(matched, cfg)
 			case workflowsconfig.EventIssueComment:
@@ -141,6 +145,7 @@ func (s *Service) FindMatchingWorkflows(configs []*workflowsconfig.WorkflowConfi
 type WorkflowEventFilter struct {
 	Branch            string
 	ChangedPaths      []string
+	Tag               string
 	FromRole          string
 	FromUser          string
 	MentionedWorkflow string
@@ -330,6 +335,57 @@ func (s *Service) GetRunForJob(ctx context.Context, jobRunID int64) (*domain.Wor
 	}
 	return s.store.GetRun(ctx, job.WorkflowRunID)
 }
+
+
+// ---- event triggers ----
+
+// TriggerTagEvent implements domain.TagEventTrigger. It scans workflow
+// configs, finds those matching repo.push_tag with the given tag name,
+// and creates a workflow run for each match. This is the single entry
+// point used by both the git-push PushObserver and the REST create-tag
+// handler.
+func (s *Service) TriggerTagEvent(ctx context.Context, repoID int64, ownerName, repoName, defaultBranch, tagName, commitSHA string) error {
+	ref := Ref{
+		ID:            repoID,
+		Name:          repoName,
+		DefaultBranch: defaultBranch,
+		OwnerName:     ownerName,
+	}
+
+	configs, err := s.ScanWorkflowConfigs(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("trigger tag event: scan configs: %w", err)
+	}
+	if len(configs) == 0 {
+		return nil
+	}
+
+	matched := s.FindMatchingWorkflows(configs, workflowsconfig.EventRepoPushTag, WorkflowEventFilter{Tag: tagName})
+	if len(matched) == 0 {
+		return nil
+	}
+
+	container, err := s.GetHostContainer(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("trigger tag event: get container: %w", err)
+	}
+
+	tagRef := "refs/tags/" + tagName
+	for _, cfg := range matched {
+		if _, _, err := s.CreateRun(ctx, CreateRunParams{
+			Repo:      ref,
+			Config:    cfg,
+			EventName: workflowsconfig.EventRepoPushTag,
+			Ref:       tagRef,
+			CommitSHA: commitSHA,
+			Container: container,
+		}); err != nil {
+			log.Printf("workflow: trigger tag event: create run for %s: %v", cfg.Name, err)
+		}
+	}
+	return nil
+}
+
 
 // ---- dispatch ----
 

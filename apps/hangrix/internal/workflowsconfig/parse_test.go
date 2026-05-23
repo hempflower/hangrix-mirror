@@ -366,3 +366,127 @@ func TestMatchesCommentEvent_MentionedOnly(t *testing.T) {
 		t.Error("expected no match when mentioned_only and no mention")
 	}
 }
+
+func TestParseWorkflowConfig_RepoPushTag(t *testing.T) {
+	raw := []byte(`
+version: 1
+name: release
+on:
+  repo.push_tag:
+    tags: ["v*", "release-*"]
+    tags_ignore: ["*-rc*"]
+jobs:
+  build:
+    steps:
+      - run: echo release
+`)
+	cfg, err := ParseWorkflowConfig(raw, "release.yml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.On) != 1 {
+		t.Fatalf("got %d triggers, want 1", len(cfg.On))
+	}
+	trig := cfg.On[0]
+	if trig.Event != EventRepoPushTag {
+		t.Errorf("event = %q, want %q", trig.Event, EventRepoPushTag)
+	}
+	if len(trig.Tags) != 2 || trig.Tags[0] != "v*" || trig.Tags[1] != "release-*" {
+		t.Errorf("tags = %v, want [v* release-*]", trig.Tags)
+	}
+	if len(trig.TagsIgnore) != 1 || trig.TagsIgnore[0] != "*-rc*" {
+		t.Errorf("tags_ignore = %v, want [*-rc*]", trig.TagsIgnore)
+	}
+}
+
+func TestParseWorkflowConfig_RepoPushTagUnknownKey(t *testing.T) {
+	raw := []byte(`
+version: 1
+name: release
+on:
+  repo.push_tag:
+    tags: ["v*"]
+    branches: [main]
+jobs:
+  build:
+    steps:
+      - run: echo release
+`)
+	_, err := ParseWorkflowConfig(raw, "release.yml")
+	if err == nil {
+		t.Fatal("expected error for unknown key branches in repo.push_tag, got nil")
+	}
+}
+
+func TestParseWorkflowConfig_RepoPushTagEmptyIsValid(t *testing.T) {
+	raw := []byte(`
+version: 1
+name: release
+on:
+  repo.push_tag: {}
+jobs:
+  build:
+    steps:
+      - run: echo release
+`)
+	cfg, err := ParseWorkflowConfig(raw, "release.yml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.On[0].Event != EventRepoPushTag {
+		t.Errorf("event = %q, want %q", cfg.On[0].Event, EventRepoPushTag)
+	}
+}
+
+func TestMatchesPushTagEvent_ExactTag(t *testing.T) {
+	trig := EventTrigger{
+		Event: EventRepoPushTag,
+		Tags:  []string{"v1.0.0"},
+	}
+	if !trig.MatchesPushTagEvent("v1.0.0") {
+		t.Error("expected match for tag v1.0.0")
+	}
+	if trig.MatchesPushTagEvent("v2.0.0") {
+		t.Error("expected no match for tag v2.0.0")
+	}
+}
+
+func TestMatchesPushTagEvent_Glob(t *testing.T) {
+	trig := EventTrigger{
+		Event: EventRepoPushTag,
+		Tags:  []string{"v*"},
+	}
+	if !trig.MatchesPushTagEvent("v1.2.3") {
+		t.Error("expected match for tag v1.2.3 with pattern v*")
+	}
+	if !trig.MatchesPushTagEvent("v0.0.1") {
+		t.Error("expected match for tag v0.0.1 with pattern v*")
+	}
+	if trig.MatchesPushTagEvent("release-1") {
+		t.Error("expected no match for tag release-1 with pattern v*")
+	}
+}
+
+func TestMatchesPushTagEvent_TagsIgnore(t *testing.T) {
+	trig := EventTrigger{
+		Event:      EventRepoPushTag,
+		Tags:       []string{"v*"},
+		TagsIgnore: []string{"*-rc*"},
+	}
+	if !trig.MatchesPushTagEvent("v1.0.0") {
+		t.Error("expected match for tag v1.0.0")
+	}
+	if trig.MatchesPushTagEvent("v1.0.0-rc1") {
+		t.Error("expected no match for tag v1.0.0-rc1 (matches tags_ignore)")
+	}
+}
+
+func TestMatchesPushTagEvent_WrongEvent(t *testing.T) {
+	trig := EventTrigger{
+		Event: EventRepoPush,
+		Tags:  []string{"v*"},
+	}
+	if trig.MatchesPushTagEvent("v1.0.0") {
+		t.Error("expected no match when event is repo.push, not repo.push_tag")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/handler"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/infra"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/service"
+	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/server"
 	"github.com/hangrix/hangrix/pkg/ioc"
 )
@@ -20,9 +21,14 @@ func Module() *ioc.Module {
 	m.Provide(infra.NewPostgresRepo).ToInterface(new(domain.Store))
 
 	// Service: business logic; single instance satisfies Dispatcher
+	// and TagEventTrigger for cross-module tag-event production.
 	svc := m.Provide(service.New)
 	svc.ToSelf()
 	svc.ToInterface(new(domain.Dispatcher))
+	svc.ToInterface(new(domain.TagEventTrigger))
+
+	// PushObserver: triggers repo.push_tag workflows on git tag push.
+	m.Provide(handler.NewPushObserver).ToInterface(new(repodomain.PushObserver))
 
 	// Handler: HTTP routes
 	m.Provide(handler.NewHandler).ToInterface(new(server.RouteProvider))

@@ -97,6 +97,30 @@ func (t EventTrigger) MatchesPushEvent(branch string, changedPaths []string) boo
 	return true
 }
 
+// MatchesPushTagEvent checks whether a repo.push_tag event trigger should fire for
+// the given short tag name (e.g. "v1.2.3", not "refs/tags/v1.2.3").
+func (t EventTrigger) MatchesPushTagEvent(tag string) bool {
+	if t.Event != EventRepoPushTag {
+		return false
+	}
+
+	// Tags filter
+	if len(t.Tags) > 0 {
+		if !matchAnyGlob(t.Tags, tag) {
+			return false
+		}
+	}
+
+	// Tags ignore
+	if len(t.TagsIgnore) > 0 {
+		if matchAnyGlob(t.TagsIgnore, tag) {
+			return false
+		}
+	}
+
+	return true
+}
+
 // MatchesCommentEvent checks whether an issue.comment event trigger should fire.
 func (t EventTrigger) MatchesCommentEvent(fromRole, fromUser string, mentionedWorkflow string) bool {
 	if t.Event != EventIssueComment {
