@@ -38,6 +38,12 @@ type pushWire struct {
 	PathsIgnore    []string `yaml:"paths_ignore"`
 }
 
+// pushTagWire models the value under on.repo.push_tag.
+type pushTagWire struct {
+	Tags       []string `yaml:"tags"`
+	TagsIgnore []string `yaml:"tags_ignore"`
+}
+
 // commentWire models the value under on.issue.comment.
 type commentWire struct {
 	MentionedOnly bool     `yaml:"mentioned_only"`
@@ -195,6 +201,32 @@ func decodeOn(node *yaml.Node) ([]EventTrigger, []string) {
 			trigger.BranchesIgnore = pw.BranchesIgnore
 			trigger.Paths = pw.Paths
 			trigger.PathsIgnore = pw.PathsIgnore
+
+		case EventRepoPushTag:
+			var ptw pushTagWire
+			if valNode.Kind == yaml.MappingNode && len(valNode.Content) > 0 {
+				if err := valNode.Decode(&ptw); err != nil {
+					errs = append(errs, fmt.Sprintf("on.repo.push_tag: %v", err))
+					continue
+				}
+				// Strict key check
+				seen := map[string]bool{}
+				for j := 0; j < len(valNode.Content); j += 2 {
+					k := valNode.Content[j].Value
+					if seen[k] {
+						errs = append(errs, fmt.Sprintf("on.repo.push_tag.%s: duplicate key", k))
+					}
+					seen[k] = true
+					switch k {
+					case "tags", "tags_ignore":
+						// valid
+					default:
+						errs = append(errs, fmt.Sprintf("on.repo.push_tag.%s: unknown key", k))
+					}
+				}
+			}
+			trigger.Tags = ptw.Tags
+			trigger.TagsIgnore = ptw.TagsIgnore
 
 		case EventIssueOpened:
 			// v1: no filters, but reject unknown keys

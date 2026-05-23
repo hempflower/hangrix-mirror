@@ -52,6 +52,7 @@ type EventName string
 
 const (
 	EventRepoPush         EventName = "repo.push"
+	EventRepoPushTag      EventName = "repo.push_tag"
 	EventIssueOpened      EventName = "issue.opened"
 	EventIssueComment     EventName = "issue.comment"
 	EventWorkflowDispatch EventName = "workflow.dispatch"

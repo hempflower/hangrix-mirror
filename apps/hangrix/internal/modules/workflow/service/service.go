@@ -121,6 +121,10 @@ func (s *Service) FindMatchingWorkflows(configs []*workflowsconfig.WorkflowConfi
 				if trigger.MatchesPushEvent(filter.Branch, filter.ChangedPaths) {
 					matched = append(matched, cfg)
 				}
+			case workflowsconfig.EventRepoPushTag:
+				if trigger.MatchesPushTagEvent(filter.Tag) {
+					matched = append(matched, cfg)
+				}
 			case workflowsconfig.EventIssueOpened:
 				matched = append(matched, cfg)
 			case workflowsconfig.EventIssueComment:
@@ -141,6 +145,7 @@ func (s *Service) FindMatchingWorkflows(configs []*workflowsconfig.WorkflowConfi
 type WorkflowEventFilter struct {
 	Branch            string
 	ChangedPaths      []string
+	Tag               string
 	FromRole          string
 	FromUser          string
 	MentionedWorkflow string
