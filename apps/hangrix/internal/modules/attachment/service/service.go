@@ -71,6 +71,8 @@ func (s *Service) Upload(
 	ctx context.Context,
 	authorID int64,
 	agentRole string,
+	displayName string,
+	inline bool,
 	file multipart.File,
 	header *multipart.FileHeader,
 ) (*domain.Attachment, error) {
@@ -153,8 +155,12 @@ func (s *Service) Upload(
 		return nil, fmt.Errorf("move to storage: %w", err)
 	}
 
+	if displayName == "" {
+		displayName = originalName
+	}
+
 	attachment, err := s.store.CreateAttachment(ctx, authorID, agentRole,
-		storageKey, originalName, "", totalBytes, clientMime, detectedMime, sha256Sum, kind, false)
+		storageKey, originalName, displayName, totalBytes, clientMime, detectedMime, sha256Sum, kind, inline)
 	if err != nil {
 		_ = os.Remove(targetPath)
 		return nil, fmt.Errorf("create attachment row: %w", err)
