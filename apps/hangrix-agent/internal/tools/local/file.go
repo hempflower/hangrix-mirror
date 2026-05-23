@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -178,9 +177,14 @@ type editArgs struct {
 
 }
 
-type editTool struct{ tracker *ReadTracker }
+type editTool struct {
+	tracker  *ReadTracker
+	registry *FormatterRegistry
+}
 
-func newEditTool(t *ReadTracker) Tool { return &editTool{tracker: t} }
+func newEditTool(t *ReadTracker, r *FormatterRegistry) Tool {
+	return &editTool{tracker: t, registry: r}
+}
 
 func (editTool) Name() string { return "edit" }
 func (editTool) Description() string {
@@ -402,8 +406,8 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 	// are advisory, never fatal.
 	var fmtResult map[string]any
 	if a.Formatting {
-		fmtName := formatterName(a.Path)
-		if fmtName == "" {
+		f := e.registry.Find(a.Path)
+		if f == nil {
 			fmtResult = map[string]any{
 				"attempted": true,
 				"ok":        false,
@@ -411,12 +415,12 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 				"error":     fmt.Sprintf("该文件类型 (%s) 不支持自动格式化", filepath.Ext(a.Path)),
 			}
 		} else {
-			formatted, fmtErr := runFormatter(a.Path, []byte(updated))
+			formatted, fmtErr := f.Format(a.Path, []byte(updated))
 			if fmtErr != nil {
 				fmtResult = map[string]any{
 					"attempted": true,
 					"ok":        false,
-					"formatter": fmtName,
+					"formatter": f.Name(),
 					"path":      a.Path,
 					"error":     fmtErr.Error(),
 				}
@@ -425,7 +429,7 @@ func (e editTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 				fmtResult = map[string]any{
 					"attempted": true,
 					"ok":        true,
-					"formatter": fmtName,
+					"formatter": f.Name(),
 					"path":      a.Path,
 				}
 			}
@@ -713,76 +717,6 @@ func validateInsertText(text string) error {
 		return fmt.Errorf("edit: 'text' must end with a newline in insert mode. Add \\n at the end.")
 	}
 	return nil
-}
-
-// ----- formatting helpers -----------------------------------------------------
-
-// formatterName returns the canonical formatter name for a given file path,
-// or "" when the extension is not supported.
-func formatterName(path string) string {
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".go":
-		return "gofmt"
-	case ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".vue", ".json", ".md", ".yaml", ".yml":
-		return "prettier"
-	case ".rs":
-		return "rustfmt"
-	default:
-		return ""
-	}
-}
-
-// runFormatter dispatches to the right formatter for path.  It returns
-// the formatted content or the first error (missing binary / non-zero exit).
-func runFormatter(path string, content []byte) ([]byte, error) {
-	name := formatterName(path)
-	switch name {
-	case "gofmt":
-		return runGofmt(content)
-	case "prettier":
-		return runPrettier(path, content)
-	case "rustfmt":
-		return runRustfmt(content)
-	default:
-		return nil, fmt.Errorf("no formatter for %q", filepath.Ext(path))
-	}
-}
-
-func runGofmt(content []byte) ([]byte, error) {
-	cmd := exec.Command("gofmt")
-	cmd.Stdin = bytes.NewReader(content)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("gofmt: %w", err)
-	}
-	return out.Bytes(), nil
-}
-
-func runPrettier(path string, content []byte) ([]byte, error) {
-	cmd := exec.Command("prettier", "--stdin-filepath", path)
-	cmd.Stdin = bytes.NewReader(content)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("prettier: %w", err)
-	}
-	return out.Bytes(), nil
-}
-
-func runRustfmt(content []byte) ([]byte, error) {
-	cmd := exec.Command("rustfmt", "--emit=stdout")
-	cmd.Stdin = bytes.NewReader(content)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("rustfmt: %w", err)
-	}
-	return out.Bytes(), nil
 }
 
 // ----- glob -----

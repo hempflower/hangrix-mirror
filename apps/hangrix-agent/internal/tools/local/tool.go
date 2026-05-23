@@ -113,11 +113,12 @@ type Bundle struct {
 func Build() Bundle {
 	tracker := NewReadTracker()
 	bash := newBashTool()
+	registry := NewFormatterRegistry()
 	return Bundle{
 		Tools: []Tool{
 			newReadTool(tracker),
 			newWriteTool(),
-			newEditTool(tracker),
+			newEditTool(tracker, registry),
 			newGlobTool(),
 			newGrepTool(),
 			bash,
