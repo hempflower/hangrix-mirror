@@ -25,7 +25,12 @@ Never commit `apps/hangrix/internal/web/dist/*` (only `.gitkeep`). The release f
 
 ## Verification
 
-Before submitting your work: `pnpm --filter web typecheck`, and `pnpm --filter web build` for routing/composable changes. Push your contribution branch under your namespace, e.g. `issue-<issue_number>/web/status-badges` (slug = the change; immutable-branch + review rules are in your runtime baseline).
+Before submitting your work:
+- `pnpm --filter web typecheck` — always.
+- `pnpm --filter web build` — for routing/composable changes.
+- For UI changes (pages, components, layouts), use Playwright (`browser_*` tools) to navigate the dev server and confirm the rendered output matches expectations. Start the dev server (`pnpm --filter web dev`) in the background, then use browser tools to inspect the page. A passing typecheck without visual verification is not enough for UI work.
+
+Push your contribution branch under your namespace, e.g. `issue-<issue_number>/web/status-badges` (slug = the change; immutable-branch + review rules are in your runtime baseline).
 
 ## Rules
 
