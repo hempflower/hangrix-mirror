@@ -1703,23 +1703,25 @@ func (h *Handler) commitFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ref must be resolvable as a branch (not a tag or raw SHA).
-	branchSHA, err := h.git.ResolveCommit(path, req.Ref)
+	// Resolve ref to a commit SHA. Accepts branch names, tag names, or raw
+	// commit SHAs. For the direct-commit path (no new_branch_name) the ref
+	// must be a branch; that check happens later.
+	resolvedSHA, err := h.git.ResolveCommit(path, req.Ref)
 	if err != nil {
 		if errors.Is(err, gitdomain.ErrRefNotFound) {
-			httpx.WriteError(w, http.StatusBadRequest, "ref does not resolve to a branch: "+req.Ref)
+			httpx.WriteError(w, http.StatusBadRequest, "ref not found: "+req.Ref)
 			return
 		}
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if branchSHA == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "ref is not a branch with commits: "+req.Ref)
+	if resolvedSHA == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "ref has no commits: "+req.Ref)
 		return
 	}
 
-	// Optimistic lock: base_commit_sha must match the current branch HEAD.
-	if req.BaseCommitSHA != branchSHA {
+	// Optimistic lock: base_commit_sha must match the resolved commit.
+	if req.BaseCommitSHA != resolvedSHA {
 		httpx.WriteError(w, http.StatusConflict, "branch has been updated since you loaded this file; please refresh and try again")
 		return
 	}
@@ -1749,8 +1751,8 @@ func (h *Handler) commitFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Resolve the start ref to get its SHA for the guard check.
-		startSHA := branchSHA
+		// The resolved commit SHA is the branch start point.
+		startSHA := resolvedSHA
 
 		// Run guards for branch creation.
 		if err := h.runGuards(r.Context(), domain.BranchWriteOp{
@@ -1773,7 +1775,7 @@ func (h *Handler) commitFile(w http.ResponseWriter, r *http.Request) {
 		// branch advanced since the ResolveCommit check, the new branch
 		// would be created at the new tip but EditAndCommit would fail
 		// because base_commit_sha no longer matches, leaving an orphan.
-		if err := h.git.CreateBranchAt(path, req.NewBranchName, branchSHA); err != nil {
+		if err := h.git.CreateBranchAt(path, req.NewBranchName, resolvedSHA); err != nil {
 			if mapGitErr(w, err) {
 				return
 			}
@@ -1782,11 +1784,29 @@ func (h *Handler) commitFile(w http.ResponseWriter, r *http.Request) {
 		}
 		targetBranch = req.NewBranchName
 	} else {
+		// Direct commit: ref must be an existing branch name.
+		refs, err := h.git.ListRefs(path)
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		isBranch := false
+		for _, b := range refs.Branches {
+			if b.Name == req.Ref {
+				isBranch = true
+				break
+			}
+		}
+		if !isBranch {
+			httpx.WriteError(w, http.StatusBadRequest, "ref is not a branch name: "+req.Ref)
+			return
+		}
+
 		// Direct commit to existing branch: run guards and check protections.
 		if err := h.runGuards(r.Context(), domain.BranchWriteOp{
 			RepoID:   repo.ID,
 			Branch:   req.Ref,
-			OldSHA:   branchSHA,
+			OldSHA:   resolvedSHA,
 			NewSHA:   "", // the new SHA is unknown until commit; guard can still block
 			IsCreate: false,
 		}); err != nil {
