@@ -193,10 +193,10 @@ roles:
     triggers:
       issue.comment:
         mentioned_only: true
+    mcp: [playwright]   # browser automation for frontend verification
     scope:
       paths:
         - "apps/web/**"
-    mcp: [playwright]   # browser automation for frontend verification
     can:
       - issue_read
       - issue_diff
