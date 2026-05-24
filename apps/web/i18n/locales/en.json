@@ -897,6 +897,16 @@
       "remove": "Remove",
       "removeFailed": "Remove failed"
     },
+    "todos": {
+      "title": "Todos",
+      "empty": "No todos yet.",
+      "completed": "completed",
+      "status": {
+        "todo": "To do",
+        "in_progress": "In progress",
+        "done": "Done"
+      }
+    },
     "contributions": {
       "title": "Contributions",
       "empty": "No contributions yet.",

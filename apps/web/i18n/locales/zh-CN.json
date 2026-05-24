@@ -897,6 +897,16 @@
       "remove": "移除",
       "removeFailed": "移除失败"
     },
+    "todos": {
+      "title": "待办",
+      "empty": "暂无待办。",
+      "completed": "已完成",
+      "status": {
+        "todo": "待做",
+        "in_progress": "进行中",
+        "done": "完成"
+      }
+    },
     "contributions": {
       "title": "贡献分支",
       "empty": "暂无贡献分支。",

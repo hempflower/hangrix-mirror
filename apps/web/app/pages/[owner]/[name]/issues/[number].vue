@@ -2,6 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch, nextTick } from 'vue'
 import {
   Bot,
+  Circle,
+  CircleCheck,
   CircleDot,
   CircleSlash,
   CornerDownRight,
@@ -10,6 +12,7 @@ import {
   GitBranch,
   GitCommit,
   GitMerge,
+  ListTodo,
   Lock,
   MessageSquare,
   MinusCircle,
@@ -28,7 +31,7 @@ import FileDiffList from '@/components/repo/FileDiffList.vue'
 import FoldableBody from '@/components/issue/FoldableBody.vue'
 import MentionTextarea from '@/components/issue/MentionTextarea.vue'
 import AttachmentUploader from '@/components/issue/AttachmentUploader.vue'
-import type { Issue, IssueState, IssueTimeline, IssueMergeResp, ReviewStatus, ReviewVerdict, ReviewVoteValue } from '~/types/issue'
+import type { Issue, IssueState, IssueTimeline, IssueMergeResp, ReviewStatus, ReviewVerdict, ReviewVoteValue, TodoStatus } from '~/types/issue'
 import type { Commit, FileDiff } from '~/types/repo'
 import { relativeTime } from '~/utils/time'
 
@@ -154,6 +157,11 @@ const canMerge = computed(() => {
 // by client-side timeline derivation. When review_status is absent (old
 // backend) we default to "not blocked" for backward compatibility.
 const reviewStatus = computed<ReviewStatus | null>(() => issue.value?.review_status ?? null)
+
+// Todos — driven by the server-embedded todos + todo_summary on the issue
+// response. Absent means the backend doesn't support todos yet.
+const todos = computed(() => issue.value?.todos ?? [])
+const todoSummary = computed(() => issue.value?.todo_summary ?? null)
 
 const mergeBlocked = computed(() => reviewStatus.value?.merge_blocked ?? false)
 
@@ -467,6 +475,29 @@ function verdictIcon(v: ReviewVerdict) {
     case 'approved': return ThumbsUp
     case 'rejected': return ThumbsDown
     case 'pending': return CircleSlash
+  }
+}
+
+
+function todoStatusIcon(s: TodoStatus) {
+  switch (s) {
+    case 'todo': return Circle
+    case 'in_progress': return CircleDot
+    case 'done': return CircleCheck
+  }
+}
+function todoStatusClass(s: TodoStatus) {
+  switch (s) {
+    case 'todo': return 'text-slate-500'
+    case 'in_progress': return 'text-amber-500'
+    case 'done': return 'text-emerald-500'
+  }
+}
+function todoBadgeClass(s: TodoStatus) {
+  switch (s) {
+    case 'todo': return 'bg-slate-500/15 text-slate-700 dark:text-slate-300'
+    case 'in_progress': return 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+    case 'done': return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
   }
 }
 
@@ -986,6 +1017,58 @@ onUnmounted(() => {
   </p>
   </CardContent>
   </Card>
+
+
+          <!-- Todos: server-embedded todo list with summary counts and
+               detail items. Display-only — no inline editing. -->
+          <Card class="gap-0 py-0">
+            <CardContent class="space-y-3 p-4">
+              <div class="flex items-center justify-between gap-2">
+                <p class="flex items-center gap-1 text-xs text-muted-foreground">
+                  <ListTodo class="size-3" />
+                  {{ t('issue.todos.title') }}
+                </p>
+                <Badge
+                  v-if="todos.length > 0"
+                  :class="todoSummary?.all_done ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' : 'bg-slate-500/15 text-slate-700 dark:text-slate-300'"
+                  variant="secondary"
+                >
+                  {{ todoSummary?.done ?? 0 }} / {{ todoSummary?.total ?? 0 }} {{ t('issue.todos.completed') }}
+                </Badge>
+              </div>
+
+              <!-- Empty state -->
+              <p v-if="todos.length === 0" class="text-xs text-muted-foreground">
+                {{ t('issue.todos.empty') }}
+              </p>
+
+              <template v-else>
+                <!-- Three-state summary counts -->
+                <div v-if="todoSummary" class="flex gap-3 text-xs text-muted-foreground">
+                  <Badge variant="secondary" class="bg-slate-500/15 text-slate-700 dark:text-slate-300">
+                    {{ t('issue.todos.status.todo') }} {{ todoSummary.todo }}
+                  </Badge>
+                  <Badge variant="secondary" class="bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                    {{ t('issue.todos.status.in_progress') }} {{ todoSummary.in_progress }}
+                  </Badge>
+                  <Badge variant="secondary" class="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                    {{ t('issue.todos.status.done') }} {{ todoSummary.done }}
+                  </Badge>
+                </div>
+
+                <!-- Detail list -->
+                <ul class="space-y-1.5">
+                  <li v-for="item in todos" :key="item.id" class="flex items-center gap-2 text-xs">
+                    <component :is="todoStatusIcon(item.status)" class="size-3 shrink-0" :class="todoStatusClass(item.status)" />
+                    <span class="min-w-0 flex-1 truncate">{{ item.content }}</span>
+                    <Badge :class="todoBadgeClass(item.status)" variant="secondary" class="shrink-0">
+                      {{ t(`issue.todos.status.${item.status}`) }}
+                    </Badge>
+                  </li>
+                </ul>
+              </template>
+            </CardContent>
+          </Card>
 
           <Card class="gap-0 py-0">
             <CardContent class="space-y-3 p-4">

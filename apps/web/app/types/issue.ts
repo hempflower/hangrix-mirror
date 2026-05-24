@@ -20,6 +20,11 @@ export interface Issue {
   // review_status is the server-computed review gate summary. Absent / null
   // means the backend hasn't computed it yet — treat as "pending, no block".
   review_status?: ReviewStatus | null
+  // todos and todo_summary are embedded in the issue detail response
+  // (GET /api/repos/{owner}/{name}/issues/{number}). Absent means the backend
+  // doesn't support todos yet — treat as "no todos".
+  todos?: TodoItem[]
+  todo_summary?: TodoSummary
 }
 
 export interface IssueListResp {
@@ -265,5 +270,26 @@ export interface PlatformAttachment {
   original_name?: string
   kind?: string
   size_bytes?: number
+}
+
+
+export type TodoStatus = 'todo' | 'in_progress' | 'done'
+
+export interface TodoItem {
+  id: number
+  issue_id: number
+  content: string
+  status: TodoStatus
+  position: number
+  created_at: string
+  updated_at: string
+}
+
+export interface TodoSummary {
+  total: number
+  todo: number
+  in_progress: number
+  done: number
+  all_done: boolean
 }
 
