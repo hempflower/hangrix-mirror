@@ -1,3 +1,32 @@
+
+-- name: ExportUsageCSV :many
+-- Same filter as ListUsage but without LIMIT/OFFSET; excludes request_body
+-- and response_body so the CSV stays light.
+SELECT u.id, u.session_id, u.provider_id, u.model,
+       u.prompt_tokens, u.completion_tokens, u.total_tokens,
+       u.latency_ms, u.status_code, u.error_message, u.request_path,
+       u.created_at,
+       p.name AS provider_name
+FROM llm_usage_log u
+JOIN llm_providers p ON p.id = u.provider_id
+WHERE (sqlc.narg('provider_id')::BIGINT IS NULL OR u.provider_id = sqlc.narg('provider_id'))
+  AND (sqlc.narg('since')::TIMESTAMPTZ IS NULL OR u.created_at >= sqlc.narg('since'))
+ORDER BY u.created_at DESC;
+
+-- name: ExportUsageJSONL :many
+-- Same filter as ListUsage but without LIMIT/OFFSET; includes request_body
+-- and response_body for the full-record JSONL export.
+SELECT u.id, u.session_id, u.provider_id, u.model,
+       u.prompt_tokens, u.completion_tokens, u.total_tokens,
+       u.latency_ms, u.status_code, u.error_message, u.request_path,
+       u.created_at, u.request_body, u.response_body,
+       p.name AS provider_name
+FROM llm_usage_log u
+JOIN llm_providers p ON p.id = u.provider_id
+WHERE (sqlc.narg('provider_id')::BIGINT IS NULL OR u.provider_id = sqlc.narg('provider_id'))
+  AND (sqlc.narg('since')::TIMESTAMPTZ IS NULL OR u.created_at >= sqlc.narg('since'))
+ORDER BY u.created_at DESC;
+
 -- name: CreateProvider :one
 INSERT INTO llm_providers (
     name, type, base_url, api_key_encrypted, allowed_models, created_by

@@ -102,6 +102,8 @@ type LlmUsageLog struct {
 	ErrorMessage     string
 	RequestPath      string
 	CreatedAt        pgtype.Timestamptz
+	RequestBody      string
+	ResponseBody     string
 }
 
 type Organization struct {

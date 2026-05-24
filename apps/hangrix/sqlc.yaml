@@ -75,7 +75,10 @@ sql:
     # to the runner module so the schema set stays narrow.
     schema:
       - internal/modules/user/infra/migrations
-      - internal/modules/llm_provider/infra/migrations
+      - internal/modules/llm_provider/infra/migrations/00001_create_llm_providers.sql
+      - internal/modules/llm_provider/infra/migrations/00002_add_provider_disabled.sql
+      - internal/modules/llm_provider/infra/migrations/00003_add_usage_body_columns.sql
+      - internal/modules/llm_provider/infra/migrations/00005_fix_mock_provider_constraint.sql
     gen:
       go:
         package: llmproviderdb
@@ -197,7 +200,10 @@ sql:
       - internal/modules/user/infra/migrations
       - internal/modules/org/infra/migrations
       - internal/modules/repo/infra/migrations
-      - internal/modules/llm_provider/infra/migrations
+      - internal/modules/llm_provider/infra/migrations/00001_create_llm_providers.sql
+      - internal/modules/llm_provider/infra/migrations/00002_add_provider_disabled.sql
+      - internal/modules/llm_provider/infra/migrations/00003_add_usage_body_columns.sql
+      - internal/modules/llm_provider/infra/migrations/00005_fix_mock_provider_constraint.sql
       - internal/modules/runner/infra/migrations
     gen:
       go:
