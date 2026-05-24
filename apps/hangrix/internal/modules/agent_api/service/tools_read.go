@@ -150,6 +150,67 @@ func (r *Registry) issueReadByNumberTool() *agentapidomain.Tool {
 	}
 }
 
+
+// issueCommentReadTool reads a single comment by its id. Only comments on the
+// current session's issue are accessible — cross-issue lookups return a
+// "not found" soft error. The body is returned in full (no truncation),
+// unlike the summaries emitted by issue_read / issue_read_by_number.
+func (r *Registry) issueCommentReadTool() *agentapidomain.Tool {
+	return &agentapidomain.Tool{
+		Name:        "issue_comment_read",
+		Description: "Read a single comment by its id. Only comments on the current session's issue are accessible — cross-issue lookups return 'not found'. Returns the full body (no truncation).",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"comment_id": map[string]any{
+					"type":        "integer",
+					"description": "The comment id to read (required). Must belong to the current session's issue.",
+				},
+			},
+			"required": []any{"comment_id"},
+		},
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+			scope, err := r.loadScope(ctx, sess)
+			if err != nil {
+				return errorResult(err.Error()), nil
+			}
+
+			var req struct {
+				CommentID int64 `json:"comment_id"`
+			}
+			if err := json.Unmarshal(args, &req); err != nil {
+				return errorResult("invalid args: " + err.Error()), nil
+			}
+			if req.CommentID <= 0 {
+				return errorResult("comment_id must be a positive integer"), nil
+			}
+
+			c, err := r.deps.Issues.GetCommentByID(ctx, req.CommentID)
+			if err != nil {
+				return errorResult("comment not found"), nil
+			}
+			if c.IssueID != scope.issue.ID {
+				return errorResult("comment not found or out of scope"), nil
+			}
+
+			author := c.AuthorName
+			if c.AgentRole != "" {
+				author = c.AgentRole
+			}
+			dto := commentDTO{
+				ID:        c.ID,
+				Author:    author,
+				AgentRole: c.AgentRole,
+				Body:      c.Body,
+				FilePath:  c.FilePath,
+				Line:      c.Line,
+				CreatedAt: stableTime(c.CreatedAt),
+			}
+			return textResult(dto), nil
+		},
+	}
+}
+
 // issueDiffTool returns the file-level unified diff between the issue
 // branch and its base (using merge-base diff, equivalent to
 // `git diff base...branch`). Empty list when the issue has no commits yet —
@@ -303,6 +364,26 @@ func lastActivityAt(s *runnerdomain.AgentSession) time.Time {
 
 // ---- DTOs ----
 
+// truncateSuffix is appended by truncateBody when the input exceeds
+// maxRunes. Its length is reserved from the maxRunes budget so the
+// returned string never overflows the cap.
+const truncateSuffix = "… (truncated)"
+
+// truncateBody returns s unchanged when it fits within maxRunes Unicode
+// characters (runes). Longer strings are shortened so that the returned
+// text — including the "… (truncated)" suffix — does not exceed maxRunes.
+func truncateBody(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	suffixRunes := []rune(truncateSuffix)
+	budget := maxRunes - len(suffixRunes)
+	if budget < 0 {
+		return s[:maxRunes]
+	}
+	return string(runes[:budget]) + truncateSuffix
+}
 type commentDTO struct {
 	ID        int64  `json:"id"`
 	Author    string `json:"author"`
@@ -324,7 +405,7 @@ func commentsToDTO(in []*issuedomain.Comment) []commentDTO {
 			ID:        c.ID,
 			Author:    author,
 			AgentRole: c.AgentRole,
-			Body:      c.Body,
+			Body:      truncateBody(c.Body, 140),
 			FilePath:  c.FilePath,
 			Line:      c.Line,
 			CreatedAt: stableTime(c.CreatedAt),
