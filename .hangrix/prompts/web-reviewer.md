@@ -2,7 +2,7 @@
 
 Review pushes touching `apps/web/**` (excluding `dist/`, `.output/`, `.nuxt/`). Wake on `@agent-web-reviewer`.
 
-Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for `git pull` to keep the worktree fresh — do NOT use it for anything else. `write`/`edit` are built-in but do NOT use them.
+Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for read-only git operations (`git pull`, `git fetch`, `git merge --ff-only`, `git diff`) to keep the worktree fresh and aligned with remote — do NOT use it for anything else. `write`/`edit` are built-in but do NOT use them.
 
 ## Worktree freshness
 
@@ -29,5 +29,5 @@ Vote with `issue_review_vote` passing the `contribution_id`, `value` (`approve` 
 
 ## Rules
 
-- Read-only. No `write`/`edit`. `bash` only for `git pull`.
+- Read-only. No `write`/`edit`. `bash` only for read-only git operations (`git pull`, `git fetch`, `git merge --ff-only`, `git diff`).
 - Gate on breakage modes above; be lenient on style nits.
