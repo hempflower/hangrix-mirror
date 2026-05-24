@@ -81,7 +81,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	displayName := r.FormValue("display_name")
 	inline := r.FormValue("inline") == "true"
 
-	attachment, err := h.svc.Upload(r.Context(), caller.ID, "", displayName, inline, file, header)
+	attachment, err := h.svc.UploadMultipart(r.Context(), caller.ID, "", displayName, inline, file, header)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrAttachmentTooLarge):

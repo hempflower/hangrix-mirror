@@ -64,10 +64,10 @@ func NewService(deps *ServiceDeps) *Service {
 	}
 }
 
-// Upload validates the multipart file, computes its SHA256, writes it to disk
-// under <attachments_path>/<dirComp>/<sha256>, and creates a domain.Attachment
-// row (status = uploaded).
-func (s *Service) Upload(
+// UploadMultipart validates a multipart file, computes its SHA256, writes it
+// to disk under <attachments_path>/<dirComp>/<sha256>, and creates a
+// domain.Attachment row (status = uploaded).
+func (s *Service) UploadMultipart(
 	ctx context.Context,
 	authorID int64,
 	agentRole string,
@@ -169,10 +169,10 @@ func (s *Service) Upload(
 	return attachment, nil
 }
 
-// UploadBytes accepts raw file bytes (sent by the agent_api tool), validates,
-// hashes, writes to disk, and creates the DB row. authorID is always 0 —
-// agent uploads have no user author.
-func (s *Service) UploadBytes(
+// Upload accepts raw file bytes (from the agent_api tool or any cross-module
+// caller), validates, hashes, writes to disk, and creates the DB row. It
+// implements domain.Uploader.
+func (s *Service) Upload(
 	ctx context.Context,
 	params *domain.AttachmentUploadParams,
 ) (*domain.Attachment, error) {
