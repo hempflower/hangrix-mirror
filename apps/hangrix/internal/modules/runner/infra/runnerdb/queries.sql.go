@@ -1119,9 +1119,9 @@ type MarkSessionIdleParams struct {
 
 // Flip a running session to idle: one turn finished but the parent issue
 // is still live, so the row should stay reusable for the next trigger.
-// Unlike MarkSessionTerminal this DOES NOT NULL session_token_sealed —
-// the runner re-uses the same session identity when the row is rewoken,
-// so the sealed plaintext must survive across container exits. ended_at
+// Like MarkSessionTerminal, this preserves session_token_sealed so that
+// the runner can re-use the same session identity when the row is
+// rewoken. ended_at
 // is intentionally left NULL because the session as a logical unit
 // isn't done; only the most recent container is.
 func (q *Queries) MarkSessionIdle(ctx context.Context, arg MarkSessionIdleParams) (int64, error) {
