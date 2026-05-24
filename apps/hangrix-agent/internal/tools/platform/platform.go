@@ -509,6 +509,7 @@ func All(client *Client) []local.Tool {
 					"todo_id": intProp("The todo id to update. Omit or pass 0 to create a new todo instead."),
 					"status":  enumProp("New status. One of: todo, in_progress, done. Use todo when creating.", []string{"todo", "in_progress", "done"}),
 					"content": stringProp("Todo text. Required when creating; optional when updating."),
+					"position": intProp("Optional position for ordering (new todos only). Default 0."),
 				}, []string{"status"}),
 			},
 
