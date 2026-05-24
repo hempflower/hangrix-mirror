@@ -386,13 +386,14 @@ func (h *Handler) injectContributionHints(buf *bytes.Buffer, contribs []domain.P
 	// is embedded inside a sideband-1 pkt-line; its "0000" bytes are part
 	// of that outer pkt-line's data and must not be split.
 	idx := lastOuterFlush(raw)
-	var head, tail []byte
+	var head []byte
+	var tail string
 	if idx >= 0 {
 		head = raw[:idx]
-		tail = raw[idx:] // includes "0000"
+		tail = string(raw[idx:]) // snapshot before buf.Reset/Write overwrite
 	} else {
 		head = raw
-		tail = []byte("0000")
+		tail = "0000"
 	}
 
 	buf.Reset()
@@ -413,7 +414,7 @@ func (h *Handler) injectContributionHints(buf *bytes.Buffer, contribs []domain.P
 		}
 	}
 
-	_, _ = buf.Write(tail)
+	_, _ = buf.WriteString(tail)
 }
 
 // lastOuterFlush walks the pkt-line stream and returns the byte position of the
