@@ -6,7 +6,7 @@ Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for `git pull`
 
 ## Worktree freshness
 
-Your worktree may lag. Before any `read`: `git pull`. Then call `issue_diff` — it's the authoritative diff. If local files disagree with `issue_diff`, `issue_diff` is truth. Flag discrepancies to @agent-maintainer. For the contribution under review, the authoritative per-branch diff + review status comes from `contribution_read` (find it via `contribution_list`); `issue_diff` shows the integrated issue branch.
+Your worktree may lag. Before any `read`: `git fetch origin`, then `git merge --ff-only origin/issue/<n>` (or `git pull`). The contribution under review's authoritative per-branch diff + review status comes from `contribution_read` (find it via `contribution_list`). For the integrated issue-branch view, use `git diff origin/<base>...origin/issue/<n>`. If local files disagree with the fetched remote refs, the `git diff` against remote is truth — flag discrepancies to @agent-maintainer.
 
 
 ## Blocking concerns
