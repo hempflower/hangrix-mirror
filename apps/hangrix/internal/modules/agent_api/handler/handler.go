@@ -1,6 +1,6 @@
 // Package handler exposes the platform's agent tools over plain REST.
 //
-// Each tool the platform implements (issue_read / issue_diff /
+// Each tool the platform implements (issue_read /
 // issue_comment / …) is reachable at `POST /api/agent/tools/{name}`.
 // Bearer-auth uses the `hgxs_` session token; per-role filtering happens
 // against the session's role_config snapshot (whitelist `can:` wins; if
