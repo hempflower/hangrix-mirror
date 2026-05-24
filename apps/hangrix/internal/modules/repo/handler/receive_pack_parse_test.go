@@ -283,6 +283,146 @@ func TestInjectContributionHints_OnlyFlush(t *testing.T) {
 	}
 }
 
+func TestInjectContributionHints_NoOuterFlush(t *testing.T) {
+	// Simulate receive-pack killed after writing the sideband-1 pkt-line
+	// (whose payload includes the inner "0000" flush) but BEFORE writing
+	// the outer "0000" flush. This is the exact scenario described in
+	// issue #157: bytes.LastIndex found the inner "0000", splitting
+	// inside the outer pkt-line and corrupting the framing.
+	var in bytes.Buffer
+	inner := fmt.Sprintf("%04x%s", 4+len("unpack ok\n"), "unpack ok\n")
+	inner += fmt.Sprintf("%04x%s", 4+len("ok refs/heads/main\n"), "ok refs/heads/main\n")
+	inner += "0000" // inner flush
+	payload := "\x01" + inner
+	fmt.Fprintf(&in, "%04x%s", 4+len(payload), payload)
+	// Deliberately NO outer "0000" — the stream is truncated.
+
+	h := &Handler{}
+	contribs := []domain.PostReceiveContrib{
+		{ContributionID: 42, RefName: "refs/heads/issue-1/server/fix", AgentRole: "server", HeadSHA: "abc1234def"},
+	}
+	h.injectContributionHints(&in, contribs)
+
+	out := in.Bytes()
+
+	// Must end with "0000" (appended by the injector).
+	if !bytes.HasSuffix(out, []byte("0000")) {
+		t.Fatalf("output does not end with 0000:\n%x", out)
+	}
+
+	// Walk the output as pkt-lines. The original sideband-1 frame must be
+	// intact — its length prefix must match the data length exactly.
+	pos := 0
+	foundPack := false
+	foundProgress := false
+	for pos < len(out) {
+		if pos+4 > len(out) {
+			t.Fatalf("truncated at pos %d", pos)
+		}
+		lenHex := string(out[pos : pos+4])
+		if lenHex == "0000" {
+			pos += 4
+			break
+		}
+		var pl int
+		if _, err := fmt.Sscanf(lenHex, "%04x", &pl); err != nil || pl < 5 {
+			t.Fatalf("invalid pkt-line at pos %d: len=%q", pos, lenHex)
+		}
+		if pos+pl > len(out) {
+			t.Fatalf("pkt-line at pos %d claims %d bytes but only %d remain", pos, pl, len(out)-pos)
+		}
+		ch := out[pos+4]
+		payload := out[pos+5 : pos+pl]
+		switch ch {
+		case 1:
+			foundPack = true
+			if !bytes.Contains(payload, []byte("unpack ok")) {
+				t.Errorf("channel-1 payload missing unpack status")
+			}
+			// The inner flush "0000" must be intact inside this payload.
+			if !bytes.HasSuffix(payload, []byte("0000")) {
+				t.Errorf("channel-1 payload missing inner flush: %x", payload)
+			}
+		case 2:
+			foundProgress = true
+			// The first progress line carries contribution_id; the second
+			// is a "Next:" hint. Check that at least one line has it.
+			if bytes.Contains(payload, []byte("contribution_id: 42")) {
+				foundProgress = true
+			}
+		default:
+			t.Errorf("unexpected channel %d", ch)
+		}
+		pos += pl
+	}
+	if pos != len(out) {
+		t.Errorf("trailing bytes after flush: %d", len(out)-pos)
+	}
+	if !foundPack {
+		t.Error("missing channel-1 (pack data) frame")
+	}
+	if !foundProgress {
+		t.Error("missing channel-2 (progress) frame with contribution hints")
+	}
+}
+
+func TestLastOuterFlush(t *testing.T) {
+	tests := []struct {
+		name     string
+		raw      []byte
+		wantPos  int
+	}{
+		{
+			name: "normal double-framed",
+			// Simulates: <sideband-1 ...inner with flush...> + 0000
+			raw: func() []byte {
+				var b bytes.Buffer
+				inner := "000eunpack ok\n" + "0018ok refs/heads/main\n" + "0000"
+				payload := "\x01" + inner
+				fmt.Fprintf(&b, "%04x%s", 4+len(payload), payload)
+				b.WriteString("0000")
+				return b.Bytes()
+			}(),
+			wantPos: 46, // position of the outer "0000"
+		},
+		{
+			name: "no outer flush (truncated)",
+			// Simulates receive-pack crash: only sideband-1, no outer 0000
+			raw: func() []byte {
+				var b bytes.Buffer
+				inner := "000eunpack ok\n" + "0018ok refs/heads/main\n" + "0000"
+				payload := "\x01" + inner
+				fmt.Fprintf(&b, "%04x%s", 4+len(payload), payload)
+				return b.Bytes()
+			}(),
+			wantPos: -1, // no standalone flush
+		},
+		{
+			name:    "empty",
+			raw:     []byte{},
+			wantPos: -1,
+		},
+		{
+			name:    "only flush",
+			raw:     []byte("0000"),
+			wantPos: 0,
+		},
+		{
+			name: "flush then truncated pkt",
+			raw:  []byte("0000" + "0011\x01partial"),
+			wantPos: 0, // the first 0000 is standalone
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := lastOuterFlush(tt.raw)
+			if got != tt.wantPos {
+				t.Errorf("lastOuterFlush = %d, want %d", got, tt.wantPos)
+			}
+		})
+	}
+}
+
 func TestSidebandPktLine(t *testing.T) {
 	line := sidebandPktLine("hello")
 	// Format: <4-hex-len><0x02>hello\n

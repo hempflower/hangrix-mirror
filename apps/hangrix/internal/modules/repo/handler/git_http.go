@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -327,7 +328,14 @@ func (h *Handler) runReceivePackWithSideband(w http.ResponseWriter, r *http.Requ
 
 	w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
 	w.Header().Set("Cache-Control", "no-cache")
-	_ = cmd.Run()
+	if err := cmd.Run(); err != nil {
+		// git receive-pack may have updated refs before the process exited
+		// abnormally (signal, context cancellation, etc.). PostReceive
+		// observers still run so contributions are recognised, but the
+		// stdout may be truncated — injectContributionHints handles that
+		// via lastOuterFlush rather than a naive bytes.LastIndex.
+		log.Printf("repo: receive-pack error for repo %d: %v (stdout=%d bytes)", repo.ID, err, stdout.Len())
+	}
 
 	// PostReceive observers run after the subprocess returns. Use a detached
 	// context so a client disconnect doesn't immediately cancel the observer
@@ -364,20 +372,20 @@ func (h *Handler) runReceivePackWithSideband(w http.ResponseWriter, r *http.Requ
 // Under --stateless-rpc, receive-pack produces a double-framed pkt-line stream:
 // an outer sideband layer whose pack-data channel (0x01) embeds another layer
 // of pkt-line framing that also ends with "0000". Both flush sequences are
-// adjacent, giving "…0000" (inner) + "0000" (outer). We locate the last "0000"
-// — which is the outer flush pkt — and inject the contribution hints immediately
-// before it. When no "0000" is present (e.g. truncated output) we still append
-// one so the git client always sees a properly terminated stream.
+// adjacent, giving "…0000" (inner) + "0000" (outer). We parse the pkt-line
+// structure to find the last standalone "0000" flush (not the inner one inside
+// a sideband pkt-line payload) and inject the contribution hints immediately
+// before it. When no standalone flush is present (e.g. receive-pack killed
+// mid-write, truncated output) we append a fresh one so the git client always
+// sees a properly terminated stream.
 func (h *Handler) injectContributionHints(buf *bytes.Buffer, contribs []domain.PostReceiveContrib) {
 	raw := buf.Bytes()
 
-	// Find the last "0000" in the stream. In the common double-framed case
-	// this is the outer flush pkt; the inner flush is embedded inside the
-	// outer pkt-line payload and is not at the buffer tail. When the stream
-	// is truncated and no "0000" exists, we inject the hints and append a
-	// terminating flush so the client sees a valid end-of-stream marker
-	// rather than an unexpected EOF mid-packet.
-	idx := bytes.LastIndex(raw, []byte("0000"))
+	// Walk the pkt-line stream to find the last standalone "0000" flush —
+	// one that is NOT inside another pkt-line's payload. The inner flush
+	// is embedded inside a sideband-1 pkt-line; its "0000" bytes are part
+	// of that outer pkt-line's data and must not be split.
+	idx := lastOuterFlush(raw)
 	var head, tail []byte
 	if idx >= 0 {
 		head = raw[:idx]
@@ -406,6 +414,43 @@ func (h *Handler) injectContributionHints(buf *bytes.Buffer, contribs []domain.P
 	}
 
 	_, _ = buf.Write(tail)
+}
+
+// lastOuterFlush walks the pkt-line stream and returns the byte position of the
+// last standalone "0000" flush pkt — one that is NOT inside another pkt-line's
+// payload. Returns -1 when no standalone flush exists (truncated stream).
+//
+// This is needed because receive-pack output double-frames: an outer sideband
+// layer (channel 0x01) wraps inner pkt-line status, and that inner framing
+// includes its own "0000" flush. A naive bytes.LastIndex for "0000" would find
+// the inner flush when the outer flush is missing (e.g. receive-pack killed
+// mid-write), and splitting at that position would break the outer pkt-line
+// framing — the length prefix would claim bytes that are no longer present.
+func lastOuterFlush(raw []byte) int {
+	pos := 0
+	lastFlush := -1
+	for pos < len(raw) {
+		if pos+4 > len(raw) {
+			break
+		}
+		// Standalone flush pkt: exactly "0000" at the current position.
+		if string(raw[pos:pos+4]) == "0000" {
+			lastFlush = pos
+			pos += 4
+			continue
+		}
+		// Parse the pkt-line length (4 hex digits).
+		pktLen, err := hex.DecodeString(string(raw[pos : pos+4]))
+		if err != nil || len(pktLen) != 2 {
+			break
+		}
+		pl := int(pktLen[0])<<8 | int(pktLen[1])
+		if pl < 4 || pos+pl > len(raw) {
+			break
+		}
+		pos += pl
+	}
+	return lastFlush
 }
 
 // sidebandPktLine encodes text as a sideband-2 (progress) pkt-line suitable for
