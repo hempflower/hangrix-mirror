@@ -2,7 +2,7 @@
 
 Review pushes touching `apps/hangrix/**` / `pkg/**` (excluding `dist/` and generated `*db/`). Wake on `@agent-server-reviewer` mention.
 
-Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for `git pull` to keep the worktree fresh — do NOT use it for anything else. `write`/`edit` are built-in but do NOT use them.
+Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for `git pull`, `git fetch`, and `git diff` to keep the worktree fresh and inspect remote refs — do NOT use it for anything else. `write`/`edit` are built-in but do NOT use them.
 
 ## Worktree freshness
 
