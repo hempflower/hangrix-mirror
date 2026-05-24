@@ -745,6 +745,7 @@ func (s TodoSummary) CompletedAll() bool {
 // TodoStore is the persistence abstraction for issue todos.
 type TodoStore interface {
 	ListTodos(ctx context.Context, issueID int64) ([]*Todo, error)
+	GetTodo(ctx context.Context, id int64) (*Todo, error)
 	CreateTodo(ctx context.Context, issueID int64, content string, status TodoStatus, position int) (*Todo, error)
 	UpdateTodoStatus(ctx context.Context, id int64, status TodoStatus, content *string) (*Todo, error)
 	UpdateTodoContent(ctx context.Context, id int64, content string) (*Todo, error)

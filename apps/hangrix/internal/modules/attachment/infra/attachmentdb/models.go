@@ -184,6 +184,16 @@ type RepoVariable struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
+type Todo struct {
+	ID        int64
+	IssueID   int64
+	Content   string
+	Status    string
+	Position  int32
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
 type User struct {
 	ID           int64
 	Username     string

@@ -77,7 +77,15 @@ func (r *Registry) issueTodoUpdateTool() *agentapidomain.Tool {
 				return textResult(todoToDTO(todo)), nil
 			}
 
-			// Update path
+			// Update path — verify the todo belongs to the current issue
+			// before allowing an update, preventing cross-issue tampering.
+			existing, err := r.deps.Todos.GetTodo(ctx, req.TodoID)
+			if err != nil {
+				return errorResult("get todo: " + err.Error()), nil
+			}
+			if existing.IssueID != scope.issue.ID {
+				return errorResult("todo does not belong to the current issue"), nil
+			}
 			var contentPtr *string
 			if strings.TrimSpace(req.Content) != "" {
 				c := strings.TrimSpace(req.Content)

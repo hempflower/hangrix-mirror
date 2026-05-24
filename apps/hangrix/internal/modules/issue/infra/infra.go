@@ -721,6 +721,17 @@ func (s *PostgresStore) ListTodos(ctx context.Context, issueID int64) ([]*domain
 	return out, nil
 }
 
+func (s *PostgresStore) GetTodo(ctx context.Context, id int64) (*domain.Todo, error) {
+	row, err := s.q.GetTodoByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrTodoNotFound
+		}
+		return nil, fmt.Errorf("get todo: %w", err)
+	}
+	return todoFromRow(row), nil
+}
+
 func (s *PostgresStore) CreateTodo(ctx context.Context, issueID int64, content string, status domain.TodoStatus, position int) (*domain.Todo, error) {
 	row, err := s.q.CreateTodo(ctx, issuedb.CreateTodoParams{
 		IssueID:  issueID,

@@ -375,6 +375,12 @@ VALUES (
 )
 RETURNING id, issue_id, content, status, position, created_at, updated_at;
 
+-- name: GetTodoByID :one
+SELECT id, issue_id, content, status, position, created_at, updated_at
+FROM todos
+WHERE id = sqlc.arg('id');
+
+
 -- name: UpdateTodoStatus :one
 UPDATE todos
 SET status = sqlc.arg('status'),
