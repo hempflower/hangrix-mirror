@@ -897,6 +897,7 @@
       "remove": "Remove",
       "removeFailed": "Remove failed"
     },
+    "scrollToTop": "Scroll to top",
     "todos": {
       "title": "Todos",
       "empty": "No todos yet.",

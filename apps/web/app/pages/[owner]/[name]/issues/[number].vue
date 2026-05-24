@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch, nextTick } from 'vue'
 import {
+  ArrowUp,
   Bot,
   Circle,
   CircleCheck,
@@ -33,6 +34,7 @@ import MentionTextarea from '@/components/issue/MentionTextarea.vue'
 import AttachmentUploader from '@/components/issue/AttachmentUploader.vue'
 import type { Issue, IssueState, IssueTimeline, IssueMergeResp, ReviewStatus, ReviewVerdict, ReviewVoteValue, TodoStatus } from '~/types/issue'
 import type { Commit, FileDiff } from '~/types/repo'
+import { useWindowScroll } from '@vueuse/core'
 import { relativeTime } from '~/utils/time'
 
 definePageMeta({ layout: 'repo' })
@@ -54,6 +56,13 @@ const issue = ref<Issue | null>(null)
 const headerRef = ref<HTMLElement | null>(null)
 const headerHeight = ref(128) // default 8rem fallback (Tailwind top-32)
 let _headerObserver: ResizeObserver | null = null
+
+// Scroll-to-top button
+const { y: scrollY } = useWindowScroll()
+const showScrollTop = computed(() => scrollY.value > 300)
+function scrollToTop() {
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
 
 
 useHead({ title: () => {
@@ -1143,5 +1152,28 @@ onUnmounted(() => {
     </div>
   </Tabs>
   </template>
+
+  <!-- Scroll-to-top floating button -->
+  <Transition name="scroll-top">
+    <button
+      v-if="showScrollTop"
+      :aria-label="t('issue.scrollToTop')"
+      class="fixed bottom-6 right-6 z-30 flex size-11 items-center justify-center rounded-full bg-background shadow-md border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      @click="scrollToTop"
+    >
+      <ArrowUp class="size-5" />
+    </button>
+  </Transition>
   </div>
 </template>
+
+<style scoped>
+.scroll-top-enter-active,
+.scroll-top-leave-active {
+  transition: opacity 0.2s ease;
+}
+.scroll-top-enter-from,
+.scroll-top-leave-to {
+  opacity: 0;
+}
+</style>

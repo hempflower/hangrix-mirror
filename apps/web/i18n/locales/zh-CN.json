@@ -897,6 +897,7 @@
       "remove": "移除",
       "removeFailed": "移除失败"
     },
+    "scrollToTop": "滚动到顶部",
     "todos": {
       "title": "待办",
       "empty": "暂无待办。",
