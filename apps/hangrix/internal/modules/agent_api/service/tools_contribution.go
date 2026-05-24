@@ -57,16 +57,17 @@ func (r *Registry) contributionListTool() *agentapidomain.Tool {
 	}
 }
 
-// contributionReadTool returns a contribution plus its server-computed diff
-// (against the issue branch) and per-contribution review status.
+// contributionReadTool returns contribution metadata, review status, and a
+// local-checkout hint. It no longer returns a server-computed diff; the agent
+// should fetch the branch and run git locally to inspect changes.
 func (r *Registry) contributionReadTool() *agentapidomain.Tool {
 	return &agentapidomain.Tool{
 		Name:        "contribution_read",
-		Description: "Read one contribution: metadata, the real diff against the issue branch (what this branch adds), and its review status. Use the id from contribution_list.",
+		Description: "Read one contribution: metadata, review status (verdict plus which required reviewers still must vote), and a checkout_hint to fetch the branch and compare locally. This tool no longer returns an inline diff — use git locally after fetching. Use the id from contribution_list.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id": map[string]any{"type": "integer", "description": "Contribution id to read."},
+				"id": map[string]any{"type": "integer", "description": "Contribution id to read (from contribution_list)."},
 			},
 			"required": []string{"id"},
 		},
@@ -81,18 +82,20 @@ func (r *Registry) contributionReadTool() *agentapidomain.Tool {
 			}
 
 			contribBranch := strings.TrimPrefix(c.RefName, "refs/heads/")
-			diffs, derr := r.deps.Git.DiffMergeBase(scope.fsPath, scope.issue.BranchName, contribBranch)
-			if derr != nil {
-				diffs = []*gitdomain.FileDiff{}
-			}
+			checkoutHint := fmt.Sprintf(
+				"This tool no longer returns an inline diff. To view the changes locally, fetch the contribution branch and compare with the issue branch:\n\n  git fetch origin %s\n  git diff origin/%s...origin/%s\n\nOr checkout directly:\n\n  git fetch origin %s && git checkout %s",
+				contribBranch, scope.issue.BranchName, contribBranch,
+				contribBranch, contribBranch,
+			)
+
 			var review *issuedomain.ReviewStatus
 			if events, err := r.deps.Issues.ListEvents(ctx, scope.issue.ID); err == nil {
 				review = issuedomain.ComputeContributionReviewStatus(c, r.requiredReviewers(ctx, scope.repo.ID, c), events)
 			}
 			return textResult(map[string]any{
-				"contribution": contributionSummary(c),
-				"diff":         diffs,
-				"review":       review,
+				"contribution":  contributionSummary(c),
+				"review":        review,
+				"checkout_hint": checkoutHint,
 			}), nil
 		},
 	}

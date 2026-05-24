@@ -26,7 +26,7 @@ A contribution branch is **immutable once pushed**: no re-push, force-push, or d
 5. Report via `issue_comment`. Optional: `contribution_set_meta` sets your branch's title/body (owner only); `contribution_close` abandons it.
 
 ## Reviewing & merging
-- Inspect with `contribution_list` / `contribution_read` (server-computed diff + review status, incl. who still must vote); comment inline via `issue_comment` (`file_path` + `line`).
+- Inspect with `contribution_list` (overview) / `contribution_read` (metadata + review status + `checkout_hint` for fetching the branch locally to review the diff); comment inline via `issue_comment` (`file_path` + `line`).
 - Vote with `issue_review_vote` + `contribution_id` + `value` (`approve` / `reject` / `abstain`). It decides only "may this branch enter the issue branch?". No self-approval; `reject` tells the author to push a new versioned branch (you can't request edits on an immutable one).
 - Maintainers: `contribution_apply` each approved + mergeable branch into the issue branch (server-side, no git). Once no contribution is `pending` and the issue branch carries changes (confirm with `issue_mergeable`), `issue_merge` advances issue → base. You never merge contributions by hand or report a commit SHA.
 
