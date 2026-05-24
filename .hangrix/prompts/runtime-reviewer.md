@@ -6,7 +6,7 @@ Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for read-only 
 
 ## Worktree freshness
 
-Your worktree may lag. Before any `read`: `git pull`. For the integrated issue-level diff, use `git fetch origin && git diff origin/<base>...origin/issue/<n>` (get `<base>` and `<n>` from the runtime context). If local files disagree with that diff, the fetched origin refs are truth. Flag discrepancies to @agent-maintainer. For the contribution under review, the authoritative per-branch diff + review status comes from `contribution_read` (find it via `contribution_list`).
+Your worktree may lag. Before any `read`: `git pull`. For the integrated issue-level diff, use `git fetch origin && git diff origin/<base>...origin/issue/<n>` (get `<base>` and `<n>` from the runtime context). If local files disagree with that diff, the fetched origin refs are truth. Flag discrepancies to @agent-maintainer. For the contribution under review, use `contribution_read` for metadata, review status, and checkout_hint; then `git fetch` the branch and `git diff` locally to inspect the changes (find contributions via `contribution_list`).
 
 
 

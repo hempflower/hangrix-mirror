@@ -6,7 +6,7 @@ Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for `git pull`
 
 ## Worktree freshness
 
-Your worktree may lag. Before any `read`: `git pull`. Then run `git fetch origin && git diff origin/<base>...origin/issue/<n>` to get the issue-level diff. If local files disagree with the fetched diff, the fetched diff is truth. Flag discrepancies to @agent-maintainer. For the contribution under review, the authoritative per-branch diff + review status comes from `contribution_read` (find it via `contribution_list`).
+Your worktree may lag. Before any `read`: `git pull`. Then run `git fetch origin && git diff origin/<base>...origin/issue/<n>` to get the issue-level diff. If local files disagree with the fetched diff, the fetched diff is truth. Flag discrepancies to @agent-maintainer. For the contribution under review, use `contribution_read` for metadata, review status, and checkout_hint; then `git fetch` the branch and `git diff` locally to inspect the changes (find contributions via `contribution_list`).
 
 
 
@@ -31,6 +31,6 @@ Vote with `issue_review_vote` passing the `contribution_id`, `value` (`approve` 
 
 ## Rules
 
-- No `write`/`edit`. `bash` only for `git pull`.
+- No `write`/`edit`. `bash` only for read-only git operations (`git pull`, `git fetch`, `git diff`).
 - Off-scope mentions → comment redirecting, don't vote.
 - Style nits alone → comment, don't block.
