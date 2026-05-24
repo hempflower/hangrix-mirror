@@ -17,8 +17,8 @@ BEGIN
         EXECUTE format('ALTER TABLE llm_providers DROP CONSTRAINT %I', constraint_name);
     END IF;
 
-    EXECUTE $$ALTER TABLE llm_providers ADD CONSTRAINT llm_providers_type_check
-        CHECK (type IN ('openai', 'anthropic', 'openai-compat', 'mock'))$$;
+    EXECUTE $_$ALTER TABLE llm_providers ADD CONSTRAINT llm_providers_type_check
+        CHECK (type IN ('openai', 'anthropic', 'openai-compat', 'mock'))$_$;
 END;
 $$;
 
@@ -40,7 +40,7 @@ BEGIN
         EXECUTE format('ALTER TABLE llm_providers DROP CONSTRAINT %I', constraint_name);
     END IF;
 
-    EXECUTE $$ALTER TABLE llm_providers ADD CONSTRAINT llm_providers_type_check
-        CHECK (type IN ('openai', 'anthropic', 'openai-compat'))$$;
+    EXECUTE $_$ALTER TABLE llm_providers ADD CONSTRAINT llm_providers_type_check
+        CHECK (type IN ('openai', 'anthropic', 'openai-compat'))$_$;
 END;
 $$;
