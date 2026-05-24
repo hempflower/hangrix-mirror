@@ -144,3 +144,9 @@ FROM llm_usage_log u
 JOIN llm_providers p ON p.id = u.provider_id
 WHERE u.id = sqlc.arg('id');
 
+-- name: DeleteUsageBefore :execrows
+-- Hard-deletes usage-log rows whose created_at is strictly before :cutoff.
+-- Called by the background reaper (service/reaper.go); not exposed through
+-- the domain.Repo interface or the admin handler.
+DELETE FROM llm_usage_log WHERE created_at < sqlc.arg('cutoff');
+

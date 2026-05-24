@@ -33,6 +33,15 @@ storage:
 
 llm:
   encryption_key: "wAO53V1ifCfBbm5ZVmjR9haeymmvhIobK4b99+D4Eq8="
+  # Hard-delete llm_usage_log rows whose created_at is older than this.
+  # Default 168h (7 days). Set shorter to reclaim disk faster; set longer
+  # to keep usage data for analysis.
+  usage_retention: "168h"
+  # How often the background reaper wakes up. Default 1h — the gate is
+  # 7 days, so even a 4-hour interval would still hit rows well before
+  # the next boundary. One hour leaves room for an operator to shorten
+  # retention without re-tuning the interval.
+  usage_cleanup_interval: "1h"
 
 runner:
   # Fallback image the runner pulls when a session doesn't pin one.

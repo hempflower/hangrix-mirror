@@ -9,6 +9,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider/handler"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider/infra"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider/service"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/server"
 	"github.com/hangrix/hangrix/pkg/ioc"
 )
@@ -25,6 +26,10 @@ func Module() *ioc.Module {
 	// the usage-read path (not on the cross-module interface — only this
 	// module's handler renders the usage table).
 	binder.ToSelf()
+
+	// Background reaper: hard-deletes usage-log rows older than
+	// config.llm.usage_retention on a periodic ticker.
+	m.Provide(service.NewReaper).ToInterface(new(server.BackgroundJob))
 
 	m.Provide(handler.NewHandler).ToInterface(new(server.RouteProvider))
 	return m
