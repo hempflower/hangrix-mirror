@@ -35,3 +35,29 @@ func TestBuildAgentEnvOmitsZeroIssueNumber(t *testing.T) {
 		t.Fatalf("HANGRIX_ISSUE_NUMBER set for a non-issue session: %q", env["HANGRIX_ISSUE_NUMBER"])
 	}
 }
+
+func TestBuildAgentEnvMcpServers(t *testing.T) {
+	// Nil McpServers → HANGRIX_MCP_SERVERS is unset.
+	env := buildAgentEnv(&client.Task{SessionID: 1, Role: "web"}, "https://hangrix.example")
+	if _, ok := env["HANGRIX_MCP_SERVERS"]; ok {
+		t.Fatalf("HANGRIX_MCP_SERVERS set when McpServers is nil")
+	}
+
+	// Empty McpServers → HANGRIX_MCP_SERVERS is unset.
+	env = buildAgentEnv(&client.Task{SessionID: 1, Role: "web", McpServers: []string{}}, "https://hangrix.example")
+	if _, ok := env["HANGRIX_MCP_SERVERS"]; ok {
+		t.Fatalf("HANGRIX_MCP_SERVERS set when McpServers is empty")
+	}
+
+	// Single server → comma-free value.
+	env = buildAgentEnv(&client.Task{SessionID: 1, Role: "web", McpServers: []string{"playwright"}}, "https://hangrix.example")
+	if got := env["HANGRIX_MCP_SERVERS"]; got != "playwright" {
+		t.Fatalf("HANGRIX_MCP_SERVERS = %q, want %q", got, "playwright")
+	}
+
+	// Multiple servers → comma-joined.
+	env = buildAgentEnv(&client.Task{SessionID: 1, Role: "web", McpServers: []string{"playwright", "github"}}, "https://hangrix.example")
+	if got := env["HANGRIX_MCP_SERVERS"]; got != "playwright,github" {
+		t.Fatalf("HANGRIX_MCP_SERVERS = %q, want %q", got, "playwright,github")
+	}
+}

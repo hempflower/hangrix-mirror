@@ -186,6 +186,13 @@ type Task struct {
 	// agents.yml container block. The orchestrator adds each as a `-v`
 	// bind mount at `docker create` time. Nil/empty means no volumes.
 	Volumes []Volume `json:"volumes,omitempty"`
+	// McpServers is the role's MCP server whitelist from agents.yml. Each
+	// element is a server name that must exist in the workspace .mcp.json.
+	// Nil or empty means the role declares no MCP servers — the agent will
+	// not load any MCP servers even if .mcp.json is present. The runner
+	// injects this as HANGRIX_MCP_SERVERS (comma-separated) into the
+	// agent container.
+	McpServers []string `json:"mcp_servers,omitempty"`
 }
 
 // Volume mirrors agentsconfig.Volume (and server-side volumeDTO) on the

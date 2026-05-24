@@ -36,6 +36,7 @@ type Config struct {
 	BaseBranch       string
 	HostAddendumPath string
 	ToolCatalog      string
+	McpServers       []string
 
 	// CompactTokenThreshold is the input-token usage above which the
 	// runtime nudges the LLM (via a synthetic system reminder injected
@@ -83,6 +84,7 @@ func NewConfig() *Config {
 		BaseBranch:       os.Getenv("HANGRIX_BASE_BRANCH"),
 		HostAddendumPath:      os.Getenv("HANGRIX_HOST_ADDENDUM"),
 		ToolCatalog:           os.Getenv("HANGRIX_TOOL_CATALOG"),
+		McpServers:            parseMcpServers(os.Getenv("HANGRIX_MCP_SERVERS")),
 		CompactTokenThreshold: parseCompactThreshold(os.Getenv("HANGRIX_COMPACT_TOKEN_THRESHOLD")),
 	}
 
@@ -100,6 +102,27 @@ func NewConfig() *Config {
 		panic(fmt.Errorf("config: missing required env: %s", strings.Join(missing, ", ")))
 	}
 	return cfg
+}
+
+// parseMcpServers splits a comma-separated env value into a slice of
+// trimmed, non-empty server names. Empty input → nil (no servers).
+func parseMcpServers(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // parseCompactThreshold reads HANGRIX_COMPACT_TOKEN_THRESHOLD. Empty or

@@ -767,6 +767,9 @@ func buildAgentEnv(task *client.Task, baseURL string) map[string]string {
 	if task.BaseBranch != "" {
 		env["HANGRIX_BASE_BRANCH"] = task.BaseBranch
 	}
+	if len(task.McpServers) > 0 {
+		env["HANGRIX_MCP_SERVERS"] = strings.Join(task.McpServers, ",")
+	}
 	return env
 }
 

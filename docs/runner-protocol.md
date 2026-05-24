@@ -99,6 +99,7 @@ docker run --rm -i
   -e HANGRIX_SESSION_ID=...
   -e HANGRIX_LLM_MODEL=...
   -e HANGRIX_ROLE=...
+  -e HANGRIX_MCP_SERVERS=...
   ...
   <image>
 ```
@@ -110,6 +111,14 @@ docker run --rm -i
 ## Role prompt 供给
 
 Spawn 时 server 已经把 role 解析后的 prompt 内容快照进 `agent_sessions.role_config.prompt`（见 [agent-config.md](agent-config.md)）。Runner 拉任务时直接拿到 prompt 字符串，写一份临时文件 bind-mount 进容器。**没有独立的 agent bundle 分发链路** —— prompt 在 session row 里，跟着 task 一起下行。
+
+## MCP 服务器白名单下发
+
+Task payload 新增 `mcp_servers` 字段（`[]string`），是 role 在 `agents.yml` 中声明的 MCP 服务器白名单（如 `mcp: ['playwright']`）。Runner 在 `buildAgentEnv` 阶段将其编码为逗号分隔的 `HANGRIX_MCP_SERVERS` 环境变量注入 agent 容器。
+
+Agent 侧行为：
+- `HANGRIX_MCP_SERVERS` 为空或未设置：不加载任何 MCP 服务器（包括 `.mcp.json` 已有的）。
+- 设置了服务器名列表：仅加载白名单内的服务器；若某个服务器名在 `.mcp.json` 中不存在，session 显式失败（panic），因为这是 host 配置错误。
 
 > 历史注记：M7a 上线时设计过「agent 仓库 bundle 分发」（content-addressed 缓存、sha256 校验、pre-spawn agent 仓库可达性验证）。随 agent-as-repo 设计取消，整段链路（`GET /api/runner/agent-bundles/...` 端点 / `~/.hangrix/agent-bundles/` 缓存 / `agent_sessions.agent_repo` 列）在 M7c cleanup 一并下线。
 
