@@ -355,6 +355,14 @@ func (b *bashTool) Cleanup(ctx context.Context) {
 // is cancelled.
 func (b *bashTool) Schedule(d time.Duration, notification string) string {
 	id := newSleepID()
+	b.ScheduleWithID(id, d, notification)
+	return id
+}
+
+// ScheduleWithID is like Schedule but uses the caller-provided id
+// instead of generating one. The caller is responsible for ensuring the
+// id is unique (e.g. via newSleepID()).
+func (b *bashTool) ScheduleWithID(id string, d time.Duration, notification string) {
 	b.timersMu.Lock()
 	b.timers[id] = &sleepTimer{
 		timer: time.AfterFunc(d, func() {
@@ -366,7 +374,6 @@ func (b *bashTool) Schedule(d time.Duration, notification string) string {
 		msg: notification,
 	}
 	b.timersMu.Unlock()
-	return id
 }
 
 // CancelSchedule cancels a previously scheduled notification. No

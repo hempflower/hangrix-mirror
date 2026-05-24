@@ -95,6 +95,11 @@ type AsyncLifecycle interface {
 	// to NotificationCh when the timer fires. Schedule increments the
 	// running-job count; it decrements on fire or cancel.
 	Schedule(d time.Duration, notification string) string
+	// ScheduleWithID is like Schedule but uses the caller-provided id
+	// instead of generating one. This allows the caller to embed the id
+	// in the notification text (e.g. a sleep tool including sleep_id in
+	// the completion message for disambiguation).
+	ScheduleWithID(id string, d time.Duration, notification string)
 	// CancelSchedule cancels a previously scheduled notification. No
 	// notification is sent. Safe to call on an already-fired ID (no-op).
 	CancelSchedule(id string)

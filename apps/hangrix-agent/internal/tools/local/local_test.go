@@ -1414,13 +1414,15 @@ func TestSleepReturnsImmediatelyWithScheduled(t *testing.T) {
 		t.Errorf("note should mention 'scheduled'; got %q", fields.Note)
 	}
 
-	// Verify the notification fires after the timer expires.
+	// Verify the notification fires after the timer expires and
+	// includes the sleep_id so concurrent/reasonless sleeps are
+	// distinguishable.
 	select {
 	case msg := <-bundle.Async.NotificationCh():
-		if !strings.Contains(msg, "[hangrix] sleep finished after 3s") {
-			t.Errorf("notification = %q, want sleep finished message", msg)
+		if !strings.Contains(msg, "[hangrix] sleep "+fields.SleepID+" finished after 3s") {
+			t.Errorf("notification = %q, want sleep %s finished message", msg, fields.SleepID)
 		}
-		if !strings.Contains(msg, "reason: test") {
+		if !strings.Contains(msg, "(reason: test)") {
 			t.Errorf("notification should include reason; got %q", msg)
 		}
 	case <-time.After(4 * time.Second):

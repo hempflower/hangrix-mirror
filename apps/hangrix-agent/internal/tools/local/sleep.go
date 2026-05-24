@@ -79,6 +79,11 @@ func (t *sleepTool) Call(ctx context.Context, raw json.RawMessage) (any, error) 
 
 	d := time.Duration(a.Seconds) * time.Second
 
+	// Generate the ID first so it can be embedded in the completion
+	// notification. This lets the LLM distinguish concurrent sleeps
+	// (with or without reason) when the notification fires.
+	sleepID := newSleepID()
+
 	// Build the completion notification that the runtime will inject into
 	// the LLM context when this timer fires. Include the sleep_id so the
 	// model knows exactly which sleep finished, plus seconds and reason
@@ -88,11 +93,11 @@ func (t *sleepTool) Call(ctx context.Context, raw json.RawMessage) (any, error) 
 		reasonPart = fmt.Sprintf(" (reason: %s)", a.Reason)
 	}
 	notification := fmt.Sprintf(
-		"[hangrix] sleep finished after %ds%s. You can now continue with the next step.",
-		a.Seconds, reasonPart,
+		"[hangrix] sleep %s finished after %ds%s. You can now continue with the next step.",
+		sleepID, a.Seconds, reasonPart,
 	)
 
-	sleepID := t.async.Schedule(d, notification)
+	t.async.ScheduleWithID(sleepID, d, notification)
 
 	return map[string]any{
 		"status":   "scheduled",
