@@ -44,11 +44,11 @@ llm:
 
 roles:
   seeder:
+    # mcp: [playwright]             # uncomment + list servers from .mcp.json when the role needs MCP tools
     triggers:
       issue.opened: {}
       issue.comment:
         mentioned_only: true
-    # mcp: [playwright]             # uncomment + list servers from .mcp.json when the role needs MCP tools
     can: [issue_read, issue_comment, read, write, edit, glob, grep, bash]
     prompt: |
       You are the **seeder** agent for this repository. You have two
