@@ -216,9 +216,9 @@ type Tool struct {
 	client      *Client
 }
 
-func (t *Tool) Name() string             { return t.name }
-func (t *Tool) Description() string      { return t.description }
-func (t *Tool) Schema() map[string]any   { return t.schema }
+func (t *Tool) Name() string           { return t.name }
+func (t *Tool) Description() string    { return t.description }
+func (t *Tool) Schema() map[string]any { return t.schema }
 
 // Call returns the platform's text payload as the result. Soft errors
 // (is_error=true) are returned as a structured `{is_error, text}`
@@ -536,49 +536,49 @@ func All(client *Client) []local.Tool {
 			}, []string{"id"}),
 		},
 
-	{
-		name:        "release_create",
-		description: "Create a new release in draft state from an existing git tag. The tag must already exist in the repo.",
-		schema: objectSchema(map[string]any{
-			"tag_name": stringProp("The existing git tag to create the release from (required)."),
-			"title":    stringProp("Optional release title. Defaults to the tag name if omitted."),
-			"notes":    stringProp("Optional release notes (markdown)."),
-		}, []string{"tag_name"}),
-	},
-	{
-		name:        "release_upload_asset",
-		description: "Upload a custom asset to a release. The file content must be base64-encoded.",
-		schema: objectSchema(map[string]any{
-			"release_id":   intProp("The release ID to attach the asset to (required)."),
-			"name":         stringProp("Asset file name (required)."),
-			"content":      stringProp("Base64-encoded file content (required)."),
-			"content_type": stringProp("Optional MIME type. Defaults to application/octet-stream."),
-		}, []string{"release_id", "name", "content"}),
-	},
-	{
-		name:        "release_publish",
-		description: "Publish a draft release, making it visible as an official release with a published_at timestamp.",
-		schema: objectSchema(map[string]any{
-			"release_id": intProp("The release ID to publish (required)."),
-		}, []string{"release_id"}),
-	},
-	{
-		name:        "release_update",
-		description: "Edit an existing release's metadata (title, notes). The tag_name can only be changed while the release is still a draft.",
-		schema: objectSchema(map[string]any{
-			"release_id": intProp("The release ID to update (required)."),
-			"title":      stringProp("Optional new release title."),
-			"notes":      stringProp("Optional new release notes (markdown)."),
-			"tag_name":   stringProp("Optional new tag name. Only mutable when the release is still a draft."),
-		}, []string{"release_id"}),
-	},
-	{
-		name:        "release_delete",
-		description: "Delete a release and all of its custom assets. Derived source archives (zip/tar.gz) are not separately stored and do not need cleanup.",
-		schema: objectSchema(map[string]any{
-			"release_id": intProp("The release ID to delete (required)."),
-		}, []string{"release_id"}),
-	},
+		{
+			name:        "release_create",
+			description: "Create a new release in draft state from an existing git tag. The tag must already exist in the repo.",
+			schema: objectSchema(map[string]any{
+				"tag_name": stringProp("The existing git tag to create the release from (required)."),
+				"title":    stringProp("Optional release title. Defaults to the tag name if omitted."),
+				"notes":    stringProp("Optional release notes (markdown)."),
+			}, []string{"tag_name"}),
+		},
+		{
+			name:        "release_upload_asset",
+			description: "Upload a custom asset to a release. The file content must be base64-encoded.",
+			schema: objectSchema(map[string]any{
+				"release_id":   intProp("The release ID to attach the asset to (required)."),
+				"name":         stringProp("Asset file name (required)."),
+				"content":      stringProp("Base64-encoded file content (required)."),
+				"content_type": stringProp("Optional MIME type. Defaults to application/octet-stream."),
+			}, []string{"release_id", "name", "content"}),
+		},
+		{
+			name:        "release_publish",
+			description: "Publish a draft release, making it visible as an official release with a published_at timestamp.",
+			schema: objectSchema(map[string]any{
+				"release_id": intProp("The release ID to publish (required)."),
+			}, []string{"release_id"}),
+		},
+		{
+			name:        "release_update",
+			description: "Edit an existing release's metadata (title, notes). The tag_name can only be changed while the release is still a draft.",
+			schema: objectSchema(map[string]any{
+				"release_id": intProp("The release ID to update (required)."),
+				"title":      stringProp("Optional new release title."),
+				"notes":      stringProp("Optional new release notes (markdown)."),
+				"tag_name":   stringProp("Optional new tag name. Only mutable when the release is still a draft."),
+			}, []string{"release_id"}),
+		},
+		{
+			name:        "release_delete",
+			description: "Delete a release and all of its custom assets. Derived source archives (zip/tar.gz) are not separately stored and do not need cleanup.",
+			schema: objectSchema(map[string]any{
+				"release_id": intProp("The release ID to delete (required)."),
+			}, []string{"release_id"}),
+		},
 	}
 	out := make([]local.Tool, 0, len(descriptors))
 	for _, d := range descriptors {
@@ -631,7 +631,8 @@ func boolProp(desc string) map[string]any {
 
 func issueEditSchema() map[string]any {
 	return map[string]any{
-		"type": "object",
+		"type":          "object",
+		"minProperties": 1,
 		"properties": map[string]any{
 			"title": map[string]any{
 				"type":        "string",
@@ -644,10 +645,5 @@ func issueEditSchema() map[string]any {
 				"description": "New body (markdown) for the current issue. Omit to leave unchanged.",
 			},
 		},
-		"anyOf": []map[string]any{
-			{"required": []string{"title"}},
-			{"required": []string{"body"}},
-		},
 	}
 }
-

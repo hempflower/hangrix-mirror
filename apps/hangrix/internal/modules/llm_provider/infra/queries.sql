@@ -1,7 +1,7 @@
 
 -- name: ExportUsageCSV :many
--- Same filter as ListUsage but without LIMIT/OFFSET; excludes request_body
--- and response_body so the CSV stays light.
+-- Page through the usage log in small chunks so the zip writer can stream
+-- rows without holding the whole export in memory.
 SELECT u.id, u.session_id, u.provider_id, u.model,
        u.prompt_tokens, u.completion_tokens, u.total_tokens,
        u.latency_ms, u.status_code, u.error_message, u.request_path,
@@ -11,11 +11,13 @@ FROM llm_usage_log u
 JOIN llm_providers p ON p.id = u.provider_id
 WHERE (sqlc.narg('provider_id')::BIGINT IS NULL OR u.provider_id = sqlc.narg('provider_id'))
   AND (sqlc.narg('since')::TIMESTAMPTZ IS NULL OR u.created_at >= sqlc.narg('since'))
-ORDER BY u.created_at DESC;
+ORDER BY u.created_at DESC
+LIMIT sqlc.arg('lim')
+OFFSET sqlc.arg('off');
 
 -- name: ExportUsageJSONL :many
--- Same filter as ListUsage but without LIMIT/OFFSET; includes request_body
--- and response_body for the full-record JSONL export.
+-- Page through the full usage log in small chunks so JSONL export can
+-- stream request_body / response_body without loading the whole table.
 SELECT u.id, u.session_id, u.provider_id, u.model,
        u.prompt_tokens, u.completion_tokens, u.total_tokens,
        u.latency_ms, u.status_code, u.error_message, u.request_path,
@@ -25,7 +27,9 @@ FROM llm_usage_log u
 JOIN llm_providers p ON p.id = u.provider_id
 WHERE (sqlc.narg('provider_id')::BIGINT IS NULL OR u.provider_id = sqlc.narg('provider_id'))
   AND (sqlc.narg('since')::TIMESTAMPTZ IS NULL OR u.created_at >= sqlc.narg('since'))
-ORDER BY u.created_at DESC;
+ORDER BY u.created_at DESC
+LIMIT sqlc.arg('lim')
+OFFSET sqlc.arg('off');
 
 -- name: CreateProvider :one
 INSERT INTO llm_providers (
