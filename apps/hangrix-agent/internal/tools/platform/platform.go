@@ -398,6 +398,13 @@ func All(client *Client) []local.Tool {
 			schema:      objectSchema(nil, nil),
 		},
 		{
+			name:        "issue_comment_read",
+			description: "Read a single comment by its id. Only comments on the current session's issue are accessible — cross-issue lookups return 'not found'. Returns the full body (no truncation).",
+			schema: objectSchema(map[string]any{
+				"comment_id": intProp("The comment id to read (required). Must belong to the current session's issue."),
+			}, []string{"comment_id"}),
+		},
+		{
 			name:        "issue_mergeable",
 			description: "Check whether the issue branch can be merged into its base — tries fast-forward first, then checks for conflicts. mergeable=true means issue_merge is expected to succeed. When conflicted (mode=conflicted), the hint explains to resolve it through a new contribution branch rather than pushing the issue branch directly. Returns mergeable, mode, base_branch, base_sha, head_sha, and hint.",
 			schema:      objectSchema(nil, nil),
