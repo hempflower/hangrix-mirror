@@ -758,6 +758,135 @@ func TestLoopAtMentionNudgeWithToolCallsPreservesChain(t *testing.T) {
 	}
 }
 
+// TestLoopSleepGate verifies the sleep batching guard: when the LLM
+// returns sleep alongside other tool calls in the same response, the
+// loop must only execute sleep and reject the rest with errors. The
+// turn must end immediately (done frame) so the agent goes idle and
+// waits for the sleep wake-up notification.
+func TestLoopSleepGate(t *testing.T) {
+	t.Parallel()
+
+	var llmCallCount atomic.Int32
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		callN := llmCallCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch callN {
+		case 1:
+			// First turn: LLM returns both sleep AND another tool call
+			// (a naive read). The sleep-gate must reject the read.
+			resp := map[string]any{
+				"id": "resp_1",
+				"output": []map[string]any{
+					{
+						"type":      "function_call",
+						"call_id":   "tc_sleep",
+						"name":      "sleep",
+						"arguments": `{"seconds":5}`,
+					},
+					{
+						"type":      "function_call",
+						"call_id":   "tc_other",
+						"name":      "glob",
+						"arguments": `{"pattern":"*.go"}`,
+					},
+				},
+				"usage": map[string]any{"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			http.Error(w, "unexpected extra LLM call", http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(llmServer.Close)
+
+	llmClient := llm.New(llmServer.URL, "test-token")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bundle := local.Build()
+	registry := tools.Build(bundle.Tools, nil, nil, nil)
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdoutR.Close()
+
+	loop := runtime.NewLoop(
+		ipc.NewReader(stdinR),
+		ipc.NewWriter(stdoutW),
+		llmClient,
+		"gpt-4o-mini",
+		registry,
+		"system prompt for test",
+		bundle.Async,
+		0,
+	)
+
+	loopErr := make(chan error, 1)
+	go func() {
+		loopErr <- loop.Run(ctx)
+		stdoutW.Close()
+	}()
+
+	go func() {
+		_, _ = stdinW.Write([]byte(`{"kind":"history","messages":[]}` + "\n"))
+		_, _ = stdinW.Write([]byte(`{"kind":"event","event":"issue.comment.mentioned","payload":{"body":"@bot do something"}}` + "\n"))
+		time.Sleep(500 * time.Millisecond)
+		_, _ = stdinW.Write([]byte(`{"kind":"control","op":"shutdown"}` + "\n"))
+		stdinW.Close()
+	}()
+
+	frames, err := drainFrames(stdoutR)
+	if err != nil {
+		t.Fatalf("drain frames: %v", err)
+	}
+	if err := <-loopErr; err != nil {
+		t.Fatalf("loop returned error: %v", err)
+	}
+	if got := llmCallCount.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 LLM call (sleep-gate prevents second round), got %d", got)
+	}
+
+	var (
+		sawSleepCall bool
+		sawOtherCall bool
+		sawDone      bool
+		otherResult  string
+	)
+	for _, f := range frames {
+		switch f.Kind {
+		case "tool_call":
+			if f.Name == "sleep" {
+				sawSleepCall = true
+				if !strings.Contains(string(f.Result), "scheduled") {
+					t.Errorf("sleep result missing 'scheduled': %s", f.Result)
+				}
+			}
+			if f.Name == "glob" {
+				sawOtherCall = true
+				otherResult = string(f.Result)
+			}
+		case "done":
+			sawDone = true
+		}
+	}
+	if !sawSleepCall {
+		t.Error("expected a tool_call for sleep")
+	}
+	if !sawOtherCall {
+		t.Error("expected a tool_call for the rejected call (glob)")
+	}
+	if !strings.Contains(otherResult, "batched with sleep") {
+		t.Errorf("rejected call result should explain batching violation, got: %s", otherResult)
+	}
+	if !sawDone {
+		t.Error("expected a done frame after sleep-gate")
+	}
+}
+
 // drainFrames reads outbound JSON-Lines until EOF.
 func drainFrames(r io.Reader) ([]ipc.Outbound, error) {
 	dec := json.NewDecoder(r)
