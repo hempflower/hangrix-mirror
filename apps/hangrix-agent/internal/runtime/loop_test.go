@@ -152,7 +152,7 @@ func TestLoopSmoke(t *testing.T) {
 		"gpt-4o-mini",
 		registry,
 		"system prompt for test",
-		bundle.Bash,
+		bundle.Async,
 		0,
 	)
 
@@ -340,7 +340,7 @@ func TestLoopCompactSession(t *testing.T) {
 		"gpt-4o-mini",
 		registry,
 		"system prompt for test",
-		bundle.Bash,
+		bundle.Async,
 		0,
 	)
 
@@ -517,7 +517,7 @@ func TestLoopAtMentionNudge(t *testing.T) {
 		"gpt-4o-mini",
 		registry,
 		"system prompt for test",
-		bundle.Bash,
+		bundle.Async,
 		0,
 	)
 
@@ -673,7 +673,7 @@ func TestLoopAtMentionNudgeWithToolCallsPreservesChain(t *testing.T) {
 		"gpt-4o-mini",
 		registry,
 		"system prompt for test",
-		bundle.Bash,
+		bundle.Async,
 		0,
 	)
 

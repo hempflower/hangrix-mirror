@@ -21,11 +21,12 @@ type Deps struct {
 	LLM       *llm.Client
 	Registry  *tools.Registry
 	Assembled *prompt.Assembled
-	// Bash is the lifecycle handle for background bash tasks. The
-	// runtime drains its NotificationCh into the LLM context at every
-	// drain point (round boundary, idle wait) and calls Cleanup on
-	// shutdown so unfinished tasks don't outlive the agent process.
-	Bash local.BashLifecycle
+	// Async is the lifecycle handle for local async work (background bash
+	// tasks, sleep timers, etc.). The runtime drains its NotificationCh
+	// into the LLM context at every drain point (round boundary, idle
+	// wait) and calls Cleanup on shutdown so unfinished work doesn't
+	// outlive the agent process.
+	Async local.AsyncLifecycle
 }
 
 func NewProvider(deps *Deps) *Loop {
@@ -36,7 +37,7 @@ func NewProvider(deps *Deps) *Loop {
 		deps.Cfg.Model,
 		deps.Registry,
 		deps.Assembled.Prompt,
-		deps.Bash,
+		deps.Async,
 		deps.Cfg.CompactTokenThreshold,
 	)
 }

@@ -16,20 +16,20 @@ type Deps struct {
 	LLMClient *llm.Client
 }
 
-// LocalBundle pairs the local tool slice with the bash lifecycle handle
+// LocalBundle pairs the local tool slice with the async lifecycle handle
 // the runtime needs for notifications, idle reporting, and shutdown
 // cleanup. We provide it as its own ioc node so two consumers — the
 // Registry (which only wants Tools) and the runtime.Loop (which only
-// wants Bash) — can both depend on the same bashTool instance without
-// the runtime having to fish it out of a generic Tool slice.
+// wants Async) — can both depend on the same instance without the
+// runtime having to fish it out of a generic Tool slice.
 type LocalBundle struct {
 	Tools []local.Tool
-	Bash  local.BashLifecycle
+	Async local.AsyncLifecycle
 }
 
 func NewLocalBundle(deps *Deps) *LocalBundle {
 	b := local.BuildWithResearch(deps.LLMClient, deps.Cfg.Model)
-	return &LocalBundle{Tools: b.Tools, Bash: b.Bash}
+	return &LocalBundle{Tools: b.Tools, Async: b.Async}
 }
 
 // RegistryDeps is the dependency set for NewRegistry. It's split off
@@ -45,16 +45,16 @@ type RegistryDeps struct {
 	MCPBundle *mcp.Bundle
 }
 
-// BashLifecycleDeps wraps the bundle so NewBashLifecycle can be a
+// AsyncLifecycleDeps wraps the bundle so NewAsyncLifecycle can be a
 // single-parameter constructor in the ioc style. The accessor is
-// trivial (return Bundle.Bash) but having a real ioc node for it lets
-// the runtime module depend on local.BashLifecycle directly without
+// trivial (return Bundle.Async) but having a real ioc node for it lets
+// the runtime module depend on local.AsyncLifecycle directly without
 // reaching into the LocalBundle struct shape.
-type BashLifecycleDeps struct {
+type AsyncLifecycleDeps struct {
 	Bundle *LocalBundle
 }
 
-func NewBashLifecycle(deps *BashLifecycleDeps) local.BashLifecycle { return deps.Bundle.Bash }
+func NewAsyncLifecycle(deps *AsyncLifecycleDeps) local.AsyncLifecycle { return deps.Bundle.Async }
 
 // NewRegistry parses HANGRIX_TOOL_CATALOG and builds the merged
 // (local + platform) registry. Both steps happen exactly once at init
@@ -70,7 +70,7 @@ func NewBashLifecycle(deps *BashLifecycleDeps) local.BashLifecycle { return deps
 //
 // The local set comes from NewLocalBundle (which calls
 // local.BuildWithResearch). NewRegistry consumes the same bundle so
-// that the bash tool instance the registry serves and the lifecycle
+// that the tool instances the registry serves and the lifecycle
 // handle the runtime drains are guaranteed to be one-and-the-same.
 func NewRegistry(deps *RegistryDeps) *Registry {
 	allow, err := ParseToolCatalog(deps.Cfg.ToolCatalog)
@@ -92,7 +92,7 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 func Module() *ioc.Module {
 	m := ioc.NewModule()
 	m.Provide(NewLocalBundle).ToSelf()
-	m.Provide(NewBashLifecycle).ToSelf()
+	m.Provide(NewAsyncLifecycle).ToSelf()
 	m.Provide(NewRegistry).ToSelf()
 	return m
 }

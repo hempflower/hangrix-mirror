@@ -1365,33 +1365,66 @@ func TestGlobRespectsGitignore(t *testing.T) {
 // TestSleepPausesForSpecifiedSeconds is the headline test for the sleep
 // tool: call sleep(seconds=3) and assert the actual wall-clock pause is
 // within 200ms of 3s, and that the result echoes the requested seconds.
-func TestSleepPausesForSpecifiedSeconds(t *testing.T) {
+func TestSleepReturnsImmediatelyWithScheduled(t *testing.T) {
 	t.Parallel()
-	tools := byName(local.All())
+	bundle := local.Build()
+	tools := byName(bundle.Tools)
 	sleep := tools["sleep"]
 	if sleep == nil {
-		t.Fatal("sleep tool not registered in local.All()")
+		t.Fatal("sleep tool not registered")
 	}
 
 	start := time.Now()
-	res, err := sleep.Call(context.Background(), mustJSON(map[string]any{"seconds": 3}))
+	res, err := sleep.Call(context.Background(), mustJSON(map[string]any{"seconds": 3, "reason": "test"}))
 	if err != nil {
 		t.Fatalf("sleep(seconds=3): %v", err)
 	}
 	elapsed := time.Since(start)
-	if elapsed < 2800*time.Millisecond || elapsed > 3200*time.Millisecond {
-		t.Errorf("sleep(seconds=3) took %v, want ~3s (±200ms)", elapsed)
+	// Must return immediately, not block for the full 3s.
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("sleep returned in %v, want <100ms (async)", elapsed)
 	}
 
 	var fields struct {
+		Status  string `json:"status"`
+		SleepID string `json:"sleep_id"`
 		Seconds int    `json:"seconds"`
 		Reason  string `json:"reason"`
+		Note    string `json:"note"`
 	}
 	if err := json.Unmarshal(mustReJSON(res), &fields); err != nil {
 		t.Fatalf("decode sleep result: %v", err)
 	}
+	if fields.Status != "scheduled" {
+		t.Errorf("status = %q, want \"scheduled\"", fields.Status)
+	}
+	if fields.SleepID == "" {
+		t.Error("sleep_id is empty")
+	}
+	if !strings.HasPrefix(fields.SleepID, "sleep_") {
+		t.Errorf("sleep_id = %q, want prefix \"sleep_\"", fields.SleepID)
+	}
 	if fields.Seconds != 3 {
 		t.Errorf("seconds = %d, want 3", fields.Seconds)
+	}
+	if fields.Reason != "test" {
+		t.Errorf("reason = %q, want \"test\"", fields.Reason)
+	}
+	if !strings.Contains(fields.Note, "scheduled") {
+		t.Errorf("note should mention 'scheduled'; got %q", fields.Note)
+	}
+
+	// Verify the notification fires after the timer expires.
+	select {
+	case msg := <-bundle.Async.NotificationCh():
+		if !strings.Contains(msg, "[hangrix] sleep finished after 3s") {
+			t.Errorf("notification = %q, want sleep finished message", msg)
+		}
+		if !strings.Contains(msg, "reason: test") {
+			t.Errorf("notification should include reason; got %q", msg)
+		}
+	case <-time.After(4 * time.Second):
+		t.Error("timed out waiting for sleep notification")
 	}
 }
 
@@ -1434,36 +1467,45 @@ func TestSleepRejectsZeroSeconds(t *testing.T) {
 	}
 }
 
-// TestSleepRespectsContextCancellation pins that a cancelled context
-// wakes the sleep within 500ms rather than blocking for the full
-// requested duration. This is a liveness guard — without it, a
-// control:shutdown during a long sleep stalls agent teardown.
-func TestSleepRespectsContextCancellation(t *testing.T) {
+// TestSleepCleanupCancelsPendingTimers verifies that Cleanup stops
+// pending sleep timers and no notification leaks after shutdown.
+// This replaces the old context-cancellation guard: sleep is now async,
+// so the tool-call context is irrelevant; cancellation happens at the
+// lifecycle level via Cleanup.
+func TestSleepCleanupCancelsPendingTimers(t *testing.T) {
 	t.Parallel()
-	tools := byName(local.All())
+	bundle := local.Build()
+	tools := byName(bundle.Tools)
 	sleep := tools["sleep"]
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Cancel almost immediately, then assert the call returns promptly.
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
-
-	start := time.Now()
-	_, err := sleep.Call(ctx, mustJSON(map[string]any{"seconds": 60}))
-	if err == nil {
-		t.Fatal("expected an error from cancelled context")
+	// Schedule a long sleep.
+	_, err := sleep.Call(context.Background(), mustJSON(map[string]any{"seconds": 60}))
+	if err != nil {
+		t.Fatalf("sleep(seconds=60): %v", err)
 	}
-	elapsed := time.Since(start)
-	if elapsed > 500*time.Millisecond {
-		t.Errorf("sleep with cancelled context took %v, want <500ms", elapsed)
+
+	// Verify HasRunningJobs reflects the pending timer.
+	if n := bundle.Async.HasRunningJobs(); n != 1 {
+		t.Fatalf("HasRunningJobs = %d, want 1 (one pending sleep)", n)
 	}
-	// The error should surface context.Canceled so the LLM knows the
-	// sleep was interrupted rather than rejected.
-	if !strings.Contains(err.Error(), "cancel") && !strings.Contains(err.Error(), "interrupted") {
-		t.Errorf("error should mention the cancellation reason; got: %v", err)
+
+	// Cleanup should cancel the timer.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	bundle.Async.Cleanup(ctx)
+
+	// After cleanup, running jobs should be zero.
+	if n := bundle.Async.HasRunningJobs(); n != 0 {
+		t.Errorf("HasRunningJobs after Cleanup = %d, want 0", n)
+	}
+
+	// The notification channel must not receive anything — the timer
+	// was cancelled before it could fire.
+	select {
+	case msg := <-bundle.Async.NotificationCh():
+		t.Errorf("unexpected notification after cleanup: %q", msg)
+	case <-time.After(500 * time.Millisecond):
+		// Expected: no notification arrives.
 	}
 }
 

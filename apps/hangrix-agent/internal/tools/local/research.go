@@ -337,7 +337,7 @@ func errorJSON(msg string) string {
 // appended. The shared *llm.Client + default model are wired through so the
 // research goroutines can talk to the LLM proxy with the parent's session
 // token. Production wiring (tools/module.go) calls BuildWithResearch
-// when it needs the BashLifecycle handle too; AllWithResearch stays as
+// when it needs the AsyncLifecycle handle too; AllWithResearch stays as
 // the slim "just the tools" convenience for older callers.
 func AllWithResearch(client *llm.Client, defaultModel string) []Tool {
 	return append(All(), NewResearchTool(client, defaultModel))
@@ -345,7 +345,7 @@ func AllWithResearch(client *llm.Client, defaultModel string) []Tool {
 
 // BuildWithResearch is Build + the research tool, returned as a Bundle.
 // This is the production constructor: the runtime needs the
-// BashLifecycle handle, and the research tool must share the parent's
+// AsyncLifecycle handle, and the research tool must share the parent's
 // LLM client. Splitting from AllWithResearch keeps tests (which use
 // All / AllWithResearch and don't care about lifecycle hooks)
 // untouched.

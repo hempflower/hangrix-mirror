@@ -235,9 +235,20 @@ func (j *bashJob) snapshot() string {
 	return string(data)
 }
 
+type sleepTimer struct {
+	timer *time.Timer
+	msg   string
+}
+
 type bashTool struct {
 	mu   sync.Mutex
 	jobs map[string]*bashJob
+
+	// timers tracks pending sleep schedules. Guarded by timersMu (separate
+	// from mu so the timer-fired callback — which runs on the time package's
+	// goroutine — doesn't contend with the bash job map lock).
+	timersMu sync.Mutex
+	timers   map[string]*sleepTimer
 
 	// notifyCh fans background-job completions out to whoever subscribed
 	// via NotificationCh — in practice that's the agent runtime loop,
@@ -253,6 +264,7 @@ type bashTool struct {
 func newBashTool() *bashTool {
 	return &bashTool{
 		jobs:     map[string]*bashJob{},
+		timers:   map[string]*sleepTimer{},
 		notifyCh: make(chan string, 64),
 	}
 }
@@ -282,6 +294,9 @@ func (b *bashTool) HasRunningJobs() int {
 		}
 		j.mu.Unlock()
 	}
+	b.timersMu.Lock()
+	n += len(b.timers)
+	b.timersMu.Unlock()
 	return n
 }
 
@@ -295,6 +310,15 @@ func (b *bashTool) HasRunningJobs() int {
 // seconds is typical. Past that, container teardown will reap whatever
 // is left.
 func (b *bashTool) Cleanup(ctx context.Context) {
+	// Cancel every pending sleep timer first. No notification is sent
+	// for cancelled timers — the session is shutting down.
+	b.timersMu.Lock()
+	for id, t := range b.timers {
+		t.timer.Stop()
+		delete(b.timers, id)
+	}
+	b.timersMu.Unlock()
+
 	b.mu.Lock()
 	running := make([]*bashJob, 0, len(b.jobs))
 	for _, j := range b.jobs {
@@ -323,6 +347,38 @@ func (b *bashTool) Cleanup(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// Schedule fires a notification after the given duration. Returns an
+// opaque sleep ID. The notification text is sent to NotificationCh when
+// the timer fires. The timer counts as a running job until it fires or
+// is cancelled.
+func (b *bashTool) Schedule(d time.Duration, notification string) string {
+	id := newSleepID()
+	b.timersMu.Lock()
+	b.timers[id] = &sleepTimer{
+		timer: time.AfterFunc(d, func() {
+			b.timersMu.Lock()
+			delete(b.timers, id)
+			b.timersMu.Unlock()
+			b.notify(notification)
+		}),
+		msg: notification,
+	}
+	b.timersMu.Unlock()
+	return id
+}
+
+// CancelSchedule cancels a previously scheduled notification. No
+// notification is sent. Safe to call on an already-fired ID (no-op).
+func (b *bashTool) CancelSchedule(id string) {
+	b.timersMu.Lock()
+	t, ok := b.timers[id]
+	if ok {
+		t.timer.Stop()
+		delete(b.timers, id)
+	}
+	b.timersMu.Unlock()
 }
 
 // notify pushes a terminal notification onto the bashTool's
@@ -714,6 +770,12 @@ func newTaskID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return "task_" + hex.EncodeToString(b[:])
+}
+
+func newSleepID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return "sleep_" + hex.EncodeToString(b[:])
 }
 
 // writeEphemeralError stashes an error message in a temp file so

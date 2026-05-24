@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // Tool is the in-process tool contract. All seven local tools implement
@@ -68,36 +69,45 @@ func (r *ReadTracker) WasRead(path string) bool {
 	return ok
 }
 
-// BashLifecycle is the public surface the runtime uses to observe and
-// shut down background bash tasks. It's separate from the Tool interface
-// because these are operations the *agent runtime* drives — not things
-// the LLM invokes through a tool call. Exposed as an interface so tests
-// can substitute a no-op implementation when they don't care about
-// background tasks.
-type BashLifecycle interface {
+// AsyncLifecycle is the public surface the runtime uses to observe and
+// shut down local async work (background bash tasks, sleep timers, and
+// future async tools). It's separate from the Tool interface because
+// these are operations the *agent runtime* drives — not things the LLM
+// invokes through a tool call. Exposed as an interface so tests can
+// substitute a no-op implementation when they don't care about async
+// work.
+type AsyncLifecycle interface {
 	// NotificationCh streams one user-role text snippet per completed
-	// background task. The runtime drains it at every "wait point"
+	// async work item. The runtime drains it at every "wait point"
 	// (idle, between LLM rounds) and appends the messages into the
-	// conversation so the LLM doesn't have to poll to learn a task
+	// conversation so the LLM doesn't have to poll to learn something
 	// finished.
 	NotificationCh() <-chan string
-	// HasRunningJobs reports the count of still-alive background jobs.
-	// Used to populate the `running_jobs` hint on the agent's `idle`
-	// outbound frame.
+	// HasRunningJobs reports the count of still-alive async work items
+	// (background bash jobs + pending sleep timers). Used to populate
+	// the `running_jobs` hint on the agent's `idle` outbound frame.
 	HasRunningJobs() int
-	// Cleanup signals every alive job and waits, bounded by the
-	// supplied context, for them to reap. Called on agent shutdown.
+	// Cleanup cancels every alive job / pending timer and waits, bounded
+	// by the supplied context, for them to reap. Called on agent shutdown.
 	Cleanup(ctx context.Context)
+	// Schedule fires a notification after the given duration. Returns an
+	// opaque ID usable with CancelSchedule. The notification text is sent
+	// to NotificationCh when the timer fires. Schedule increments the
+	// running-job count; it decrements on fire or cancel.
+	Schedule(d time.Duration, notification string) string
+	// CancelSchedule cancels a previously scheduled notification. No
+	// notification is sent. Safe to call on an already-fired ID (no-op).
+	CancelSchedule(id string)
 }
 
 // Bundle is the result of Build: every Tool the agent registers plus
-// the BashLifecycle handle the runtime hooks into. Returning them
-// together (instead of having callers fish the bash tool out of the
+// the AsyncLifecycle handle the runtime hooks into. Returning them
+// together (instead of having callers fish the concrete type out of the
 // Tool slice and downcast) keeps the wiring honest — the runtime gets
 // exactly the verbs it needs, nothing more.
 type Bundle struct {
 	Tools []Tool
-	Bash  BashLifecycle
+	Async AsyncLifecycle
 }
 
 // Build is the canonical constructor: one ReadTracker shared across
@@ -128,7 +138,7 @@ func Build() Bundle {
 			// feed it stdin).
 			newBashInputTool(bash),
 			newWebFetchTool(),
-			newSleepTool(),
+			newSleepTool(bash),
 			// compact_session is a schema-only stub — the runtime loop
 			// intercepts the call by name and applies its effect to the
 			// in-memory Context. Registering it here makes the
@@ -136,12 +146,12 @@ func Build() Bundle {
 			// path so role configs can opt out symmetrically.
 			NewCompactSessionTool(),
 		},
-		Bash: bash,
+		Async: bash,
 	}
 }
 
 // All returns just the Tool slice from Build. Retained for callers
-// that don't need the BashLifecycle handle (notably: tests, and the
+// that don't need the AsyncLifecycle handle (notably: tests, and the
 // `research` sub-agent's whitelisted child catalogue, neither of which
 // wants to manage background jobs).
 func All() []Tool {

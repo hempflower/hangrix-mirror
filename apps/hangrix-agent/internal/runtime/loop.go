@@ -46,7 +46,7 @@ type Loop struct {
 	model    string
 	registry *tools.Registry
 	system   string
-	bash     local.BashLifecycle
+	async    local.AsyncLifecycle
 
 	// maxToolRounds caps how many LLM⇄tool round-trips we allow within
 	// one inbound event. The cap exists only as a runaway-loop fail-safe;
@@ -55,10 +55,10 @@ type Loop struct {
 	// many files, multi-step debugging) don't get cut off mid-stream.
 	maxToolRounds int
 
-	// shutdownGrace bounds how long Cleanup waits for background bash
-	// tasks to ack SIGKILL on shutdown before we exit anyway. The
-	// container teardown will reap whatever is left; this just keeps
-	// the exit path from wedging on a pathological child.
+	// shutdownGrace bounds how long Cleanup waits for async work
+	// (background bash tasks, sleep timers) to finish on shutdown before
+	// we exit anyway. The container teardown will reap whatever is left;
+	// this just keeps the exit path from wedging.
 	shutdownGrace time.Duration
 
 	// compactTokenThreshold is the input-token usage above which the
@@ -90,7 +90,7 @@ func NewLoop(
 	model string,
 	registry *tools.Registry,
 	systemPrompt string,
-	bash local.BashLifecycle,
+	async local.AsyncLifecycle,
 	compactTokenThreshold int,
 ) *Loop {
 	return &Loop{
@@ -100,7 +100,7 @@ func NewLoop(
 		model:                 model,
 		registry:              registry,
 		system:                systemPrompt,
-		bash:                  bash,
+		async:                 async,
 		maxToolRounds:         999999,
 		shutdownGrace:         5 * time.Second,
 		compactTokenThreshold: compactTokenThreshold,
@@ -109,8 +109,8 @@ func NewLoop(
 
 // inboxItem is one thing the loop reacts to. Exactly one of Frame /
 // Notification is populated per item. The reader goroutine (stdin) and
-// the bashTool notification goroutine both push into the same channel —
-// the loop never has to multiplex sources itself.
+// the async-lifecycle notification goroutine both push into the same
+// channel — the loop never has to multiplex sources itself.
 type inboxItem struct {
 	Frame        *ipc.Inbound
 	Notification string
@@ -255,25 +255,25 @@ func (l *Loop) handleFrame(
 // reap, then return so Run can exit. Container teardown will sweep
 // whatever is left.
 func (l *Loop) gracefulShutdown() {
-	if l.bash == nil {
+	if l.async == nil {
 		return
 	}
-	if l.bash.HasRunningJobs() == 0 {
+	if l.async.HasRunningJobs() == 0 {
 		return
 	}
 	gctx, cancel := context.WithTimeout(context.Background(), l.shutdownGrace)
 	defer cancel()
-	l.bash.Cleanup(gctx)
+	l.async.Cleanup(gctx)
 }
 
 // emitIdle reports event-done state to the runner along with a hint
-// about how many background bash tasks are still alive. The runner uses
-// running_jobs to pick the right idle timeout (don't retire a container
-// that's babysitting a long test run).
+// about how many async work items (bash jobs + sleep timers) are still
+// alive. The runner uses running_jobs to pick the right idle timeout
+// (don't retire a container that's babysitting a long test run).
 func (l *Loop) emitIdle() error {
 	n := 0
-	if l.bash != nil {
-		n = l.bash.HasRunningJobs()
+	if l.async != nil {
+		n = l.async.HasRunningJobs()
 	}
 	return l.out.Idle(n)
 }
@@ -586,15 +586,16 @@ func (l *Loop) pumpFrames(ctx context.Context, inbox chan<- inboxItem) {
 	}
 }
 
-// pumpNotifications forwards bashTool completion notifications into the
-// inbox. The channel from b.NotificationCh() is buffered on the bashTool
-// side too; this goroutine just adapts it into the unified inbox shape
-// so the loop doesn't have to select on N source-specific channels.
+// pumpNotifications forwards async-lifecycle completion notifications
+// (background bash tasks, sleep timer expiry, etc.) into the inbox. The
+// channel from NotificationCh() is buffered on the lifecycle side too;
+// this goroutine just adapts it into the unified inbox shape so the loop
+// doesn't have to select on N source-specific channels.
 func (l *Loop) pumpNotifications(ctx context.Context, inbox chan<- inboxItem) {
-	if l.bash == nil {
+	if l.async == nil {
 		return
 	}
-	ch := l.bash.NotificationCh()
+	ch := l.async.NotificationCh()
 	for {
 		select {
 		case <-ctx.Done():

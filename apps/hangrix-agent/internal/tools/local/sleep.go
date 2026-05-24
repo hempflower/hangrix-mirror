@@ -8,19 +8,23 @@ import (
 	"time"
 )
 
-// sleepTool pauses the agent for a caller-specified number of seconds.
-// It exists so the LLM can wait for background bash tasks (or other
-// eventual side effects) to land without burning round-trips on empty
-// polls. The design is deliberately minimal: integer seconds with a
-// hard upper bound of 300 (5 min) so the agent can't self-inflict a
-// hang that outlasts a session watchdog.
+// sleepTool schedules an asynchronous pause: it returns immediately with a
+// "scheduled" status, and the runtime delivers a notification to the LLM
+// context when the timer expires. It replaces the old synchronous sleep
+// (which blocked the tool-call round-trip) with the same async-notification
+// model that background bash tasks use.
 //
-// Context cancellation (control:shutdown, runner closes the pipe) is
-// honoured immediately — the tool selects on ctx.Done() alongside the
-// timer so the agent exits promptly when told to.
-type sleepTool struct{}
+// The tool itself is deliberately minimal — integer seconds with a hard
+// upper bound of 300 — so the LLM can't self-inflict a hang. The runtime
+// cancels any pending sleep on session shutdown via the AsyncLifecycle
+// Cleanup path.
+type sleepTool struct {
+	async AsyncLifecycle
+}
 
-func newSleepTool() Tool { return sleepTool{} }
+func newSleepTool(async AsyncLifecycle) Tool {
+	return &sleepTool{async: async}
+}
 
 const SleepToolName = "sleep"
 
@@ -28,7 +32,12 @@ func (sleepTool) Name() string { return SleepToolName }
 
 func (sleepTool) Description() string {
 	return strings.Join([]string{
-		"Pause execution for the specified number of seconds before returning. Use this to wait for a background task (started with bash run_in_background=true) to complete before polling it, rather than spending a round-trip on an empty poll. Only integer seconds; maximum 300 (5 minutes). The call returns early if the session is cancelled.",
+		"Schedule an asynchronous pause for the specified number of seconds.",
+		"This is an ASYNC tool: it returns immediately with status \"scheduled\" — returning does NOT mean the wait is over.",
+		"The runtime will post a completion notification to your context when the timer expires; you will be woken up to continue.",
+		"After calling sleep, if you have no other parallel work, end the current turn so the agent enters idle and waits for the wake-up notification.",
+		"Do NOT use sleep as a synchronous delay or as a throttle between tool calls.",
+		"Only integer seconds; maximum 300 (5 minutes).",
 	}, " ")
 }
 
@@ -56,7 +65,7 @@ type sleepArgs struct {
 	Reason  string `json:"reason"`
 }
 
-func (sleepTool) Call(ctx context.Context, raw json.RawMessage) (any, error) {
+func (t *sleepTool) Call(ctx context.Context, raw json.RawMessage) (any, error) {
 	var a sleepArgs
 	if err := decodeArgs(raw, &a); err != nil {
 		return nil, err
@@ -69,17 +78,27 @@ func (sleepTool) Call(ctx context.Context, raw json.RawMessage) (any, error) {
 	}
 
 	d := time.Duration(a.Seconds) * time.Second
-	timer := time.NewTimer(d)
-	defer timer.Stop()
 
-	select {
-	case <-ctx.Done():
-		return nil, fmt.Errorf("sleep: interrupted: %w", ctx.Err())
-	case <-timer.C:
+	// Build the completion notification that the runtime will inject into
+	// the LLM context when this timer fires. Include the sleep_id so the
+	// model knows exactly which sleep finished, plus seconds and reason
+	// so it has enough context to continue without polling.
+	reasonPart := ""
+	if a.Reason != "" {
+		reasonPart = fmt.Sprintf(" (reason: %s)", a.Reason)
 	}
+	notification := fmt.Sprintf(
+		"[hangrix] sleep finished after %ds%s. You can now continue with the next step.",
+		a.Seconds, reasonPart,
+	)
+
+	sleepID := t.async.Schedule(d, notification)
 
 	return map[string]any{
-		"seconds": a.Seconds,
-		"reason":  a.Reason,
+		"status":   "scheduled",
+		"sleep_id": sleepID,
+		"seconds":  a.Seconds,
+		"reason":   a.Reason,
+		"note":     "Sleep has been scheduled but is NOT yet complete. The runtime will wake you with a notification when the timer expires. If you have no other parallel work, end the current turn now to wait for the wake-up.",
 	}, nil
 }

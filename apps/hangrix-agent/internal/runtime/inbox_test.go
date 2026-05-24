@@ -18,24 +18,25 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/local"
 )
 
-// fakeBashLifecycle is a hand-rolled stand-in for local.BashLifecycle.
-// The runtime tests don't want to spawn real bash subprocesses; instead
-// they want full control over when notifications fire and how many
-// jobs are "running" at a given moment. The agent loop calls only the
-// three interface methods, so an in-memory impl is enough.
-type fakeBashLifecycle struct {
+// fakeAsyncLifecycle is a hand-rolled stand-in for local.AsyncLifecycle.
+// The runtime tests don't want to spawn real bash subprocesses or sleep
+// timers; instead they want full control over when notifications fire
+// and how many jobs are "running" at a given moment.
+type fakeAsyncLifecycle struct {
 	notifications chan string
 	running       atomic.Int32
 	cleanupCount  atomic.Int32
 }
 
-func newFakeBash() *fakeBashLifecycle {
-	return &fakeBashLifecycle{notifications: make(chan string, 16)}
+func newFakeAsync() *fakeAsyncLifecycle {
+	return &fakeAsyncLifecycle{notifications: make(chan string, 16)}
 }
 
-func (f *fakeBashLifecycle) NotificationCh() <-chan string { return f.notifications }
-func (f *fakeBashLifecycle) HasRunningJobs() int            { return int(f.running.Load()) }
-func (f *fakeBashLifecycle) Cleanup(ctx context.Context)    { f.cleanupCount.Add(1) }
+func (f *fakeAsyncLifecycle) NotificationCh() <-chan string                 { return f.notifications }
+func (f *fakeAsyncLifecycle) HasRunningJobs() int                            { return int(f.running.Load()) }
+func (f *fakeAsyncLifecycle) Cleanup(ctx context.Context)                    { f.cleanupCount.Add(1) }
+func (f *fakeAsyncLifecycle) Schedule(time.Duration, string) string          { return "sleep_fake" }
+func (f *fakeAsyncLifecycle) CancelSchedule(string)                          {}
 
 // TestLoopEmitsIdleAfterEvent pins the long-lived-agent contract: after
 // the assistant finishes a turn (no more tool calls), the loop must
@@ -78,7 +79,7 @@ func TestLoopEmitsIdleAfterEvent(t *testing.T) {
 		"gpt-4o-mini",
 		registry,
 		"system prompt for test",
-		bundle.Bash,
+		bundle.Async,
 		0,
 	)
 
@@ -183,7 +184,7 @@ func TestLoopProcessesMultipleEvents(t *testing.T) {
 		"gpt-4o-mini",
 		registry,
 		"system prompt",
-		bundle.Bash,
+		bundle.Async,
 		0,
 	)
 
@@ -239,7 +240,7 @@ func TestLoopProcessesMultipleEvents(t *testing.T) {
 
 // TestLoopShutdownInvokesBashCleanup pins the cleanup hook. When the
 // runner sends control:shutdown and there are still-running background
-// bash tasks, the loop MUST call BashLifecycle.Cleanup with a bounded
+// bash tasks, the loop MUST call AsyncLifecycle.Cleanup with a bounded
 // context before returning — otherwise jobs leak past the agent exit
 // and live on as orphaned children inside the container until teardown
 // (and lose any chance of an orderly SIGTERM).
@@ -260,7 +261,7 @@ func TestLoopShutdownInvokesBashCleanup(t *testing.T) {
 	t.Cleanup(llmServer.Close)
 
 	llmClient := llm.New(llmServer.URL, "test-token")
-	fake := newFakeBash()
+	fake := newFakeAsync()
 	fake.running.Store(2) // pretend two bash jobs are still alive
 
 	bundle := local.Build()
@@ -332,7 +333,7 @@ func TestLoopShutdownInvokesBashCleanup(t *testing.T) {
 func TestLoopNotificationDuringEvent(t *testing.T) {
 	t.Parallel()
 
-	fake := newFakeBash()
+	fake := newFakeAsync()
 
 	// Scripted LLM:
 	//   call #1: takes ~300ms (mocked via Sleep), returns one tool call
@@ -448,7 +449,7 @@ func TestLoopNotificationDuringEvent(t *testing.T) {
 func TestLoopEventDuringTurnFoldsIn(t *testing.T) {
 	t.Parallel()
 
-	fake := newFakeBash()
+	fake := newFakeAsync()
 
 	// Scripted LLM:
 	//   call #1: stalls ~250ms, returns one tool call so the loop comes
@@ -578,7 +579,7 @@ func TestLoopEventDuringTurnFoldsIn(t *testing.T) {
 func TestLoopNotificationDrivesIdleTurn(t *testing.T) {
 	t.Parallel()
 
-	fake := newFakeBash()
+	fake := newFakeAsync()
 
 	// Two rounds expected: the first event, then a notification-driven
 	// "phantom event". Both end in a final message with no tool calls.
@@ -710,7 +711,7 @@ func TestLoopEventArrivesAfterReady(t *testing.T) {
 		"gpt-4o-mini",
 		registry,
 		"system prompt",
-		bundle.Bash,
+		bundle.Async,
 		0,
 	)
 
@@ -884,7 +885,7 @@ func TestLoopMidCallEventPreventsDone(t *testing.T) {
 		"gpt-4o-mini",
 		registry,
 		"system prompt",
-		bundle.Bash,
+		bundle.Async,
 		0,
 	)
 
