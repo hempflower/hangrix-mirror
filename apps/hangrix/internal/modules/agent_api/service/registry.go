@@ -58,7 +58,6 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 		r.issueReadTool(),
 		r.issueReadByNumberTool(),
 		r.issueCommentReadTool(),
-		r.issueDiffTool(),
 		r.issueMergeableTool(),
 
 		r.issueChildrenTool(),

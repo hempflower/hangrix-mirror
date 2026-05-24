@@ -509,6 +509,16 @@ func csvEscape(s string) string {
 	return s
 }
 
+// ---- cleanup ----
+
+// DeleteUsageBefore hard-deletes usage-log rows whose created_at is strictly
+// before cutoff and returns how many rows were removed. Called only by the
+// background reaper (service/reaper.go); not part of the domain.Repo interface
+// because admin handlers should never trigger mass deletion.
+func (r *PostgresRepo) DeleteUsageBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	return r.q.DeleteUsageBefore(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true})
+}
+
 // ---- row → domain ----
 
 func providerFromRow(r llmproviderdb.LlmProvider) *domain.Provider {

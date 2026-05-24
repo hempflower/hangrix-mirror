@@ -398,11 +398,6 @@ func All(client *Client) []local.Tool {
 			schema:      objectSchema(nil, nil),
 		},
 		{
-			name:        "issue_diff",
-			description: "Return the diff between the issue branch and its base branch (file-level unified diff).",
-			schema:      objectSchema(nil, nil),
-		},
-		{
 			name:        "issue_mergeable",
 			description: "Check whether the issue branch can be merged into its base — tries fast-forward first, then checks for conflicts. mergeable=true means issue_merge is expected to succeed. When conflicted (mode=conflicted), the hint explains to resolve it through a new contribution branch rather than pushing the issue branch directly. Returns mergeable, mode, base_branch, base_sha, head_sha, and hint.",
 			schema:      objectSchema(nil, nil),

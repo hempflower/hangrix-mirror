@@ -38,15 +38,21 @@ type RunnerConfig struct {
 	DefaultAgentImage string `mapstructure:"default_agent_image"`
 }
 
-// LLMConfig holds platform-wide LLM settings — currently just the AES-256
+// LLMConfig holds platform-wide LLM settings. EncryptionKey is the AES-256
 // master key used by modules/llm_provider to encrypt provider api keys at
-// rest. Per-provider details (base_url / api_key / allowed_models) live in
-// the database, not here.
+// rest. UsageRetention and UsageCleanupInterval drive the background usage-log
+// reaper (see modules/llm_provider/service/reaper.go). Per-provider details
+// (base_url / api_key / allowed_models) live in the database, not here.
 type LLMConfig struct {
 	// EncryptionKey is a base64-encoded 32-byte key required to seal and
 	// unseal provider api keys. The llm_provider module panics at startup
 	// if it is unset or malformed.
 	EncryptionKey string `mapstructure:"encryption_key"`
+	// UsageRetention is how long llm_usage_log rows are kept before the
+	// background reaper hard-deletes them. Default 168h (7 days).
+	UsageRetention time.Duration `mapstructure:"usage_retention"`
+	// UsageCleanupInterval is the cadence between reaper sweeps. Default 1h.
+	UsageCleanupInterval time.Duration `mapstructure:"usage_cleanup_interval"`
 }
 
 type StorageConfig struct {
@@ -117,6 +123,8 @@ func NewConfig(path string) (*Config, error) {
 	v.SetDefault("storage.attachments_path", "./data/attachments")
 	v.SetDefault("runner.default_agent_image", "")
 	v.SetDefault("automation.scanner_interval", "60s")
+	v.SetDefault("llm.usage_retention", "168h")
+	v.SetDefault("llm.usage_cleanup_interval", "1h")
 
 	v.SetEnvPrefix("API")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))

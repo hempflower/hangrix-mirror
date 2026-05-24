@@ -71,7 +71,7 @@ async function loadList() {
   listError.value = null
   try {
     const data = await $fetch<{ contributions: Contribution[] }>(
-      `/api/repos/${props.owner}/${props.name}/issues/${props.issueNumber}/contributions`,
+      `/api/repos/${props.owner}/${props.name}/issues/${props.issueNumber}/contributions?include_merged=true&include_closed=true`,
       { credentials: 'include' },
     )
     contributions.value = data?.contributions ?? []
@@ -254,6 +254,12 @@ function isConflict(c: Contribution) {
   return !c.mergeable || c.merge_mode === 'conflicted'
 }
 
+// Terminal states (merged / closed) get muted styling to visually
+// separate them from actionable pending / approved items.
+function isTerminal(s: ContributionStatus) {
+  return s === 'merged' || s === 'closed'
+}
+
 // --- review vote rendering (mirrors [number].vue right sidebar) ---
 function voteValueClass(v: ReviewVoteValue) {
   switch (v) {
@@ -314,11 +320,12 @@ const canApply = computed(() => {
           :key="c.id"
           type="button"
           class="w-full rounded-lg border px-3 py-2.5 text-left transition-colors"
-          :class="
+          :class="[
             selectedId === c.id
               ? 'border-primary/50 bg-primary/5'
-              : 'border-transparent hover:bg-muted/50'
-          "
+              : 'border-transparent hover:bg-muted/50',
+            isTerminal(c.status) ? 'opacity-60 bg-muted/10' : '',
+          ]"
           @click="selectContribution(c.id)"
         >
           <div class="flex items-center gap-1.5">
