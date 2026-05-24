@@ -86,8 +86,8 @@ func (h *Handler) SyncIssueBranch(ctx context.Context, repo *repodomain.Repo, fs
 // fireCommitPushed dispatches the commit.pushed trigger. CauseID is the
 // new head sha so each push produces a distinct cause-key (subsequent
 // pushes don't dedupe against earlier ones). Payload carries the
-// commit list so the agent can read the changes without an issue_diff
-// roundtrip — the data is already on the platform side.
+// commit list so the agent can read the changes without a roundtrip —
+// the data is already on the platform side.
 //
 // ChangedPaths is the union of file paths affected between oldRef and
 // headSHA — collected once here so the spawner can match each
