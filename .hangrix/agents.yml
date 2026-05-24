@@ -82,8 +82,7 @@ roles:
     triggers:
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_comment_read, issue_diff, issue_comment, issue_create, roster_list]
-    can: [issue_read, issue_comment, issue_create, roster_list]
+    can: [issue_read, issue_comment_read, issue_comment, issue_create, roster_list]
     prompt_file: .hangrix/prompts/product-designer.md
     llm:
       model: gpt-5.4
@@ -148,8 +147,7 @@ roles:
           - "**/*db/**"
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_comment_read, issue_diff, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
-    can: [issue_read, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
+    can: [issue_read, issue_comment_read, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
     prompt_file: .hangrix/prompts/server-reviewer.md
     llm:
       model: gpt-5.4
@@ -185,8 +183,7 @@ roles:
           - "apps/hangrix-runner/**"
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_comment_read, issue_diff, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
-    can: [issue_read, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
+    can: [issue_read, issue_comment_read, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
     prompt_file: .hangrix/prompts/runtime-reviewer.md
     llm:
       model: gpt-5.4
@@ -223,8 +220,7 @@ roles:
           - "apps/web/.nuxt/**"
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_comment_read, issue_diff, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
-    can: [issue_read, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
+    can: [issue_read, issue_comment_read, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
     prompt_file: .hangrix/prompts/web-reviewer.md
     llm:
       model: gpt-5.4
