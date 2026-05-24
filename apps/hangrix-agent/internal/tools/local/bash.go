@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -630,10 +631,15 @@ func (b *bashTool) runForeground(ctx context.Context, a bashArgs) *bashResult {
 		// original timeout budget.
 		id := b.registerTaskID(job)
 		partial := job.snapshot()
-		notice := fmt.Sprintf(
-			"\n[hangrix] command still running after %s; promoted to background as task_id=%s. Poll progress with bash(task_id=%q); answer prompts with bash_input(task_id=%q, data=...).",
-			foregroundPromoteAfter, id, id, id,
-		)
+			promoteSecs := int(foregroundPromoteAfter.Seconds())
+			notice := "\n" + fmt.Sprintf(
+				"<hangrix-event kind=\"notification.bash.promoted\" id=\"%s\" status=\"running\">"+
+				"<promotion after_seconds=\"%d\"/>"+
+				"<command>%s</command>"+
+				"</hangrix-event>\n"+
+				"Poll progress with bash(task_id=%q); answer prompts with bash_input(task_id=%q, data=...).",
+			xmlEscapeAttr(id), promoteSecs, xmlCDATA(job.command), id, id,
+			)
 		return &bashResult{
 			Summary:    a.Summary,
 			Output:     partial + notice,
@@ -698,6 +704,33 @@ func (b *bashTool) registerTaskID(job *bashJob) string {
 	return id
 }
 
+
+// xmlEscape escapes a string for safe inclusion in XML text content.
+// Uses encoding/xml.EscapeText which handles &, <, >, ", '.
+func xmlEscape(s string) string {
+	var buf strings.Builder
+	xml.EscapeText(&buf, []byte(s))
+	return buf.String()
+}
+
+// xmlEscapeAttr escapes a string for safe inclusion in an XML attribute
+// value (between double quotes). Uses named entity references (&quot;,
+// &apos;, &lt;, &gt;, &amp;) for maximum parser compatibility.
+func xmlEscapeAttr(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "'", "&apos;")
+	return s
+}
+
+// xmlCDATA wraps a string in a CDATA section, handling the edge case
+// where the content itself contains "]]>" by splitting the CDATA block.
+func xmlCDATA(s string) string {
+	safe := strings.ReplaceAll(s, "]]>", "]]]]><![CDATA[>")
+	return "<![CDATA[" + safe + "]]>"
+}
 // formatJobNotification produces the short user-role text the runtime
 // drains into the LLM context when a background bash task ends. The
 // goal is "tell the model the job is done, with enough context that it
@@ -714,10 +747,6 @@ func formatJobNotification(job *bashJob) string {
 	job.mu.Unlock()
 
 	elapsed := time.Since(startedAt).Round(time.Second)
-	outcome := fmt.Sprintf("exit=%d", exit)
-	if timedOut {
-		outcome = "timed out"
-	}
 
 	// Trim the snapshot tail to the last ~20 lines / 2 KiB; the full
 	// output is still available via bash(task_id=...) or by reading the
@@ -736,9 +765,19 @@ func formatJobNotification(job *bashJob) string {
 		snap = "(no output)"
 	}
 
+	elapsedSeconds := int(elapsed.Seconds())
+	timedOutStr := "false"
+	if timedOut {
+		timedOutStr = "true"
+	}
 	return fmt.Sprintf(
-		"[hangrix] background bash task %s finished (%s, %s elapsed).\ncommand: %s\noutput tail:\n%s",
-		taskID, outcome, elapsed, command, snap,
+		"<hangrix-event kind=\"notification.bash.finished\" id=\"%s\" status=\"done\">"+
+			"<outcome exit_code=\"%d\" timed_out=\"%s\" elapsed_seconds=\"%d\"/>"+
+			"<command>%s</command>"+
+			"<output_tail>%s</output_tail>"+
+			"</hangrix-event>",
+		xmlEscapeAttr(taskID), exit, timedOutStr, elapsedSeconds,
+		xmlCDATA(command), xmlCDATA(snap),
 	)
 }
 

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -623,21 +624,24 @@ type llmResult struct {
 // seeing structured data in the conversation and prompts that name a
 // specific event tend to invoke role-appropriate behaviour reliably.
 func renderEventMessage(event string, payload json.RawMessage) (string, error) {
-	wrapper := map[string]any{
-		"hangrix_event": event,
-	}
+	payloadStr := "{}"
 	if len(payload) > 0 {
 		var p any
 		if err := json.Unmarshal(payload, &p); err != nil {
 			return "", err
 		}
-		wrapper["payload"] = p
+		compact, err := json.Marshal(p)
+		if err != nil {
+			return "", err
+		}
+		var buf strings.Builder
+		xml.EscapeText(&buf, compact)
+		payloadStr = buf.String()
 	}
-	out, err := json.MarshalIndent(wrapper, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
+	return fmt.Sprintf(
+		`<hangrix-event kind="platform.%s"><payload>%s</payload></hangrix-event>`,
+		event, payloadStr,
+	), nil
 }
 
 func toolPayload(r tools.CallResult) string {
