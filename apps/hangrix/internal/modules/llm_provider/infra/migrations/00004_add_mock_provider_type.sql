@@ -2,6 +2,7 @@
 
 -- Allow 'mock' as a valid llm_providers.type so test/e2e environments can
 -- register a built-in mock provider that requires no external API key.
+-- +goose StatementBegin
 DO $$
 DECLARE
     constraint_name text;
@@ -21,10 +22,12 @@ BEGIN
         CHECK (type IN ('openai', 'anthropic', 'openai-compat', 'mock'))$_$;
 END;
 $$;
+-- +goose StatementEnd
 
 -- +goose Down
 
 -- Revert to the original constraint set (without 'mock').
+-- +goose StatementBegin
 DO $$
 DECLARE
     constraint_name text;
@@ -44,3 +47,4 @@ BEGIN
         CHECK (type IN ('openai', 'anthropic', 'openai-compat'))$_$;
 END;
 $$;
+-- +goose StatementEnd
