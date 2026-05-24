@@ -38,7 +38,7 @@ roles:
     mcp: [playwright, playwright]   # duplicate intentionally tests dedup
     can:
       - issue_read
-      - issue_diff
+      - issue_mergeable
       - issue_comment
       - read
       - write
@@ -53,7 +53,7 @@ roles:
       issue.comment:
         mentioned_only: true
         from_roles: [dispatcher]
-    can: [issue_read, issue_diff, issue_comment]
+    can: [issue_read, issue_mergeable, issue_comment]
     prompt_file: .hangrix/prompts/reviewer.md
     llm:
       model: claude-opus-4-7

@@ -57,7 +57,7 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 	r.tools = []*agentapidomain.Tool{
 		r.issueReadTool(),
 		r.issueReadByNumberTool(),
-		r.issueDiffTool(),
+		r.issueCommentReadTool(),
 		r.issueMergeableTool(),
 
 		r.issueChildrenTool(),

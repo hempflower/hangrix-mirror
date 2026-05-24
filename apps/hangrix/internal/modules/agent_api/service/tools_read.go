@@ -150,49 +150,63 @@ func (r *Registry) issueReadByNumberTool() *agentapidomain.Tool {
 	}
 }
 
-// issueDiffTool returns the file-level unified diff between the issue
-// branch and its base (using merge-base diff, equivalent to
-// `git diff base...branch`). Empty list when the issue has no commits yet —
-// matching the web UI's behaviour.
-func (r *Registry) issueDiffTool() *agentapidomain.Tool {
+
+// issueCommentReadTool reads a single comment by its id. Only comments on the
+// current session's issue are accessible — cross-issue lookups return a
+// "not found" soft error. The body is returned in full (no truncation),
+// unlike the summaries emitted by issue_read / issue_read_by_number.
+func (r *Registry) issueCommentReadTool() *agentapidomain.Tool {
 	return &agentapidomain.Tool{
-		Name:        "issue_diff",
-		Description: "Return the diff between the issue branch and its base branch (file-level unified diff).",
+		Name:        "issue_comment_read",
+		Description: "Read a single comment by its id. Only comments on the current session's issue are accessible — cross-issue lookups return 'not found'. Returns the full body (no truncation).",
 		InputSchema: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
+			"type": "object",
+			"properties": map[string]any{
+				"comment_id": map[string]any{
+					"type":        "integer",
+					"description": "The comment id to read (required). Must belong to the current session's issue.",
+				},
+			},
+			"required": []any{"comment_id"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, _ json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
 			}
-			if scope.issue.HeadSHA == "" {
-				return textResult(map[string]any{"files": []any{}}), nil
+
+			var req struct {
+				CommentID int64 `json:"comment_id"`
 			}
-			var (
-				diffs []*gitdomain.FileDiff
-				derr  error
-			)
-			// After the issue is merged the issue branch may have been deleted;
-			// recover the pre-merge base tip from the branch_merged event so the
-			// diff continues to show what the issue introduced. (Mirrors the web
-			// handler diff() post-merge path.)
-			if scope.issue.State == issuedomain.StateMerged {
-				if pre := r.preMergeBaseRef(ctx, scope); pre != "" {
-					diffs, derr = r.deps.Git.DiffRefs(scope.fsPath, pre, scope.issue.HeadSHA)
-				}
+			if err := json.Unmarshal(args, &req); err != nil {
+				return errorResult("invalid args: " + err.Error()), nil
 			}
-			if diffs == nil && derr == nil {
-				diffs, derr = r.deps.Git.DiffMergeBase(scope.fsPath, scope.issue.BaseBranch, scope.issue.BranchName)
+			if req.CommentID <= 0 {
+				return errorResult("comment_id must be a positive integer"), nil
 			}
-			if derr != nil {
-				if errors.Is(derr, gitdomain.ErrRefNotFound) {
-					return textResult(map[string]any{"files": []any{}}), nil
-				}
-				return errorResult("diff: " + derr.Error()), nil
+
+			c, err := r.deps.Issues.GetCommentByID(ctx, req.CommentID)
+			if err != nil {
+				return errorResult("comment not found"), nil
 			}
-			return textResult(map[string]any{"files": diffs}), nil
+			if c.IssueID != scope.issue.ID {
+				return errorResult("comment not found or out of scope"), nil
+			}
+
+			author := c.AuthorName
+			if c.AgentRole != "" {
+				author = c.AgentRole
+			}
+			dto := commentDTO{
+				ID:        c.ID,
+				Author:    author,
+				AgentRole: c.AgentRole,
+				Body:      c.Body,
+				FilePath:  c.FilePath,
+				Line:      c.Line,
+				CreatedAt: stableTime(c.CreatedAt),
+			}
+			return textResult(dto), nil
 		},
 	}
 }
@@ -303,6 +317,26 @@ func lastActivityAt(s *runnerdomain.AgentSession) time.Time {
 
 // ---- DTOs ----
 
+// truncateSuffix is appended by truncateBody when the input exceeds
+// maxRunes. Its length is reserved from the maxRunes budget so the
+// returned string never overflows the cap.
+const truncateSuffix = "… (truncated)"
+
+// truncateBody returns s unchanged when it fits within maxRunes Unicode
+// characters (runes). Longer strings are shortened so that the returned
+// text — including the "… (truncated)" suffix — does not exceed maxRunes.
+func truncateBody(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	suffixRunes := []rune(truncateSuffix)
+	budget := maxRunes - len(suffixRunes)
+	if budget < 0 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:budget]) + truncateSuffix
+}
 type commentDTO struct {
 	ID        int64  `json:"id"`
 	Author    string `json:"author"`
@@ -324,7 +358,7 @@ func commentsToDTO(in []*issuedomain.Comment) []commentDTO {
 			ID:        c.ID,
 			Author:    author,
 			AgentRole: c.AgentRole,
-			Body:      c.Body,
+			Body:      truncateBody(c.Body, 140),
 			FilePath:  c.FilePath,
 			Line:      c.Line,
 			CreatedAt: stableTime(c.CreatedAt),
@@ -447,37 +481,5 @@ func (r *Registry) issueMergeableTool() *agentapidomain.Tool {
 	}
 }
 
-// preMergeBaseRef recovers the base-branch tip as of the moment the issue was
-// merged, by reading the BaseSHA stamped onto the branch_merged event payload.
-// Returns "" if the event is missing or the payload doesn't carry BaseSHA.
-// Mirrors the web handler's preMergeBaseRef.
-func (r *Registry) preMergeBaseRef(ctx context.Context, scope *sessionScope) string {
-	events, err := r.deps.Issues.ListEvents(ctx, scope.issue.ID)
-	if err != nil {
-		return ""
-	}
-	for i := len(events) - 1; i >= 0; i-- {
-		e := events[i]
-		if e.Kind != issuedomain.EventBranchMerged {
-			continue
-		}
-		var p issuedomain.BranchMergedPayload
-		if err := json.Unmarshal(e.Payload, &p); err != nil {
-			return ""
-		}
-		if p.BaseSHA != "" {
-			return p.BaseSHA
-		}
-		// Legacy merge-commit events without BaseSHA: reconstruct from the merge
-		// commit's first parent.
-		if p.Mode == "merge-commit" && scope.issue.MergeCommitSHA != "" {
-			mc, err := r.deps.Git.ListCommits(scope.fsPath, scope.issue.MergeCommitSHA, 0, 1)
-			if err == nil && len(mc) == 1 && len(mc[0].ParentSHAs) > 0 {
-				return mc[0].ParentSHAs[0]
-			}
-		}
-		return ""
-	}
-	return ""
-}
+
 

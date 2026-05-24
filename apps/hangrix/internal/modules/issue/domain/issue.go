@@ -499,6 +499,7 @@ type Store interface {
 	// grammar — the service layer validates before calling.
 	CreateAgentComment(ctx context.Context, issueID int64, agentRole, body, filePath string, line int) (*Comment, error)
 	ListComments(ctx context.Context, issueID int64) ([]*Comment, error)
+	GetCommentByID(ctx context.Context, id int64) (*Comment, error)
 
 	CreateEvent(ctx context.Context, issueID int64, kind EventKind, payload []byte, actorID int64) (*Event, error)
 	// CreateAgentEvent attributes the event to a host yaml role rather

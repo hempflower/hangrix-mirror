@@ -222,7 +222,7 @@ func (s *PostgresStore) CreateComment(ctx context.Context, issueID, authorID int
 	if err != nil {
 		return nil, err
 	}
-	return s.commentByID(ctx, row.ID)
+	return s.GetCommentByID(ctx, row.ID)
 }
 
 // CreateAgentComment writes an agent-authored comment. AuthorID is NULL
@@ -240,10 +240,10 @@ func (s *PostgresStore) CreateAgentComment(ctx context.Context, issueID int64, a
 	if err != nil {
 		return nil, err
 	}
-	return s.commentByID(ctx, row.ID)
+	return s.GetCommentByID(ctx, row.ID)
 }
 
-func (s *PostgresStore) commentByID(ctx context.Context, id int64) (*domain.Comment, error) {
+func (s *PostgresStore) GetCommentByID(ctx context.Context, id int64) (*domain.Comment, error) {
 	row, err := s.q.GetCommentByID(ctx, id)
 	if err != nil {
 		return nil, err

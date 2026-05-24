@@ -56,7 +56,7 @@ roles:
     prompt: hi
     triggers:
       commit.pushed: {}
-    can: [issue_read, issue_diff]
+    can: [issue_read, issue_comment]
 `
 
 // hostYAMLMentions exercises the M7b mention path: two roles each

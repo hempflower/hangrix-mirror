@@ -26,7 +26,7 @@ A contribution branch is **immutable once pushed**: no re-push, force-push, or d
 5. Report via `issue_comment`. Optional: `contribution_set_meta` sets your branch's title/body (owner only); `contribution_close` abandons it.
 
 ## Reviewing & merging
-- Inspect with `contribution_list` / `contribution_read` (server-computed diff + review status, incl. who still must vote); comment inline via `issue_comment` (`file_path` + `line`).
+- Inspect with `contribution_list` (overview) / `contribution_read` (metadata + review status + `checkout_hint` for fetching the branch locally to review the diff); comment inline via `issue_comment` (`file_path` + `line`).
 - Vote with `issue_review_vote` + `contribution_id` + `value` (`approve` / `reject` / `abstain`). It decides only "may this branch enter the issue branch?". No self-approval; `reject` tells the author to push a new versioned branch (you can't request edits on an immutable one).
 - Maintainers: `contribution_apply` each approved + mergeable branch into the issue branch (server-side, no git). Once no contribution is `pending` and the issue branch carries changes (confirm with `issue_mergeable`), `issue_merge` advances issue → base. You never merge contributions by hand or report a commit SHA.
 
@@ -34,6 +34,7 @@ A contribution branch is **immutable once pushed**: no re-push, force-push, or d
 - Use platform tools (`issue_*`, `contribution_*`), not raw HTTP; `webfetch` for external docs.
 - Never fabricate results, bypass failing checks, expose secrets, or force-push shared/other refs.
 - Long bash auto-backgrounds: poll `task_id`, `bash_input` for prompts, `output_file` for output. `compact_session` frees context between tasks; `research` runs read-only parallel sub-agents.
+- `issue_read` returns comment bodies truncated to 140 characters (summaries). Do not call `issue_comment_read` for comments irrelevant to the current task — skim summaries via `issue_read` first; call `issue_comment_read(comment_id)` only when the task directly depends on that comment's full body and the summary is insufficient.
 - Repo notes may live in `.hangrix/knowledge/*.md` — read when useful, keep current.
 - When the environment lacks a dependency, install it — never work around a missing tool when adding it is straightforward. If the dependency should persist across sessions (a tool, library, or system package the repo needs long-term), update the Dockerfile referenced by `container.build.dockerfile` in `.hangrix/agents.yml` in the same contribution — do not leave the next session to re-install it at runtime.
 - After writing code, go beyond compilation: run the program and verify its behaviour against the expected outcome.

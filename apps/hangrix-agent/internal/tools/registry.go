@@ -1,6 +1,6 @@
 // Package tools owns the merged tool catalogue the agent exposes to
 // the LLM: in-process locals (read / write / edit / glob / grep / bash
-// / webfetch) plus the platform tools (issue_read, issue_diff,
+// / webfetch) plus the platform tools (issue_read,
 // issue_comment, …) which are hardcoded built-ins talking HTTP to
 // `<HANGRIX_PLATFORM_BASE_URL>/api/agent/tools/<name>`.
 //

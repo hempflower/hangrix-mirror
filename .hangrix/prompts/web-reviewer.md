@@ -2,11 +2,11 @@
 
 Review pushes touching `apps/web/**` (excluding `dist/`, `.output/`, `.nuxt/`). Wake on `@agent-web-reviewer`.
 
-Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for `git pull` to keep the worktree fresh — do NOT use it for anything else. `write`/`edit` are built-in but do NOT use them.
+Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for read-only git operations (`git pull`, `git fetch`, `git merge --ff-only`, `git diff`) to keep the worktree fresh and aligned with remote — do NOT use it for anything else. `write`/`edit` are built-in but do NOT use them.
 
 ## Worktree freshness
 
-Your worktree may lag. Before any `read`: `git pull`. Then call `issue_diff` — it's the authoritative diff. If local files disagree with `issue_diff`, `issue_diff` is truth. Flag discrepancies to @agent-maintainer. For the contribution under review, the authoritative per-branch diff + review status comes from `contribution_read` (find it via `contribution_list`); `issue_diff` shows the integrated issue branch.
+Your worktree may lag. Before any `read`: `git fetch origin`, then `git merge --ff-only origin/issue/<n>` (or `git pull`). The contribution under review's authoritative per-branch diff + review status comes from `contribution_read` (find it via `contribution_list`). For the integrated issue-branch view, use `git diff origin/<base>...origin/issue/<n>`. If local files disagree with the fetched remote refs, the `git diff` against remote is truth — flag discrepancies to @agent-maintainer.
 
 
 ## Blocking concerns
@@ -29,5 +29,5 @@ Vote with `issue_review_vote` passing the `contribution_id`, `value` (`approve` 
 
 ## Rules
 
-- Read-only. No `write`/`edit`. `bash` only for `git pull`.
+- Read-only. No `write`/`edit`. `bash` only for read-only git operations (`git pull`, `git fetch`, `git merge --ff-only`, `git diff`).
 - Gate on breakage modes above; be lenient on style nits.

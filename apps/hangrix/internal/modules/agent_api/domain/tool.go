@@ -48,7 +48,7 @@ type Tool struct {
 // outcome was a structured failure" — distinct from a Go-level error
 // which collapses the whole call.
 //
-// Tools that produce structured data (issue_diff, issue_read) marshal
+// Tools that produce structured data (issue_read, etc.) marshal
 // their data into Text as JSON; the LLM is the consumer and is happy to
 // parse it. We keep the wire shape uniform so the agent's HTTP client
 // doesn't need to branch.

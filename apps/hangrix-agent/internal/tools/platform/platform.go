@@ -398,11 +398,6 @@ func All(client *Client) []local.Tool {
 			schema:      objectSchema(nil, nil),
 		},
 		{
-			name:        "issue_diff",
-			description: "Return the diff between the issue branch and its base branch (file-level unified diff).",
-			schema:      objectSchema(nil, nil),
-		},
-		{
 			name:        "issue_mergeable",
 			description: "Check whether the issue branch can be merged into its base — tries fast-forward first, then checks for conflicts. mergeable=true means issue_merge is expected to succeed. When conflicted (mode=conflicted), the hint explains to resolve it through a new contribution branch rather than pushing the issue branch directly. Returns mergeable, mode, base_branch, base_sha, head_sha, and hint.",
 			schema:      objectSchema(nil, nil),
@@ -504,7 +499,7 @@ func All(client *Client) []local.Tool {
 		},
 		{
 			name:        "contribution_read",
-			description: "Read one contribution: metadata, the real diff against the issue branch (what this branch adds), and its review status (verdict plus which required reviewers still must vote). Use the id from contribution_list.",
+			description: "Read one contribution: metadata (id, agent_role, ref_name, status, mergeable, merge_mode, head_sha, diff stats), review status (verdict, required reviewers still pending), and a checkout_hint with the branch ref and issue branch names so you can fetch the contribution branch locally and inspect its diff with git. Use the id from contribution_list.",
 			schema: objectSchema(map[string]any{
 				"id": intProp("Contribution id to read (from contribution_list)."),
 			}, []string{"id"}),

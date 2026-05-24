@@ -356,13 +356,27 @@ func (h *Handler) runReceivePackWithSideband(w http.ResponseWriter, r *http.Requ
 	_, _ = w.Write(stdout.Bytes())
 }
 
-// injectContributionHints prepends sideband-2 progress pkt-lines before the
-// last "0000" flush pkt in buf. The injected messages carry contribution_id
+// injectContributionHints inserts sideband-2 progress pkt-lines before the
+// terminating flush pkt in buf. The injected messages carry contribution_id
 // and next-step hints so the agent that pushed the branch doesn't need a
 // follow-up contribution_list call.
+//
+// Under --stateless-rpc, receive-pack produces a double-framed pkt-line stream:
+// an outer sideband layer whose pack-data channel (0x01) embeds another layer
+// of pkt-line framing that also ends with "0000". Both flush sequences are
+// adjacent, giving "…0000" (inner) + "0000" (outer). We locate the last "0000"
+// — which is the outer flush pkt — and inject the contribution hints immediately
+// before it. When no "0000" is present (e.g. truncated output) we still append
+// one so the git client always sees a properly terminated stream.
 func (h *Handler) injectContributionHints(buf *bytes.Buffer, contribs []domain.PostReceiveContrib) {
 	raw := buf.Bytes()
-	// Find the terminating flush pkt — it is the last "0000" in the stream.
+
+	// Find the last "0000" in the stream. In the common double-framed case
+	// this is the outer flush pkt; the inner flush is embedded inside the
+	// outer pkt-line payload and is not at the buffer tail. When the stream
+	// is truncated and no "0000" exists, we inject the hints and append a
+	// terminating flush so the client sees a valid end-of-stream marker
+	// rather than an unexpected EOF mid-packet.
 	idx := bytes.LastIndex(raw, []byte("0000"))
 	var head, tail []byte
 	if idx >= 0 {
@@ -370,7 +384,7 @@ func (h *Handler) injectContributionHints(buf *bytes.Buffer, contribs []domain.P
 		tail = raw[idx:] // includes "0000"
 	} else {
 		head = raw
-		tail = nil
+		tail = []byte("0000")
 	}
 
 	buf.Reset()
@@ -384,25 +398,31 @@ func (h *Handler) injectContributionHints(buf *bytes.Buffer, contribs []domain.P
 		msg := fmt.Sprintf("contribution_id: %d | ref: %s | role: %s | head: %s",
 			c.ContributionID, strings.TrimPrefix(c.RefName, "refs/heads/"), c.AgentRole, shortSHA)
 		hint := "Next: use contribution_set_meta to set title/description; " +
-			"contribution_read to view diff & review status. " +
+			"contribution_read for metadata, review status & checkout_hint (fetch branch locally to inspect diff). " +
 			"No need for contribution_list to discover this ID."
 		for _, line := range []string{msg, hint} {
 			buf.Write(sidebandPktLine(line))
 		}
 	}
 
-	if tail != nil {
-		_, _ = buf.Write(tail)
-	}
+	_, _ = buf.Write(tail)
 }
 
 // sidebandPktLine encodes text as a sideband-2 (progress) pkt-line suitable for
 // injection into a git receive-pack response stream. The git client renders
-// sideband-2 as a `remote:` line.
+// sideband-2 as a `remote:` line. The text is truncated to fit within the git
+// pkt-line maximum of 65520 bytes (0xfff0).
 func sidebandPktLine(text string) []byte {
 	// Data is: sideband byte (0x02) + text + "\n"
 	data := "\x02" + text + "\n"
-	totalLen := 4 + len(data) // 4-byte hex length prefix + data
+	// Git pkt-line max is 65520 bytes (0xfff0); the 4-byte hex length prefix
+	// must fit in exactly 4 hex digits, so totalLen must not exceed 0xffff.
+	// Cap at 0xfff0 to stay within the protocol limit.
+	maxDataLen := 0xfff0 - 4 // 65516
+	if len(data) > maxDataLen {
+		data = data[:maxDataLen-1] + "\n" // keep trailing newline
+	}
+	totalLen := 4 + len(data)
 	return fmt.Appendf(nil, "%04x%s", totalLen, data)
 }
 

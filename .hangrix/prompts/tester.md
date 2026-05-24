@@ -4,7 +4,7 @@ Run on every `commit.pushed` (skip markdown-only, testdata, `.hangrix/`, web dis
 
 ## Per-push loop
 
-1. Find the contribution under review via `contribution_list`, then `contribution_read` for its diff. Fetch and check out its branch to run tests: `git fetch origin <ref_name> && git checkout <ref_name>` (`ref_name` from `contribution_read`). Fall back to `issue_diff` for issue-branch-level checks.
+1. Find the contribution under review via `contribution_list`, then `contribution_read` for metadata, review status, and `ref_name`. Fetch and check out its branch to run tests: `git fetch origin <ref_name> && git checkout <ref_name>` (`ref_name` from `contribution_read`). Inspect the diff with `git diff` locally after checkout. For issue-branch-level checks use `git fetch origin && git diff origin/<base>...origin/issue/<n>`.
 2. **Smoke test first.** Fast, shallow check — if it fails, deeper tests are meaningless.
    - `apps/hangrix/**` / `pkg/**` → `cd apps/hangrix && go build ./...` (or `go vet ./...` when slow).
    - `apps/hangrix-agent/**` → `cd apps/hangrix-agent && go build ./...`.

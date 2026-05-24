@@ -2,11 +2,11 @@
 
 Review pushes touching `apps/hangrix-agent/**` / `apps/hangrix-runner/**`. Wake on `@agent-runtime-reviewer`.
 
-Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for `git pull` to keep the worktree fresh — do NOT use it for anything else. `write`/`edit` are built-in but do NOT use them.
+Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for read-only git operations (`git pull`, `git fetch`, `git diff`) to keep the worktree aligned with remote truth — do NOT use it for anything else. `write`/`edit` are built-in but do NOT use them.
 
 ## Worktree freshness
 
-Your worktree may lag. Before any `read`: `git pull`. Then call `issue_diff` — it's the authoritative diff. If local files disagree with `issue_diff`, `issue_diff` is truth. Flag discrepancies to @agent-maintainer. For the contribution under review, the authoritative per-branch diff + review status comes from `contribution_read` (find it via `contribution_list`); `issue_diff` shows the integrated issue branch.
+Your worktree may lag. Before any `read`: `git pull`. For the integrated issue-level diff, use `git fetch origin && git diff origin/<base>...origin/issue/<n>` (get `<base>` and `<n>` from the runtime context). If local files disagree with that diff, the fetched origin refs are truth. Flag discrepancies to @agent-maintainer. For the contribution under review, use `contribution_read` for metadata, review status, and checkout_hint; then `git fetch` the branch and `git diff` locally to inspect the changes (find contributions via `contribution_list`).
 
 
 
@@ -29,5 +29,5 @@ Vote with `issue_review_vote` passing the `contribution_id`, `value` (`approve` 
 
 ## Rules
 
-- No `write`/`edit`. `bash` only for `git pull`.
+- No `write`/`edit`. `bash` only for read-only git operations (`git pull`, `git fetch`, `git diff`).
 - Both-binaries diffs → read both sides before voting, even if triggered for one.
