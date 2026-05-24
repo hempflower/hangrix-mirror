@@ -356,3 +356,46 @@ WHERE id = sqlc.arg('id')
 RETURNING id;
 
 
+
+-- ---- todos ----
+
+-- name: ListTodos :many
+SELECT id, issue_id, content, status, position, created_at, updated_at
+FROM todos
+WHERE issue_id = sqlc.arg('issue_id')
+ORDER BY position, id;
+
+-- name: CreateTodo :one
+INSERT INTO todos (issue_id, content, status, position)
+VALUES (
+    sqlc.arg('issue_id'),
+    sqlc.arg('content'),
+    sqlc.arg('status'),
+    sqlc.arg('position')
+)
+RETURNING id, issue_id, content, status, position, created_at, updated_at;
+
+-- name: UpdateTodoStatus :one
+UPDATE todos
+SET status = sqlc.arg('status'),
+    content = COALESCE(sqlc.narg('content'), content),
+    updated_at = NOW()
+WHERE id = sqlc.arg('id')
+RETURNING id, issue_id, content, status, position, created_at, updated_at;
+
+-- name: UpdateTodoContent :one
+UPDATE todos
+SET content = sqlc.arg('content'),
+    updated_at = NOW()
+WHERE id = sqlc.arg('id')
+RETURNING id, issue_id, content, status, position, created_at, updated_at;
+
+-- name: DeleteTodo :exec
+DELETE FROM todos WHERE id = sqlc.arg('id');
+
+-- name: CountTodosByStatus :many
+SELECT status, COUNT(*)::BIGINT AS count
+FROM todos
+WHERE issue_id = sqlc.arg('issue_id')
+GROUP BY status;
+

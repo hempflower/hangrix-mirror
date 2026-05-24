@@ -11,8 +11,8 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
-	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
+	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
@@ -230,6 +230,11 @@ func (r *Registry) issueCloseTool() *agentapidomain.Tool {
 					"changed": false,
 				}), nil
 			}
+			// Todos gate: all todos must be completed before closing (agent path only).
+			if block, incomplete := r.todosCompletionBlock(ctx, scope); block != "" {
+				blockJSON, _ := json.Marshal(map[string]any{"error": "close blocked", "block_reason": block, "incomplete_todos": incomplete})
+				return agentapidomain.Result{Text: string(blockJSON), IsError: true}, nil
+			}
 			var req struct {
 				Reason string `json:"reason"`
 			}
@@ -288,6 +293,11 @@ func (r *Registry) issueMergeTool() *agentapidomain.Tool {
 			// contribution has been applied into it.
 			if block := r.issueMergeBlock(ctx, scope); block != "" {
 				blockJSON, _ := json.Marshal(map[string]any{"error": "merge blocked", "block_reason": block})
+				return agentapidomain.Result{Text: string(blockJSON), IsError: true}, nil
+			}
+			// Todos gate: all todos must be completed before merging (agent path only).
+			if block, incomplete := r.todosCompletionBlock(ctx, scope); block != "" {
+				blockJSON, _ := json.Marshal(map[string]any{"error": "merge blocked", "block_reason": block, "incomplete_todos": incomplete})
 				return agentapidomain.Result{Text: string(blockJSON), IsError: true}, nil
 			}
 
@@ -765,7 +775,6 @@ func (r *Registry) issueEditTool() *agentapidomain.Tool {
 		},
 	}
 }
-
 
 // unmarshalArgs accepts an empty body as the empty object — LLMs
 // occasionally emit `""` for no-arg tools and we don't want that to

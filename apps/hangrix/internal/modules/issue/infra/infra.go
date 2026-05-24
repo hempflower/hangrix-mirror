@@ -706,3 +706,102 @@ func contributionFromRow(r issuedb.Contribution) *domain.Contribution {
 
 // Ensure PostgresStore implements domain.ContributionStore.
 var _ domain.ContributionStore = (*PostgresStore)(nil)
+
+// --- domain.TodoStore implementation ---
+
+func (s *PostgresStore) ListTodos(ctx context.Context, issueID int64) ([]*domain.Todo, error) {
+	rows, err := s.q.ListTodos(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*domain.Todo, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, todoFromRow(r))
+	}
+	return out, nil
+}
+
+func (s *PostgresStore) CreateTodo(ctx context.Context, issueID int64, content string, status domain.TodoStatus, position int) (*domain.Todo, error) {
+	row, err := s.q.CreateTodo(ctx, issuedb.CreateTodoParams{
+		IssueID:  issueID,
+		Content:  content,
+		Status:   string(status),
+		Position: int32(position),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create todo: %w", err)
+	}
+	return todoFromRow(row), nil
+}
+
+func (s *PostgresStore) UpdateTodoStatus(ctx context.Context, id int64, status domain.TodoStatus, content *string) (*domain.Todo, error) {
+	var contentArg pgtype.Text
+	if content != nil {
+		contentArg = pgtype.Text{String: *content, Valid: true}
+	}
+	row, err := s.q.UpdateTodoStatus(ctx, issuedb.UpdateTodoStatusParams{
+		ID:      id,
+		Status:  string(status),
+		Content: contentArg,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrTodoNotFound
+		}
+		return nil, fmt.Errorf("update todo status: %w", err)
+	}
+	return todoFromRow(row), nil
+}
+
+func (s *PostgresStore) UpdateTodoContent(ctx context.Context, id int64, content string) (*domain.Todo, error) {
+	row, err := s.q.UpdateTodoContent(ctx, issuedb.UpdateTodoContentParams{
+		ID:      id,
+		Content: content,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrTodoNotFound
+		}
+		return nil, fmt.Errorf("update todo content: %w", err)
+	}
+	return todoFromRow(row), nil
+}
+
+func (s *PostgresStore) DeleteTodo(ctx context.Context, id int64) error {
+	return s.q.DeleteTodo(ctx, id)
+}
+
+func (s *PostgresStore) CountTodosByStatus(ctx context.Context, issueID int64) (*domain.TodoSummary, error) {
+	rows, err := s.q.CountTodosByStatus(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+	sum := &domain.TodoSummary{}
+	for _, r := range rows {
+		switch r.Status {
+		case string(domain.TodoStatusTodo):
+			sum.Todo = r.Count
+		case string(domain.TodoStatusInProgress):
+			sum.InProgress = r.Count
+		case string(domain.TodoStatusDone):
+			sum.Done = r.Count
+		}
+		sum.Total += r.Count
+	}
+	return sum, nil
+}
+
+func todoFromRow(r issuedb.Todo) *domain.Todo {
+	return &domain.Todo{
+		ID:        r.ID,
+		IssueID:   r.IssueID,
+		Content:   r.Content,
+		Status:    domain.TodoStatus(r.Status),
+		Position:  int(r.Position),
+		CreatedAt: r.CreatedAt.Time,
+		UpdatedAt: r.UpdatedAt.Time,
+	}
+}
+
+// Ensure PostgresStore implements domain.TodoStore.
+var _ domain.TodoStore = (*PostgresStore)(nil)

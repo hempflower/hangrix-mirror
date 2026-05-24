@@ -698,3 +698,60 @@ var (
 var (
 	ErrAttachmentNotFound = errors.New("attachment not found")
 )
+
+// ---- todos ----
+
+// TodoStatus models the lifecycle of a todo item within an issue.
+type TodoStatus string
+
+const (
+	TodoStatusTodo       TodoStatus = "todo"
+	TodoStatusInProgress TodoStatus = "in_progress"
+	TodoStatusDone       TodoStatus = "done"
+)
+
+func (s TodoStatus) Valid() bool {
+	switch s {
+	case TodoStatusTodo, TodoStatusInProgress, TodoStatusDone:
+		return true
+	}
+	return false
+}
+
+// Todo is a single action item tracked on an issue.
+type Todo struct {
+	ID        int64
+	IssueID   int64
+	Content   string
+	Status    TodoStatus
+	Position  int
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// TodoSummary aggregates todo counts by status.
+type TodoSummary struct {
+	Total      int64 `json:"total"`
+	Todo       int64 `json:"todo"`
+	InProgress int64 `json:"in_progress"`
+	Done       int64 `json:"done"`
+}
+
+// CompletedAll reports whether every todo is done.
+func (s TodoSummary) CompletedAll() bool {
+	return s.Total > 0 && s.Done == s.Total
+}
+
+// TodoStore is the persistence abstraction for issue todos.
+type TodoStore interface {
+	ListTodos(ctx context.Context, issueID int64) ([]*Todo, error)
+	CreateTodo(ctx context.Context, issueID int64, content string, status TodoStatus, position int) (*Todo, error)
+	UpdateTodoStatus(ctx context.Context, id int64, status TodoStatus, content *string) (*Todo, error)
+	UpdateTodoContent(ctx context.Context, id int64, content string) (*Todo, error)
+	DeleteTodo(ctx context.Context, id int64) error
+	CountTodosByStatus(ctx context.Context, issueID int64) (*TodoSummary, error)
+}
+
+var (
+	ErrTodoNotFound = errors.New("todo not found")
+)

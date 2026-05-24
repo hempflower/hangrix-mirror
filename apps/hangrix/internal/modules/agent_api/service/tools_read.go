@@ -37,30 +37,35 @@ func (r *Registry) issueReadTool() *agentapidomain.Tool {
 			if err != nil {
 				return errorResult("list events: " + err.Error()), nil
 			}
+			todos, summary, _ := r.loadTodos(ctx, scope.issue.ID)
 			out := struct {
-				Number    int64        `json:"number"`
-				Title     string       `json:"title"`
-				Body      string       `json:"body"`
-				State     string       `json:"state"`
-				Base      string       `json:"base_branch"`
-				Branch    string       `json:"branch_name"`
-				HeadSHA   string       `json:"head_sha"`
-				Author    string       `json:"author_username"`
-				CreatedAt string       `json:"created_at"`
-				Comments  []commentDTO `json:"comments"`
-				Events    []eventDTO   `json:"events"`
+				Number      int64            `json:"number"`
+				Title       string           `json:"title"`
+				Body        string           `json:"body"`
+				State       string           `json:"state"`
+				Base        string           `json:"base_branch"`
+				Branch      string           `json:"branch_name"`
+				HeadSHA     string           `json:"head_sha"`
+				Author      string           `json:"author_username"`
+				CreatedAt   string           `json:"created_at"`
+				Comments    []commentDTO     `json:"comments"`
+				Events      []eventDTO       `json:"events"`
+				Todos       []map[string]any `json:"todos"`
+				TodoSummary map[string]any   `json:"todo_summary"`
 			}{
-				Number:    scope.issue.Number,
-				Title:     scope.issue.Title,
-				Body:      scope.issue.Body,
-				State:     string(scope.issue.State),
-				Base:      scope.issue.BaseBranch,
-				Branch:    scope.issue.BranchName,
-				HeadSHA:   scope.issue.HeadSHA,
-				Author:    scope.issue.AuthorName,
-				CreatedAt: stableTime(scope.issue.CreatedAt),
-				Comments:  commentsToDTO(comments),
-				Events:    eventsToDTO(events),
+				Number:      scope.issue.Number,
+				Title:       scope.issue.Title,
+				Body:        scope.issue.Body,
+				State:       string(scope.issue.State),
+				Base:        scope.issue.BaseBranch,
+				Branch:      scope.issue.BranchName,
+				HeadSHA:     scope.issue.HeadSHA,
+				Author:      scope.issue.AuthorName,
+				CreatedAt:   stableTime(scope.issue.CreatedAt),
+				Comments:    commentsToDTO(comments),
+				Events:      eventsToDTO(events),
+				Todos:       todosToDTO(todos),
+				TodoSummary: todoSummaryToDTO(summary),
 			}
 			return textResult(out), nil
 		},
@@ -118,19 +123,22 @@ func (r *Registry) issueReadByNumberTool() *agentapidomain.Tool {
 			if err != nil {
 				return errorResult("list events: " + err.Error()), nil
 			}
+			todos, todoSummary, _ := r.loadTodos(ctx, iss.ID)
 			out := struct {
-				Number       int64        `json:"number"`
-				Title        string       `json:"title"`
-				Body         string       `json:"body"`
-				State        string       `json:"state"`
-				Base         string       `json:"base_branch"`
-				Branch       string       `json:"branch_name"`
-				HeadSHA      string       `json:"head_sha"`
-				Author       string       `json:"author_username"`
-				ParentNumber int64        `json:"parent_number"`
-				CreatedAt    string       `json:"created_at"`
-				Comments     []commentDTO `json:"comments"`
-				Events       []eventDTO   `json:"events"`
+				Number       int64            `json:"number"`
+				Title        string           `json:"title"`
+				Body         string           `json:"body"`
+				State        string           `json:"state"`
+				Base         string           `json:"base_branch"`
+				Branch       string           `json:"branch_name"`
+				HeadSHA      string           `json:"head_sha"`
+				Author       string           `json:"author_username"`
+				ParentNumber int64            `json:"parent_number"`
+				CreatedAt    string           `json:"created_at"`
+				Comments     []commentDTO     `json:"comments"`
+				Events       []eventDTO       `json:"events"`
+				Todos        []map[string]any `json:"todos"`
+				TodoSummary  map[string]any   `json:"todo_summary"`
 			}{
 				Number:       iss.Number,
 				Title:        iss.Title,
@@ -144,12 +152,13 @@ func (r *Registry) issueReadByNumberTool() *agentapidomain.Tool {
 				CreatedAt:    stableTime(iss.CreatedAt),
 				Comments:     commentsToDTO(comments),
 				Events:       eventsToDTO(events),
+				Todos:        todosToDTO(todos),
+				TodoSummary:  todoSummaryToDTO(todoSummary),
 			}
 			return textResult(out), nil
 		},
 	}
 }
-
 
 // issueCommentReadTool reads a single comment by its id. Only comments on the
 // current session's issue are accessible — cross-issue lookups return a
@@ -337,6 +346,7 @@ func truncateBody(s string, maxRunes int) string {
 	}
 	return string(runes[:budget]) + truncateSuffix
 }
+
 type commentDTO struct {
 	ID        int64  `json:"id"`
 	Author    string `json:"author"`
@@ -400,12 +410,13 @@ func eventsToDTO(in []*issuedomain.Event) []eventDTO {
 }
 
 type mergeableResult struct {
-	Mergeable  bool   `json:"mergeable"`
-	Mode       string `json:"mode"`
-	BaseBranch string `json:"base_branch"`
-	BaseSHA    string `json:"base_sha"`
-	HeadSHA    string `json:"head_sha"`
-	Hint       string `json:"hint"`
+	Mergeable       bool             `json:"mergeable"`
+	Mode            string           `json:"mode"`
+	BaseBranch      string           `json:"base_branch"`
+	BaseSHA         string           `json:"base_sha"`
+	HeadSHA         string           `json:"head_sha"`
+	Hint            string           `json:"hint"`
+	IncompleteTodos []map[string]any `json:"incomplete_todos,omitempty"`
 }
 
 // issueMergeableTool returns mergeable status for the current issue's branch
@@ -468,18 +479,27 @@ func (r *Registry) issueMergeableTool() *agentapidomain.Tool {
 				mode = "blocked"
 				hint = block
 			}
+			// Todos gate: block merge when todos are incomplete (agent path only).
+			var incompleteTodos []map[string]any
+			if mergeable {
+				var block string
+				block, incompleteTodos = r.todosCompletionBlock(ctx, scope)
+				if block != "" {
+					mergeable = false
+					mode = "blocked"
+					hint = block
+				}
+			}
 			result := mergeableResult{
-				Mergeable:  mergeable,
-				Mode:       mode,
-				BaseBranch: iss.BaseBranch,
-				BaseSHA:    baseSHA,
-				HeadSHA:    iss.HeadSHA,
-				Hint:       hint,
+				Mergeable:       mergeable,
+				Mode:            mode,
+				BaseBranch:      iss.BaseBranch,
+				BaseSHA:         baseSHA,
+				HeadSHA:         iss.HeadSHA,
+				Hint:            hint,
+				IncompleteTodos: incompleteTodos,
 			}
 			return textResult(result), nil
 		},
 	}
 }
-
-
-

@@ -45,6 +45,7 @@ import (
 
 type Handler struct {
 	issues        domain.Store
+	todos         domain.TodoStore
 	contributions domain.ContributionStore
 	repos         repodomain.Store
 	storage       *repoinfra.Storage
@@ -75,6 +76,7 @@ type Handler struct {
 
 type HandlerDeps struct {
 	Issues        domain.Store
+	Todos         domain.TodoStore
 	Contributions domain.ContributionStore
 	Repos         repodomain.Store
 	Storage       *repoinfra.Storage
@@ -112,23 +114,24 @@ type HandlerDeps struct {
 
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
-		issues:        deps.Issues,
-		contributions: deps.Contributions,
-		repos:         deps.Repos,
-		storage:       deps.Storage,
-		git:           deps.Git,
-		cache:         deps.Cache,
-		users:         deps.Users,
-		resolver:      deps.Resolver,
-		middleware:    deps.Middleware,
-		spawner:       deps.Spawner,
-		archiver:      deps.Archiver,
-		auditor:       deps.Auditor,
-		controller:    deps.Controller,
+		issues:             deps.Issues,
+		todos:              deps.Todos,
+		contributions:      deps.Contributions,
+		repos:              deps.Repos,
+		storage:            deps.Storage,
+		git:                deps.Git,
+		cache:              deps.Cache,
+		users:              deps.Users,
+		resolver:           deps.Resolver,
+		middleware:         deps.Middleware,
+		spawner:            deps.Spawner,
+		archiver:           deps.Archiver,
+		auditor:            deps.Auditor,
+		controller:         deps.Controller,
 		attachments:        deps.Attachments,
 		commentAttachments: deps.CommentAttachments,
-		guards:        deps.Guards,
-		workflowSvc:   deps.WorkflowSvc,
+		guards:             deps.Guards,
+		workflowSvc:        deps.WorkflowSvc,
 	}
 }
 
@@ -206,6 +209,9 @@ type publicIssue struct {
 	MergedAt       *time.Time `json:"merged_at,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+	// Todos and TodoSummary are populated only on the single-issue GET endpoint.
+	Todos       []publicTodo        `json:"todos,omitempty"`
+	TodoSummary *publicTodoSummary  `json:"todo_summary,omitempty"`
 }
 
 func toPublic(i *domain.Issue) publicIssue {
@@ -570,6 +576,9 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pub := toPublic(iss)
+	todos, summary := h.loadTodosForIssue(r.Context(), iss.ID)
+	pub.Todos = todosDTO(todos)
+	pub.TodoSummary = todoSummaryDTO(summary)
 	httpx.WriteJSON(w, http.StatusOK, pub)
 }
 
@@ -1109,34 +1118,33 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	// "remove the role from host yaml", not a per-session button.
 	h.fireIssueClosed(r.Context(), rc.repo.ID, int32(iss.Number))
 
-		// Dispatch repo.push workflow runs for any matching workflow configs.
-		// Best-effort: failures are logged but never roll back the merge.
-		if h.workflowSvc != nil && preMergeBaseSHA != "" {
-			changedPaths := collectChangedPaths(h.git, rc.fsPath, preMergeBaseSHA, mergeSHA)
-			triggerPayload, _ := json.Marshal(map[string]any{
-				"event":              "issue.merge",
-				"issue_number":       iss.Number,
-				"issue_title":        iss.Title,
-				"base_branch":        iss.BaseBranch,
-				"issue_branch":       iss.BranchName,
-				"merge_sha":          mergeSHA,
-				"merge_mode":         mode,
-				"pre_merge_base_sha": preMergeBaseSHA,
-			})
-			h.workflowSvc.DispatchRepoPush(r.Context(),
-				workflowservice.Ref{
-					ID:            rc.repo.ID,
-					Name:          rc.repo.Name,
-					DefaultBranch: rc.repo.DefaultBranch,
-					OwnerName:     rc.repo.OwnerName,
-				},
-				iss.BaseBranch,
-				changedPaths,
-				triggerPayload,
-				mergeSHA,
-			)
-		}
-
+	// Dispatch repo.push workflow runs for any matching workflow configs.
+	// Best-effort: failures are logged but never roll back the merge.
+	if h.workflowSvc != nil && preMergeBaseSHA != "" {
+		changedPaths := collectChangedPaths(h.git, rc.fsPath, preMergeBaseSHA, mergeSHA)
+		triggerPayload, _ := json.Marshal(map[string]any{
+			"event":              "issue.merge",
+			"issue_number":       iss.Number,
+			"issue_title":        iss.Title,
+			"base_branch":        iss.BaseBranch,
+			"issue_branch":       iss.BranchName,
+			"merge_sha":          mergeSHA,
+			"merge_mode":         mode,
+			"pre_merge_base_sha": preMergeBaseSHA,
+		})
+		h.workflowSvc.DispatchRepoPush(r.Context(),
+			workflowservice.Ref{
+				ID:            rc.repo.ID,
+				Name:          rc.repo.Name,
+				DefaultBranch: rc.repo.DefaultBranch,
+				OwnerName:     rc.repo.OwnerName,
+			},
+			iss.BaseBranch,
+			changedPaths,
+			triggerPayload,
+			mergeSHA,
+		)
+	}
 
 	resp := map[string]any{
 		"issue":     toPublic(updated),
@@ -1191,7 +1199,6 @@ type contribCleanupResult struct {
 	Deleted bool   `json:"deleted"`
 	Reason  string `json:"reason,omitempty"`
 }
-
 
 // tryDeleteIssueBranch attempts to delete the issue branch after a successful
 // merge. It consults the host config first: if delete_branch_on_merge is
@@ -1661,5 +1668,73 @@ func (h *Handler) refreshSiblingMergeability(ctx context.Context, fsPath string,
 			continue
 		}
 		_ = h.contributions.SetContributionMergeable(ctx, c.ID, mergeable, mode)
+	}
+}
+
+// ---- todo helpers for web handlers ----
+
+// loadTodosForIssue fetches both the todo list and the status summary for an issue.
+func (h *Handler) loadTodosForIssue(ctx context.Context, issueID int64) ([]*domain.Todo, *domain.TodoSummary) {
+	if h.todos == nil {
+		return nil, nil
+	}
+	todos, err := h.todos.ListTodos(ctx, issueID)
+	if err != nil {
+		return nil, nil
+	}
+	summary, err := h.todos.CountTodosByStatus(ctx, issueID)
+	if err != nil {
+		return todos, nil
+	}
+	return todos, summary
+}
+
+type publicTodo struct {
+	ID        int64  `json:"id"`
+	IssueID   int64  `json:"issue_id"`
+	Content   string `json:"content"`
+	Status    string `json:"status"`
+	Position  int    `json:"position"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+func todosDTO(todos []*domain.Todo) []publicTodo {
+	if todos == nil {
+		return nil
+	}
+	out := make([]publicTodo, 0, len(todos))
+	for _, t := range todos {
+		out = append(out, publicTodo{
+			ID:        t.ID,
+			IssueID:   t.IssueID,
+			Content:   t.Content,
+			Status:    string(t.Status),
+			Position:  t.Position,
+			CreatedAt: t.CreatedAt.Format(time.RFC3339),
+			UpdatedAt: t.UpdatedAt.Format(time.RFC3339),
+		})
+	}
+	return out
+}
+
+type publicTodoSummary struct {
+	Total      int64 `json:"total"`
+	Todo       int64 `json:"todo"`
+	InProgress int64 `json:"in_progress"`
+	Done       int64 `json:"done"`
+	AllDone    bool  `json:"all_done"`
+}
+
+func todoSummaryDTO(s *domain.TodoSummary) *publicTodoSummary {
+	if s == nil {
+		return nil
+	}
+	return &publicTodoSummary{
+		Total:      s.Total,
+		Todo:       s.Todo,
+		InProgress: s.InProgress,
+		Done:       s.Done,
+		AllDone:    s.CompletedAll(),
 	}
 }

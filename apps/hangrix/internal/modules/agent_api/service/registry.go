@@ -45,6 +45,7 @@ type RegistryDeps struct {
 	ReleaseAssets releasedomain.AssetStore
 	AssetStorage  *releaseinfra.AssetStorage
 	Attachments   attachmentdomain.Uploader
+	Todos         issuedomain.TodoStore
 }
 
 // NewRegistry assembles the tool catalogue at startup. Tools share the
@@ -77,6 +78,9 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 		r.contributionSetMetaTool(),
 		r.contributionApplyTool(),
 		r.contributionCloseTool(),
+		// Todo tools — read-first then mutating.
+		r.issueTodoListTool(),
+		r.issueTodoUpdateTool(),
 		r.releaseCreateTool(),
 		r.releaseUploadAssetTool(),
 		r.releasePublishTool(),
