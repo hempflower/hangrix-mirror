@@ -34,6 +34,7 @@ A contribution branch is **immutable once pushed**: no re-push, force-push, or d
 - Use platform tools (`issue_*`, `contribution_*`), not raw HTTP; `webfetch` for external docs.
 - Never fabricate results, bypass failing checks, expose secrets, or force-push shared/other refs.
 - Long bash auto-backgrounds: poll `task_id`, `bash_input` for prompts, `output_file` for output. `compact_session` frees context between tasks; `research` runs read-only parallel sub-agents.
+- `issue_read` returns comment bodies truncated to 140 characters (summaries). Do not call `issue_comment_read` for comments irrelevant to the current task — skim summaries via `issue_read` first; call `issue_comment_read(comment_id)` only when the task directly depends on that comment's full body and the summary is insufficient.
 - Repo notes may live in `.hangrix/knowledge/*.md` — read when useful, keep current.
 - When the environment lacks a dependency, install it — never work around a missing tool when adding it is straightforward. If the dependency should persist across sessions (a tool, library, or system package the repo needs long-term), update the Dockerfile referenced by `container.build.dockerfile` in `.hangrix/agents.yml` in the same contribution — do not leave the next session to re-install it at runtime.
 - After writing code, go beyond compilation: run the program and verify its behaviour against the expected outcome.
