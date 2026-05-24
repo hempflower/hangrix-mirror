@@ -198,7 +198,7 @@ issue 详情下新增「贡献 / 分支」视图,**左右布局**:
 自 contribution-branch 模型上线起，`git push` 成功后，如果本次 push 的 ref 属于贡献分支命名空间（`refs/heads/issue-<N>/<role>/<slug>`），服务端会在 push 响应的 sideband 流中注入 `remote:` 提示行，包含：
 
 - 机器可提取的 `contribution_id`（例如 `contribution_id: 42`）
-- 人/agent 可读的下一步操作提示（可直接用 `contribution_set_meta` 设置标题描述；用 `contribution_read` 查看 diff 和 review 状态；无需再调 `contribution_list` 来获取 ID）
+- 人/agent 可读的下一步操作提示（可直接用 `contribution_set_meta` 设置标题描述；用 `contribution_read` 查看 metadata 和 review 状态，再 fetch 贡献分支到本地自行查看 diff；无需再调 `contribution_list` 来获取 ID）
 
 这意味着 agent 不需要在 push 之后额外调用 `contribution_list` 工具来发现 contribution ID —— push 终端的 `remote:` 输出就是第一手来源。`contribution_list` 退化为「查看某个 issue 下所有 contribution」的补充查询工具。
 
@@ -212,7 +212,7 @@ issue 详情下新增「贡献 / 分支」视图,**左右布局**:
 | --- | --- |
 | `issue_patch_submit` | **移除** —— push 到自己命名空间 ref 即隐式创建/更新 contribution;title/description 由 `contribution_set_meta`(或贡献分支上的约定 commit / PR-body 评论)提供 |
 | `issue_patch_list` | `contribution_list` —— 列出 issue 下各贡献,带 status / mergeable / head_sha / role。默认仅返回非终态贡献(pending/approved/rejected);传 `include_closed=true` 可包含已关闭贡献,传 `include_merged=true` 可包含已合并贡献 |
-| `issue_patch_read` | `contribution_read` —— 返回 ref + 服务端算的 diff + reviews |
+| `issue_patch_read` | `contribution_read` —— 返回 contribution 元数据 + review 状态 + `checkout_hint` 提示（引导 agent fetch 贡献分支到本地自行查看 diff，不再内联 diff） |
 | `issue_patch_apply` | `contribution_apply` —— 服务端合入(第一级闸门),不再发 trigger 等回调 |
 | `issue_patch_apply_result` | **移除** —— 服务端自己 apply,无需 agent 回报 commit_sha |
 | `issue_patch_reject` | `contribution_request_changes` / `contribution_close` |
