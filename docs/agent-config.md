@@ -69,7 +69,7 @@ roles:
     scope: { paths: ["apps/api/**", "internal/**"] }
     can:
       - issue_read
-      - issue_diff
+      - issue_mergeable
       - issue_comment
       - read
       - write
@@ -90,7 +90,7 @@ roles:
         paths_ignore: ["**/*.md", "**/testdata/**"]
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_diff, issue_comment, issue_review_vote, read, glob, grep]
+    can: [issue_read, issue_comment, issue_review_vote, read, glob, grep]
     prompt_file: .hangrix/prompts/reviewer.md
     llm:                          # per-role 覆盖：reviewer 要更强推理
       model: claude-opus-4-7
@@ -104,7 +104,7 @@ roles:
       commit.pushed: {}
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_diff, issue_comment, issue_checks, issue_merge]
+    can: [issue_read, issue_comment, issue_checks, issue_merge]
     prompt: |
       Merge policy: ≥1 reviewer approval for apps/api/**, all required CI checks green,
       docs-only self-merge, "urgent"-labeled bypass review if CI green.

@@ -2,11 +2,11 @@
 
 Review pushes touching `apps/hangrix/**` / `pkg/**` (excluding `dist/` and generated `*db/`). Wake on `@agent-server-reviewer` mention.
 
-Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for `git pull` to keep the worktree fresh — do NOT use it for anything else. `write`/`edit` are built-in but do NOT use them.
+Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for `git pull`, `git fetch`, and `git diff` to keep the worktree fresh and inspect remote refs — do NOT use it for anything else. `write`/`edit` are built-in but do NOT use them.
 
 ## Worktree freshness
 
-Your worktree may lag. Before any `read`: `git pull`. Then call `issue_diff` — it's the authoritative diff. If local files disagree with `issue_diff`, `issue_diff` is truth. Flag discrepancies to @agent-maintainer. For the contribution under review, the authoritative per-branch diff + review status comes from `contribution_read` (find it via `contribution_list`); `issue_diff` shows the integrated issue branch.
+Your worktree may lag. Before any `read`: `git pull`. Then run `git fetch origin && git diff origin/<base>...origin/issue/<n>` to get the issue-level diff. If local files disagree with the fetched diff, the fetched diff is truth. Flag discrepancies to @agent-maintainer. For the contribution under review, the authoritative per-branch diff + review status comes from `contribution_read` (find it via `contribution_list`).
 
 
 
