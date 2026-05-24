@@ -126,13 +126,15 @@ Runner 在 `GET /api/runner/tasks` 拉到的 task 载荷中，除 `Env`（sessio
   "repo_variables": {
     "OPENAI_API_KEY": "sk-abc123",
     "NPM_AUTH_TOKEN": "npm_xxx"
-  }
+  },
+  "mcp_servers": ["playwright"]
 }
 ```
 
 - `repo_variables` 是 `map[string]string`，key 为变量名，value 为明文（机密变量已在服务端解密后下发）。
 - Runner 在 `buildAgentEnv()` 之前调用 `expandEnv(env, repoVars)` 对 `Env` 做 `${VAR_NAME}` 整值展开（仅 `FOO: ${BAR}` 形状；`FOO: prefix-${BAR}` 不做部分替换）。展开失败（引用不存在的变量名）时 session 明确失败并返回缺失名，不静默注入空串。
 - `repo_variables` 为 `nil` 表示服务端尚未升级（向后兼容，`${...}` 引用不做展开也不报错）；空 non-nil map 表示服务端已升级但仓库无变量（`${...}` 引用明确报错）。
+- `mcp_servers` 是 `[]string`，从 session 冻结的 `role_config` 中提取。非空时 runner 将其注入 agent 容器（如 `HANGRIX_MCP_SERVERS=playwright`），agent 按此白名单过滤 `.mcp.json` 中的服务器加载；空/nil 时 agent 不加载任何 MCP 服务器。
 
 ## 不在本设计里的事
 

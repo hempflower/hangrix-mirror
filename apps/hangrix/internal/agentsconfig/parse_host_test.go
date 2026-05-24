@@ -35,6 +35,7 @@ roles:
         mentioned_only: true
         from_users: [alice, bob]
     scope: { paths: ["apps/api/**", "internal/**"] }
+    mcp: [playwright, playwright]   # duplicate intentionally tests dedup
     can:
       - issue_read
       - issue_diff
@@ -116,6 +117,10 @@ func TestParseHostConfig_Happy(t *testing.T) {
 	}
 	if want := []string{"alice", "bob"}; len(beCmt.Comment.FromUsers) != 2 || beCmt.Comment.FromUsers[0] != want[0] {
 		t.Fatalf("backend from_users: %+v", beCmt.Comment.FromUsers)
+	}
+	// MCP: duplicate "playwright" in yaml → deduped to single entry.
+	if want := []string{"playwright"}; len(be.MCP) != 1 || be.MCP[0] != want[0] {
+		t.Fatalf("backend mcp: %+v", be.MCP)
 	}
 
 	rev := cfg.Roles["reviewer"]
@@ -505,6 +510,15 @@ container:
 roles: { r: { triggers: { issue.opened: {} }, prompt: hi } }
 `,
 			target: ErrInvalidContainerEntrypoint,
+		},
+		{
+			name: "mcp-empty-server-name",
+			body: `
+version: 1
+container: { image: x }
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi, mcp: ["", playwright] } }
+`,
+			target: ErrInvalidMCP,
 		},
 		{
 			name: "duplicate-role-key",

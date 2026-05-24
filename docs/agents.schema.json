@@ -180,6 +180,12 @@
           "uniqueItems": true,
           "description": "Platform tool blacklist; only consulted when `can` is empty. When both `can` and `not` are set, `can` wins and `not` is ignored."
         },
+        "mcp": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "MCP server whitelist. Each element names a server key from the repo-root .mcp.json. When absent or empty the role loads no MCP servers; when non-empty only the listed servers are loaded. Referencing a non-existent server causes the agent session to explicitly fail at startup."
+        },
         "scope": {
           "type": "object",
           "properties": {

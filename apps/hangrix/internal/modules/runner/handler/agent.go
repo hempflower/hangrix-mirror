@@ -412,6 +412,11 @@ type taskResp struct {
 	// agents.yml container block. The runner adds each as a `-v` bind
 	// mount at `docker create` time. Nil/empty means no volumes.
 	Volumes []volumeDTO `json:"volumes,omitempty"`
+	// McpServers is the role's MCP server whitelist extracted from the
+	// frozen role_config snapshot. When non-empty, the agent only loads
+	// the listed servers from .mcp.json; when nil/empty, no MCP servers
+	// are loaded at all.
+	McpServers []string `json:"mcp_servers,omitempty"`
 
 	// ---- workflow_job fields (present when Kind == "workflow_job") ----
 
@@ -528,6 +533,7 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 				ContainerID:     sess.ContainerID,
 				RepoVariables:   repoVars,
 				Volumes:         extractVolumes(sess.RoleConfig),
+				McpServers:      extractMcpServers(sess.RoleConfig),
 			})
 			return
 		}
@@ -1093,6 +1099,22 @@ func extractVolumes(roleConfig []byte) []volumeDTO {
 		return nil
 	}
 	return snap.Container.Volumes
+}
+
+// extractMcpServers reads mcp_servers out of the frozen role_config
+// snapshot. Returns nil when the role has no MCP whitelist (the agent
+// defaults to loading zero MCP servers).
+func extractMcpServers(roleConfig []byte) []string {
+	if len(roleConfig) == 0 {
+		return nil
+	}
+	var snap struct {
+		McpServers []string `json:"mcp_servers"`
+	}
+	if err := json.Unmarshal(roleConfig, &snap); err != nil {
+		return nil
+	}
+	return snap.McpServers
 }
 
 // extractBuild reads container.build out of the frozen role_config

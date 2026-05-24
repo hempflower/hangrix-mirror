@@ -80,6 +80,10 @@ var (
 	// silently — the parser explicitly catches duplicates.
 	ErrDuplicateRoleKey = errors.New("duplicate role key")
 
+	// ErrInvalidMCP fires when a role's `mcp:` list contains an empty
+	// server name. The agent-runtime owns the server-existence check.
+	ErrInvalidMCP = errors.New("invalid mcp server name")
+
 	// ErrInvalidReviewers fires when the `reviewers:` block is malformed: a
 	// rule missing paths / reviewers, an empty fallback, or a reviewer role
 	// that does not exist or cannot cast review votes.

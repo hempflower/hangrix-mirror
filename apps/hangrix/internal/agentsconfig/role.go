@@ -45,6 +45,15 @@ type Role struct {
 	// layout stays predictable. Mutually exclusive with Prompt.
 	PromptFile string
 
+	// MCP is the MCP server whitelist for this role. Each element
+	// names a server key from the repo-root .mcp.json. When empty
+	// (nil or zero-length), the role does not load any MCP servers.
+	// When non-empty, only the listed servers are loaded; any
+	// server referenced but missing from .mcp.json causes the
+	// agent session to explicitly fail at startup rather than
+	// silently degrade.
+	MCP []string
+
 	// LLM is the per-role LLM override. nil means "inherit team
 	// default"; a non-nil zero-value struct is rejected by the
 	// parser (empty model is invalid).

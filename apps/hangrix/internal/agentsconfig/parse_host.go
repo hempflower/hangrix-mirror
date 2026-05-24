@@ -83,6 +83,7 @@ type roleWire struct {
 	Prompt     string     `yaml:"prompt"`
 	PromptFile string     `yaml:"prompt_file"`
 	LLM        *llmWire   `yaml:"llm"`
+	Mcp        []string   `yaml:"mcp"`
 }
 
 // commentFilterWire is the per-comment trigger filter block. Unknown
@@ -407,6 +408,18 @@ func buildRole(key string, w *roleWire) (*Role, error) {
 		}
 	}
 
+	// Deduplicate and validate the MCP whitelist. Empty strings are
+	// rejected; duplicates are collapsed (first occurrence kept).
+	// We do NOT validate that server names exist in .mcp.json here
+	// — the agent-runtime owns that check at session startup so
+	// the error carries the exact missing server name.
+	mcp := deduplicateStrings(w.Mcp)
+	for i, name := range mcp {
+		if strings.TrimSpace(name) == "" {
+			return nil, fmt.Errorf("roles.%s.mcp[%d]: %w", key, i, ErrInvalidMCP)
+		}
+	}
+
 	return &Role{
 		Triggers:   triggers,
 		Can:        w.Can,
@@ -414,6 +427,7 @@ func buildRole(key string, w *roleWire) (*Role, error) {
 		Scope:      scope,
 		Prompt:     w.Prompt,
 		PromptFile: w.PromptFile,
+		MCP:        mcp,
 		LLM:        roleLLM,
 	}, nil
 }
@@ -559,6 +573,24 @@ func isValidEnvKey(s string) bool {
 		}
 	}
 	return true
+}
+
+// deduplicateStrings returns a copy of ss with duplicates removed,
+// keeping the first occurrence. Empty input yields nil.
+func deduplicateStrings(ss []string) []string {
+	if len(ss) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(ss))
+	seen := make(map[string]struct{}, len(ss))
+	for _, s := range ss {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 // isValidMountPath requires an absolute path with no `..` segments. We

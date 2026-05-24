@@ -839,6 +839,7 @@ func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, a
 		LLMMaxOutputTokens  int            `json:"llm_max_output_tokens,omitempty"`
 		LLMMaxContextTokens int            `json:"llm_max_context_tokens,omitempty"`
 		LLMReasoningEffort  string         `json:"llm_reasoning_effort,omitempty"`
+		McpServers          []string       `json:"mcp_servers,omitempty"`
 		Container           map[string]any `json:"container"`
 	}
 	snap := rs{
@@ -848,6 +849,7 @@ func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, a
 		ScopePaths:   append([]string(nil), role.Scope.Paths...),
 		HostAddendum: addendum,
 		Model:        model,
+		McpServers:   append([]string(nil), role.MCP...),
 	}
 	if effective != nil {
 		if effective.MaxOutputTokens != nil {

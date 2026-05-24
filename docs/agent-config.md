@@ -67,6 +67,7 @@ roles:
       issue.comment:
         mentioned_only: true      # 只在被 @agent-backend 时唤醒
     scope: { paths: ["apps/api/**", "internal/**"] }
+    mcp: [playwright]             # 可选：需要浏览器自动化时声明
     can:
       - issue_read
       - issue_diff
@@ -147,6 +148,7 @@ issues:
   - `review_vote.posted` / `ci.status_changed` —— 无参数。
 - **`can:`** —— 平台工具白名单。没在 `can:` 里的工具 `tools/list` 看不到、`tools/call` 返 `isError`。
 - **`not:`** —— 平台工具黑名单。仅在 `can:` 留空时生效，语义是「除列出的工具外其它都可用」。`can:` 和 `not:` 同时给值时**白名单优先**，`not:` 被忽略；两者都为空则 fail-closed（无任何工具）。
+- **`mcp:`** —— 可选，MCP 服务器白名单。字符串数组，每项对应仓库根目录 `.mcp.json` 中 `mcpServers` 的一个 key。**缺失或空数组时该 role 不加载任何 MCP 服务器**；非空时仅加载列出的服务器。引用了 `.mcp.json` 中不存在的 server 名时 session 明确失败并报告缺失的 server 名。`mcp:` 是独立的 MCP 白名单，不复用 `can:` / `not:` 的工具 ACL。
 - **`scope.paths:`** —— 软约束（写进 role 的初始 prompt 让 dispatcher 知道分派给谁），不在 pre-receive 强制。
 - **`prompt:` 或 `prompt_file:`** —— role 的提示词。二选一（schema mutually exclusive）；`prompt_file:` 必须以 `.hangrix/prompts/` 开头，文件随仓库一起进 git。**没有 host addendum 的概念了** —— 直接写 role 自己的完整 prompt 即可。
 - **`llm:`** —— team 级 + per-role 两层，**按字段合并**：role 写了哪个字段就覆盖哪个字段，没写的字段继承 team；team 没设的字段走 platform default（即 adapter / upstream 的内置默认）。字段：
