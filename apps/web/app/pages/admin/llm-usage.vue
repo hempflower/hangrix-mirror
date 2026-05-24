@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Activity, Cpu, Hash, Timer } from 'lucide-vue-next'
+import { Activity, Cpu, Download, Hash, Timer } from 'lucide-vue-next'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -13,6 +13,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Pagination } from '@/components/ui/pagination'
@@ -43,6 +49,7 @@ const total = ref(0)
 const providers = ref<LLMProvider[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
+const exporting = ref(false)
 
 // --- detail dialog ---
 const detailOpen = ref(false)
@@ -148,6 +155,40 @@ function onOffsetChange(v: number) {
   load()
 }
 
+async function exportUsage(format: 'csv' | 'jsonl') {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const params: Record<string, string> = { format }
+    if (filterProvider.value && filterProvider.value !== ANY_PROVIDER) params.provider = filterProvider.value
+    if (filterSince.value) {
+      const d = new Date(filterSince.value)
+      if (!Number.isNaN(d.getTime())) params.since = d.toISOString()
+    }
+
+    const blob = await $fetch<Blob>('/api/admin/llm/usage/export', {
+      credentials: 'include',
+      params,
+    })
+
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const filename = `llm-usage-${format}-${ts}.zip`
+
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  } catch (_e) {
+    // silently ignore — the user can retry
+  } finally {
+    exporting.value = false
+  }
+}
+
 onMounted(async () => {
   await loadProviders()
   await load()
@@ -232,6 +273,26 @@ onMounted(async () => {
           <div class="flex items-end">
             <Button class="w-full" @click="applyFilters">{{ t('admin.usage.applyFilters') }}</Button>
           </div>
+        </div>
+
+        <!-- Export toolbar -->
+        <div class="flex items-center justify-end gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <Button variant="outline" :disabled="exporting">
+                <Download v-if="!exporting" class="size-4" />
+                <span>{{ exporting ? t('admin.usage.export.exporting') : t('admin.usage.export.label') }}</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem @click="exportUsage('csv')">
+                {{ t('admin.usage.export.csv') }}
+              </DropdownMenuItem>
+              <DropdownMenuItem @click="exportUsage('jsonl')">
+                {{ t('admin.usage.export.jsonl') }}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
         <p v-if="error" class="text-sm text-destructive">{{ error }}</p>

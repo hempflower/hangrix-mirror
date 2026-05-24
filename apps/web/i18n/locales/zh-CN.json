@@ -301,6 +301,12 @@
         "model": "Model",
         "time": "时间",
         "status": "状态码"
+      },
+      "export": {
+        "label": "导出",
+        "csv": "CSV（摘要）",
+        "jsonl": "JSONL（完整）",
+        "exporting": "导出中…"
       }
 
     },

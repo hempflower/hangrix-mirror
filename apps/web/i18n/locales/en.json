@@ -301,6 +301,12 @@
         "model": "Model",
         "time": "Time",
         "status": "Status code"
+      },
+      "export": {
+        "label": "Export",
+        "csv": "CSV (summary)",
+        "jsonl": "JSONL (full)",
+        "exporting": "Exporting…"
       }
 
     },
