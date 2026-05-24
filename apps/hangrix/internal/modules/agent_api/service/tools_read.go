@@ -380,7 +380,7 @@ func truncateBody(s string, maxRunes int) string {
 	suffixRunes := []rune(truncateSuffix)
 	budget := maxRunes - len(suffixRunes)
 	if budget < 0 {
-		return s[:maxRunes]
+		return string(runes[:maxRunes])
 	}
 	return string(runes[:budget]) + truncateSuffix
 }
