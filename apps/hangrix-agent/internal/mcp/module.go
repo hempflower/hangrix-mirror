@@ -43,9 +43,12 @@ type Deps struct {
 // is empty. This is the default: a role that doesn't declare mcp: in
 // agents.yml gets no MCP tools.
 //
+// When the whitelist is non-empty and .mcp.json is missing, empty, or
+// unparseable, the session panics (explicit failure) because this is a host
+// configuration error, not a recoverable degradation.
+//
 // When the whitelist names a server that doesn't exist in .mcp.json, the
-// session panics (explicit failure) because this is a host configuration
-// error, not a recoverable degradation.
+// session also panics for the same reason.
 func NewBundle(deps *Deps) *Bundle {
 	whitelist := deps.Cfg.McpServers
 	// No whitelist → no MCP servers at all (default: role didn't declare mcp:).
@@ -55,11 +58,10 @@ func NewBundle(deps *Deps) *Bundle {
 
 	cfg, err := Load("/workspace")
 	if err != nil {
-		log.Printf("WARN: mcp: %v", err)
-		return &Bundle{}
+		panic(fmt.Errorf("mcp: %v", err))
 	}
 	if cfg == nil {
-		return &Bundle{}
+		panic(fmt.Errorf("mcp: role declares MCP servers %v but .mcp.json is missing or has no mcpServers — check your host configuration", whitelist))
 	}
 
 	// Validate every whitelisted server exists in .mcp.json.
