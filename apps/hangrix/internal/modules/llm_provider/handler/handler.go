@@ -1,3 +1,4 @@
+
 // Package handler exposes the llm_provider admin HTTP surface mounted at
 // /api/admin/llm/. Every route is RequireAdmin-gated; provider credentials
 // are platform-level operations.
@@ -12,9 +13,10 @@
 package handler
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"errors"
-	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -24,6 +26,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider/infra"
@@ -75,6 +78,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 
 		r.Get("/usage", h.listUsage)
 		r.Get("/usage/{id}", h.getUsage)
+			r.Get("/usage/export", h.exportUsage)
 	})
 }
 
@@ -432,6 +436,70 @@ func (h *Handler) getUsage(w http.ResponseWriter, r *http.Request) {
 		RequestBody:  row.RequestBody,
 		ResponseBody: row.ResponseBody,
 	})
+}
+
+
+// ---- export ----
+
+func (h *Handler) exportUsage(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	format := strings.TrimSpace(q.Get("format"))
+	if format != "csv" && format != "jsonl" {
+		httpx.WriteError(w, http.StatusBadRequest, "format must be csv or jsonl")
+		return
+	}
+
+	var providerID *int64
+	if name := strings.TrimSpace(q.Get("provider")); name != "" {
+		if !providerNameRe.MatchString(name) {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid provider")
+			return
+		}
+		p, err := h.repo.GetProviderByName(r.Context(), name)
+		if err != nil {
+			if errors.Is(err, domain.ErrProviderNotFound) {
+				httpx.WriteError(w, http.StatusNotFound, "provider not found")
+				return
+			}
+			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		providerID = &p.ID
+	}
+
+	var since *time.Time
+	if raw := strings.TrimSpace(q.Get("since")); raw != "" {
+		t, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid since (RFC3339 required)")
+			return
+		}
+		since = &t
+	}
+
+	ts := time.Now().UTC().Format("20060102T150405Z")
+	filename := fmt.Sprintf("llm-usage-%s-%s.zip", format, ts)
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+
+	entryName := "llm-usage." + format
+	fw, err := zw.Create(entryName)
+	if err != nil {
+		return
+	}
+
+	ctx := r.Context()
+	if format == "csv" {
+		err = h.usage.ExportUsageCSV(ctx, fw, providerID, since)
+	} else {
+		err = h.usage.ExportUsageJSONL(ctx, fw, providerID, since)
+	}
+	if err != nil {
+		return
+	}
 }
 
 // ---- helpers ----
