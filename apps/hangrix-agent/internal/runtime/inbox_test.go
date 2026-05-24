@@ -354,7 +354,7 @@ func TestLoopNotificationDuringEvent(t *testing.T) {
 			// While we slow-walk this call, fire the notification.
 			go func() {
 				time.Sleep(80 * time.Millisecond)
-				fake.notifications <- "[hangrix] task_xyz finished (exit=0)"
+				fake.notifications <- `<hangrix-event kind="notification.bash.finished" id="task_xyz" status="done"><outcome exit_code="0" timed_out="false" elapsed_seconds="0"/><command>echo test</command><output_tail>test</output_tail></hangrix-event>`
 			}()
 			time.Sleep(250 * time.Millisecond)
 			// One tool call so the loop comes back for round 2.
@@ -429,7 +429,7 @@ func TestLoopNotificationDuringEvent(t *testing.T) {
 	if body == "" {
 		t.Fatal("LLM call #2 never happened; tool-call round didn't run")
 	}
-	if !strings.Contains(body, "task_xyz finished") {
+	if !strings.Contains(body, `notification.bash.finished`) || !strings.Contains(body, `task_xyz`) {
 		t.Errorf("notification fired mid-call should appear in the next LLM request body; body=%s", body)
 	}
 }
@@ -636,7 +636,7 @@ func TestLoopNotificationDrivesIdleTurn(t *testing.T) {
 		// drive a second round, even though no event arrived from
 		// stdin.
 		time.Sleep(300 * time.Millisecond)
-		fake.notifications <- "[hangrix] task_late finished"
+		fake.notifications <- `<hangrix-event kind="notification.bash.finished" id="task_late" status="done"><outcome exit_code="0" timed_out="false" elapsed_seconds="0"/></hangrix-event>`
 		time.Sleep(300 * time.Millisecond)
 		_, _ = stdinW.Write([]byte(`{"kind":"control","op":"shutdown"}` + "\n"))
 		stdinW.Close()

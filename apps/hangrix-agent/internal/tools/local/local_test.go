@@ -1419,11 +1419,14 @@ func TestSleepReturnsImmediatelyWithScheduled(t *testing.T) {
 	// distinguishable.
 	select {
 	case msg := <-bundle.Async.NotificationCh():
-		if !strings.Contains(msg, "[hangrix] sleep "+fields.SleepID+" finished after 3s") {
-			t.Errorf("notification = %q, want sleep %s finished message", msg, fields.SleepID)
+		if !strings.Contains(msg, `<hangrix-event kind="notification.sleep.finished" id="`+fields.SleepID+`"`) {
+			t.Errorf("notification = %q, want hangrix-event sleep.finished with id %s", msg, fields.SleepID)
 		}
-		if !strings.Contains(msg, "(reason: test)") {
-			t.Errorf("notification should include reason; got %q", msg)
+		if !strings.Contains(msg, `seconds="3"`) {
+			t.Errorf("notification should include seconds=\"3\"; got %q", msg)
+		}
+		if !strings.Contains(msg, `reason="test"`) {
+			t.Errorf("notification should include reason=\"test\"; got %q", msg)
 		}
 	case <-time.After(4 * time.Second):
 		t.Error("timed out waiting for sleep notification")
