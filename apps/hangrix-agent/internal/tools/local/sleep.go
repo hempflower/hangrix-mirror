@@ -90,7 +90,7 @@ func (t *sleepTool) Call(ctx context.Context, raw json.RawMessage) (any, error) 
 	// so it has enough context to continue without polling.
 		reasonAttr := ""
 		if a.Reason != "" {
-			reasonAttr = fmt.Sprintf(" reason=\"%s\"", xmlEscape(a.Reason))
+			reasonAttr = fmt.Sprintf(" reason=\"%s\"", xmlEscapeAttr(a.Reason))
 		}
 		notification := fmt.Sprintf(
 			"<hangrix-event kind=\"notification.sleep.finished\" id=\"%s\" status=\"done\">"+

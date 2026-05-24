@@ -638,7 +638,7 @@ func (b *bashTool) runForeground(ctx context.Context, a bashArgs) *bashResult {
 				"<command>%s</command>"+
 				"</hangrix-event>\n"+
 				"Poll progress with bash(task_id=%q); answer prompts with bash_input(task_id=%q, data=...).",
-			xmlEscape(id), promoteSecs, xmlCDATA(job.command), id, id,
+			xmlEscapeAttr(id), promoteSecs, xmlCDATA(job.command), id, id,
 			)
 		return &bashResult{
 			Summary:    a.Summary,
@@ -705,13 +705,24 @@ func (b *bashTool) registerTaskID(job *bashJob) string {
 }
 
 
-// xmlEscape escapes a string for safe inclusion in XML text content or
-// attribute values. Uses encoding/xml.EscapeText which handles &, <, >,
-// ", and '.
+// xmlEscape escapes a string for safe inclusion in XML text content.
+// Uses encoding/xml.EscapeText which handles &, <, >, ", '.
 func xmlEscape(s string) string {
 	var buf strings.Builder
 	xml.EscapeText(&buf, []byte(s))
 	return buf.String()
+}
+
+// xmlEscapeAttr escapes a string for safe inclusion in an XML attribute
+// value (between double quotes). Uses named entity references (&quot;,
+// &apos;, &lt;, &gt;, &amp;) for maximum parser compatibility.
+func xmlEscapeAttr(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "'", "&apos;")
+	return s
 }
 
 // xmlCDATA wraps a string in a CDATA section, handling the edge case
@@ -765,7 +776,7 @@ func formatJobNotification(job *bashJob) string {
 			"<command>%s</command>"+
 			"<output_tail>%s</output_tail>"+
 			"</hangrix-event>",
-		xmlEscape(taskID), exit, timedOutStr, elapsedSeconds,
+		xmlEscapeAttr(taskID), exit, timedOutStr, elapsedSeconds,
 		xmlCDATA(command), xmlCDATA(snap),
 	)
 }
