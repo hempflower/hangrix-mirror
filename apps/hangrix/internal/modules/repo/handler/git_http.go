@@ -398,7 +398,7 @@ func (h *Handler) injectContributionHints(buf *bytes.Buffer, contribs []domain.P
 		msg := fmt.Sprintf("contribution_id: %d | ref: %s | role: %s | head: %s",
 			c.ContributionID, strings.TrimPrefix(c.RefName, "refs/heads/"), c.AgentRole, shortSHA)
 		hint := "Next: use contribution_set_meta to set title/description; " +
-			"contribution_read to view diff & review status. " +
+			"contribution_read for metadata, review status & checkout_hint (fetch branch locally to inspect diff). " +
 			"No need for contribution_list to discover this ID."
 		for _, line := range []string{msg, hint} {
 			buf.Write(sidebandPktLine(line))
