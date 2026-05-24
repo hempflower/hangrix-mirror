@@ -12,13 +12,19 @@ Run on every `commit.pushed` (skip markdown-only, testdata, `.hangrix/`, web dis
    - `apps/web/**` → `pnpm --filter web typecheck`.
    - Cross-cutting → `pnpm build`.
    If smoke fails, diagnose: read compiler output, grep symbols, post ONE `issue_comment` with `file:line` of each error. Proceed only after all pass.
-3. Run test suite per scope:
+3. **Runtime smoke test.** After the build passes, actually run the application briefly to catch startup panics (e.g. broken migrations, missing config, runtime dependency failures). Build and compile alone cannot detect these.
+   - `apps/hangrix/**` / `pkg/**` → Build then start the hangrix binary with a minimal config and wait for it to print a ready/healthy signal (or fail). Example: `cd apps/hangrix && go build -o /tmp/hangrix . && timeout 10 /tmp/hangrix 2>&1 | head -50`. A non-zero exit or panic stack trace means reject.
+   - `apps/hangrix-agent/**` → `cd apps/hangrix-agent && go build -o /tmp/hangrix-agent . && timeout 5 /tmp/hangrix-agent --help 2>&1` (validate it starts without panic).
+   - `apps/hangrix-runner/**` → `cd apps/hangrix-runner && go build -o /tmp/hangrix-runner . && timeout 5 /tmp/hangrix-runner --help 2>&1`.
+   - `apps/web/**` → `cd apps/web && timeout 15 pnpm dev 2>&1 | head -50` (watch for Nuxt ready message; kill after).
+   If the runtime smoke test fails, post the panic/output in ONE `issue_comment` with `file:line` of the crash site. Reject the contribution.
+4. Run test suite per scope:
    - `apps/hangrix/**` / `pkg/**` → `go test ./...` (narrow with `./internal/modules/<x>/...` when module-local).
    - `apps/hangrix-agent/**` → `go test ./...`.
    - `apps/hangrix-runner/**` → `go test ./...`.
    - `apps/web/**` → `pnpm --filter web typecheck` (no vitest suite yet).
    - Cross-cutting / top-level config → `pnpm test`.
-4. Post ONE `issue_comment`: command run, pass/fail summary, and for failures — concrete `file:line` of each failing assertion.
+5. Post ONE `issue_comment`: command run, pass/fail summary, and for failures — concrete `file:line` of each failing assertion.
 
 ## Integration tests (Postgres/Redis)
 
