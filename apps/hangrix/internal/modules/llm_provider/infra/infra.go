@@ -18,8 +18,10 @@ package infra
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"time"
 
@@ -361,6 +363,131 @@ func (r *PostgresRepo) GetUsageByID(ctx context.Context, id int64) (*UsageDetail
 	return ur, nil
 }
 
+
+
+// ---- export ----
+
+// ExportUsageCSV fetches rows via the sqlc-generated ExportUsageCSV query
+// and writes them as CSV to w. Only summary columns are included (no
+// request_body / response_body).
+func (r *PostgresRepo) ExportUsageCSV(ctx context.Context, w io.Writer, providerID *int64, since *time.Time) error {
+	provArg, sinceArg := usageFilterArgs(providerID, since)
+	rows, err := r.q.ExportUsageCSV(ctx, llmproviderdb.ExportUsageCSVParams{
+		ProviderID: provArg,
+		Since:      sinceArg,
+	})
+	if err != nil {
+		return fmt.Errorf("export csv query: %w", err)
+	}
+
+	// BOM-free; the ZIP content-type declares UTF-8.
+	if _, err := io.WriteString(w, "created_at,provider_name,model,prompt_tokens,completion_tokens,total_tokens,latency_ms,status_code,session_id\n"); err != nil {
+		return err
+	}
+
+	for _, row := range rows {
+		var sid string
+		if row.SessionID.Valid {
+			sid = fmt.Sprintf("%d", row.SessionID.Int64)
+		}
+		line := fmt.Sprintf("%s,%s,%s,%d,%d,%d,%d,%d,%s\n",
+			row.CreatedAt.Time.UTC().Format(time.RFC3339),
+			csvEscape(row.ProviderName),
+			csvEscape(row.Model),
+			row.PromptTokens,
+			row.CompletionTokens,
+			row.TotalTokens,
+			row.LatencyMs,
+			row.StatusCode,
+			sid,
+		)
+		if _, err := io.WriteString(w, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ExportUsageJSONL fetches rows via the sqlc-generated ExportUsageJSONL
+// query and writes them as JSONL (one JSON object per line) to w. All
+// columns are included, including request_body and response_body.
+func (r *PostgresRepo) ExportUsageJSONL(ctx context.Context, w io.Writer, providerID *int64, since *time.Time) error {
+	provArg, sinceArg := usageFilterArgs(providerID, since)
+	rows, err := r.q.ExportUsageJSONL(ctx, llmproviderdb.ExportUsageJSONLParams{
+		ProviderID: provArg,
+		Since:      sinceArg,
+	})
+	if err != nil {
+		return fmt.Errorf("export jsonl query: %w", err)
+	}
+
+	for _, row := range rows {
+		obj := exportJSONLRow{
+			CreatedAt:        row.CreatedAt.Time.UTC().Format(time.RFC3339),
+			ProviderName:     row.ProviderName,
+			Model:            row.Model,
+			PromptTokens:     row.PromptTokens,
+			CompletionTokens: row.CompletionTokens,
+			TotalTokens:      row.TotalTokens,
+			LatencyMS:        row.LatencyMs,
+			StatusCode:       row.StatusCode,
+			RequestPath:      row.RequestPath,
+			ErrorMessage:     row.ErrorMessage,
+			RequestBody:      row.RequestBody,
+			ResponseBody:     row.ResponseBody,
+		}
+		if row.SessionID.Valid {
+			v := row.SessionID.Int64
+			obj.SessionID = &v
+		}
+
+		b, err := json.Marshal(obj)
+		if err != nil {
+			return fmt.Errorf("export jsonl marshal: %w", err)
+		}
+		if _, err := w.Write(append(b, '\n')); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type exportJSONLRow struct {
+	CreatedAt        string `json:"created_at"`
+	ProviderName     string `json:"provider_name"`
+	Model            string `json:"model"`
+	PromptTokens     int32  `json:"prompt_tokens"`
+	CompletionTokens int32  `json:"completion_tokens"`
+	TotalTokens      int32  `json:"total_tokens"`
+	LatencyMS        int32  `json:"latency_ms"`
+	StatusCode       int32  `json:"status_code"`
+	ErrorMessage     string `json:"error_message"`
+	RequestPath      string `json:"request_path"`
+	RequestBody      string `json:"request_body"`
+	ResponseBody     string `json:"response_body"`
+	SessionID        *int64 `json:"session_id,omitempty"`
+}
+
+// csvEscape escapes a string for CSV: wraps in double-quotes and doubles any
+// embedded double-quotes when the value contains a comma, quote, or newline.
+func csvEscape(s string) string {
+	for i := 0; i < len(s); i++ {
+		if s[i] == ',' || s[i] == '"' || s[i] == '\n' || s[i] == '\r' {
+			quoted := make([]byte, 0, len(s)+4)
+			quoted = append(quoted, '"')
+			for j := 0; j < len(s); j++ {
+				if s[j] == '"' {
+					quoted = append(quoted, '"', '"')
+				} else {
+					quoted = append(quoted, s[j])
+				}
+			}
+			quoted = append(quoted, '"')
+			return string(quoted)
+		}
+	}
+	return s
+}
 
 // ---- row → domain ----
 

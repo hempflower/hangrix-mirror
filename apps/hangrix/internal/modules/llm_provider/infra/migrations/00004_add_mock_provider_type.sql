@@ -2,6 +2,7 @@
 
 -- Allow 'mock' as a valid llm_providers.type so test/e2e environments can
 -- register a built-in mock provider that requires no external API key.
+-- +goose StatementBegin
 DO $$
 DECLARE
     constraint_name text;
@@ -17,14 +18,16 @@ BEGIN
         EXECUTE format('ALTER TABLE llm_providers DROP CONSTRAINT %I', constraint_name);
     END IF;
 
-    EXECUTE $$ALTER TABLE llm_providers ADD CONSTRAINT llm_providers_type_check
-        CHECK (type IN ('openai', 'anthropic', 'openai-compat', 'mock'))$$;
+    EXECUTE $alter$ALTER TABLE llm_providers ADD CONSTRAINT llm_providers_type_check
+        CHECK (type IN ('openai', 'anthropic', 'openai-compat', 'mock'))$alter$;
 END;
 $$;
+-- +goose StatementEnd
 
 -- +goose Down
 
 -- Revert to the original constraint set (without 'mock').
+-- +goose StatementBegin
 DO $$
 DECLARE
     constraint_name text;
@@ -40,7 +43,8 @@ BEGIN
         EXECUTE format('ALTER TABLE llm_providers DROP CONSTRAINT %I', constraint_name);
     END IF;
 
-    EXECUTE $$ALTER TABLE llm_providers ADD CONSTRAINT llm_providers_type_check
-        CHECK (type IN ('openai', 'anthropic', 'openai-compat'))$$;
+    EXECUTE $alter$ALTER TABLE llm_providers ADD CONSTRAINT llm_providers_type_check
+        CHECK (type IN ('openai', 'anthropic', 'openai-compat'))$alter$;
 END;
 $$;
+-- +goose StatementEnd

@@ -92,6 +92,150 @@ func (q *Queries) DeleteProvider(ctx context.Context, id int64) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const exportUsageCSV = `-- name: ExportUsageCSV :many
+SELECT u.id, u.session_id, u.provider_id, u.model,
+       u.prompt_tokens, u.completion_tokens, u.total_tokens,
+       u.latency_ms, u.status_code, u.error_message, u.request_path,
+       u.created_at,
+       p.name AS provider_name
+FROM llm_usage_log u
+JOIN llm_providers p ON p.id = u.provider_id
+WHERE ($1::BIGINT IS NULL OR u.provider_id = $1)
+  AND ($2::TIMESTAMPTZ IS NULL OR u.created_at >= $2)
+ORDER BY u.created_at DESC
+`
+
+type ExportUsageCSVParams struct {
+	ProviderID pgtype.Int8
+	Since      pgtype.Timestamptz
+}
+
+type ExportUsageCSVRow struct {
+	ID               int64
+	SessionID        pgtype.Int8
+	ProviderID       int64
+	Model            string
+	PromptTokens     int32
+	CompletionTokens int32
+	TotalTokens      int32
+	LatencyMs        int32
+	StatusCode       int32
+	ErrorMessage     string
+	RequestPath      string
+	CreatedAt        pgtype.Timestamptz
+	ProviderName     string
+}
+
+// Same filter as ListUsage but without LIMIT/OFFSET; excludes request_body
+// and response_body so the CSV stays light.
+func (q *Queries) ExportUsageCSV(ctx context.Context, arg ExportUsageCSVParams) ([]ExportUsageCSVRow, error) {
+	rows, err := q.db.Query(ctx, exportUsageCSV, arg.ProviderID, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ExportUsageCSVRow{}
+	for rows.Next() {
+		var i ExportUsageCSVRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.ProviderID,
+			&i.Model,
+			&i.PromptTokens,
+			&i.CompletionTokens,
+			&i.TotalTokens,
+			&i.LatencyMs,
+			&i.StatusCode,
+			&i.ErrorMessage,
+			&i.RequestPath,
+			&i.CreatedAt,
+			&i.ProviderName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const exportUsageJSONL = `-- name: ExportUsageJSONL :many
+SELECT u.id, u.session_id, u.provider_id, u.model,
+       u.prompt_tokens, u.completion_tokens, u.total_tokens,
+       u.latency_ms, u.status_code, u.error_message, u.request_path,
+       u.created_at, u.request_body, u.response_body,
+       p.name AS provider_name
+FROM llm_usage_log u
+JOIN llm_providers p ON p.id = u.provider_id
+WHERE ($1::BIGINT IS NULL OR u.provider_id = $1)
+  AND ($2::TIMESTAMPTZ IS NULL OR u.created_at >= $2)
+ORDER BY u.created_at DESC
+`
+
+type ExportUsageJSONLParams struct {
+	ProviderID pgtype.Int8
+	Since      pgtype.Timestamptz
+}
+
+type ExportUsageJSONLRow struct {
+	ID               int64
+	SessionID        pgtype.Int8
+	ProviderID       int64
+	Model            string
+	PromptTokens     int32
+	CompletionTokens int32
+	TotalTokens      int32
+	LatencyMs        int32
+	StatusCode       int32
+	ErrorMessage     string
+	RequestPath      string
+	CreatedAt        pgtype.Timestamptz
+	RequestBody      string
+	ResponseBody     string
+	ProviderName     string
+}
+
+// Same filter as ListUsage but without LIMIT/OFFSET; includes request_body
+// and response_body for the full-record JSONL export.
+func (q *Queries) ExportUsageJSONL(ctx context.Context, arg ExportUsageJSONLParams) ([]ExportUsageJSONLRow, error) {
+	rows, err := q.db.Query(ctx, exportUsageJSONL, arg.ProviderID, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ExportUsageJSONLRow{}
+	for rows.Next() {
+		var i ExportUsageJSONLRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.ProviderID,
+			&i.Model,
+			&i.PromptTokens,
+			&i.CompletionTokens,
+			&i.TotalTokens,
+			&i.LatencyMs,
+			&i.StatusCode,
+			&i.ErrorMessage,
+			&i.RequestPath,
+			&i.CreatedAt,
+			&i.RequestBody,
+			&i.ResponseBody,
+			&i.ProviderName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const findProviderByModel = `-- name: FindProviderByModel :one
 SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled FROM llm_providers
 WHERE $1::TEXT = ANY(allowed_models)
