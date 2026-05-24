@@ -49,7 +49,7 @@ roles:
       issue.comment:
         mentioned_only: true
     # mcp: [playwright]             # uncomment + list servers from .mcp.json when the role needs MCP tools
-    can: [issue_read, issue_diff, issue_comment, read, write, edit, glob, grep, bash]
+    can: [issue_read, issue_comment, read, write, edit, glob, grep, bash]
     prompt: |
       You are the **seeder** agent for this repository. You have two
       jobs on the first issue:
@@ -179,7 +179,7 @@ roles:
                approval on the timeline. Then call `issue_merge`
                and `issue_close`.
 
-           can: `[issue_read, issue_diff, issue_comment,
+           can: `[issue_read, issue_comment,
            issue_review_vote, issue_checks, issue_merge,
            issue_close, roster_list, read, write, edit, glob,
            grep, bash]`.
@@ -191,7 +191,7 @@ roles:
            acceptance criteria — and posts it as one or more
            `issue_comment`s. Stops once the spec is on the
            timeline; the maintainer routes from there. can:
-           `[issue_read, issue_diff, issue_comment]`.
+           `[issue_read, issue_comment]`.
 
          - `tester` — `triggers: { patch.submitted: {}, commit.pushed: {},
            issue.comment: { mentioned_only: true } }`. On every patch
@@ -204,7 +204,7 @@ roles:
            `approve` (all green), `request_changes` (any red),
            `abstain` (can't run). The maintainer requires the
            tester's approval before merging. can: `[issue_read,
-           issue_diff, issue_comment, issue_review_vote, read,
+           issue_comment, issue_review_vote, read,
            write, edit, glob, grep, bash]`.
 
          **Plus, per module: one worker + one module reviewer.**
@@ -213,7 +213,7 @@ roles:
          module-reviewer pair for each:
 
          - **Worker** — `triggers: { issue.comment: { mentioned_only:
-           true } }`, full coding tools (`issue_read`, `issue_diff`,
+           true } }`, full coding tools (`issue_read`,
            `issue_comment`, `read`, `write`, `edit`, `glob`, `grep`,
            `bash`). Implements features inside its module's paths.
          - **Module reviewer** — `triggers: { patch.submitted: { paths:
@@ -224,7 +224,7 @@ roles:
            is the primary trigger for agent contributions; `commit.pushed`
            covers human pushes. Posts architecture + code-quality feedback
            as `issue_comment` and casts an `issue_review_vote`. can:
-           `[issue_read, issue_diff, issue_comment, issue_review_vote]`.
+           `[issue_read, issue_comment, issue_review_vote]`.
 
          Module pairs by project type (combine / extend as needed):
 
