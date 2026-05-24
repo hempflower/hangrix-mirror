@@ -461,6 +461,44 @@ func (l *Loop) driveOneTurnWithID(
 			return nil
 		}
 
+		// Sleep-gate: sleep is an async tool that returns immediately with
+		// "scheduled" — the LLM must NOT batch it with other calls because
+		// executing those calls alongside it would effectively bypass the
+		// wait. If sleep is present in this batch, only execute sleep
+		// (and any other sleep calls) and reject the rest with an error
+		// telling the LLM to re-issue after the wake-up notification.
+		if hasSleepCall(resp.ToolCalls) {
+			for _, call := range resp.ToolCalls {
+				_ = l.out.Status("tool")
+				args := json.RawMessage(call.Arguments)
+				var result tools.CallResult
+				if call.Name == local.SleepToolName {
+					result = l.registry.Call(ctx, call.Name, args)
+				} else {
+					errBody, _ := json.Marshal(map[string]any{
+						"error": "This tool call was batched with sleep in the same response. Sleep must be the only call in its batch — re-issue this call in a subsequent turn after the sleep notification wakes you.",
+					})
+					result = tools.CallResult{
+						Source:     tools.SourceLocal,
+						ResultJSON: errBody,
+						IsError:    true,
+						ErrMsg:     "batched with sleep; re-issue after wake-up",
+					}
+				}
+				toolContent := toolPayload(result)
+				cctx.AppendToolResult(call.ID, toolContent)
+				_ = l.out.ToolCall(call.ID, call.Name, args, json.RawMessage(toolContent))
+			}
+			// Deferred @-mention nudge: tool results are now in place, so the
+			// assistant(tool_calls) → tool(result)+ chain is intact and it's
+			// safe to append the reminder as the next user-role message.
+			if shouldNudgeAtMention {
+				cctx.AppendUser(atMentionReminder)
+			}
+			_ = l.out.Done(turnID)
+			return nil
+		}
+
 		// pendingSummary defers the AppendSummary call until every tool
 		// result in this round has been placed. Snapshot anchors on the
 		// most recent KindSummary entry, so placing the summary marker
@@ -741,6 +779,16 @@ func dispatchCompactSession(args json.RawMessage) (string, tools.CallResult) {
 		"note":      "Prior conversation has been replaced with your summary. Subsequent turns will see {system prompt} + this summary + anything new — proceed with the task using only what your summary preserved.",
 	})
 	return summary, tools.CallResult{Source: tools.SourceLocal, ResultJSON: okBody}
+}
+
+// hasSleepCall reports whether any tool call in the slice is a sleep call.
+func hasSleepCall(calls []llm.ToolCall) bool {
+	for _, c := range calls {
+		if c.Name == local.SleepToolName {
+			return true
+		}
+	}
+	return false
 }
 
 func newTurnID() string {
