@@ -410,6 +410,12 @@ func All(client *Client) []local.Tool {
 			schema:      objectSchema(nil, nil),
 		},
 
+			{
+				name:        "issue_todo_list",
+				description: "List todos for the current issue. Returns a lightweight `todos` array and `todo_summary` (total, todo, in_progress, done, all_done) without pulling full issue metadata.",
+				schema:      objectSchema(nil, nil),
+			},
+
 		{
 			name:        "issue_children",
 			description: "List sub-issues (child issues) of the current issue.",
@@ -495,6 +501,16 @@ func All(client *Client) []local.Tool {
 				"comment_id":   intProp("Optional comment ID to bind the attachment to an existing comment."),
 			}, []string{"path"}),
 		},
+
+			{
+				name:        "issue_todo_update",
+				description: "Create or update a todo on the current issue. Omit `todo_id` (or pass 0) to create a new todo — `content` is required in that case. Pass a non-zero `todo_id` to update an existing todo's `status` and/or `content`. `status` must be one of: todo, in_progress, done. Returns the created/updated todo object on success.",
+				schema: objectSchema(map[string]any{
+					"todo_id": intProp("The todo id to update. Omit or pass 0 to create a new todo instead."),
+					"status":  enumProp("New status. One of: todo, in_progress, done. Use todo when creating.", []string{"todo", "in_progress", "done"}),
+					"content": stringProp("Todo text. Required when creating; optional when updating."),
+				}, []string{"status"}),
+			},
 
 		{
 			name:        "contribution_list",

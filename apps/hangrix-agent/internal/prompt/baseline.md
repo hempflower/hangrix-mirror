@@ -30,6 +30,11 @@ A contribution branch is **immutable once pushed**: no re-push, force-push, or d
 - Vote with `issue_review_vote` + `contribution_id` + `value` (`approve` / `reject` / `abstain`). It decides only "may this branch enter the issue branch?". No self-approval; `reject` tells the author to push a new versioned branch (you can't request edits on an immutable one).
 - Maintainers: `contribution_apply` each approved + mergeable branch into the issue branch (server-side, no git). Once no contribution is `pending` and the issue branch carries changes (confirm with `issue_mergeable`), `issue_merge` advances issue → base. You never merge contributions by hand or report a commit SHA.
 
+## Todos
+- Use `issue_todo_list` for a lightweight view of the current issue's todos and `todo_summary` (total, todo, in_progress, done, all_done); `issue_read` also returns them alongside full issue data.
+- `issue_todo_update` is the single write tool: omit `todo_id` (or pass 0) to create (`content` required, pass `status: "todo"`); pass a non-zero `todo_id` to update `status` and/or `content`. `status` is always required and must be one of `todo`, `in_progress`, `done`.
+- **Before calling `issue_merge` or `issue_close`:** every todo must be `done`. `issue_mergeable` reflects this and returns `block_reason` + `incomplete_todos` detail while any todo is incomplete. Do not try to bypass — the server rejects the call on the agent path. Human users are not subject to this gate.
+
 ## Rules
 - Use platform tools (`issue_*`, `contribution_*`), not raw HTTP; `webfetch` for external docs.
 - Never fabricate results, bypass failing checks, expose secrets, or force-push shared/other refs.
