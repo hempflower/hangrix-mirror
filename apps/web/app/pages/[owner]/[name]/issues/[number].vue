@@ -59,7 +59,7 @@ let _headerObserver: ResizeObserver | null = null
 
 // Scroll-to-top button
 const { y: scrollY } = useWindowScroll()
-const showScrollTop = computed(() => scrollY.value > 300)
+const showScrollTop = computed(() => scrollY.value > 480)
 function scrollToTop() {
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
@@ -1170,10 +1170,12 @@ onUnmounted(() => {
 <style scoped>
 .scroll-top-enter-active,
 .scroll-top-leave-active {
-  transition: opacity 0.2s ease;
+  transition: opacity 0.2s ease-out, transform 0.2s ease-out;
 }
 .scroll-top-enter-from,
 .scroll-top-leave-to {
   opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
 }
 </style>
