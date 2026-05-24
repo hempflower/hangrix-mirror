@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 )
 
 // TestParseReceivePackRefsAgainstRealPush captures the body of a real
@@ -146,4 +149,178 @@ func gitTry(t *testing.T, dir string, args ...string) string {
 		t.Logf("git %s returned error (may be expected): %v", strings.Join(args, " "), err)
 	}
 	return string(out)
+}
+
+// ---- injectContributionHints tests ----
+
+func TestInjectContributionHints_Normal(t *testing.T) {
+	// Simulate real receive-pack --stateless-rpc output: an outer sideband
+	// pkt-line (channel 1) containing inner pkt-line-framed status, followed
+	// by an outer "0000" flush.
+	var in bytes.Buffer
+	inner := fmt.Sprintf("%04x%s", 4+len("unpack ok\n"), "unpack ok\n")
+	inner += fmt.Sprintf("%04x%s", 4+len("ok refs/heads/main\n"), "ok refs/heads/main\n")
+	inner += "0000" // inner flush
+	payload := "\x01" + inner
+	fmt.Fprintf(&in, "%04x%s", 4+len(payload), payload)
+	in.WriteString("0000") // outer flush
+
+	h := &Handler{}
+	contribs := []domain.PostReceiveContrib{
+		{ContributionID: 42, RefName: "refs/heads/issue-1/server/fix", AgentRole: "server", HeadSHA: "abc1234def"},
+	}
+	h.injectContributionHints(&in, contribs)
+
+	out := in.Bytes()
+
+	// Must end with "0000".
+	if !bytes.HasSuffix(out, []byte("0000")) {
+		t.Fatalf("output does not end with 0000:\n%x", out)
+	}
+
+	// Parse the outer stream: there should be the original outer pkt-line,
+	// then the contribution progress pkt-lines, then a final "0000".
+	pos := 0
+	outerFrames := 0
+	var progressLines []string
+	for pos < len(out) {
+		if pos+4 > len(out) {
+			t.Fatalf("truncated at pos %d", pos)
+		}
+		lenHex := string(out[pos : pos+4])
+		if lenHex == "0000" {
+			pos += 4
+			break
+		}
+		var pl int
+		if _, err := fmt.Sscanf(lenHex, "%04x", &pl); err != nil || pl < 5 {
+			t.Fatalf("invalid pkt-line at pos %d: len=%q", pos, lenHex)
+		}
+		ch := out[pos+4]
+		payload := out[pos+5 : pos+pl]
+		outerFrames++
+		switch ch {
+		case 1:
+			// Original pack-data frame — verify inner structure intact.
+			if !bytes.Contains(payload, []byte("unpack ok")) {
+				t.Errorf("channel-1 payload missing unpack status")
+			}
+			if !bytes.HasSuffix(payload, []byte("0000")) {
+				t.Errorf("channel-1 payload missing inner flush")
+			}
+		case 2:
+			progressLines = append(progressLines, string(payload))
+		default:
+			t.Errorf("unexpected channel %d", ch)
+		}
+		pos += pl
+	}
+	if pos != len(out) {
+		t.Errorf("trailing bytes after flush: %d", len(out)-pos)
+	}
+	if len(progressLines) != 2 {
+		t.Fatalf("expected 2 progress pkt-lines, got %d: %v", len(progressLines), progressLines)
+	}
+	if !strings.Contains(progressLines[0], "contribution_id: 42") {
+		t.Errorf("first progress line missing contribution_id: %q", progressLines[0])
+	}
+}
+
+func TestInjectContributionHints_NoFlush(t *testing.T) {
+	// When receive-pack output lacks a terminating flush pkt (e.g. truncated),
+	// the function must still produce a valid stream ending with "0000".
+	var in bytes.Buffer
+	in.WriteString("0011\x01partial") // incomplete, no flush
+
+	h := &Handler{}
+	contribs := []domain.PostReceiveContrib{
+		{ContributionID: 1, RefName: "refs/heads/issue-1/server/fix", AgentRole: "server", HeadSHA: "abc1234"},
+	}
+	h.injectContributionHints(&in, contribs)
+
+	out := in.Bytes()
+	if !bytes.HasSuffix(out, []byte("0000")) {
+		t.Fatalf("output must end with 0000 even when input lacks one:\n%x", out)
+	}
+}
+
+func TestInjectContributionHints_Empty(t *testing.T) {
+	var in bytes.Buffer
+
+	h := &Handler{}
+	contribs := []domain.PostReceiveContrib{
+		{ContributionID: 1, RefName: "refs/heads/issue-1/server/fix", AgentRole: "server", HeadSHA: "abc1234"},
+	}
+	h.injectContributionHints(&in, contribs)
+
+	out := in.Bytes()
+	if !bytes.HasSuffix(out, []byte("0000")) {
+		t.Fatalf("empty input must still produce valid stream ending with 0000:\n%x", out)
+	}
+	// Should contain the hints + flush.
+	if !bytes.Contains(out, []byte("contribution_id: 1")) {
+		t.Errorf("empty input output missing contributions")
+	}
+}
+
+func TestInjectContributionHints_OnlyFlush(t *testing.T) {
+	// Input is just "0000" (empty push).
+	var in bytes.Buffer
+	in.WriteString("0000")
+
+	h := &Handler{}
+	contribs := []domain.PostReceiveContrib{
+		{ContributionID: 7, RefName: "refs/heads/issue-7/server/thing", AgentRole: "server", HeadSHA: "def5678"},
+	}
+	h.injectContributionHints(&in, contribs)
+
+	out := in.Bytes()
+	if !bytes.HasSuffix(out, []byte("0000")) {
+		t.Fatalf("output must end with 0000:\n%x", out)
+	}
+	if !bytes.Contains(out, []byte("contribution_id: 7")) {
+		t.Errorf("contributions missing when input was only flush")
+	}
+}
+
+func TestSidebandPktLine(t *testing.T) {
+	line := sidebandPktLine("hello")
+	// Format: <4-hex-len><0x02>hello\n
+	if len(line) < 4+1+5+1 {
+		t.Fatalf("too short: %x", line)
+	}
+	var pl int
+	if _, err := fmt.Sscanf(string(line[:4]), "%04x", &pl); err != nil {
+		t.Fatalf("bad length prefix: %x", line[:4])
+	}
+	if pl != len(line) {
+		t.Errorf("prefix %04x != actual length %d", pl, len(line))
+	}
+	if line[4] != 2 {
+		t.Errorf("channel byte: want 0x02, got 0x%02x", line[4])
+	}
+	payload := string(line[5:])
+	if !strings.HasSuffix(payload, "\n") {
+		t.Error("payload must end with newline")
+	}
+	if !strings.Contains(payload, "hello") {
+		t.Error("payload missing text")
+	}
+}
+
+func TestSidebandPktLine_Overflow(t *testing.T) {
+	// Generate text that would exceed the pkt-line max (0xfff0).
+	big := strings.Repeat("x", 0xfff0)
+	line := sidebandPktLine(big)
+	if len(line) > 0xfff0 {
+		t.Errorf("pkt-line exceeds protocol max: %d > %d", len(line), 0xfff0)
+	}
+	// Must still be valid.
+	var pl int
+	if _, err := fmt.Sscanf(string(line[:4]), "%04x", &pl); err != nil {
+		t.Fatalf("overflow output has bad prefix: %x", line[:4])
+	}
+	if pl != len(line) {
+		t.Errorf("overflow prefix %04x != actual %d", pl, len(line))
+	}
 }
