@@ -153,7 +153,7 @@ func TestLoopSmoke(t *testing.T) {
 		registry,
 		"system prompt for test",
 		bundle.Async,
-		0,
+		0, 0, 0,
 	)
 
 	loopErr := make(chan error, 1)
@@ -341,7 +341,7 @@ func TestLoopCompactSession(t *testing.T) {
 		registry,
 		"system prompt for test",
 		bundle.Async,
-		0,
+		0, 0, 0,
 	)
 
 	loopErr := make(chan error, 1)
@@ -518,7 +518,7 @@ func TestLoopAtMentionNudge(t *testing.T) {
 		registry,
 		"system prompt for test",
 		bundle.Async,
-		0,
+		0, 0, 0,
 	)
 
 	loopErr := make(chan error, 1)
@@ -674,7 +674,7 @@ func TestLoopAtMentionNudgeWithToolCallsPreservesChain(t *testing.T) {
 		registry,
 		"system prompt for test",
 		bundle.Async,
-		0,
+		0, 0, 0,
 	)
 
 	loopErr := make(chan error, 1)
@@ -822,7 +822,7 @@ func TestLoopSleepGate(t *testing.T) {
 		registry,
 		"system prompt for test",
 		bundle.Async,
-		0,
+		0, 0, 0,
 	)
 
 	loopErr := make(chan error, 1)
@@ -884,6 +884,380 @@ func TestLoopSleepGate(t *testing.T) {
 	}
 	if !sawDone {
 		t.Error("expected a done frame after sleep-gate")
+	}
+}
+
+// TestLoopReasoningTimeoutRetrySuccess verifies the retry path: when the
+// first LLM attempt hits a reasoning timeout (DeadlineExceeded), the loop
+// retries with the same request snapshot. The second attempt succeeds.
+func TestLoopReasoningTimeoutRetrySuccess(t *testing.T) {
+	t.Parallel()
+
+	var llmCallCount atomic.Int32
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		n := llmCallCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch n {
+		case 1:
+			// Sleep long enough that the per-call timeout fires, causing
+			// the HTTP client to return DeadlineExceeded.
+			time.Sleep(200 * time.Millisecond)
+			// Response after timeout — the client has already bailed,
+			// so this goes nowhere, but write it anyway.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "resp_timeout",
+				"output": []map[string]any{
+					{"type": "message", "role": "assistant", "content": []map[string]any{{"type": "output_text", "text": "too late"}}},
+				},
+				"usage": map[string]any{"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+			})
+		case 2:
+			// Retry attempt: respond immediately with a plain message.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "resp_ok",
+				"output": []map[string]any{
+					{"type": "message", "role": "assistant", "content": []map[string]any{{"type": "output_text", "text": "retry succeeded"}}},
+				},
+				"usage": map[string]any{"input_tokens": 8, "output_tokens": 4, "total_tokens": 12},
+			})
+		default:
+			http.Error(w, "unexpected extra LLM call", http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(llmServer.Close)
+
+	llmClient := llm.New(llmServer.URL, "test-token")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bundle := local.Build()
+	registry := tools.Build(bundle.Tools, nil, nil, nil)
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdoutR.Close()
+
+	loop := runtime.NewLoop(
+		ipc.NewReader(stdinR),
+		ipc.NewWriter(stdoutW),
+		llmClient,
+		"gpt-4o-mini",
+		registry,
+		"system prompt for test",
+		bundle.Async,
+		0,
+		100*time.Millisecond, // reasoningTimeout
+		1,                    // reasoningTimeoutRetries: 1 retry = 2 total attempts
+	)
+
+	loopErr := make(chan error, 1)
+	go func() {
+		loopErr <- loop.Run(ctx)
+		stdoutW.Close()
+	}()
+
+	go func() {
+		_, _ = stdinW.Write([]byte(`{"kind":"history","messages":[]}` + "\n"))
+		_, _ = stdinW.Write([]byte(`{"kind":"event","event":"issue.comment.mentioned","payload":{"body":"@bot hello"}}` + "\n"))
+		time.Sleep(time.Second)
+		_, _ = stdinW.Write([]byte(`{"kind":"control","op":"shutdown"}` + "\n"))
+		stdinW.Close()
+	}()
+
+	if _, err := drainFrames(stdoutR); err != nil {
+		t.Fatalf("drain frames: %v", err)
+	}
+	if err := <-loopErr; err != nil {
+		t.Fatalf("loop returned error: %v", err)
+	}
+	if got := llmCallCount.Load(); got != 2 {
+		t.Errorf("expected 2 LLM calls (1 timeout + 1 retry), got %d", got)
+	}
+}
+
+// TestLoopReasoningTimeoutRetryExhausted verifies that after maxAttempts
+// calls, each returning DeadlineExceeded, the loop stops and returns a
+// descriptive timeout error.
+func TestLoopReasoningTimeoutRetryExhausted(t *testing.T) {
+	t.Parallel()
+
+	var llmCallCount atomic.Int32
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		llmCallCount.Add(1)
+		// Always sleep past the timeout so every call returns DeadlineExceeded.
+		time.Sleep(300 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "resp_late",
+			"output": []map[string]any{
+				{"type": "message", "role": "assistant", "content": []map[string]any{{"type": "output_text", "text": "too late"}}},
+			},
+			"usage": map[string]any{"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+		})
+	}))
+	t.Cleanup(llmServer.Close)
+
+	llmClient := llm.New(llmServer.URL, "test-token")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bundle := local.Build()
+	registry := tools.Build(bundle.Tools, nil, nil, nil)
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdoutR.Close()
+
+	loop := runtime.NewLoop(
+		ipc.NewReader(stdinR),
+		ipc.NewWriter(stdoutW),
+		llmClient,
+		"gpt-4o-mini",
+		registry,
+		"system prompt for test",
+		bundle.Async,
+		0,
+		100*time.Millisecond, // reasoningTimeout
+		1,                    // reasoningTimeoutRetries: 2 total attempts
+	)
+
+	loopErr := make(chan error, 1)
+	go func() {
+		loopErr <- loop.Run(ctx)
+		stdoutW.Close()
+	}()
+
+	go func() {
+		_, _ = stdinW.Write([]byte(`{"kind":"history","messages":[]}` + "\n"))
+		_, _ = stdinW.Write([]byte(`{"kind":"event","event":"issue.comment.mentioned","payload":{"body":"@bot hello"}}` + "\n"))
+		time.Sleep(time.Second)
+		_, _ = stdinW.Write([]byte(`{"kind":"control","op":"shutdown"}` + "\n"))
+		stdinW.Close()
+	}()
+
+	if _, err := drainFrames(stdoutR); err != nil {
+		t.Fatalf("drain frames: %v", err)
+	}
+	err := <-loopErr
+	if err == nil {
+		t.Fatal("expected loop to return a timeout error, got nil")
+	}
+	if got := llmCallCount.Load(); got != 2 {
+		t.Errorf("expected 2 LLM calls (both timing out), got %d", got)
+	}
+	if !strings.Contains(err.Error(), "LLM reasoning timeout after 2 attempt(s)") {
+		t.Errorf("error message should indicate exhausted retries, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "threshold=0s") {
+		t.Errorf("error message should include threshold, got: %v", err)
+	}
+}
+
+// TestLoopReasoningTimeoutNonTimeoutErrorNoRetry verifies that non-timeout
+// errors (here a 400 from the upstream) are NOT retried at the reasoning-
+// timeout layer. Only one LLM call should be made.
+func TestLoopReasoningTimeoutNonTimeoutErrorNoRetry(t *testing.T) {
+	t.Parallel()
+
+	var llmCallCount atomic.Int32
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		llmCallCount.Add(1)
+		// Return a hard 400 — not a timeout, not retryable at either layer.
+		http.Error(w, "upstream rejected request", http.StatusBadRequest)
+	}))
+	t.Cleanup(llmServer.Close)
+
+	llmClient := llm.New(llmServer.URL, "test-token")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bundle := local.Build()
+	registry := tools.Build(bundle.Tools, nil, nil, nil)
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdoutR.Close()
+
+	loop := runtime.NewLoop(
+		ipc.NewReader(stdinR),
+		ipc.NewWriter(stdoutW),
+		llmClient,
+		"gpt-4o-mini",
+		registry,
+		"system prompt for test",
+		bundle.Async,
+		0,
+		1*time.Second, // reasoningTimeout
+		2,             // reasoningTimeoutRetries: 3 would be possible, but should only use 1
+	)
+
+	loopErr := make(chan error, 1)
+	go func() {
+		loopErr <- loop.Run(ctx)
+		stdoutW.Close()
+	}()
+
+	go func() {
+		_, _ = stdinW.Write([]byte(`{"kind":"history","messages":[]}` + "\n"))
+		_, _ = stdinW.Write([]byte(`{"kind":"event","event":"issue.comment.mentioned","payload":{"body":"@bot hello"}}` + "\n"))
+		time.Sleep(500 * time.Millisecond)
+		_, _ = stdinW.Write([]byte(`{"kind":"control","op":"shutdown"}` + "\n"))
+		stdinW.Close()
+	}()
+
+	if _, err := drainFrames(stdoutR); err != nil {
+		t.Fatalf("drain frames: %v", err)
+	}
+	err := <-loopErr
+	if err == nil {
+		t.Fatal("expected loop to return an error for the 400, got nil")
+	}
+	if got := llmCallCount.Load(); got != 1 {
+		t.Errorf("expected exactly 1 LLM call (no retry for non-timeout error), got %d", got)
+	}
+	if !strings.Contains(err.Error(), "llm call failed") {
+		t.Errorf("error should be propagated from the LLM layer, got: %v", err)
+	}
+}
+
+// TestLoopReasoningTimeoutInboxDrain verifies that inbox events arriving
+// while an LLM call is in flight are still drained into context, causing
+// the loop to make another round with the new input visible.
+func TestLoopReasoningTimeoutInboxDrain(t *testing.T) {
+	t.Parallel()
+
+	// Block the first LLM call on a channel so the test has a window to
+	// push an inbox event mid-call.
+	proceedCh := make(chan struct{})
+	var (
+		llmCallCount   atomic.Int32
+		secondCallBody atomic.Value // []byte
+	)
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		n := llmCallCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch n {
+		case 1:
+			// Block until the test pushes the inbox event.
+			<-proceedCh
+			// Respond with a plain assistant message — no tool calls.
+			// The loop will detect postCallLen > preCallLen (the inbox
+			// event folded into context) and make a second round.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "resp_1",
+				"output": []map[string]any{
+					{"type": "message", "role": "assistant", "content": []map[string]any{{"type": "output_text", "text": "thinking..."}}},
+				},
+				"usage": map[string]any{"input_tokens": 10, "output_tokens": 3, "total_tokens": 13},
+			})
+		case 2:
+			// Capture the second call body so we can assert the inbox
+			// event text is visible.
+			body, _ := io.ReadAll(r.Body)
+			secondCallBody.Store(body)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "resp_2",
+				"output": []map[string]any{
+					{"type": "message", "role": "assistant", "content": []map[string]any{{"type": "output_text", "text": "all done"}}},
+				},
+				"usage": map[string]any{"input_tokens": 5, "output_tokens": 2, "total_tokens": 7},
+			})
+		default:
+			http.Error(w, "unexpected extra LLM call", http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(llmServer.Close)
+
+	llmClient := llm.New(llmServer.URL, "test-token")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bundle := local.Build()
+	registry := tools.Build(bundle.Tools, nil, nil, nil)
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdoutR.Close()
+
+	loop := runtime.NewLoop(
+		ipc.NewReader(stdinR),
+		ipc.NewWriter(stdoutW),
+		llmClient,
+		"gpt-4o-mini",
+		registry,
+		"system prompt for test",
+		bundle.Async,
+		0, 5*time.Second, 0, // reasoning timeout generous; retries=0 (1 total attempt)
+	)
+
+	loopErr := make(chan error, 1)
+	go func() {
+		loopErr <- loop.Run(ctx)
+		stdoutW.Close()
+	}()
+
+	go func() {
+		_, _ = stdinW.Write([]byte(`{"kind":"history","messages":[]}` + "\n"))
+		_, _ = stdinW.Write([]byte(`{"kind":"event","event":"issue.comment.mentioned","payload":{"body":"@bot hello"}}` + "\n"))
+		// Wait for the first LLM call to start (it blocks on proceedCh).
+		time.Sleep(100 * time.Millisecond)
+		// Push an inbox event while the LLM call is in flight.
+		_, _ = stdinW.Write([]byte(`{"kind":"event","event":"issue.comment.mentioned","payload":{"body":"INBOX_EVENT_MARKER"}}` + "\n"))
+		// Give the main goroutine time to drain the inbox via select.
+		time.Sleep(100 * time.Millisecond)
+		// Unblock the first LLM call.
+		close(proceedCh)
+		// Wait for the second round to finish, then shutdown.
+		time.Sleep(500 * time.Millisecond)
+		_, _ = stdinW.Write([]byte(`{"kind":"control","op":"shutdown"}` + "\n"))
+		stdinW.Close()
+	}()
+
+	frames, err := drainFrames(stdoutR)
+	if err != nil {
+		t.Fatalf("drain frames: %v", err)
+	}
+	if err := <-loopErr; err != nil {
+		t.Fatalf("loop returned error: %v", err)
+	}
+	if got := llmCallCount.Load(); got != 2 {
+		t.Fatalf("expected 2 LLM calls (first unblocked + second round for inbox event), got %d", got)
+	}
+
+	// The inbox event text must be visible in the second LLM call's input.
+	rawBody, _ := secondCallBody.Load().([]byte)
+	if len(rawBody) == 0 {
+		t.Fatal("did not capture second LLM call body")
+	}
+	if !strings.Contains(string(rawBody), "INBOX_EVENT_MARKER") {
+		t.Errorf("second LLM call body should contain the inbox event text, got:\n%s", string(rawBody))
+	}
+
+	// Outbound stream should have exactly one done frame.
+	var doneFrames int
+	for _, f := range frames {
+		if f.Kind == "done" {
+			doneFrames++
+		}
+	}
+	if doneFrames != 1 {
+		t.Errorf("expected exactly 1 done frame, got %d", doneFrames)
 	}
 }
 

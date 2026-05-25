@@ -42,7 +42,7 @@ reviewers:
     - paths: ["apps/hangrix/**", "pkg/**", "go.work", "go.work.sum"]
       reviewers: [server-reviewer, tester]
     - paths: ["apps/hangrix-agent/**", "apps/hangrix-runner/**"]
-      reviewers: [maintainer, tester]
+      reviewers: [runtime-reviewer, tester]
     - paths: ["apps/web/**"]
       reviewers: [web-reviewer, tester]
   fallback: [maintainer]

@@ -770,6 +770,9 @@ func buildAgentEnv(task *client.Task, baseURL string) map[string]string {
 	if len(task.McpServers) > 0 {
 		env["HANGRIX_MCP_SERVERS"] = strings.Join(task.McpServers, ",")
 	}
+	if task.LLMMaxContextTokens > 0 {
+		env["HANGRIX_LLM_MAX_CONTEXT_TOKENS"] = strconv.Itoa(task.LLMMaxContextTokens)
+	}
 	return env
 }
 
