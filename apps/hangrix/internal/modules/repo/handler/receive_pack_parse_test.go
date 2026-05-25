@@ -83,6 +83,63 @@ func TestParseReceivePackRefsAgainstRealPush(t *testing.T) {
 	}
 }
 
+func TestParseReceivePackRefsAgainstRealTagPush(t *testing.T) {
+	bare := initBareRepo(t)
+	work := initWorkRepoWithCommit(t)
+
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/info/refs"):
+			service := r.URL.Query().Get("service")
+			w.Header().Set("Content-Type", "application/x-"+service+"-advertisement")
+			out := gitOutput(t, "", service[len("git-"):], "--stateless-rpc", "--advertise-refs", bare)
+			_, _ = w.Write(packetLine("# service=" + service + "\n"))
+			_, _ = w.Write([]byte("0000"))
+			_, _ = w.Write(out)
+		case strings.HasSuffix(r.URL.Path, "/git-receive-pack"):
+			body := readMaybeGzip(t, r)
+			capturedBody = body
+			cmd := exec.Command("git", "receive-pack", "--stateless-rpc", bare)
+			cmd.Stdin = bytes.NewReader(body)
+			w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
+			out, err := cmd.Output()
+			if err != nil {
+				t.Errorf("replay receive-pack: %v", err)
+			}
+			_, _ = w.Write(out)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	gitOutput(t, work, "tag", "-f", "v1.0.0")
+	pushOut := gitTry(t, work, "push", srv.URL+"/repo.git", "refs/tags/v1.0.0")
+	t.Logf("git push output:\n%s", pushOut)
+
+	if len(capturedBody) == 0 {
+		t.Fatal("no receive-pack POST body captured — push did not reach the server")
+	}
+
+	refs, _ := parseReceivePackRefs(capturedBody)
+	if len(refs) == 0 {
+		t.Fatal("parseReceivePackRefs returned NO refs for a real tag push")
+	}
+	var found bool
+	for _, u := range refs {
+		if u.RefName == "refs/tags/v1.0.0" {
+			found = true
+			if strings.ContainsAny(u.RefName, "\n\t ") {
+				t.Errorf("RefName has stray whitespace: %q", u.RefName)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("pushed ref refs/tags/v1.0.0 not among parsed refs: %+v", refs)
+	}
+}
+
 func readMaybeGzip(t *testing.T, r *http.Request) []byte {
 	t.Helper()
 	var src io.Reader = r.Body
@@ -368,9 +425,9 @@ func TestInjectContributionHints_NoOuterFlush(t *testing.T) {
 
 func TestLastOuterFlush(t *testing.T) {
 	tests := []struct {
-		name     string
-		raw      []byte
-		wantPos  int
+		name    string
+		raw     []byte
+		wantPos int
 	}{
 		{
 			name: "normal double-framed",
@@ -408,8 +465,8 @@ func TestLastOuterFlush(t *testing.T) {
 			wantPos: 0,
 		},
 		{
-			name: "flush then truncated pkt",
-			raw:  []byte("0000" + "0011\x01partial"),
+			name:    "flush then truncated pkt",
+			raw:     []byte("0000" + "0011\x01partial"),
 			wantPos: 0, // the first 0000 is standalone
 		},
 	}

@@ -177,30 +177,20 @@ func (h *Handler) gitReceivePack(w http.ResponseWriter, r *http.Request) {
 
 	// Per-ref ACL for agent sessions (contribution-branch model): a session
 	// may only update refs inside its own per-issue namespace
-	// (refs/heads/issue-<N>/<role>[/...]). Any attempt to touch the issue
-	// branch, base, or another role's namespace is rejected before git runs.
-	// Human callers (cookie/pat/password) are governed by branch protections
-	// + canAccessRepo instead.
+	// (refs/heads/issue-<N>/<role>[/...]) or create new tags. Any attempt to
+	// touch the issue branch, base, another role's namespace, or update an
+	// existing tag is rejected before git runs. Human callers
+	// (cookie/pat/password) are governed by branch protections + canAccessRepo
+	// instead.
 	if caller != nil && caller.authMethod == "session" && caller.session != nil {
 		base := sessionNamespacePrefix(caller.session)
 		for _, u := range refUpdates {
-			if !refWithinNamespace(u.RefName, base) {
+			if !sessionRefUpdateAllowed(u.RefName, u.OldSHA, base) {
+				if strings.HasPrefix(u.RefName, "refs/tags/") {
+					http.Error(w, "per-ref ACL: agent sessions may only create new tags", http.StatusForbidden)
+					return
+				}
 				http.Error(w, "per-ref ACL: agent session may only push to "+base+"/<slug>", http.StatusForbidden)
-				return
-			}
-			// Require a slug under the role namespace. Contribution branches
-			// are issue-<N>/<role>/<slug> so a role can run several in
-			// parallel, each independently reviewable. The bare role ref is
-			// rejected (and would D/F-conflict with any slugged sibling).
-			if u.RefName == base {
-				http.Error(w, "contribution branch needs a slug: push to "+base+"/<slug> (e.g. "+base+"/fix-typo), not the bare role namespace", http.StatusForbidden)
-				return
-			}
-			// Immutability: a contribution branch is write-once. Any update to
-			// an existing ref (force-push, fast-forward, or delete) is
-			// rejected — revise by pushing a NEW versioned branch (…-v2).
-			if !isZeroSHA(u.OldSHA) {
-				http.Error(w, "contribution branch "+strings.TrimPrefix(u.RefName, "refs/heads/")+" is immutable once pushed — push a new versioned branch (e.g. a -v2 suffix) instead of updating it", http.StatusForbidden)
 				return
 			}
 		}
@@ -715,6 +705,26 @@ func refWithinNamespace(refName, base string) bool {
 	return refName == base || strings.HasPrefix(refName, base+"/")
 }
 
+// sessionRefUpdateAllowed applies the agent-session push policy. Contribution
+// branches must live under the session's own refs/heads/issue-<N>/<role>
+// namespace, while tag pushes are allowed only when creating a new tag. Any
+// existing ref update or delete is rejected to preserve write-once semantics.
+func sessionRefUpdateAllowed(refName, oldSHA, base string) bool {
+	if base == "" {
+		return false
+	}
+	if strings.HasPrefix(refName, "refs/tags/") {
+		return isZeroSHA(oldSHA)
+	}
+	if !refWithinNamespace(refName, base) {
+		return false
+	}
+	if refName == base {
+		return false
+	}
+	return isZeroSHA(oldSHA)
+}
+
 // isZeroSHA reports whether sha is the git all-zero object id — the old-SHA of
 // a ref create, or the new-SHA of a ref delete. An empty string counts as
 // zero. Used to distinguish "creating a new contribution branch" (old=zero,
@@ -836,7 +846,6 @@ func hasSidebandResponse(data []byte) bool {
 	ch := data[4]
 	return ch == 1 || ch == 2 || ch == 3
 }
-
 
 // packetLine encodes one Git wire-protocol packet line: 4-hex-digit length
 // prefix (covering the prefix itself) followed by the payload.

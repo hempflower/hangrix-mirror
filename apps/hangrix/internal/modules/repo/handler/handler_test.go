@@ -863,6 +863,38 @@ func TestSessionRefAllowed(t *testing.T) {
 	}
 }
 
+func TestSessionRefUpdateAllowed(t *testing.T) {
+	num := func(n int32) *int32 { return &n }
+	sess := &runnerdomain.AgentSession{IssueNumber: num(5), RoleKey: "server"}
+	zero := "0000000000000000000000000000000000000000"
+	real := "1111111111111111111111111111111111111111"
+
+	tests := []struct {
+		name   string
+		ref    string
+		oldSHA string
+		want   bool
+	}{
+		{name: "new slugged contribution branch", ref: "refs/heads/issue-5/server/fix-typo-v1", oldSHA: zero, want: true},
+		{name: "new tag allowed", ref: "refs/tags/v1.0.0", oldSHA: zero, want: true},
+		{name: "bare role ref rejected", ref: "refs/heads/issue-5/server", oldSHA: zero, want: false},
+		{name: "existing branch update rejected", ref: "refs/heads/issue-5/server/fix-typo-v1", oldSHA: real, want: false},
+		{name: "existing tag update rejected", ref: "refs/tags/v1.0.0", oldSHA: real, want: false},
+		{name: "other role namespace rejected", ref: "refs/heads/issue-5/web/try", oldSHA: zero, want: false},
+		{name: "unbound session denied", ref: "refs/tags/v1.0.0", oldSHA: zero, want: false},
+	}
+
+	for _, tc := range tests {
+		base := sessionNamespacePrefix(sess)
+		if tc.name == "unbound session denied" {
+			base = sessionNamespacePrefix(&runnerdomain.AgentSession{})
+		}
+		if got := sessionRefUpdateAllowed(tc.ref, tc.oldSHA, base); got != tc.want {
+			t.Errorf("%s: sessionRefUpdateAllowed(%q, %q, %q) = %v, want %v", tc.name, tc.ref, tc.oldSHA, base, got, tc.want)
+		}
+	}
+}
+
 func TestIsZeroSHA(t *testing.T) {
 	zero := "0000000000000000000000000000000000000000"
 	tests := []struct {
