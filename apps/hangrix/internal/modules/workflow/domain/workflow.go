@@ -211,11 +211,33 @@ type JobDefInput struct {
 	Outputs map[string]string
 }
 
+// AssetInput is a single asset to attach to a release step.
+type AssetInput struct {
+	// Path is the container-relative or absolute path to the file.
+	Path string `json:"path"`
+	// Name overrides the uploaded asset file name. When empty, the
+	// basename of Path is used.
+	Name string `json:"name,omitempty"`
+}
+
 // StepInput is a single step within a job definition.
 type StepInput struct {
 	Id   *string // optional step id for ${{ steps.<id>.outputs.<key> }} references
 	Name string
-	Run  string
+	// Type discriminates between step kinds. "" and "run" are shell steps;
+	// "release" is a built-in release creation step.
+	Type string `json:"type,omitempty"`
+	// Run is the shell command (only for type=run / type omitted).
+	Run string `json:"run,omitempty"`
+	// Tag is the release tag name (only for type=release).
+	Tag string `json:"tag,omitempty"`
+	// Notes is the release notes (only for type=release).
+	Notes string `json:"notes,omitempty"`
+	// Draft, when true, creates the release as a draft (only for type=release).
+	// Default true.
+	Draft bool `json:"draft"`
+	// Assets lists files to upload to the release (only for type=release).
+	Assets []AssetInput `json:"assets,omitempty"`
 }
 
 // StepOutputValue is a single output value with masking metadata.

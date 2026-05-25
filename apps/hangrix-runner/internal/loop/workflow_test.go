@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/hangrix/hangrix/apps/hangrix-runner/internal/client"
@@ -819,5 +820,65 @@ func TestBuildWorkflowEnv_StepOutputFileFallback(t *testing.T) {
 
 	if got, want := env["HANGRIX_STEP_OUTPUT_FILE"], "/tmp/hangrix/step-output-3"; got != want {
 		t.Errorf("HANGRIX_STEP_OUTPUT_FILE = %q, want %q", got, want)
+	}
+}
+
+func TestResolveAssetPath_Relative(t *testing.T) {
+	driver := &WorkflowJobDriver{}
+	got, err := driver.resolveAssetPath("dist/app", "/tmp/wf-job-1/repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "/tmp/wf-job-1/repo/dist/app"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveAssetPath_WorkspaceSlash(t *testing.T) {
+	driver := &WorkflowJobDriver{}
+	got, err := driver.resolveAssetPath("/workspace/dist/app", "/tmp/wf-job-1/repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "/tmp/wf-job-1/repo/dist/app"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveAssetPath_WorkspaceRoot(t *testing.T) {
+	driver := &WorkflowJobDriver{}
+	got, err := driver.resolveAssetPath("/workspace", "/tmp/wf-job-1/repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "/tmp/wf-job-1/repo"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveAssetPath_RejectsOutsideWorkspace(t *testing.T) {
+	driver := &WorkflowJobDriver{}
+	paths := []string{"/etc/passwd", "/home/user/.ssh/id_rsa", "/var/run/secrets"}
+	for _, p := range paths {
+		_, err := driver.resolveAssetPath(p, "/tmp/wf-job-1/repo")
+		if err == nil {
+			t.Errorf("expected error for path %q, got nil", p)
+		}
+		if err != nil && !strings.Contains(err.Error(), "outside /workspace") {
+			t.Errorf("error for %q should mention 'outside /workspace': %v", p, err)
+		}
+	}
+}
+
+func TestResolveAssetPath_WorkspacePrefixCheck(t *testing.T) {
+	// Paths that start with /workspace but aren't actually under it
+	// (e.g. /workspace-other) must be rejected.
+	driver := &WorkflowJobDriver{}
+	_, err := driver.resolveAssetPath("/workspace-other/secret", "/tmp/wf-job-1/repo")
+	if err == nil {
+		t.Fatal("expected error for /workspace-other, got nil")
 	}
 }

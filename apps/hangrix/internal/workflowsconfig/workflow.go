@@ -87,11 +87,34 @@ type JobDefinition struct {
 	Outputs          map[string]string
 }
 
-// StepDefinition is a single shell step within a job.
-type StepDefinition struct {
-	Id   string
+// Step type constants.
+const (
+	StepTypeRun     = "run"
+	StepTypeRelease = "release"
+)
+
+// AssetDefinition is a single asset to attach to a release step.
+type AssetDefinition struct {
+	// Path is the container-relative or absolute path to the file.
+	Path string
+	// Name overrides the uploaded asset file name. When empty, the
+	// basename of Path is used.
 	Name string
-	Run  string
+}
+
+// StepDefinition is a single step within a job. The Type field
+// discriminates between run (shell) and release (built-in release
+// creation) steps. When Type is empty, the step is treated as
+// type "run" for backward compatibility.
+type StepDefinition struct {
+	Id      string
+	Name    string
+	Type    string            // "run" (default) or "release"
+	Run     string            // shell command (only for type=run)
+	Tag     string            // release tag name (only for type=release)
+	Notes   string            // release notes (only for type=release)
+	Draft   bool              // create as draft (only for type=release, default true)
+	Assets  []AssetDefinition // assets to upload (only for type=release)
 }
 
 // WorkflowConfigValidationError collects all validation errors for a single

@@ -145,6 +145,59 @@ Runner 在 `GET /api/runner/tasks` 拉到的 task 载荷中，除 `Env`（sessio
 - `repo_variables` 为 `nil` 表示服务端尚未升级（向后兼容，`${...}` 引用不做展开也不报错）；空 non-nil map 表示服务端已升级但仓库无变量（`${...}` 引用明确报错）。
 - `mcp_servers` 是 `[]string`，从 session 冻结的 `role_config` 中提取。非空时 runner 将其注入 agent 容器（如 `HANGRIX_MCP_SERVERS=playwright`），agent 按此白名单过滤 `.mcp.json` 中的服务器加载；空/nil 时 agent 不加载任何 MCP 服务器。
 
+## Workflow job task payload
+
+当 task `kind` 为 `"workflow_job"` 时，载荷中包含 `workflow_job` 字段。其中 `steps` 数组的每一项是一个 **typed step**：
+
+```json
+{
+  "kind": "workflow_job",
+  "workflow_job": {
+    "steps": [
+      {
+        "id": "build",
+        "name": "Build artifacts",
+        "type": "run",
+        "run": "make release"
+      },
+      {
+        "id": "create-release",
+        "name": "Create release",
+        "type": "release",
+        "tag": "v1.0.0",
+        "notes": "Release notes",
+        "draft": false,
+        "assets": [
+          {"path": "dist/app.tar.gz", "name": "app-linux-amd64.tar.gz"}
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Step 类型
+
+| type | 执行方式 | 专属字段 |
+|---|---|---|
+| `run`（默认） | `docker exec bash -lc <run>` | `run` |
+| `release` | 内建：调用平台 release API | `tag`, `notes`, `draft`, `assets[]` |
+
+- `type` 省略或为空时等价于 `"run"`。
+- `release` step 的 `assets[]` 中每项包含 `path`（必填）和 `name`（可选，覆盖上传后的文件名）。文件从当前 checkout/workdir 读取。
+- `release` step 执行成功后将 outputs（`release_id`, `tag`, `draft`, `published`, `release_url`）写入 `/step-result` 回调。
+
+### 回调端点
+
+Workflow job 使用以下 runner 回调（Bearer `hgxr_` token）：
+
+| Method + Path | 用途 |
+|---|---|
+| `POST /api/runner/workflow-jobs/{jobRunID}/running` | 标记 job 进入 running |
+| `POST /api/runner/workflow-jobs/{jobRunID}/logs` | 追加日志行 |
+| `POST /api/runner/workflow-jobs/{jobRunID}/step-result` | 上报单个 step 的输出 |
+| `POST /api/runner/workflow-jobs/{jobRunID}/terminate` | 上报 job 终态 |
+
 ## 不在本设计里的事
 
 - **多 session 并发：** v1 一 runner 一时刻一 session，串行消化。M7a 起按 `runner.capabilities.parallelism` 扩。

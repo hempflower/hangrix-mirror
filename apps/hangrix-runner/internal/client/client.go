@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
@@ -260,11 +261,36 @@ type WorkflowContainer struct {
 	Volumes    []Volume          `json:"volumes"`
 }
 
-// WorkflowStep is one shell command in a workflow job.
+// WorkflowStep is one step in a workflow job. The Type field discriminates
+// between built-in step kinds: "run" (shell command, the default) and
+// "release" (create/publish a platform release).
 type WorkflowStep struct {
 	ID   string `json:"id,omitempty"`
 	Name string `json:"name,omitempty"`
-	Run  string `json:"run"`
+	// Type is the step kind. Empty / "run" means a shell step; "release"
+	// means a platform-release step. The runner dispatches on this field.
+	Type string `json:"type,omitempty"`
+	// Run is the shell command for "run" steps. Must be empty for "release" steps.
+	Run string `json:"run,omitempty"`
+	// ---- release step fields (only valid when Type == "release") ----
+	// Tag is the git tag name (required, must exist in the repo).
+	Tag string `json:"tag,omitempty"`
+	// Notes is the release body / description (optional).
+	Notes string `json:"notes,omitempty"`
+	// Assets is the list of files to upload as release assets.
+	Assets []WorkflowStepAsset `json:"assets,omitempty"`
+	// Draft controls whether the release is created as a draft. When nil
+	// or true the release stays draft; false means auto-publish after creation.
+	Draft *bool `json:"draft,omitempty"`
+}
+
+// WorkflowStepAsset describes a single file to attach to a release.
+// Path is the workspace-relative (or absolute) file path inside the job
+// container; Name is the optional override for the asset filename shown
+// on the release page. When Name is empty the basename of Path is used.
+type WorkflowStepAsset struct {
+	Path string `json:"path"`
+	Name string `json:"name,omitempty"`
 }
 
 // PollTasks returns (task, true, nil) on a real assignment, (nil, false, nil)
@@ -417,6 +443,140 @@ type WorkflowStepResultRequest struct {
 // output file.
 func (c *Client) ReportWorkflowStepResult(ctx context.Context, jobRunID int64, req WorkflowStepResultRequest) error {
 	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/runner/workflow-jobs/%d/step-result", jobRunID), req, nil, true)
+}
+
+// ---- release API (called with workflow token, not agent token) ----
+
+// releaseResponse is a minimal view of the server's publicRelease shape
+// that the runner needs from create / publish calls.
+type releaseResponse struct {
+	ID      int64  `json:"id"`
+	TagName string `json:"tag_name"`
+	IsDraft bool   `json:"is_draft"`
+}
+
+// CreateReleaseRequest is the JSON body for POST /api/repos/{owner}/{name}/releases.
+type CreateReleaseRequest struct {
+	TagName string `json:"tag_name"`
+	Notes   string `json:"notes,omitempty"`
+}
+
+// CreateRelease creates a draft release for the given tag. Returns the
+// minimal release metadata the runner needs to produce step outputs.
+// The workflowToken is the HANGRIX_WORKFLOW_TOKEN value from the job payload.
+func (c *Client) CreateRelease(ctx context.Context, baseURL, owner, name, workflowToken string, req CreateReleaseRequest) (*releaseResponse, error) {
+	path := fmt.Sprintf("/api/repos/%s/%s/releases", owner, name)
+	var out releaseResponse
+	if err := c.doWithToken(ctx, baseURL, http.MethodPost, path, req, &out, workflowToken); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UploadReleaseAsset uploads a single file as a release asset. The body
+// is sent as multipart/form-data with two fields: "name" (the asset name)
+// and "file" (the file contents). The contentType parameter is the MIME
+// type of the file (defaults to "application/octet-stream" when empty).
+func (c *Client) UploadReleaseAsset(ctx context.Context, baseURL, owner, name, workflowToken string, releaseID int64, assetName, contentType string, body io.Reader) error {
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	path := fmt.Sprintf("/api/repos/%s/%s/releases/%d/assets", owner, name, releaseID)
+	return c.uploadMultipart(ctx, baseURL, path, workflowToken, assetName, contentType, body)
+}
+
+// PublishRelease publishes a draft release. Returns the updated release
+// metadata (with is_draft=false, published_at set).
+func (c *Client) PublishRelease(ctx context.Context, baseURL, owner, name, workflowToken string, releaseID int64) (*releaseResponse, error) {
+	path := fmt.Sprintf("/api/repos/%s/%s/releases/%d/publish", owner, name, releaseID)
+	var out releaseResponse
+	if err := c.doWithToken(ctx, baseURL, http.MethodPost, path, nil, &out, workflowToken); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// doWithToken is like do but uses the given bearer token instead of the
+// client's agent token, and prepends baseURL to path (so release calls
+// can use a different base than the runner endpoint).
+func (c *Client) doWithToken(ctx context.Context, baseURL, method, path string, in, out any, token string) error {
+	url := strings.TrimRight(baseURL, "/") + path
+	var body io.Reader
+	if in != nil {
+		buf, err := json.Marshal(in)
+		if err != nil {
+			return fmt.Errorf("encode body: %w", err)
+		}
+		body = bytes.NewReader(buf)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return err
+	}
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("%s %s: %d %s", method, path, resp.StatusCode, snippet(respBody))
+	}
+	if out != nil && len(respBody) > 0 {
+		if err := json.Unmarshal(respBody, out); err != nil {
+			return fmt.Errorf("decode %s response: %w", path, err)
+		}
+	}
+	return nil
+}
+
+// uploadMultipart sends a multipart/form-data POST with a single file field.
+func (c *Client) uploadMultipart(ctx context.Context, baseURL, path, token, assetName, contentType string, fileReader io.Reader) error {
+	url := strings.TrimRight(baseURL, "/") + path
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	// name field
+	if err := writer.WriteField("name", assetName); err != nil {
+		return fmt.Errorf("write name field: %w", err)
+	}
+	// file field
+	part, err := writer.CreateFormFile("file", assetName)
+	if err != nil {
+		return fmt.Errorf("create form file: %w", err)
+	}
+	if _, err := io.Copy(part, fileReader); err != nil {
+		return fmt.Errorf("copy file: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close writer: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("POST %s: %d %s", path, resp.StatusCode, snippet(respBody))
+	}
+	return nil
 }
 
 // ---- message + input forwarding ----
