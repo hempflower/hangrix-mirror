@@ -70,6 +70,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Use(h.requireAgentToken)
 		r.Post("/running", h.markJobRunning)
 		r.Post("/logs", h.appendLog)
+		r.Post("/step-result", h.stepResult)
 		r.Post("/terminate", h.terminateJob)
 	})
 }
@@ -148,21 +149,23 @@ type runDTO struct {
 }
 
 type jobRunDTO struct {
-	ID               int64   `json:"id"`
-	WorkflowRunID    int64   `json:"workflow_run_id"`
-	JobKey           string  `json:"job_key"`
-	DisplayName      string  `json:"display_name"`
-	Status           string  `json:"status"`
-	SequenceIndex    int32   `json:"sequence_index"`
-	WorkingDirectory string  `json:"working_directory"`
-	TimeoutMinutes   int32   `json:"timeout_minutes"`
-	RunnerID         *int64  `json:"runner_id"`
-	ContainerID      *string `json:"container_id"`
-	StartedAt        *string `json:"started_at"`
-	FinishedAt       *string `json:"finished_at"`
-	ExitCode         *int32  `json:"exit_code"`
-	ErrorMessage     string  `json:"error_message"`
-	CreatedAt        string  `json:"created_at"`
+	ID               int64                                  `json:"id"`
+	WorkflowRunID    int64                                  `json:"workflow_run_id"`
+	JobKey           string                                 `json:"job_key"`
+	DisplayName      string                                 `json:"display_name"`
+	Status           string                                 `json:"status"`
+	SequenceIndex    int32                                  `json:"sequence_index"`
+	WorkingDirectory string                                 `json:"working_directory"`
+	TimeoutMinutes   int32                                  `json:"timeout_minutes"`
+	RunnerID         *int64                                 `json:"runner_id"`
+	ContainerID      *string                                `json:"container_id"`
+	StepOutputs      map[string]map[string]domain.StepOutputValue `json:"step_outputs"`
+	JobOutputs       map[string]domain.StepOutputValue            `json:"job_outputs"`
+	StartedAt        *string                                `json:"started_at"`
+	FinishedAt       *string                                `json:"finished_at"`
+	ExitCode         *int32                                 `json:"exit_code"`
+	ErrorMessage     string                                 `json:"error_message"`
+	CreatedAt        string                                 `json:"created_at"`
 }
 
 type logLineDTO struct {
@@ -499,6 +502,50 @@ func (h *Handler) appendLog(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type stepResultReq struct {
+	StepID  string            `json:"step_id"`
+	Outputs map[string]string `json:"outputs"`
+	Masked  []string          `json:"masked"`
+}
+
+// POST /api/runner/workflow-jobs/{jobRunID}/step-result
+func (h *Handler) stepResult(w http.ResponseWriter, r *http.Request) {
+	jobID, ok := httpx.ParseID(w, chi.URLParam(r, "jobRunID"))
+	if !ok {
+		return
+	}
+
+	var req stepResultReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+
+	if req.StepID == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "step_id is required")
+		return
+	}
+
+	// Build StepOutputValue map with masking metadata.
+	maskedSet := make(map[string]bool, len(req.Masked))
+	for _, k := range req.Masked {
+		maskedSet[k] = true
+	}
+	outputs := make(map[string]domain.StepOutputValue, len(req.Outputs))
+	for k, v := range req.Outputs {
+		outputs[k] = domain.StepOutputValue{
+			Value:  v,
+			Masked: maskedSet[k],
+		}
+	}
+
+	if err := h.svc.SetStepOutputs(r.Context(), jobID, req.StepID, outputs); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type terminateJobReq struct {
 	Status   string `json:"status"`
 	ExitCode *int32 `json:"exit_code"`
@@ -530,6 +577,14 @@ func (h *Handler) terminateJob(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.MarkJobTerminal(r.Context(), jobID, status, req.ExitCode, req.Message); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	// Resolve job outputs on success.
+	if status == domain.JobStatusSuccess {
+		if err := h.svc.ResolveJobOutputs(r.Context(), jobID); err != nil {
+			// Log but don't fail — output resolution is best-effort.
+			// The job is already terminal; unresolved outputs stay empty.
+		}
 	}
 
 	// Advance the run (next job or mark terminal)

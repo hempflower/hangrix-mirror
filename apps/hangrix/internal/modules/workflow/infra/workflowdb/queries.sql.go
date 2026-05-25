@@ -45,7 +45,7 @@ WHERE id = (
     LIMIT 1
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, workflow_run_id, job_key, display_name, status, sequence_index, working_directory, timeout_minutes, runner_id, container_id, env_json, steps_json, started_at, finished_at, exit_code, error_message, created_at
+RETURNING id, workflow_run_id, job_key, display_name, status, sequence_index, working_directory, timeout_minutes, runner_id, container_id, env_json, steps_json, started_at, finished_at, exit_code, error_message, created_at, step_outputs_json, job_outputs_json, job_outputs_raw_json
 `
 
 // Only claim a job if no earlier-sequence job in the same run is still
@@ -72,6 +72,9 @@ func (q *Queries) ClaimNextWorkflowJob(ctx context.Context, runnerID pgtype.Int8
 		&i.ExitCode,
 		&i.ErrorMessage,
 		&i.CreatedAt,
+		&i.StepOutputsJson,
+		&i.JobOutputsJson,
+		&i.JobOutputsRawJson,
 	)
 	return i, err
 }
@@ -80,24 +83,27 @@ const createWorkflowJobRun = `-- name: CreateWorkflowJobRun :one
 
 INSERT INTO workflow_job_runs (
     workflow_run_id, job_key, display_name, status, sequence_index,
-    working_directory, timeout_minutes, env_json, steps_json
+    working_directory, timeout_minutes, env_json, steps_json,
+    job_outputs_raw_json
 ) VALUES (
     $1, $2, $3,
     'pending', $4,
     $5, $6,
-    $7, $8
-) RETURNING id, workflow_run_id, job_key, display_name, status, sequence_index, working_directory, timeout_minutes, runner_id, container_id, env_json, steps_json, started_at, finished_at, exit_code, error_message, created_at
+    $7, $8,
+    $9
+) RETURNING id, workflow_run_id, job_key, display_name, status, sequence_index, working_directory, timeout_minutes, runner_id, container_id, env_json, steps_json, started_at, finished_at, exit_code, error_message, created_at, step_outputs_json, job_outputs_json, job_outputs_raw_json
 `
 
 type CreateWorkflowJobRunParams struct {
-	WorkflowRunID    int64
-	JobKey           string
-	DisplayName      string
-	SequenceIndex    int32
-	WorkingDirectory string
-	TimeoutMinutes   int32
-	EnvJson          []byte
-	StepsJson        []byte
+	WorkflowRunID     int64
+	JobKey            string
+	DisplayName       string
+	SequenceIndex     int32
+	WorkingDirectory  string
+	TimeoutMinutes    int32
+	EnvJson           []byte
+	StepsJson         []byte
+	JobOutputsRawJson []byte
 }
 
 // ---- workflow_job_runs ----
@@ -111,6 +117,7 @@ func (q *Queries) CreateWorkflowJobRun(ctx context.Context, arg CreateWorkflowJo
 		arg.TimeoutMinutes,
 		arg.EnvJson,
 		arg.StepsJson,
+		arg.JobOutputsRawJson,
 	)
 	var i WorkflowJobRun
 	err := row.Scan(
@@ -131,6 +138,9 @@ func (q *Queries) CreateWorkflowJobRun(ctx context.Context, arg CreateWorkflowJo
 		&i.ExitCode,
 		&i.ErrorMessage,
 		&i.CreatedAt,
+		&i.StepOutputsJson,
+		&i.JobOutputsJson,
+		&i.JobOutputsRawJson,
 	)
 	return i, err
 }
@@ -202,7 +212,7 @@ func (q *Queries) CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunPa
 }
 
 const getWorkflowJobRun = `-- name: GetWorkflowJobRun :one
-SELECT id, workflow_run_id, job_key, display_name, status, sequence_index, working_directory, timeout_minutes, runner_id, container_id, env_json, steps_json, started_at, finished_at, exit_code, error_message, created_at FROM workflow_job_runs WHERE id = $1
+SELECT id, workflow_run_id, job_key, display_name, status, sequence_index, working_directory, timeout_minutes, runner_id, container_id, env_json, steps_json, started_at, finished_at, exit_code, error_message, created_at, step_outputs_json, job_outputs_json, job_outputs_raw_json FROM workflow_job_runs WHERE id = $1
 `
 
 func (q *Queries) GetWorkflowJobRun(ctx context.Context, id int64) (WorkflowJobRun, error) {
@@ -226,6 +236,9 @@ func (q *Queries) GetWorkflowJobRun(ctx context.Context, id int64) (WorkflowJobR
 		&i.ExitCode,
 		&i.ErrorMessage,
 		&i.CreatedAt,
+		&i.StepOutputsJson,
+		&i.JobOutputsJson,
+		&i.JobOutputsRawJson,
 	)
 	return i, err
 }
@@ -325,7 +338,7 @@ func (q *Queries) ListWorkflowJobLogs(ctx context.Context, arg ListWorkflowJobLo
 }
 
 const listWorkflowJobRunsByRun = `-- name: ListWorkflowJobRunsByRun :many
-SELECT id, workflow_run_id, job_key, display_name, status, sequence_index, working_directory, timeout_minutes, runner_id, container_id, env_json, steps_json, started_at, finished_at, exit_code, error_message, created_at FROM workflow_job_runs
+SELECT id, workflow_run_id, job_key, display_name, status, sequence_index, working_directory, timeout_minutes, runner_id, container_id, env_json, steps_json, started_at, finished_at, exit_code, error_message, created_at, step_outputs_json, job_outputs_json, job_outputs_raw_json FROM workflow_job_runs
 WHERE workflow_run_id = $1
 ORDER BY sequence_index ASC
 `
@@ -357,6 +370,9 @@ func (q *Queries) ListWorkflowJobRunsByRun(ctx context.Context, workflowRunID in
 			&i.ExitCode,
 			&i.ErrorMessage,
 			&i.CreatedAt,
+			&i.StepOutputsJson,
+			&i.JobOutputsJson,
+			&i.JobOutputsRawJson,
 		); err != nil {
 			return nil, err
 		}
@@ -527,6 +543,46 @@ type SetWorkflowJobContainerParams struct {
 
 func (q *Queries) SetWorkflowJobContainer(ctx context.Context, arg SetWorkflowJobContainerParams) error {
 	_, err := q.db.Exec(ctx, setWorkflowJobContainer, arg.ContainerID, arg.ID)
+	return err
+}
+
+const setWorkflowJobOutputs = `-- name: SetWorkflowJobOutputs :exec
+UPDATE workflow_job_runs
+SET job_outputs_json = $1::jsonb
+WHERE id = $2
+`
+
+type SetWorkflowJobOutputsParams struct {
+	OutputsJson []byte
+	ID          int64
+}
+
+// Write resolved job outputs after job completion.
+func (q *Queries) SetWorkflowJobOutputs(ctx context.Context, arg SetWorkflowJobOutputsParams) error {
+	_, err := q.db.Exec(ctx, setWorkflowJobOutputs, arg.OutputsJson, arg.ID)
+	return err
+}
+
+const setWorkflowJobStepOutputs = `-- name: SetWorkflowJobStepOutputs :exec
+
+UPDATE workflow_job_runs
+SET step_outputs_json =
+    COALESCE(step_outputs_json, '{}'::jsonb) ||
+    jsonb_build_object($1, $2::jsonb)
+WHERE id = $3
+`
+
+type SetWorkflowJobStepOutputsParams struct {
+	StepID      interface{}
+	OutputsJson []byte
+	ID          int64
+}
+
+// ---- step and job outputs ----
+// Merge a step's outputs into the job's step_outputs_json column.
+// Uses jsonb_set with concatenation to merge the step-level map.
+func (q *Queries) SetWorkflowJobStepOutputs(ctx context.Context, arg SetWorkflowJobStepOutputsParams) error {
+	_, err := q.db.Exec(ctx, setWorkflowJobStepOutputs, arg.StepID, arg.OutputsJson, arg.ID)
 	return err
 }
 

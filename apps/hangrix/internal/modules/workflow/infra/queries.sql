@@ -46,12 +46,14 @@ WHERE id = sqlc.arg('id') AND status IN ('pending', 'running');
 -- name: CreateWorkflowJobRun :one
 INSERT INTO workflow_job_runs (
     workflow_run_id, job_key, display_name, status, sequence_index,
-    working_directory, timeout_minutes, env_json, steps_json
+    working_directory, timeout_minutes, env_json, steps_json,
+    job_outputs_raw_json
 ) VALUES (
     sqlc.arg('workflow_run_id'), sqlc.arg('job_key'), sqlc.arg('display_name'),
     'pending', sqlc.arg('sequence_index'),
     sqlc.arg('working_directory'), sqlc.arg('timeout_minutes'),
-    sqlc.narg('env_json'), sqlc.narg('steps_json')
+    sqlc.narg('env_json'), sqlc.narg('steps_json'),
+    sqlc.narg('job_outputs_raw_json')
 ) RETURNING *;
 
 -- name: GetWorkflowJobRun :one
@@ -120,3 +122,20 @@ FROM workflow_job_logs
 WHERE workflow_job_run_id = sqlc.arg('workflow_job_run_id')
 ORDER BY created_at ASC, id ASC
 LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+
+-- ---- step and job outputs ----
+
+-- name: SetWorkflowJobStepOutputs :exec
+-- Merge a step's outputs into the job's step_outputs_json column.
+-- Uses jsonb_set with concatenation to merge the step-level map.
+UPDATE workflow_job_runs
+SET step_outputs_json =
+    COALESCE(step_outputs_json, '{}'::jsonb) ||
+    jsonb_build_object(sqlc.arg('step_id'), sqlc.arg('outputs_json')::jsonb)
+WHERE id = sqlc.arg('id');
+
+-- name: SetWorkflowJobOutputs :exec
+-- Write resolved job outputs after job completion.
+UPDATE workflow_job_runs
+SET job_outputs_json = sqlc.arg('outputs_json')::jsonb
+WHERE id = sqlc.arg('id');

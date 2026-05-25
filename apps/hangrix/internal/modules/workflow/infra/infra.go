@@ -126,15 +126,25 @@ func (r *PostgresRepo) CreateRun(ctx context.Context, params domain.CreateRunPar
 			return nil, nil, fmt.Errorf("marshal job steps: %w", err)
 		}
 
+		// Marshal raw job outputs (expression templates).
+		var jobOutputsRawJSON []byte
+		if len(jd.Outputs) > 0 {
+			jobOutputsRawJSON, err = json.Marshal(jd.Outputs)
+			if err != nil {
+				return nil, nil, fmt.Errorf("marshal job outputs raw: %w", err)
+			}
+		}
+
 		dbJob, err := r.q.CreateWorkflowJobRun(ctx, workflowdb.CreateWorkflowJobRunParams{
-			WorkflowRunID:    run.ID,
-			JobKey:           jd.JobKey,
-			DisplayName:      jd.DisplayName,
-			SequenceIndex:    int32(i),
-			WorkingDirectory: jd.WorkingDirectory,
-			TimeoutMinutes:   jd.TimeoutMinutes,
-			EnvJson:          envJSON,
-			StepsJson:        stepsJSON,
+			WorkflowRunID:      run.ID,
+			JobKey:             jd.JobKey,
+			DisplayName:        jd.DisplayName,
+			SequenceIndex:      int32(i),
+			WorkingDirectory:   jd.WorkingDirectory,
+			TimeoutMinutes:     jd.TimeoutMinutes,
+			EnvJson:            envJSON,
+			StepsJson:          stepsJSON,
+			JobOutputsRawJson:  jobOutputsRawJSON,
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("create workflow job run: %w", err)
@@ -292,6 +302,31 @@ func (r *PostgresRepo) SetJobContainer(ctx context.Context, id int64, containerI
 	})
 }
 
+// SetStepOutputs merges a step's outputs into the job's step_outputs_json.
+func (r *PostgresRepo) SetStepOutputs(ctx context.Context, id int64, stepID string, outputs map[string]domain.StepOutputValue) error {
+	outputsJSON, err := json.Marshal(outputs)
+	if err != nil {
+		return fmt.Errorf("marshal step outputs: %w", err)
+	}
+	return r.q.SetWorkflowJobStepOutputs(ctx, workflowdb.SetWorkflowJobStepOutputsParams{
+		ID:          id,
+		StepID:      stepID,
+		OutputsJson: outputsJSON,
+	})
+}
+
+// SetJobOutputs writes resolved job outputs after job completion.
+func (r *PostgresRepo) SetJobOutputs(ctx context.Context, id int64, outputs map[string]domain.StepOutputValue) error {
+	outputsJSON, err := json.Marshal(outputs)
+	if err != nil {
+		return fmt.Errorf("marshal job outputs: %w", err)
+	}
+	return r.q.SetWorkflowJobOutputs(ctx, workflowdb.SetWorkflowJobOutputsParams{
+		ID:          id,
+		OutputsJson: outputsJSON,
+	})
+}
+
 // ---- workflow job logs ----
 
 // AppendLog appends a single log line to a job run.
@@ -398,6 +433,9 @@ func rowToJobRun(row *workflowdb.WorkflowJobRun) *domain.WorkflowJobRun {
 		TimeoutMinutes:   row.TimeoutMinutes,
 		EnvJSON:          row.EnvJson,
 		StepsJSON:        row.StepsJson,
+		StepOutputsJSON:  row.StepOutputsJson,
+		JobOutputsJSON:   row.JobOutputsJson,
+		JobOutputsRawJSON: row.JobOutputsRawJson,
 		ErrorMessage:     row.ErrorMessage,
 		CreatedAt:        row.CreatedAt.Time,
 	}

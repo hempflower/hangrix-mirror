@@ -23,9 +23,11 @@ type jobWire struct {
 	TimeoutMinutes   int               `yaml:"timeout_minutes"`
 	WorkingDirectory string            `yaml:"working_directory"`
 	Steps            []stepWire        `yaml:"steps"`
+	Outputs          map[string]string `yaml:"outputs"`
 }
 
 type stepWire struct {
+	Id   string `yaml:"id"`
 	Name string `yaml:"name"`
 	Run  string `yaml:"run"`
 }
@@ -331,7 +333,7 @@ func decodeJobs(node *yaml.Node) ([]JobDefinition, []string) {
 		for j := 0; j < len(valNode.Content); j += 2 {
 			k := valNode.Content[j].Value
 			switch k {
-			case "name", "env", "timeout_minutes", "working_directory", "steps":
+			case "name", "env", "timeout_minutes", "working_directory", "steps", "outputs":
 				// valid
 			default:
 				errs = append(errs, fmt.Sprintf("jobs.%s.%s: unknown key", key, k))
@@ -403,6 +405,7 @@ func decodeJobs(node *yaml.Node) ([]JobDefinition, []string) {
 			TimeoutMinutes:   timeout,
 			WorkingDirectory: wd,
 			Steps:            liftSteps(jw.Steps),
+			Outputs:          jw.Outputs,
 		})
 	}
 
@@ -413,6 +416,7 @@ func liftSteps(wires []stepWire) []StepDefinition {
 	steps := make([]StepDefinition, len(wires))
 	for i, sw := range wires {
 		steps[i] = StepDefinition{
+			Id:   sw.Id,
 			Name: sw.Name,
 			Run:  sw.Run,
 		}
