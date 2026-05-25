@@ -206,7 +206,8 @@ func (s *Service) CreateRun(ctx context.Context, params CreateRunParams) (*domai
 		steps := make([]domain.StepInput, len(job.Steps))
 		for si, step := range job.Steps {
 			steps[si] = domain.StepInput{
-				Name: step.Name,
+				Id:   step.Id,
+					Name: step.Name,
 				Run:  step.Run,
 			}
 		}
@@ -217,6 +218,7 @@ func (s *Service) CreateRun(ctx context.Context, params CreateRunParams) (*domai
 			TimeoutMinutes:   int32(job.TimeoutMinutes),
 			WorkingDirectory: job.WorkingDirectory,
 			Steps:            steps,
+				Outputs:          job.Outputs,
 		}
 	}
 
@@ -309,6 +311,90 @@ func (s *Service) AdvanceRun(ctx context.Context, runID int64) error {
 	}
 
 	// Otherwise, the next pending job will be picked up by a runner
+	return nil
+}
+
+// ResolveJobOutputs resolves the raw output templates for a completed job
+// against the current runtime context (step outputs, prior job outputs, env,
+// dispatch inputs) and persists the resolved outputs.
+func (s *Service) ResolveJobOutputs(ctx context.Context, runID, jobID int64, dispatchInputs map[string]string) error {
+	job, err := s.store.GetJobRun(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("resolve job outputs: get job: %w", err)
+	}
+
+	// No raw output templates — nothing to resolve
+	if len(job.JobOutputsRawJSON) == 0 {
+		return nil
+	}
+
+	// Parse raw templates
+	var rawOutputs map[string]string
+	if err := json.Unmarshal(job.JobOutputsRawJSON, &rawOutputs); err != nil {
+		return fmt.Errorf("resolve job outputs: unmarshal raw: %w", err)
+	}
+	if len(rawOutputs) == 0 {
+		return nil
+	}
+
+	// Parse step outputs from the completed job
+	var stepOutputs map[string]map[string]string
+	if len(job.StepOutputsJSON) > 0 {
+		if err := json.Unmarshal(job.StepOutputsJSON, &stepOutputs); err != nil {
+			return fmt.Errorf("resolve job outputs: unmarshal step outputs: %w", err)
+		}
+	}
+
+	// Collect prior job outputs from siblings
+	allJobs, err := s.store.ListJobRunsByRun(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("resolve job outputs: list jobs: %w", err)
+	}
+	priorJobOutputs := make(map[string]map[string]string)
+	for _, j := range allJobs {
+		if j.SequenceIndex >= job.SequenceIndex {
+			continue // only prior jobs
+		}
+		if len(j.JobOutputsJSON) > 0 {
+			var outs map[string]string
+			if err := json.Unmarshal(j.JobOutputsJSON, &outs); err != nil {
+				continue // skip malformed
+			}
+			priorJobOutputs[j.JobKey] = outs
+		}
+	}
+
+	// Parse env
+	var envMap map[string]string
+	if len(job.EnvJSON) > 0 {
+		if err := json.Unmarshal(job.EnvJSON, &envMap); err != nil {
+			return fmt.Errorf("resolve job outputs: unmarshal env: %w", err)
+		}
+	}
+
+	// Build expression context
+	ectx := workflowsconfig.ExpressionContext{
+		StepOutputs: stepOutputs,
+		JobOutputs:  priorJobOutputs,
+		Env:         envMap,
+		Inputs:      dispatchInputs,
+	}
+
+	// Resolve each output template
+	resolved := make(map[string]string)
+	for key, tmpl := range rawOutputs {
+		val, err := workflowsconfig.ExpandExpr(tmpl, ectx)
+		if err != nil {
+			return fmt.Errorf("resolve job outputs: %s: %w", key, err)
+		}
+		resolved[key] = val
+	}
+
+	// Persist
+	if err := s.store.SetJobOutputs(ctx, jobID, resolved); err != nil {
+		return fmt.Errorf("resolve job outputs: persist: %w", err)
+	}
+
 	return nil
 }
 
@@ -675,6 +761,11 @@ func (s *Service) MarkJobTerminal(ctx context.Context, jobID int64, status domai
 // AppendLog appends a log line to a job run.
 func (s *Service) AppendLog(ctx context.Context, jobRunID int64, stream domain.LogStream, line string) error {
 	return s.store.AppendLog(ctx, jobRunID, stream, line)
+}
+
+// SetStepOutputs merges a step's outputs into a job run.
+func (s *Service) SetStepOutputs(ctx context.Context, jobID int64, stepID string, outputs map[string]string) error {
+	return s.store.SetStepOutputs(ctx, jobID, stepID, outputs)
 }
 
 // GetJobRun returns a job run by ID.

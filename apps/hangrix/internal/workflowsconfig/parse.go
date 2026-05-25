@@ -23,9 +23,11 @@ type jobWire struct {
 	TimeoutMinutes   int               `yaml:"timeout_minutes"`
 	WorkingDirectory string            `yaml:"working_directory"`
 	Steps            []stepWire        `yaml:"steps"`
+	Outputs          map[string]string `yaml:"outputs"`
 }
 
 type stepWire struct {
+	Id   string `yaml:"id"`
 	Name string `yaml:"name"`
 	Run  string `yaml:"run"`
 }
@@ -69,6 +71,8 @@ var (
 	envKeyRe       = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 	inputNameRe    = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 	roleKeyRe      = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	stepIdRe       = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	outputKeyRe    = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_-]*$`)
 )
 
 // ---- public API ----
@@ -331,7 +335,7 @@ func decodeJobs(node *yaml.Node) ([]JobDefinition, []string) {
 		for j := 0; j < len(valNode.Content); j += 2 {
 			k := valNode.Content[j].Value
 			switch k {
-			case "name", "env", "timeout_minutes", "working_directory", "steps":
+			case "name", "env", "timeout_minutes", "working_directory", "steps", "outputs":
 				// valid
 			default:
 				errs = append(errs, fmt.Sprintf("jobs.%s.%s: unknown key", key, k))
@@ -372,10 +376,21 @@ func decodeJobs(node *yaml.Node) ([]JobDefinition, []string) {
 		if len(jw.Steps) == 0 {
 			errs = append(errs, fmt.Sprintf("%s.steps: at least one step is required", prefix))
 		}
+		seenStepIDs := map[string]bool{}
 		for si, sw := range jw.Steps {
 			sp := fmt.Sprintf("%s.steps[%d]", prefix, si)
 			if sw.Run == "" {
 				errs = append(errs, fmt.Sprintf("%s.run: required", sp))
+			}
+			// Validate step id
+			if sw.Id != "" {
+				if !stepIdRe.MatchString(sw.Id) {
+					errs = append(errs, fmt.Sprintf("%s.id %q: must match [a-z][a-z0-9-]*", sp, sw.Id))
+				}
+				if seenStepIDs[sw.Id] {
+					errs = append(errs, fmt.Sprintf("%s.id %q: duplicate step id", sp, sw.Id))
+				}
+				seenStepIDs[sw.Id] = true
 			}
 			// Check for unknown step keys
 			// The step node is nested; we check via the yaml.Node directly
@@ -394,6 +409,15 @@ func decodeJobs(node *yaml.Node) ([]JobDefinition, []string) {
 			if sw.Name != "" && len(sw.Name) > 200 {
 				errs = append(errs, fmt.Sprintf("%s.steps[%d].name: max 200 characters", prefix, si))
 			}
+			// Unknown step key check
+			// (handled above via raw YAML node traversal — id, name, run are the only valid keys)
+		}
+
+		// Validate outputs keys
+		for k := range jw.Outputs {
+			if !outputKeyRe.MatchString(k) {
+				errs = append(errs, fmt.Sprintf("%s.outputs key %q: must match [a-zA-Z_][a-zA-Z0-9_-]*", prefix, k))
+			}
 		}
 
 		jobs = append(jobs, JobDefinition{
@@ -403,6 +427,7 @@ func decodeJobs(node *yaml.Node) ([]JobDefinition, []string) {
 			TimeoutMinutes:   timeout,
 			WorkingDirectory: wd,
 			Steps:            liftSteps(jw.Steps),
+			Outputs:          jw.Outputs,
 		})
 	}
 
@@ -412,7 +437,12 @@ func decodeJobs(node *yaml.Node) ([]JobDefinition, []string) {
 func liftSteps(wires []stepWire) []StepDefinition {
 	steps := make([]StepDefinition, len(wires))
 	for i, sw := range wires {
+		var id *string
+		if sw.Id != "" {
+			id = &sw.Id
+		}
 		steps[i] = StepDefinition{
+			Id:   id,
 			Name: sw.Name,
 			Run:  sw.Run,
 		}

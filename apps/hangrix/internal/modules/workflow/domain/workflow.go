@@ -103,6 +103,17 @@ type WorkflowJobRun struct {
 	EnvJSON []byte
 	// StepsJSON stores the resolved step list for this job.
 	StepsJSON []byte
+	// StepOutputsJSON stores per-step outputs captured during job execution.
+	// Map of step_id -> {key: value}. Written incrementally as steps complete.
+	StepOutputsJSON []byte
+	// JobOutputsJSON stores resolved job outputs computed after job completion.
+	// Map of output_key -> value. Populated from ${{ }} resolution in the
+	// job's declared outputs.
+	JobOutputsJSON []byte
+	// JobOutputsRawJSON stores the raw output templates at run creation time.
+	// Map of output_key -> expression string (may contain ${{ }} references).
+	// The service resolves these against runtime context at job completion.
+	JobOutputsRawJSON []byte
 	StartedAt    *time.Time
 	FinishedAt   *time.Time
 	ExitCode     *int32
@@ -196,10 +207,14 @@ type JobDefInput struct {
 	TimeoutMinutes   int32
 	WorkingDirectory string
 	Steps            []StepInput
+	// Outputs carries the raw output templates from the job definition.
+	// Map of output_key -> expression string (may contain ${{ }} references).
+	Outputs map[string]string
 }
 
 // StepInput is a single step within a job definition.
 type StepInput struct {
+	Id   *string // optional step id for ${{ steps.<id>.outputs.<key> }} references
 	Name string
 	Run  string
 }
@@ -256,6 +271,14 @@ type Store interface {
 
 	// SetJobContainer records the container ID for a running job.
 	SetJobContainer(ctx context.Context, id int64, containerID string) error
+
+	// SetStepOutputs merges a step's outputs into the job's step_outputs_json.
+	// stepID identifies the step within the job (must match a declared step id).
+	// outputs is the map of key -> value captured from the step's stdout.
+	SetStepOutputs(ctx context.Context, id int64, stepID string, outputs map[string]string) error
+
+	// SetJobOutputs writes resolved job outputs after job completion.
+	SetJobOutputs(ctx context.Context, id int64, outputs map[string]string) error
 
 	// ---- workflow job logs ----
 
