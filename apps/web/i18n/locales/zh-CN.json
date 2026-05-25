@@ -758,7 +758,12 @@
       "logsFailed": "日志加载失败",
       "streamStdout": "stdout",
       "streamStderr": "stderr",
-      "streamSystem": "system"
+      "streamSystem": "system",
+      "outputs": "输出",
+      "stepOutputs": "步骤输出",
+      "copyValue": "复制",
+      "copied": "已复制",
+      "masked": "已脱敏"
       },
       "status": {
       "pending": "等待中",

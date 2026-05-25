@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { Clock, Play, ScrollText, Terminal } from 'lucide-vue-next'
+import { Check, ChevronDown, ChevronRight, Clock, Copy, Play, ScrollText, Terminal } from 'lucide-vue-next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -137,6 +137,38 @@ function streamClass(s: string) {
   }
 }
 
+// --- Outputs ---
+const expandedSteps = ref<Record<string, boolean>>({})
+const copiedKey = ref<string | null>(null)
+
+function hasOutputs(job: WorkflowJobRun): boolean {
+  return !!(job.job_outputs && Object.keys(job.job_outputs).length > 0)
+}
+
+function hasStepOutputs(job: WorkflowJobRun): boolean {
+  if (!job.step_outputs) return false
+  return Object.values(job.step_outputs).some(v => v && Object.keys(v).length > 0)
+}
+
+function toggleStep(stepId: string) {
+  expandedSteps.value = {
+    ...expandedSteps.value,
+    [stepId]: !expandedSteps.value[stepId],
+  }
+}
+
+async function copyToClipboard(value: string, id: string) {
+  try {
+    await navigator.clipboard.writeText(value)
+    copiedKey.value = id
+    setTimeout(() => {
+      if (copiedKey.value === id) copiedKey.value = null
+    }, 2000)
+  } catch {
+    // ignore
+  }
+}
+
 
 </script>
 
@@ -200,35 +232,127 @@ function streamClass(s: string) {
             <div
               v-for="job in detail.jobs"
               :key="job.id"
-              class="flex flex-wrap items-center gap-3 px-3 py-2.5"
+              class="divide-y"
             >
-              <div class="min-w-0 flex-1">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="text-sm font-medium">{{ job.display_name || job.job_key }}</span>
-                  <Badge :variant="jobStatusVariant(job.status)" class="text-xs">
-                    {{ t(`repo.workflows.status.${job.status}`) }}
-                  </Badge>
-                  <span v-if="job.exit_code !== null" class="text-xs text-muted-foreground">
-                    exit={{ job.exit_code }}
-                  </span>
-                  <span v-if="job.error_message" class="text-xs text-red-500">
-                    {{ job.error_message }}
-                  </span>
+              <!-- Job row -->
+              <div class="flex flex-wrap items-center gap-3 px-3 py-2.5">
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-sm font-medium">{{ job.display_name || job.job_key }}</span>
+                    <Badge :variant="jobStatusVariant(job.status)" class="text-xs">
+                      {{ t(`repo.workflows.status.${job.status}`) }}
+                    </Badge>
+                    <span v-if="job.exit_code !== null" class="text-xs text-muted-foreground">
+                      exit={{ job.exit_code }}
+                    </span>
+                    <span v-if="job.error_message" class="text-xs text-red-500">
+                      {{ job.error_message }}
+                    </span>
+                  </div>
+                  <p class="text-xs text-muted-foreground">
+                    {{ duration(job.started_at, job.finished_at) }}
+                    <span v-if="job.runner_id" class="mx-1">·</span>
+                    <span v-if="job.runner_id">runner #{{ job.runner_id }}</span>
+                  </p>
                 </div>
-                <p class="text-xs text-muted-foreground">
-                  {{ duration(job.started_at, job.finished_at) }}
-                  <span v-if="job.runner_id" class="mx-1">·</span>
-                  <span v-if="job.runner_id">runner #{{ job.runner_id }}</span>
-                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  @click="loadLogs(job.id)"
+                >
+                  <ScrollText class="size-3.5" />
+                  {{ t('repo.workflows.job.logs') }}
+                </Button>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                @click="loadLogs(job.id)"
-              >
-                <ScrollText class="size-3.5" />
-                {{ t('repo.workflows.job.logs') }}
-              </Button>
+
+              <!-- Job outputs -->
+              <div v-if="hasOutputs(job)" class="px-3 py-2.5 bg-muted/30">
+                <p class="text-xs font-medium text-muted-foreground mb-2">
+                  {{ t('repo.workflows.job.outputs') }}
+                </p>
+                <dl class="space-y-1.5">
+                  <div
+                    v-for="(val, key) in job.job_outputs"
+                    :key="key"
+                    class="flex items-start gap-2"
+                  >
+                    <dt class="text-xs font-mono font-medium min-w-0 shrink-0">
+                      {{ key }}
+                    </dt>
+                    <dd class="text-xs font-mono break-all min-w-0 flex-1 flex items-center gap-1.5">
+                      <template v-if="val.masked">
+                        <span class="text-muted-foreground italic">***</span>
+                        <Badge variant="outline" class="text-[10px] h-4 px-1">{{ t('repo.workflows.job.masked') }}</Badge>
+                      </template>
+                      <template v-else>
+                        <span>{{ val.value }}</span>
+                        <button
+                          type="button"
+                          class="inline-flex items-center text-muted-foreground hover:text-foreground transition-colors"
+                          :title="t('repo.workflows.job.copyValue')"
+                          @click="copyToClipboard(val.value, `job-${job.id}-${key}`)"
+                        >
+                          <Check v-if="copiedKey === `job-${job.id}-${key}`" class="size-3" />
+                          <Copy v-else class="size-3" />
+                        </button>
+                      </template>
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+
+              <!-- Step outputs (collapsible) -->
+              <div v-if="hasStepOutputs(job)" class="px-3 py-2.5 bg-muted/30">
+                <button
+                  type="button"
+                  class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors w-full text-left"
+                  @click="toggleStep(`job-${job.id}`)"
+                >
+                  <ChevronDown v-if="expandedSteps[`job-${job.id}`]" class="size-3.5" />
+                  <ChevronRight v-else class="size-3.5" />
+                  {{ t('repo.workflows.job.stepOutputs') }}
+                </button>
+
+                <div v-if="expandedSteps[`job-${job.id}`]" class="mt-2 space-y-3">
+                  <div
+                    v-for="(outputs, stepId) in job.step_outputs"
+                    v-show="outputs && Object.keys(outputs).length > 0"
+                    :key="stepId"
+                    class="pl-4 border-l-2"
+                  >
+                    <p class="text-xs font-mono font-medium mb-1.5">{{ stepId }}</p>
+                    <div class="space-y-1">
+                      <div
+                        v-for="(val, key) in outputs"
+                        :key="key"
+                        class="flex items-start gap-2"
+                      >
+                        <dt class="text-xs font-mono text-muted-foreground min-w-0 shrink-0">
+                          {{ key }}
+                        </dt>
+                        <dd class="text-xs font-mono break-all min-w-0 flex-1 flex items-center gap-1.5">
+                          <template v-if="val.masked">
+                            <span class="text-muted-foreground italic">***</span>
+                            <Badge variant="outline" class="text-[10px] h-4 px-1">{{ t('repo.workflows.job.masked') }}</Badge>
+                          </template>
+                          <template v-else>
+                            <span>{{ val.value }}</span>
+                            <button
+                              type="button"
+                              class="inline-flex items-center text-muted-foreground hover:text-foreground transition-colors"
+                              :title="t('repo.workflows.job.copyValue')"
+                              @click="copyToClipboard(val.value, `step-${job.id}-${stepId}-${key}`)"
+                            >
+                              <Check v-if="copiedKey === `step-${job.id}-${stepId}-${key}`" class="size-3" />
+                              <Copy v-else class="size-3" />
+                            </button>
+                          </template>
+                        </dd>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </CardContent>

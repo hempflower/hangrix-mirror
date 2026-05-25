@@ -758,7 +758,12 @@
       "logsFailed": "Failed to load logs",
       "streamStdout": "stdout",
       "streamStderr": "stderr",
-      "streamSystem": "system"
+      "streamSystem": "system",
+      "outputs": "Outputs",
+      "stepOutputs": "Step outputs",
+      "copyValue": "Copy value",
+      "copied": "Copied",
+      "masked": "masked"
       },
       "status": {
       "pending": "Pending",

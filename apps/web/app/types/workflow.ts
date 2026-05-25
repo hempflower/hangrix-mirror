@@ -52,6 +52,8 @@ export interface WorkflowJobRun {
   exit_code: number | null
   error_message: string
   created_at: string
+  step_outputs?: Record<string, Record<string, WorkflowOutputValue>>
+  job_outputs?: Record<string, WorkflowOutputValue>
 }
 
 export interface WorkflowJobLogLine {
@@ -60,6 +62,11 @@ export interface WorkflowJobLogLine {
   stream: 'stdout' | 'stderr' | 'system'
   line: string
   created_at: string
+}
+
+export interface WorkflowOutputValue {
+  value: string
+  masked: boolean
 }
 
 export interface WorkflowRunDetail {
