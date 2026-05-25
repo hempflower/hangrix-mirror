@@ -450,6 +450,7 @@ type workflowJobDTO struct {
 	TimeoutMinutes int                  `json:"timeout_minutes"`
 	RepoVariables  map[string]string    `json:"repo_variables"`
 	Inputs         map[string]string    `json:"inputs,omitempty"`
+	WorkflowToken  string               `json:"workflow_token,omitempty"`
 }
 
 // workflowContainerDTO mirrors the runner's client.WorkflowContainer.
@@ -707,6 +708,7 @@ func (h *AgentHandler) buildWorkflowJobDTO(ctx context.Context, job *workflowdom
 		TimeoutMinutes: int(job.TimeoutMinutes),
 		RepoVariables:  repoVars,
 		Inputs:         inputs,
+		WorkflowToken:  run.WorkflowToken,
 	}, nil
 }
 

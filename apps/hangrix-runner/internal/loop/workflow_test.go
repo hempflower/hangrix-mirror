@@ -235,7 +235,7 @@ func TestBuildWorkflowEnv_WorkflowInputs(t *testing.T) {
 func TestBuildWorkflowEnv_PlatformRuntimeVars(t *testing.T) {
 	// Verify all the mandatory HANGRIX_* runtime vars are present.
 
-	driver := &WorkflowJobDriver{}
+	driver := &WorkflowJobDriver{BaseURL: "https://hangrix.example.com"}
 	job := &client.WorkflowJob{
 		WorkflowRunID: 7,
 		WorkflowName:  "ci",
@@ -244,6 +244,7 @@ func TestBuildWorkflowEnv_PlatformRuntimeVars(t *testing.T) {
 		Name:          "widgets",
 		CommitSHA:     "deadbeef",
 		CheckoutRef:   "refs/heads/feat/x",
+		WorkflowToken: "hgxw_secret",
 		Container: client.WorkflowContainer{
 			Image: "alpine:latest",
 			Env:   map[string]string{},
@@ -256,13 +257,15 @@ func TestBuildWorkflowEnv_PlatformRuntimeVars(t *testing.T) {
 	}
 
 	tests := map[string]string{
-		"HANGRIX_WORKFLOW_RUN_ID":  "7",
-		"HANGRIX_WORKFLOW_NAME":    "ci",
-		"HANGRIX_WORKFLOW_JOB_KEY": "build",
-		"HANGRIX_REPO_OWNER":       "acme",
-		"HANGRIX_REPO_NAME":        "widgets",
-		"HANGRIX_COMMIT_SHA":       "deadbeef",
-		"HANGRIX_CHECKOUT_REF":     "refs/heads/feat/x",
+		"HANGRIX_WORKFLOW_RUN_ID":    "7",
+		"HANGRIX_WORKFLOW_NAME":      "ci",
+		"HANGRIX_WORKFLOW_JOB_KEY":   "build",
+		"HANGRIX_REPO_OWNER":         "acme",
+		"HANGRIX_REPO_NAME":          "widgets",
+		"HANGRIX_COMMIT_SHA":         "deadbeef",
+		"HANGRIX_CHECKOUT_REF":       "refs/heads/feat/x",
+		"HANGRIX_PLATFORM_BASE_URL":  "https://hangrix.example.com",
+		"HANGRIX_WORKFLOW_TOKEN":     "hgxw_secret",
 	}
 	for key, want := range tests {
 		if got := env[key]; got != want {
