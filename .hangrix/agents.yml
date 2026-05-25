@@ -113,6 +113,8 @@ roles:
       - grep
       - bash
     prompt_file: .hangrix/prompts/tester.md
+    llm:
+      model: deepseek-v4-flash
 
   server:
     triggers:
@@ -249,6 +251,6 @@ roles:
       - roster_list
     prompt_file: .hangrix/prompts/web-copy-lint.md
     llm:
-      model: gpt-5.4
+      model: deepseek-v4-flash
       reasoning_effort: low
 
