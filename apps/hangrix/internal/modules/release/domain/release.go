@@ -10,16 +10,16 @@ import (
 
 // Release is the canonical metadata for a single release.
 type Release struct {
-	ID               int64
-	RepoID           int64
-	TagName          string
-	TargetCommitSHA  string
-	Title            string
-	Notes            string
-	IsDraft          bool
-	PublishedAt      time.Time
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID              int64
+	RepoID          int64
+	TagName         string
+	TargetCommitSHA string
+	Title           string
+	Notes           string
+	IsDraft         bool
+	PublishedAt     time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // Asset is one custom uploaded asset attached to a release.
@@ -35,13 +35,13 @@ type Asset struct {
 
 // Errors for release operations.
 var (
-	ErrReleaseNotFound  = errors.New("release not found")
-	ErrReleaseConflict  = errors.New("a release for this tag already exists")
-	ErrReleaseNotDraft  = errors.New("release is not in draft state")
-	ErrTagNotFound      = errors.New("tag not found")
-	ErrAssetNotFound    = errors.New("asset not found")
-	ErrAssetConflict    = errors.New("an asset with this name already exists")
-	ErrAssetNameEmpty   = errors.New("asset name must not be empty")
+	ErrReleaseNotFound = errors.New("release not found")
+	ErrReleaseConflict = errors.New("a release for this tag already exists")
+	ErrReleaseNotDraft = errors.New("release is not in draft state")
+	ErrTagNotFound     = errors.New("tag not found")
+	ErrAssetNotFound   = errors.New("asset not found")
+	ErrAssetConflict   = errors.New("an asset with this name already exists")
+	ErrAssetNameEmpty  = errors.New("asset name must not be empty")
 )
 
 // Store is the persistence abstraction for releases.

@@ -102,9 +102,9 @@ func (g *grepTool) runRipgrep(ctx context.Context, a grepArgs) (any, error) {
 		lines = lines[:a.Limit]
 	}
 	return map[string]any{
-		"pattern":  a.Pattern,
-		"count":    len(lines),
-		"matches":  lines,
+		"pattern":   a.Pattern,
+		"count":     len(lines),
+		"matches":   lines,
 		"truncated": len(lines) >= a.Limit,
 	}, nil
 }

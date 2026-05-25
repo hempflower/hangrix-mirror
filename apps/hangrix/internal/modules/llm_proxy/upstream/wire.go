@@ -225,15 +225,15 @@ type responsesResponse struct {
 // only carries what's relevant; Type is the discriminator and is
 // always present.
 type responsesOutputItem struct {
-	Type             string                 `json:"type"`
-	ID               string                 `json:"id,omitempty"`
-	Role             string                 `json:"role,omitempty"`
-	Content          []responsesContentOut  `json:"content,omitempty"`
-	Summary          []responsesSummary     `json:"summary,omitempty"`
-	EncryptedContent string                 `json:"encrypted_content,omitempty"`
-	CallID           string                 `json:"call_id,omitempty"`
-	Name             string                 `json:"name,omitempty"`
-	Arguments        string                 `json:"arguments,omitempty"`
+	Type             string                `json:"type"`
+	ID               string                `json:"id,omitempty"`
+	Role             string                `json:"role,omitempty"`
+	Content          []responsesContentOut `json:"content,omitempty"`
+	Summary          []responsesSummary    `json:"summary,omitempty"`
+	EncryptedContent string                `json:"encrypted_content,omitempty"`
+	CallID           string                `json:"call_id,omitempty"`
+	Name             string                `json:"name,omitempty"`
+	Arguments        string                `json:"arguments,omitempty"`
 }
 
 // responsesContentOut is a single output-side content block. Always

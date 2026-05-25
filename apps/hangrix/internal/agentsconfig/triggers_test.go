@@ -2,7 +2,6 @@ package agentsconfig
 
 import (
 	"testing"
-
 )
 
 func TestIsValidTrigger(t *testing.T) {
@@ -36,4 +35,3 @@ func TestIsValidTrigger(t *testing.T) {
 		}
 	}
 }
-

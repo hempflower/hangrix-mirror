@@ -172,22 +172,22 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 // --- DTO ---
 
 type publicAttachment struct {
-	ID               int64      `json:"id"`
-	OriginalName     string     `json:"original_name"`
-	DisplayName      string     `json:"display_name"`
-	SizeBytes        int64      `json:"size_bytes"`
-	MimeType         string     `json:"mime_type"`
-	DetectedMimeType string     `json:"detected_mime_type"`
-	SHA256           string     `json:"sha256"`
-	Kind             string     `json:"kind"`
-	Inline           bool       `json:"inline"`
-	Status           string     `json:"status"`
-	AuthorID         int64      `json:"author_id"`
-	AgentRole        string     `json:"agent_role,omitempty"`
-	URL              string     `json:"url"`
-	MarkdownSnippet  string     `json:"markdown_snippet"`
-	CreatedAt        string     `json:"created_at"`
-	DeletedAt        *string    `json:"deleted_at,omitempty"`
+	ID               int64   `json:"id"`
+	OriginalName     string  `json:"original_name"`
+	DisplayName      string  `json:"display_name"`
+	SizeBytes        int64   `json:"size_bytes"`
+	MimeType         string  `json:"mime_type"`
+	DetectedMimeType string  `json:"detected_mime_type"`
+	SHA256           string  `json:"sha256"`
+	Kind             string  `json:"kind"`
+	Inline           bool    `json:"inline"`
+	Status           string  `json:"status"`
+	AuthorID         int64   `json:"author_id"`
+	AgentRole        string  `json:"agent_role,omitempty"`
+	URL              string  `json:"url"`
+	MarkdownSnippet  string  `json:"markdown_snippet"`
+	CreatedAt        string  `json:"created_at"`
+	DeletedAt        *string `json:"deleted_at,omitempty"`
 }
 
 func toPublicAttachment(a *domain.Attachment) publicAttachment {

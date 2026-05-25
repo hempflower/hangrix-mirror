@@ -50,8 +50,8 @@ type Attachment struct {
 	Kind             AttachmentKind
 	Inline           bool
 	Status           AttachmentStatus
-	AuthorID         int64     // 0 for agent uploads
-	AgentRole        string    // empty for human uploads
+	AuthorID         int64  // 0 for agent uploads
+	AgentRole        string // empty for human uploads
 	CreatedAt        time.Time
 	DeletedAt        *time.Time
 }

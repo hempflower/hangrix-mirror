@@ -65,15 +65,15 @@ func (*OpenAI) Respond(ctx context.Context, req *Request) (*Response, error) {
 // /v1/responses. Mirrors ParseResponsesAPIRequest's input wire, just
 // in the outgoing direction.
 type openaiRequest struct {
-	Model           string              `json:"model"`
-	Instructions    string              `json:"instructions,omitempty"`
-	Input           []openaiInputItem   `json:"input"`
-	Tools           []openaiTool        `json:"tools,omitempty"`
-	ToolChoice      string              `json:"tool_choice,omitempty"`
-	MaxOutputTokens int                 `json:"max_output_tokens,omitempty"`
-	Temperature     *float64            `json:"temperature,omitempty"`
-	Reasoning       *openaiReasoning    `json:"reasoning,omitempty"`
-	Stream          bool                `json:"stream"`
+	Model           string            `json:"model"`
+	Instructions    string            `json:"instructions,omitempty"`
+	Input           []openaiInputItem `json:"input"`
+	Tools           []openaiTool      `json:"tools,omitempty"`
+	ToolChoice      string            `json:"tool_choice,omitempty"`
+	MaxOutputTokens int               `json:"max_output_tokens,omitempty"`
+	Temperature     *float64          `json:"temperature,omitempty"`
+	Reasoning       *openaiReasoning  `json:"reasoning,omitempty"`
+	Stream          bool              `json:"stream"`
 }
 
 // openaiInputItem covers every input-item kind in one record. Type is

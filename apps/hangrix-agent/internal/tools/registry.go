@@ -39,10 +39,10 @@ const (
 // Registry is the single dispatch point. Built once at startup;
 // goroutine safe because every backing tool's Call is.
 type Registry struct {
-	descriptors      []llm.ToolDescriptor
-	byName           map[string]local.Tool
-	platformByName   map[string]struct{} // set of names sourced from platform
-	mcpByName        map[string]struct{} // set of names sourced from MCP servers
+	descriptors    []llm.ToolDescriptor
+	byName         map[string]local.Tool
+	platformByName map[string]struct{} // set of names sourced from platform
+	mcpByName      map[string]struct{} // set of names sourced from MCP servers
 }
 
 // CallResult is what the runtime persists. ResultJSON is what gets fed

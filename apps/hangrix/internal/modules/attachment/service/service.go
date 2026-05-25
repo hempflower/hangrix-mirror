@@ -29,7 +29,7 @@ const MaxAttachmentSize = 64 << 20
 var AllowedExtensions = map[string]bool{
 	".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
 	".webp": true,
-	".mp4": true, ".webm": true, ".mov": true,
+	".mp4":  true, ".webm": true, ".mov": true,
 	".zip": true, ".tar.gz": true, ".tgz": true, ".gz": true,
 	".txt": true, ".md": true, ".json": true, ".yaml": true,
 	".yml": true, ".log": true, ".csv": true, ".pdf": true,

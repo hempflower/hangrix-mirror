@@ -197,7 +197,6 @@ func TestBuildWorkflowEnv_TagOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
-
 func TestBuildWorkflowEnv_WorkflowInputs(t *testing.T) {
 	// Dispatch inputs are pre-transformed by the server to WORKFLOW_INPUT_*
 	// keys and injected as-is.
@@ -210,7 +209,7 @@ func TestBuildWorkflowEnv_WorkflowInputs(t *testing.T) {
 		Owner:         "org",
 		Name:          "repo",
 		Inputs: map[string]string{
-			"WORKFLOW_INPUT_REF":    "main",
+			"WORKFLOW_INPUT_REF":     "main",
 			"WORKFLOW_INPUT_DRY_RUN": "true",
 		},
 		Container: client.WorkflowContainer{
@@ -257,15 +256,15 @@ func TestBuildWorkflowEnv_PlatformRuntimeVars(t *testing.T) {
 	}
 
 	tests := map[string]string{
-		"HANGRIX_WORKFLOW_RUN_ID":    "7",
-		"HANGRIX_WORKFLOW_NAME":      "ci",
-		"HANGRIX_WORKFLOW_JOB_KEY":   "build",
-		"HANGRIX_REPO_OWNER":         "acme",
-		"HANGRIX_REPO_NAME":          "widgets",
-		"HANGRIX_COMMIT_SHA":         "deadbeef",
-		"HANGRIX_CHECKOUT_REF":       "refs/heads/feat/x",
-		"HANGRIX_PLATFORM_BASE_URL":  "https://hangrix.example.com",
-		"HANGRIX_WORKFLOW_TOKEN":     "hgxw_secret",
+		"HANGRIX_WORKFLOW_RUN_ID":   "7",
+		"HANGRIX_WORKFLOW_NAME":     "ci",
+		"HANGRIX_WORKFLOW_JOB_KEY":  "build",
+		"HANGRIX_REPO_OWNER":        "acme",
+		"HANGRIX_REPO_NAME":         "widgets",
+		"HANGRIX_COMMIT_SHA":        "deadbeef",
+		"HANGRIX_CHECKOUT_REF":      "refs/heads/feat/x",
+		"HANGRIX_PLATFORM_BASE_URL": "https://hangrix.example.com",
+		"HANGRIX_WORKFLOW_TOKEN":    "hgxw_secret",
 	}
 	for key, want := range tests {
 		if got := env[key]; got != want {
@@ -411,7 +410,6 @@ func TestBuildWorkflowEnv_ExpandEnvNilRepoVars(t *testing.T) {
 		t.Errorf("SECRET = %q, want %q (should pass through unexpanded)", got, want)
 	}
 }
-
 
 func TestOrchestratorVolumes(t *testing.T) {
 	tests := []struct {

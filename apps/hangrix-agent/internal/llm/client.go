@@ -365,12 +365,12 @@ func parseResponse(resp *http.Response) (*CreateResponse, error) {
 	var wire struct {
 		ID     string `json:"id"`
 		Output []struct {
-			Type             string `json:"type"`
-			Role             string `json:"role"`
-			CallID           string `json:"call_id"`
-			Name             string `json:"name"`
-			Args             string `json:"arguments"`
-			Content          []struct {
+			Type    string `json:"type"`
+			Role    string `json:"role"`
+			CallID  string `json:"call_id"`
+			Name    string `json:"name"`
+			Args    string `json:"arguments"`
+			Content []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
 			} `json:"content"`

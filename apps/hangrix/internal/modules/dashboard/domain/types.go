@@ -8,11 +8,11 @@ import "time"
 
 // DashboardResponse is the top-level JSON envelope for the admin dashboard.
 type DashboardResponse struct {
-	Summary        Summary         `json:"summary"`
-	Timeseries     Timeseries      `json:"timeseries"`
-	Providers      []ProviderStat  `json:"providers"`
-	Health         Health          `json:"health"`
-	RecentFailures []FailureItem   `json:"recent_failures"`
+	Summary        Summary        `json:"summary"`
+	Timeseries     Timeseries     `json:"timeseries"`
+	Providers      []ProviderStat `json:"providers"`
+	Health         Health         `json:"health"`
+	RecentFailures []FailureItem  `json:"recent_failures"`
 }
 
 // Summary carries the aggregate KPI values for the selected time range.

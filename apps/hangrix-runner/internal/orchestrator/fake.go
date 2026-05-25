@@ -103,10 +103,10 @@ func newFakeExecHandle() *fakeExecHandle {
 	return h
 }
 
-func (h *fakeExecHandle) Stdout() io.ReadCloser     { return h.stdoutR }
-func (h *fakeExecHandle) Stderr() io.ReadCloser     { return h.stderrR }
-func (h *fakeExecHandle) StdoutW() io.WriteCloser   { return h.stdoutW }
-func (h *fakeExecHandle) StderrW() io.WriteCloser   { return h.stderrW }
+func (h *fakeExecHandle) Stdout() io.ReadCloser   { return h.stdoutR }
+func (h *fakeExecHandle) Stderr() io.ReadCloser   { return h.stderrR }
+func (h *fakeExecHandle) StdoutW() io.WriteCloser { return h.stdoutW }
+func (h *fakeExecHandle) StderrW() io.WriteCloser { return h.stderrW }
 func (h *fakeExecHandle) Complete(code int) {
 	h.stdoutW.Close()
 	h.stderrW.Close()

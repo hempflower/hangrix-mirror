@@ -93,11 +93,11 @@ func (h *AdminHandler) RegisterRoutes(r chi.Router) {
 // ---- runner DTOs ----
 
 type publicRunner struct {
-	ID                int64       `json:"id"`
-	Name              string      `json:"name"`
-	OwnerUserID       *int64      `json:"owner_user_id,omitempty"`
-	Visibility        string      `json:"visibility"`
-	Status            string      `json:"status"`
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	OwnerUserID *int64 `json:"owner_user_id,omitempty"`
+	Visibility  string `json:"visibility"`
+	Status      string `json:"status"`
 	// Online is a derived liveness flag: true when Status=='active' AND
 	// the last heartbeat is within domain.HeartbeatStaleThreshold of the
 	// server clock at response time. The UI uses this to surface "offline"
@@ -291,7 +291,7 @@ type createSessionReq struct {
 	IssueNumber   *int32 `json:"issue_number,omitempty"`
 	WorkingBranch string `json:"working_branch,omitempty"`
 	BaseBranch    string `json:"base_branch,omitempty"`
-	HostAddendum string `json:"host_addendum,omitempty"`
+	HostAddendum  string `json:"host_addendum,omitempty"`
 
 	// MockEvent is the first inbound event the runner pushes into the
 	// agent's stdin queue right after the seed history frame. The
@@ -308,31 +308,31 @@ type createSessionReq struct {
 }
 
 type publicSession struct {
-	ID            int64             `json:"id"`
-	RunnerID      *int64            `json:"runner_id,omitempty"`
-	RepoID        *int64            `json:"repo_id,omitempty"`
-	IssueNumber   *int32            `json:"issue_number,omitempty"`
-	Status        string            `json:"status"`
-	Role          string            `json:"role"`
-	Model         string            `json:"model,omitempty"`
-	AgentImage    string            `json:"agent_image"`
-	WorkingBranch string            `json:"working_branch"`
-	BaseBranch    string            `json:"base_branch"`
-	HostAddendum  string            `json:"host_addendum"`
+	ID            int64  `json:"id"`
+	RunnerID      *int64 `json:"runner_id,omitempty"`
+	RepoID        *int64 `json:"repo_id,omitempty"`
+	IssueNumber   *int32 `json:"issue_number,omitempty"`
+	Status        string `json:"status"`
+	Role          string `json:"role"`
+	Model         string `json:"model,omitempty"`
+	AgentImage    string `json:"agent_image"`
+	WorkingBranch string `json:"working_branch"`
+	BaseBranch    string `json:"base_branch"`
+	HostAddendum  string `json:"host_addendum"`
 	// Snapshot. Populated at session-spawn; surfaced on the admin view
 	// so audit consumers can verify the pin from outside the runner
 	// module.
-	RepoSHA   string `json:"repo_sha,omitempty"`
-	RoleKey   string `json:"role_key,omitempty"`
-	CauseKind string `json:"cause_kind,omitempty"`
-	CauseID   string `json:"cause_id,omitempty"`
-	Env           map[string]string `json:"env"`
-	ExitCode      *int32            `json:"exit_code,omitempty"`
-	ErrorMessage  string            `json:"error_message,omitempty"`
-	CreatedAt     time.Time         `json:"created_at"`
-	ClaimedAt     *time.Time        `json:"claimed_at,omitempty"`
-	StartedAt     *time.Time        `json:"started_at,omitempty"`
-	EndedAt       *time.Time        `json:"ended_at,omitempty"`
+	RepoSHA      string            `json:"repo_sha,omitempty"`
+	RoleKey      string            `json:"role_key,omitempty"`
+	CauseKind    string            `json:"cause_kind,omitempty"`
+	CauseID      string            `json:"cause_id,omitempty"`
+	Env          map[string]string `json:"env"`
+	ExitCode     *int32            `json:"exit_code,omitempty"`
+	ErrorMessage string            `json:"error_message,omitempty"`
+	CreatedAt    time.Time         `json:"created_at"`
+	ClaimedAt    *time.Time        `json:"claimed_at,omitempty"`
+	StartedAt    *time.Time        `json:"started_at,omitempty"`
+	EndedAt      *time.Time        `json:"ended_at,omitempty"`
 }
 
 func toPublicSession(s *domain.AgentSession) publicSession {

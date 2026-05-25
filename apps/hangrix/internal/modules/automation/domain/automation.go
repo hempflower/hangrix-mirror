@@ -71,4 +71,3 @@ type RepoRef struct {
 type RepoLister interface {
 	ListAll(ctx context.Context) ([]RepoRef, error)
 }
-

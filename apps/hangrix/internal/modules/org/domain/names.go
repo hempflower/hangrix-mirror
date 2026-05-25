@@ -9,24 +9,24 @@ import "strings"
 // circular dependency: user.handler imports org/domain anyway via the
 // Resolver wired through HandlerDeps.
 var reservedNames = map[string]struct{}{
-	"_":         {},
-	"admin":     {},
-	"api":       {},
-	"assets":    {},
-	"auth":      {},
-	"git":       {},
-	"healthz":   {},
-	"login":     {},
-	"logout":    {},
-	"me":        {},
-	"new":       {},
-	"orgs":      {},
-	"register":  {},
-	"repos":     {},
-	"settings":  {},
-	"static":    {},
-	"users":     {},
-	"hangrix":   {}, // platform-reserved for M7+ official agent owners
+	"_":        {},
+	"admin":    {},
+	"api":      {},
+	"assets":   {},
+	"auth":     {},
+	"git":      {},
+	"healthz":  {},
+	"login":    {},
+	"logout":   {},
+	"me":       {},
+	"new":      {},
+	"orgs":     {},
+	"register": {},
+	"repos":    {},
+	"settings": {},
+	"static":   {},
+	"users":    {},
+	"hangrix":  {}, // platform-reserved for M7+ official agent owners
 }
 
 // IsReservedName reports whether name (case-insensitive) is a reserved owner

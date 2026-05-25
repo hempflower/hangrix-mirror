@@ -29,39 +29,39 @@ import (
 
 // Handler contains the deps the release REST endpoints need.
 type Handler struct {
-	store         releasedomain.Store
-	assets        releasedomain.AssetStore
-	storage       *infra.AssetStorage
-	git           gitdomain.Git
-	repos         repodomain.Store
-	resolver      repodomain.PathResolver
-	orgResolver   orgdomain.Resolver
-	middleware    authdomain.Middleware
+	store            releasedomain.Store
+	assets           releasedomain.AssetStore
+	storage          *infra.AssetStorage
+	git              gitdomain.Git
+	repos            repodomain.Store
+	resolver         repodomain.PathResolver
+	orgResolver      orgdomain.Resolver
+	middleware       authdomain.Middleware
 	wfTokenValidator workflowdomain.WorkflowTokenValidator
 }
 
 type HandlerDeps struct {
-	Store             releasedomain.Store
-	Assets            releasedomain.AssetStore
-	Storage           *infra.AssetStorage
-	Git               gitdomain.Git
-	Repos             repodomain.Store
-	Resolver          repodomain.PathResolver
-	OrgResolver       orgdomain.Resolver
-	Middleware        authdomain.Middleware
-	WfTokenValidator  workflowdomain.WorkflowTokenValidator
+	Store            releasedomain.Store
+	Assets           releasedomain.AssetStore
+	Storage          *infra.AssetStorage
+	Git              gitdomain.Git
+	Repos            repodomain.Store
+	Resolver         repodomain.PathResolver
+	OrgResolver      orgdomain.Resolver
+	Middleware       authdomain.Middleware
+	WfTokenValidator workflowdomain.WorkflowTokenValidator
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
-		store:         deps.Store,
-		assets:        deps.Assets,
-		storage:       deps.Storage,
-		git:           deps.Git,
-		repos:         deps.Repos,
-		resolver:      deps.Resolver,
-		orgResolver:   deps.OrgResolver,
-		middleware:    deps.Middleware,
+		store:            deps.Store,
+		assets:           deps.Assets,
+		storage:          deps.Storage,
+		git:              deps.Git,
+		repos:            deps.Repos,
+		resolver:         deps.Resolver,
+		orgResolver:      deps.OrgResolver,
+		middleware:       deps.Middleware,
 		wfTokenValidator: deps.WfTokenValidator,
 	}
 }

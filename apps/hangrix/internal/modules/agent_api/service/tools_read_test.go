@@ -49,9 +49,9 @@ func TestTruncateBody(t *testing.T) {
 		},
 		{
 			name:     "small maxRunes with multi-byte UTF-8 (budget < 0 path)",
-			input:    "你好世界你好世界",  // 8 runes, 24 bytes
-			maxRunes: 3,                 // budget = 3-13 = -10 → fallback path
-			want:     "你好世",           // first 3 runes, no suffix
+			input:    "你好世界你好世界", // 8 runes, 24 bytes
+			maxRunes: 3,          // budget = 3-13 = -10 → fallback path
+			want:     "你好世",      // first 3 runes, no suffix
 		},
 		{
 			name:     "result never exceeds maxRunes",

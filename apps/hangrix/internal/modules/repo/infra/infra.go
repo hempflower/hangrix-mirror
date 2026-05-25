@@ -475,7 +475,7 @@ func (s *PostgresVariableStore) Update(ctx context.Context, id, repoID int64, na
 	}
 
 	row, err := s.q.UpdateRepoVariable(ctx, repodb.UpdateRepoVariableParams{
-		ID:    id,
+		ID:     id,
 		RepoID: repoID,
 		Name:   name,
 		Value:  storedValue,
@@ -547,4 +547,3 @@ func isValidVariableName(s string) bool {
 	}
 	return true
 }
-

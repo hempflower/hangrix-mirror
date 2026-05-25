@@ -172,7 +172,7 @@ func agentEnv() []string {
 }
 
 type bashArgs struct {
-	Command         string `json:"command"`
+	Command string `json:"command"`
 	// Summary is a short (one-line, ~7 words) human-readable description
 	// of WHAT the command does — the LLM supplies it on every fresh call
 	// so the agent-log UI has a "Running tests" / "Installing deps" chip
@@ -631,15 +631,15 @@ func (b *bashTool) runForeground(ctx context.Context, a bashArgs) *bashResult {
 		// original timeout budget.
 		id := b.registerTaskID(job)
 		partial := job.snapshot()
-			promoteSecs := int(foregroundPromoteAfter.Seconds())
-			notice := "\n" + fmt.Sprintf(
-				"<hangrix-event kind=\"notification.bash.promoted\" id=\"%s\" status=\"running\">"+
+		promoteSecs := int(foregroundPromoteAfter.Seconds())
+		notice := "\n" + fmt.Sprintf(
+			"<hangrix-event kind=\"notification.bash.promoted\" id=\"%s\" status=\"running\">"+
 				"<promotion after_seconds=\"%d\"/>"+
 				"<command>%s</command>"+
 				"</hangrix-event>\n"+
 				"Poll progress with bash(task_id=%q); answer prompts with bash_input(task_id=%q, data=...).",
 			xmlEscapeAttr(id), promoteSecs, xmlCDATA(job.command), id, id,
-			)
+		)
 		return &bashResult{
 			Summary:    a.Summary,
 			Output:     partial + notice,
@@ -704,7 +704,6 @@ func (b *bashTool) registerTaskID(job *bashJob) string {
 	return id
 }
 
-
 // xmlEscape escapes a string for safe inclusion in XML text content.
 // Uses encoding/xml.EscapeText which handles &, <, >, ", '.
 func xmlEscape(s string) string {
@@ -731,6 +730,7 @@ func xmlCDATA(s string) string {
 	safe := strings.ReplaceAll(s, "]]>", "]]]]><![CDATA[>")
 	return "<![CDATA[" + safe + "]]>"
 }
+
 // formatJobNotification produces the short user-role text the runtime
 // drains into the LLM context when a background bash task ends. The
 // goal is "tell the model the job is done, with enough context that it

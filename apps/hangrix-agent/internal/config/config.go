@@ -94,22 +94,22 @@ func (c *Config) PlatformToolsBaseURL() string {
 func NewConfig() *Config {
 	maxCtx := parseMaxContextTokens(os.Getenv("HANGRIX_LLM_MAX_CONTEXT_TOKENS"))
 	cfg := &Config{
-		SessionToken:     os.Getenv("HANGRIX_SESSION_TOKEN"),
-		PlatformBaseURL:  os.Getenv("HANGRIX_PLATFORM_BASE_URL"),
-		Model:            os.Getenv("HANGRIX_LLM_MODEL"),
-		SessionID:        os.Getenv("HANGRIX_SESSION_ID"),
-		Role:             os.Getenv("HANGRIX_ROLE"),
-		HostRepo:         os.Getenv("HANGRIX_HOST_REPO"),
-		IssueNumber:      os.Getenv("HANGRIX_ISSUE_NUMBER"),
-		WorkingBranch:    os.Getenv("HANGRIX_WORKING_BRANCH"),
-		BaseBranch:       os.Getenv("HANGRIX_BASE_BRANCH"),
-		HostAddendumPath:      os.Getenv("HANGRIX_HOST_ADDENDUM"),
-		ToolCatalog:           os.Getenv("HANGRIX_TOOL_CATALOG"),
-		McpServers:            parseMcpServers(os.Getenv("HANGRIX_MCP_SERVERS")),
-			LLMMaxContextTokens:    maxCtx,
-			CompactTokenThreshold:      parseCompactThreshold(os.Getenv("HANGRIX_COMPACT_TOKEN_THRESHOLD"), maxCtx),
-			LLMReasoningTimeoutSeconds: parseIntDefault(os.Getenv("HANGRIX_LLM_REASONING_TIMEOUT_SECONDS"), 200),
-			LLMReasoningTimeoutRetries: clampNonNegative(parseIntDefault(os.Getenv("HANGRIX_LLM_REASONING_TIMEOUT_RETRIES"), 1)),
+		SessionToken:               os.Getenv("HANGRIX_SESSION_TOKEN"),
+		PlatformBaseURL:            os.Getenv("HANGRIX_PLATFORM_BASE_URL"),
+		Model:                      os.Getenv("HANGRIX_LLM_MODEL"),
+		SessionID:                  os.Getenv("HANGRIX_SESSION_ID"),
+		Role:                       os.Getenv("HANGRIX_ROLE"),
+		HostRepo:                   os.Getenv("HANGRIX_HOST_REPO"),
+		IssueNumber:                os.Getenv("HANGRIX_ISSUE_NUMBER"),
+		WorkingBranch:              os.Getenv("HANGRIX_WORKING_BRANCH"),
+		BaseBranch:                 os.Getenv("HANGRIX_BASE_BRANCH"),
+		HostAddendumPath:           os.Getenv("HANGRIX_HOST_ADDENDUM"),
+		ToolCatalog:                os.Getenv("HANGRIX_TOOL_CATALOG"),
+		McpServers:                 parseMcpServers(os.Getenv("HANGRIX_MCP_SERVERS")),
+		LLMMaxContextTokens:        maxCtx,
+		CompactTokenThreshold:      parseCompactThreshold(os.Getenv("HANGRIX_COMPACT_TOKEN_THRESHOLD"), maxCtx),
+		LLMReasoningTimeoutSeconds: parseIntDefault(os.Getenv("HANGRIX_LLM_REASONING_TIMEOUT_SECONDS"), 200),
+		LLMReasoningTimeoutRetries: clampNonNegative(parseIntDefault(os.Getenv("HANGRIX_LLM_REASONING_TIMEOUT_RETRIES"), 1)),
 	}
 
 	var missing []string
@@ -148,7 +148,6 @@ func parseMcpServers(raw string) []string {
 	}
 	return out
 }
-
 
 // parseMaxContextTokens reads HANGRIX_LLM_MAX_CONTEXT_TOKENS. Returns 0
 // when unset or unparseable — the caller treats 0 as "not configured".

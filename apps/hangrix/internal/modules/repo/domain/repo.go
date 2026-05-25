@@ -195,11 +195,11 @@ func (k VariableKind) Valid() bool { return k == VariableKindPlain || k == Varia
 
 // RepoVariable is one row in repo_variables.
 type RepoVariable struct {
-	ID        int64
-	RepoID    int64
-	Name      string
-	Value     string // ciphertext when kind=secret; plaintext when kind=plain
-	Kind      VariableKind
+	ID     int64
+	RepoID int64
+	Name   string
+	Value  string // ciphertext when kind=secret; plaintext when kind=plain
+	Kind   VariableKind
 	// DecryptionFailed is true when the stored ciphertext could not be
 	// decrypted (e.g. key rotation, corruption). The Value field is ""
 	// and the entry must not be used for ${NAME} expansion.  Callers
@@ -223,11 +223,11 @@ type RepoVariablePublic struct {
 
 // Errors for repo_variables operations.
 var (
-	ErrVariableNotFound    = errors.New("repo variable not found")
-	ErrVariableNameEmpty   = errors.New("variable name must not be empty")
-	ErrVariableNameInvalid = errors.New("variable name must match [A-Z_][A-Z0-9_]*")
-	ErrVariableConflict    = errors.New("a variable with that name already exists")
-	ErrVariableKindInvalid       = errors.New("variable kind must be 'plain' or 'secret'")
+	ErrVariableNotFound         = errors.New("repo variable not found")
+	ErrVariableNameEmpty        = errors.New("variable name must not be empty")
+	ErrVariableNameInvalid      = errors.New("variable name must match [A-Z_][A-Z0-9_]*")
+	ErrVariableConflict         = errors.New("a variable with that name already exists")
+	ErrVariableKindInvalid      = errors.New("variable kind must be 'plain' or 'secret'")
 	ErrVariableDecryptionFailed = errors.New("variable decryption failed")
 )
 
@@ -241,4 +241,3 @@ type VariableStore interface {
 	Update(ctx context.Context, id, repoID int64, name, value string, kind VariableKind) (*RepoVariable, error)
 	Delete(ctx context.Context, id, repoID int64) error
 }
-

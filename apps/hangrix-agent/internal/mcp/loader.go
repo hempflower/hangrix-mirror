@@ -8,8 +8,8 @@ import (
 
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/local"
 	mcpclient "github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/mcp"
 	mcptransport "github.com/mark3labs/mcp-go/client/transport"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // LoadServers connects to every MCP server defined in cfg, initializes
@@ -184,4 +184,3 @@ func initAndList(ctx context.Context, name string, c *mcpclient.Client) ([]local
 	}
 	return tools, nil
 }
-

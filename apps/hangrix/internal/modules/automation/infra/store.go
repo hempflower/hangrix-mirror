@@ -128,11 +128,11 @@ func (s *PostgresStore) ListRuns(ctx context.Context, repoID int64, taskName str
 
 func toDomain(row *automationdb.AutomationRun) *domain.AutomationRun {
 	return &domain.AutomationRun{
-		ID:       row.ID,
-		RepoID:   row.RepoID,
-		TaskName: row.TaskName,
-		IssueID:  pgtypeInt8ToPtr(row.IssueID),
-		Status:   domain.Status(row.Status),
+		ID:           row.ID,
+		RepoID:       row.RepoID,
+		TaskName:     row.TaskName,
+		IssueID:      pgtypeInt8ToPtr(row.IssueID),
+		Status:       domain.Status(row.Status),
 		ErrorMessage: pgtypeTextToPtr(row.ErrorMessage),
 		StartedAt:    row.StartedAt.Time,
 		FinishedAt:   pgtypeTimestamptzToPtr(row.FinishedAt),

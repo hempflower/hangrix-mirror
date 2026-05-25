@@ -98,7 +98,7 @@ type testHarness struct {
 func newTestSpawner(t *testing.T, hostBody, lockBody []byte) *testHarness {
 	t.Helper()
 	cfg := &config.Config{
-		LLM: config.LLMConfig{EncryptionKey: testEncryptionKey},
+		LLM:    config.LLMConfig{EncryptionKey: testEncryptionKey},
 		Server: config.ServerConfig{URL: "http://localhost:8080"},
 	}
 	repos := newStubRepoStore()

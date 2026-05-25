@@ -88,16 +88,16 @@ func (t *sleepTool) Call(ctx context.Context, raw json.RawMessage) (any, error) 
 	// the LLM context when this timer fires. Include the sleep_id so the
 	// model knows exactly which sleep finished, plus seconds and reason
 	// so it has enough context to continue without polling.
-		reasonAttr := ""
-		if a.Reason != "" {
-			reasonAttr = fmt.Sprintf(" reason=\"%s\"", xmlEscapeAttr(a.Reason))
-		}
-		notification := fmt.Sprintf(
-			"<hangrix-event kind=\"notification.sleep.finished\" id=\"%s\" status=\"done\">"+
+	reasonAttr := ""
+	if a.Reason != "" {
+		reasonAttr = fmt.Sprintf(" reason=\"%s\"", xmlEscapeAttr(a.Reason))
+	}
+	notification := fmt.Sprintf(
+		"<hangrix-event kind=\"notification.sleep.finished\" id=\"%s\" status=\"done\">"+
 			"<sleep seconds=\"%d\"%s/>"+
 			"</hangrix-event>",
 		sleepID, a.Seconds, reasonAttr,
-		)
+	)
 
 	t.async.ScheduleWithID(sleepID, d, notification)
 

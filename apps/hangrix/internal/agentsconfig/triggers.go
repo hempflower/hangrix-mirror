@@ -54,13 +54,13 @@ const (
 // validTriggers is consulted by the parser; map lookup keeps the check
 // O(1) and the constants above remain the single source of truth.
 var validTriggers = map[Trigger]struct{}{
-	TriggerIssueOpened:       {},
-	TriggerIssueClosed:       {},
-	TriggerIssueComment:      {},
-	TriggerCommitPushed:      {},
-	TriggerReviewVotePosted:  {},
-	TriggerCIStatusChanged:   {},
-	TriggerPatchSubmitted:    {},
+	TriggerIssueOpened:         {},
+	TriggerIssueClosed:         {},
+	TriggerIssueComment:        {},
+	TriggerCommitPushed:        {},
+	TriggerReviewVotePosted:    {},
+	TriggerCIStatusChanged:     {},
+	TriggerPatchSubmitted:      {},
 	TriggerPatchApplyRequested: {},
 }
 

@@ -41,7 +41,7 @@ func seedSession(r *stubRunnerRepo, status runnerdomain.SessionStatus, sealed st
 	return sess
 }
 
-func intPtr(v int64) *int64  { return &v }
+func intPtr(v int64) *int64   { return &v }
 func int32Ptr(v int32) *int32 { return &v }
 
 // ---- tests ----

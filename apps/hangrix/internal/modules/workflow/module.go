@@ -4,11 +4,11 @@
 package workflow
 
 import (
+	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/handler"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/infra"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/service"
-	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/server"
 	"github.com/hangrix/hangrix/pkg/ioc"
 )

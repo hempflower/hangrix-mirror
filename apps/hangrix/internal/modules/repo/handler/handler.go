@@ -125,20 +125,20 @@ type HandlerDeps struct {
 
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
-		store:       deps.Store,
-		protections: deps.Protections,
-		members:     deps.Members,
-		variables:   deps.Variables,
-		storage:     deps.Storage,
-		git:         deps.Git,
-		users:       deps.Users,
-		orgs:        deps.Orgs,
-		resolver:    deps.Resolver,
-		tokens:      deps.Tokens,
-		sessions:    deps.Sessions,
-		middleware:  deps.Middleware,
-		cache:       deps.Cache,
-		guards:      deps.Guards,
+		store:           deps.Store,
+		protections:     deps.Protections,
+		members:         deps.Members,
+		variables:       deps.Variables,
+		storage:         deps.Storage,
+		git:             deps.Git,
+		users:           deps.Users,
+		orgs:            deps.Orgs,
+		resolver:        deps.Resolver,
+		tokens:          deps.Tokens,
+		sessions:        deps.Sessions,
+		middleware:      deps.Middleware,
+		cache:           deps.Cache,
+		guards:          deps.Guards,
 		observers:       deps.Observers,
 		tagEventTrigger: deps.TagEventTrigger,
 	}
@@ -174,9 +174,8 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Post("/{owner}/{name}/tags", h.createTag)
 		r.Delete("/{owner}/{name}/tags/*", h.deleteTag)
 
-			// Online file edit — create a commit by replacing a single blob.
-			r.Post("/{owner}/{name}/contents/commit", h.commitFile)
-
+		// Online file edit — create a commit by replacing a single blob.
+		r.Post("/{owner}/{name}/contents/commit", h.commitFile)
 
 		// Branch protection rules. Listed by any repo reader; mutated only
 		// by owner / admin (resolveRepoForManage is called in each handler).
@@ -1628,7 +1627,6 @@ func (h *Handler) deleteTag(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-
 // ---- Online file edit ----
 
 // commitFileReq is the request body for POST .../contents/commit.
@@ -1870,7 +1868,6 @@ func plumbingHex(data []byte) string {
 	h.Write(data)
 	return hex.EncodeToString(h.Sum(nil))
 }
-
 
 // lookupBranchSHA / lookupTagSHA fetch the SHA of a freshly-created ref via
 // the public Git interface. Best-effort: on any failure we return "" and let
@@ -2403,31 +2400,30 @@ type variableListResp struct {
 	Secrets   []secretMeta   `json:"secrets"`
 }
 
-	// variableResp is the response shape for POST/PATCH on a single variable.
-	// The frontend re-fetches the list after mutations so the exact shape is
-	// not critical, but it must include name, value (plain only), kind, and
-	// timestamps.
-	type variableResp struct {
-		Name      string    `json:"name"`
-		Value     string    `json:"value,omitempty"`
-		Kind      string    `json:"kind"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-	}
+// variableResp is the response shape for POST/PATCH on a single variable.
+// The frontend re-fetches the list after mutations so the exact shape is
+// not critical, but it must include name, value (plain only), kind, and
+// timestamps.
+type variableResp struct {
+	Name      string    `json:"name"`
+	Value     string    `json:"value,omitempty"`
+	Kind      string    `json:"kind"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
 
-	func toVariableResp(v *domain.RepoVariable) variableResp {
-		r := variableResp{
-			Name:      v.Name,
-			Kind:      string(v.Kind),
-			CreatedAt: v.CreatedAt,
-			UpdatedAt: v.UpdatedAt,
-		}
-		if v.Kind == domain.VariableKindPlain {
-			r.Value = v.Value
-		}
-		return r
+func toVariableResp(v *domain.RepoVariable) variableResp {
+	r := variableResp{
+		Name:      v.Name,
+		Kind:      string(v.Kind),
+		CreatedAt: v.CreatedAt,
+		UpdatedAt: v.UpdatedAt,
 	}
-
+	if v.Kind == domain.VariableKindPlain {
+		r.Value = v.Value
+	}
+	return r
+}
 
 func (h *Handler) listVariables(w http.ResponseWriter, r *http.Request) {
 	repo, ok := h.resolveRepoForManage(w, r)
@@ -2636,4 +2632,3 @@ func (h *Handler) deleteVariable(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-

@@ -137,9 +137,9 @@ func guardArray(raw json.RawMessage) json.RawMessage {
 
 	// Wrap in an object envelope so we can stamp metadata.
 	envelope := map[string]any{
-		"value":             arr,
-		"truncated":         true,
-		"output_file":       outPath,
+		"value":       arr,
+		"truncated":   true,
+		"output_file": outPath,
 		"truncation_notice": fmt.Sprintf(
 			"Tool output exceeded the %d-byte result budget. The complete output has been written to %s — use the 'read' tool to retrieve it.",
 			defaultResultBudgetBytes, outPath,
@@ -175,9 +175,9 @@ func guardString(raw json.RawMessage) json.RawMessage {
 
 	// Wrap in an object envelope with a truncated preview.
 	envelope := map[string]any{
-		"value":      s[:min(4096, len(s))] + "\n\n[... result truncated; read output_file for full content ...]",
+		"value":       s[:min(4096, len(s))] + "\n\n[... result truncated; read output_file for full content ...]",
 		"output_file": outPath,
-		"truncated":  true,
+		"truncated":   true,
 		"truncation_notice": fmt.Sprintf(
 			"Tool output exceeded the %d-byte result budget. The complete output has been written to %s — use the 'read' tool to retrieve it.",
 			defaultResultBudgetBytes, outPath,

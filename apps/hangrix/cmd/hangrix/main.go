@@ -7,11 +7,12 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/app"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/kv"
+	agentapi "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api"
 	agentsession "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session"
-	automation "github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation"
-	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/dashboard"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth"
+	automation "github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/dashboard"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/git"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/healthz"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/hello"
@@ -19,7 +20,6 @@ import (
 	llmprovider "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider"
 	llmproxy "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_proxy"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/org"
-	agentapi "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/release"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner"
@@ -54,7 +54,7 @@ func main() {
 		llmproxy.Module(),
 		runner.Module(),
 		agentsession.Module(),
-			dashboard.Module(),
+		dashboard.Module(),
 		agentapi.Module(),
 		automation.Module(),
 		workflow.Module(),

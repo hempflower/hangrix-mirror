@@ -39,8 +39,8 @@ func ParseMentions(body string) []string {
 	out := make([]string, 0, 4)
 
 	var (
-		inFence    bool
-		fenceMark  byte
+		inFence   bool
+		fenceMark byte
 	)
 	for _, line := range strings.Split(body, "\n") {
 		// Fenced-code block tracking. The opening fence may be ``` or
@@ -111,7 +111,7 @@ func ParseMentions(body string) []string {
 		return nil
 	}
 	return out
-	}
+}
 
 // HasBacktickWrappedMention reports whether body contains an @agent-<key>
 // token that is wrapped in an inline code span (backticks). This is a

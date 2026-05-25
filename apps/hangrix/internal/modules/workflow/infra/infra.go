@@ -136,15 +136,15 @@ func (r *PostgresRepo) CreateRun(ctx context.Context, params domain.CreateRunPar
 		}
 
 		dbJob, err := r.q.CreateWorkflowJobRun(ctx, workflowdb.CreateWorkflowJobRunParams{
-			WorkflowRunID:      run.ID,
-			JobKey:             jd.JobKey,
-			DisplayName:        jd.DisplayName,
-			SequenceIndex:      int32(i),
-			WorkingDirectory:   jd.WorkingDirectory,
-			TimeoutMinutes:     jd.TimeoutMinutes,
-			EnvJson:            envJSON,
-			StepsJson:          stepsJSON,
-			JobOutputsRawJson:  jobOutputsRawJSON,
+			WorkflowRunID:     run.ID,
+			JobKey:            jd.JobKey,
+			DisplayName:       jd.DisplayName,
+			SequenceIndex:     int32(i),
+			WorkingDirectory:  jd.WorkingDirectory,
+			TimeoutMinutes:    jd.TimeoutMinutes,
+			EnvJson:           envJSON,
+			StepsJson:         stepsJSON,
+			JobOutputsRawJson: jobOutputsRawJSON,
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("create workflow job run: %w", err)
@@ -355,11 +355,11 @@ func (r *PostgresRepo) ListLogs(ctx context.Context, jobRunID int64, offset, lim
 	lines := make([]*domain.WorkflowJobLogLine, len(rows))
 	for i, row := range rows {
 		lines[i] = &domain.WorkflowJobLogLine{
-			ID:              row.ID,
+			ID:               row.ID,
 			WorkflowJobRunID: row.WorkflowJobRunID,
-			Stream:          domain.LogStream(row.Stream),
-			Line:            row.Line,
-			CreatedAt:       row.CreatedAt.Time,
+			Stream:           domain.LogStream(row.Stream),
+			Line:             row.Line,
+			CreatedAt:        row.CreatedAt.Time,
 		}
 	}
 	return lines, rows[0].TotalCount, nil
@@ -423,21 +423,21 @@ func rowToRunFromList(row *workflowdb.ListWorkflowRunsByRepoRow) *domain.Workflo
 
 func rowToJobRun(row *workflowdb.WorkflowJobRun) *domain.WorkflowJobRun {
 	j := &domain.WorkflowJobRun{
-		ID:               row.ID,
-		WorkflowRunID:    row.WorkflowRunID,
-		JobKey:           row.JobKey,
-		DisplayName:      row.DisplayName,
-		Status:           domain.JobStatus(row.Status),
-		SequenceIndex:    row.SequenceIndex,
-		WorkingDirectory: row.WorkingDirectory,
-		TimeoutMinutes:   row.TimeoutMinutes,
-		EnvJSON:          row.EnvJson,
-		StepsJSON:        row.StepsJson,
-		StepOutputsJSON:  row.StepOutputsJson,
-		JobOutputsJSON:   row.JobOutputsJson,
+		ID:                row.ID,
+		WorkflowRunID:     row.WorkflowRunID,
+		JobKey:            row.JobKey,
+		DisplayName:       row.DisplayName,
+		Status:            domain.JobStatus(row.Status),
+		SequenceIndex:     row.SequenceIndex,
+		WorkingDirectory:  row.WorkingDirectory,
+		TimeoutMinutes:    row.TimeoutMinutes,
+		EnvJSON:           row.EnvJson,
+		StepsJSON:         row.StepsJson,
+		StepOutputsJSON:   row.StepOutputsJson,
+		JobOutputsJSON:    row.JobOutputsJson,
 		JobOutputsRawJSON: row.JobOutputsRawJson,
-		ErrorMessage:     row.ErrorMessage,
-		CreatedAt:        row.CreatedAt.Time,
+		ErrorMessage:      row.ErrorMessage,
+		CreatedAt:         row.CreatedAt.Time,
 	}
 	if row.RunnerID.Valid {
 		j.RunnerID = &row.RunnerID.Int64

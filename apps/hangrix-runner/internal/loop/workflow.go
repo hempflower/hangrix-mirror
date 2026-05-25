@@ -72,7 +72,7 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 			Owner:        job.Owner,
 			Name:         job.Name,
 			SessionToken: "", // workflow jobs don't use session tokens
-			Dest:          repoCheckout,
+			Dest:         repoCheckout,
 			// For workflow jobs we always check out a specific ref.
 			// We clone the repo with --no-checkout, then checkout
 			// the target commit.

@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
+	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 )
 
 // stubAuditor returns a pre-canned slice. The handler is a thin

@@ -210,8 +210,8 @@ type publicIssue struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	// Todos and TodoSummary are populated only on the single-issue GET endpoint.
-	Todos       []publicTodo        `json:"todos,omitempty"`
-	TodoSummary *publicTodoSummary  `json:"todo_summary,omitempty"`
+	Todos       []publicTodo       `json:"todos,omitempty"`
+	TodoSummary *publicTodoSummary `json:"todo_summary,omitempty"`
 }
 
 func toPublic(i *domain.Issue) publicIssue {

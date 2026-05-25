@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	sessionKeyPrefix     = "session:"
+	sessionKeyPrefix      = "session:"
 	userSessionsKeyPrefix = "user_sessions:"
 )
 
@@ -131,5 +131,5 @@ func (s *RedisSessionStore) DeleteExpired(ctx context.Context) error {
 	return nil
 }
 
-func sessionKey(token string) string       { return sessionKeyPrefix + token }
-func userSessionsKey(userID int64) string  { return fmt.Sprintf("%s%d", userSessionsKeyPrefix, userID) }
+func sessionKey(token string) string      { return sessionKeyPrefix + token }
+func userSessionsKey(userID int64) string { return fmt.Sprintf("%s%d", userSessionsKeyPrefix, userID) }

@@ -103,8 +103,8 @@ func NewLoop(
 	systemPrompt string,
 	async local.AsyncLifecycle,
 	compactTokenThreshold int,
-		reasoningTimeout time.Duration,
-		reasoningTimeoutRetries int,
+	reasoningTimeout time.Duration,
+	reasoningTimeoutRetries int,
 ) *Loop {
 	return &Loop{
 		in:                      in,

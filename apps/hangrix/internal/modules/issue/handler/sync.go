@@ -178,4 +178,3 @@ func collectNewCommits(g gitdomain.Git, fsPath, baseline, head string) []domain.
 	}
 	return out
 }
-

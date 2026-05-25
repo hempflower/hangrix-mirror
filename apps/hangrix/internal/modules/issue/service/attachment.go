@@ -31,7 +31,7 @@ const MaxAttachmentSize = 64 << 20
 var AllowedExtensions = map[string]bool{
 	".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
 	".webp": true,
-	".mp4": true, ".webm": true, ".mov": true,
+	".mp4":  true, ".webm": true, ".mov": true,
 	".zip": true, ".tar.gz": true, ".tgz": true, ".gz": true,
 	".txt": true, ".md": true, ".json": true, ".yaml": true,
 	".yml": true, ".log": true, ".csv": true, ".pdf": true,
@@ -279,7 +279,6 @@ func (s *AttachmentService) UploadAttachment(
 		return nil, fmt.Errorf("create attachment row: %w", err)
 	}
 
-
 	// If the caller specified a comment, transition directly to attached.
 	if params.CommentID > 0 {
 		if err := s.store.MarkAttached(ctx, attachment.ID, params.CommentID); err != nil {
@@ -291,7 +290,6 @@ func (s *AttachmentService) UploadAttachment(
 	}
 	return attachment, nil
 }
-
 
 // Get is a pass-through to the store.
 func (s *AttachmentService) Get(ctx context.Context, id int64) (*domain.Attachment, error) {

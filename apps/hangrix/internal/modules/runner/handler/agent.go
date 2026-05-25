@@ -524,24 +524,24 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 				issueNumber = *sess.IssueNumber
 			}
 			httpx.WriteJSON(w, http.StatusOK, taskResp{
-				HostRepoID:      hostRepoID,
-				SessionID:       sess.ID,
-				AgentImage:      sess.AgentImage,
-				AgentEntrypoint: extractEntrypoint(sess.RoleConfig),
-				AgentBuild:      extractBuild(sess.RoleConfig),
-				Role:            sess.Role,
-				Model:           sess.Model,
+				HostRepoID:          hostRepoID,
+				SessionID:           sess.ID,
+				AgentImage:          sess.AgentImage,
+				AgentEntrypoint:     extractEntrypoint(sess.RoleConfig),
+				AgentBuild:          extractBuild(sess.RoleConfig),
+				Role:                sess.Role,
+				Model:               sess.Model,
 				LLMMaxContextTokens: extractLLMMaxContextTokens(sess.RoleConfig),
-				IssueNumber:     issueNumber,
-				WorkingBranch:   sess.WorkingBranch,
-				BaseBranch:      sess.BaseBranch,
-				HostAddendum:    sess.HostAddendum,
-				Env:             env,
-				SessionToken:    plaintext,
-				ContainerID:     sess.ContainerID,
-				RepoVariables:   repoVars,
-				Volumes:         extractVolumes(sess.RoleConfig),
-				McpServers:      extractMcpServers(sess.RoleConfig),
+				IssueNumber:         issueNumber,
+				WorkingBranch:       sess.WorkingBranch,
+				BaseBranch:          sess.BaseBranch,
+				HostAddendum:        sess.HostAddendum,
+				Env:                 env,
+				SessionToken:        plaintext,
+				ContainerID:         sess.ContainerID,
+				RepoVariables:       repoVars,
+				Volumes:             extractVolumes(sess.RoleConfig),
+				McpServers:          extractMcpServers(sess.RoleConfig),
 			})
 			return
 		}
@@ -1126,6 +1126,7 @@ func extractMcpServers(roleConfig []byte) []string {
 	return snap.McpServers
 
 }
+
 // extractLLMMaxContextTokens reads llm_max_context_tokens out of the frozen
 // role_config snapshot. Returns 0 when the field is absent or the snapshot
 // is empty — the agent will fall back to the default compact threshold.

@@ -1,4 +1,3 @@
-
 // Package handler exposes the llm_provider admin HTTP surface mounted at
 // /api/admin/llm/. Every route is RequireAdmin-gated; provider credentials
 // are platform-level operations.
@@ -78,7 +77,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 
 		r.Get("/usage", h.listUsage)
 		r.Get("/usage/{id}", h.getUsage)
-			r.Get("/usage/export", h.exportUsage)
+		r.Get("/usage/export", h.exportUsage)
 	})
 }
 
@@ -437,7 +436,6 @@ func (h *Handler) getUsage(w http.ResponseWriter, r *http.Request) {
 		ResponseBody: row.ResponseBody,
 	})
 }
-
 
 // ---- export ----
 

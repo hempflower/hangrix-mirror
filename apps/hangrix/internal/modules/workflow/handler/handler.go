@@ -134,46 +134,46 @@ func bearerToken(r *http.Request) (string, error) {
 // ---- request/response DTOs ----
 
 type runDTO struct {
-	ID           int64  `json:"id"`
-	RepoID       int64  `json:"repo_id"`
-	WorkflowName string `json:"workflow_name"`
-	SourceFile   string `json:"source_file"`
-	Status       string `json:"status"`
-	EventName    string `json:"event_name"`
-	CauseID      *int64 `json:"cause_id"`
-	Ref          string `json:"ref"`
-	CommitSHA    string `json:"commit_sha"`
+	ID           int64   `json:"id"`
+	RepoID       int64   `json:"repo_id"`
+	WorkflowName string  `json:"workflow_name"`
+	SourceFile   string  `json:"source_file"`
+	Status       string  `json:"status"`
+	EventName    string  `json:"event_name"`
+	CauseID      *int64  `json:"cause_id"`
+	Ref          string  `json:"ref"`
+	CommitSHA    string  `json:"commit_sha"`
 	StartedAt    *string `json:"started_at"`
 	FinishedAt   *string `json:"finished_at"`
-	CreatedAt    string `json:"created_at"`
+	CreatedAt    string  `json:"created_at"`
 }
 
 type jobRunDTO struct {
-	ID               int64                                  `json:"id"`
-	WorkflowRunID    int64                                  `json:"workflow_run_id"`
-	JobKey           string                                 `json:"job_key"`
-	DisplayName      string                                 `json:"display_name"`
-	Status           string                                 `json:"status"`
-	SequenceIndex    int32                                  `json:"sequence_index"`
-	WorkingDirectory string                                 `json:"working_directory"`
-	TimeoutMinutes   int32                                  `json:"timeout_minutes"`
-	RunnerID         *int64                                 `json:"runner_id"`
-	ContainerID      *string                                `json:"container_id"`
+	ID               int64                                        `json:"id"`
+	WorkflowRunID    int64                                        `json:"workflow_run_id"`
+	JobKey           string                                       `json:"job_key"`
+	DisplayName      string                                       `json:"display_name"`
+	Status           string                                       `json:"status"`
+	SequenceIndex    int32                                        `json:"sequence_index"`
+	WorkingDirectory string                                       `json:"working_directory"`
+	TimeoutMinutes   int32                                        `json:"timeout_minutes"`
+	RunnerID         *int64                                       `json:"runner_id"`
+	ContainerID      *string                                      `json:"container_id"`
 	StepOutputs      map[string]map[string]domain.StepOutputValue `json:"step_outputs"`
 	JobOutputs       map[string]domain.StepOutputValue            `json:"job_outputs"`
-	StartedAt        *string                                `json:"started_at"`
-	FinishedAt       *string                                `json:"finished_at"`
-	ExitCode         *int32                                 `json:"exit_code"`
-	ErrorMessage     string                                 `json:"error_message"`
-	CreatedAt        string                                 `json:"created_at"`
+	StartedAt        *string                                      `json:"started_at"`
+	FinishedAt       *string                                      `json:"finished_at"`
+	ExitCode         *int32                                       `json:"exit_code"`
+	ErrorMessage     string                                       `json:"error_message"`
+	CreatedAt        string                                       `json:"created_at"`
 }
 
 type logLineDTO struct {
-	ID              int64  `json:"id"`
-	WorkflowJobRunID int64 `json:"workflow_job_run_id"`
-	Stream          string `json:"stream"`
-	Line            string `json:"line"`
-	CreatedAt       string `json:"created_at"`
+	ID               int64  `json:"id"`
+	WorkflowJobRunID int64  `json:"workflow_job_run_id"`
+	Stream           string `json:"stream"`
+	Line             string `json:"line"`
+	CreatedAt        string `json:"created_at"`
 }
 
 type runListResp struct {
@@ -182,7 +182,7 @@ type runListResp struct {
 }
 
 type runDetailResp struct {
-	Run  runDTO     `json:"run"`
+	Run  runDTO      `json:"run"`
 	Jobs []jobRunDTO `json:"jobs"`
 }
 
@@ -192,8 +192,8 @@ type logsResp struct {
 }
 
 type dispatchReq struct {
-	WorkflowName string            `json:"workflow_name"`
-	Ref          string            `json:"ref"`
+	WorkflowName string             `json:"workflow_name"`
+	Ref          string             `json:"ref"`
 	Inputs       []dispatchInputDTO `json:"inputs"`
 }
 
@@ -257,11 +257,11 @@ func toJobRunDTO(j *domain.WorkflowJobRun) jobRunDTO {
 
 func toLogLineDTO(l *domain.WorkflowJobLogLine) logLineDTO {
 	return logLineDTO{
-		ID:              l.ID,
+		ID:               l.ID,
 		WorkflowJobRunID: l.WorkflowJobRunID,
-		Stream:          string(l.Stream),
-		Line:            l.Line,
-		CreatedAt:       l.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		Stream:           string(l.Stream),
+		Line:             l.Line,
+		CreatedAt:        l.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
 }
 

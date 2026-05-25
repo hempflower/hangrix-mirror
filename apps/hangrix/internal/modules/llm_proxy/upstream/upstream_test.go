@@ -627,4 +627,3 @@ func TestParseAndMarshalRoundTrip(t *testing.T) {
 		t.Errorf("reasoning_tokens not surfaced under output_tokens_details: %v", usage)
 	}
 }
-

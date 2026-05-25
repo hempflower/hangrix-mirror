@@ -33,13 +33,13 @@ type Inputs struct {
 	// excludes runner internals (LLM / MCP endpoints, credential
 	// material) — the agent reaches those services through pre-wired
 	// clients and does not need their addresses to operate.
-	Role             string
-	HostRepo         string
-	IssueNumber      string
-	WorkingBranch    string
-	BaseBranch       string
-	SessionID        string
-	PlatformBaseURL  string
+	Role            string
+	HostRepo        string
+	IssueNumber     string
+	WorkingBranch   string
+	BaseBranch      string
+	SessionID       string
+	PlatformBaseURL string
 }
 
 // Assembled bundles the final prompt with debug provenance the runtime

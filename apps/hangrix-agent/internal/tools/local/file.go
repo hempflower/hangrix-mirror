@@ -247,7 +247,7 @@ func (editTool) Schema() map[string]any {
 			"all":           map[string]any{"type": "boolean", "description": "replace: replace every occurrence; default false (first only)."},
 			"anchor":        map[string]any{"type": "string", "description": "optional: nearby text that unambiguously identifies the region. When set, 'find' is only searched within ±anchor_radius lines of the anchor."},
 			"anchor_radius": map[string]any{"type": "integer", "description": "lines to search on each side of the anchor. Default 80."},
-				"formatting":    map[string]any{"type": "boolean", "description": "optional: run language formatter (gofmt/prettier/rustfmt) on the result before writing. Default false."},
+			"formatting":    map[string]any{"type": "boolean", "description": "optional: run language formatter (gofmt/prettier/rustfmt) on the result before writing. Default false."},
 		},
 		"required": []string{"path", "mode"},
 	}
@@ -608,7 +608,6 @@ func matchFailureError(lines []string, find, path, kind string, advice string) e
 		kind, find, path, previewN, preview.String(), advice,
 	)
 }
-
 
 // computeUnifiedDiff produces a single-file unified diff between original
 // and updated. It uses a simple prefix/suffix scan to find the changed

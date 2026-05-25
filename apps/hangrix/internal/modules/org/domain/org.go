@@ -75,14 +75,14 @@ type Owner struct {
 
 // Errors.
 var (
-	ErrOrgNotFound       = errors.New("organization not found")
-	ErrOrgConflict       = errors.New("organization name already taken")
-	ErrOrgReserved       = errors.New("organization name is reserved")
-	ErrMemberNotFound    = errors.New("member not found")
-	ErrMemberConflict    = errors.New("member already in organization")
-	ErrLastOwner         = errors.New("cannot remove or demote the last owner")
-	ErrOwnerNotFound     = errors.New("owner not found")
-	ErrInvalidOrgName    = errors.New("invalid organization name")
+	ErrOrgNotFound    = errors.New("organization not found")
+	ErrOrgConflict    = errors.New("organization name already taken")
+	ErrOrgReserved    = errors.New("organization name is reserved")
+	ErrMemberNotFound = errors.New("member not found")
+	ErrMemberConflict = errors.New("member already in organization")
+	ErrLastOwner      = errors.New("cannot remove or demote the last owner")
+	ErrOwnerNotFound  = errors.New("owner not found")
+	ErrInvalidOrgName = errors.New("invalid organization name")
 )
 
 // OrgRepo is the persistence abstraction for organization rows and their

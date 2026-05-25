@@ -130,7 +130,6 @@ type Git interface {
 	// branch has no commits yet — returns (false, "unknown", nil).
 	CheckFastForward(path, baseRef, headRef string) (bool, string, error)
 
-
 	// ResolveCommit returns the commit SHA the ref resolves to. Empty string
 	// (no error) is reserved for the "unborn branch" case so callers can
 	// branch on it. ErrRefNotFound when the ref does not exist at all.
@@ -152,7 +151,7 @@ type Git interface {
 	//
 	// Returns the resulting commit SHA on intoBranch, the mode, and any error.
 	MergeBranch(path, intoBranch, fromRef, message string, author Signature) (sha, mode string, err error)
-	
+
 	// CheckAutoMerge evaluates whether headRef can be merged into baseRef
 	// using a merge-commit strategy, without modifying any refs. Returns:
 	//
@@ -309,6 +308,6 @@ var (
 	ErrTagExists        = errors.New("git: tag already exists")
 	ErrCannotDeleteHEAD = errors.New("git: cannot delete current HEAD branch")
 	ErrInvalidRefName   = errors.New("git: invalid ref name")
-	ErrMergeConflict = errors.New("git: merge conflict")
-	ErrRefChanged    = errors.New("git: ref has changed concurrently")
+	ErrMergeConflict    = errors.New("git: merge conflict")
+	ErrRefChanged       = errors.New("git: ref has changed concurrently")
 )

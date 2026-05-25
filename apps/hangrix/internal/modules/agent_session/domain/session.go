@@ -17,7 +17,8 @@
 //     parent issue is the sole archiver.
 //
 //   - Auditor — the admin / agents-tab UI calls ListByIssue + GetSession
-//     + ListMessages to reconstruct the (repo_sha, cause, role_config)
+//
+//   - ListMessages to reconstruct the (repo_sha, cause, role_config)
 //     audit chain plus the per-session message log.
 package domain
 

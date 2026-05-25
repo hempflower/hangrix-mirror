@@ -139,11 +139,11 @@ func (s *PostgresStore) ListByRepo(ctx context.Context, repoID int64, offset, li
 
 func (s *PostgresStore) Update(ctx context.Context, id int64, tagName, targetCommitSHA, title, notes string) (*domain.Release, error) {
 	row, err := s.q.UpdateRelease(ctx, releasedb.UpdateReleaseParams{
-		ID:               id,
-		TagName:          tagName,
-		TargetCommitSha:  targetCommitSHA,
-		Title:            title,
-		Notes:            notes,
+		ID:              id,
+		TagName:         tagName,
+		TargetCommitSha: targetCommitSHA,
+		Title:           title,
+		Notes:           notes,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

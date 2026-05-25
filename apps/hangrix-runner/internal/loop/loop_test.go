@@ -29,11 +29,11 @@ func TestLoopParallelismFansOut(t *testing.T) {
 	const N = 3
 
 	var (
-		mu              sync.Mutex
-		runningHits     atomic.Int32
-		terminateHits   atomic.Int32
-		issuedTasks     atomic.Int32
-		seenSessionIDs  []int64
+		mu             sync.Mutex
+		runningHits    atomic.Int32
+		terminateHits  atomic.Int32
+		issuedTasks    atomic.Int32
+		seenSessionIDs []int64
 	)
 
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

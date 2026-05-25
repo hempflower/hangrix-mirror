@@ -1,19 +1,22 @@
 // Package cli implements the runner's three subcommands.
 //
 // enroll: trade an enroll plaintext for a long-lived agent token, then
-//   snapshot the platform's bootstrap response (base URL, default
-//   agent image, poll/heartbeat cadence) into state.json. After this
-//   completes, `serve` needs no further flags.
+//
+//	snapshot the platform's bootstrap response (base URL, default
+//	agent image, poll/heartbeat cadence) into state.json. After this
+//	completes, `serve` needs no further flags.
 //
 // serve:  read state.json, refresh bootstrap (in case the platform
-//   was reconfigured), extract the embedded `hangrix-agent` binary to
-//   disk, then run the heartbeat + task-poll loop until SIGINT/SIGTERM.
+//
+//	was reconfigured), extract the embedded `hangrix-agent` binary to
+//	disk, then run the heartbeat + task-poll loop until SIGINT/SIGTERM.
 //
 // update: read state.json, refresh bootstrap, look up the server's
-//   embedded `hangrix-runner_<goos>_<goarch>` artefact for this host,
-//   and atomically replace the running binary on disk when the SHA
-//   differs (or always when --force is set). Restart is the operator's
-//   responsibility — `update` only writes bytes.
+//
+//	embedded `hangrix-runner_<goos>_<goarch>` artefact for this host,
+//	and atomically replace the running binary on disk when the SHA
+//	differs (or always when --force is set). Restart is the operator's
+//	responsibility — `update` only writes bytes.
 //
 // The agent binary used to come down over /api/runner/binaries; it
 // now rides inside the runner via the agentbin package, so there's no

@@ -51,10 +51,10 @@ import (
 //     for a brand new session).
 //   - "event":   Event names the trigger; Payload carries the JSON body.
 //     Known event types:
-//       * "issue.comment"          — someone commented on the issue
-//       * "commit.pushed"          — a commit was pushed (issue branch, or a
-//         contribution branch issue-<N>/<role>/<slug>); reviewers wake on this
-//       * "review_vote.posted"     — a reviewer cast a vote on a contribution
+//   - "issue.comment"          — someone commented on the issue
+//   - "commit.pushed"          — a commit was pushed (issue branch, or a
+//     contribution branch issue-<N>/<role>/<slug>); reviewers wake on this
+//   - "review_vote.posted"     — a reviewer cast a vote on a contribution
 //   - "control": Op names the control command (today only "shutdown").
 //
 // We keep all fields on one struct rather than a tagged union because the

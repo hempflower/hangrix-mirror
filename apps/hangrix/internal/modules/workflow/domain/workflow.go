@@ -1,4 +1,3 @@
-
 // Package domain declares the workflow module's types and interfaces.
 // Other modules depend only on this package; the Postgres implementation
 // and HTTP handler live in sibling packages.
@@ -81,9 +80,9 @@ type WorkflowRun struct {
 	// creation time. Workflow steps use it to authenticate against
 	// repo-scoped write endpoints (e.g. releases).
 	WorkflowToken string
-	StartedAt  *time.Time
-	FinishedAt *time.Time
-	CreatedAt  time.Time
+	StartedAt     *time.Time
+	FinishedAt    *time.Time
+	CreatedAt     time.Time
 }
 
 // WorkflowJobRun is a single job execution within a workflow run.
@@ -114,11 +113,11 @@ type WorkflowJobRun struct {
 	// Map of output_key -> expression string (may contain ${{ }} references).
 	// The service resolves these against runtime context at job completion.
 	JobOutputsRawJSON []byte
-	StartedAt    *time.Time
-	FinishedAt   *time.Time
-	ExitCode     *int32
-	ErrorMessage string
-	CreatedAt    time.Time
+	StartedAt         *time.Time
+	FinishedAt        *time.Time
+	ExitCode          *int32
+	ErrorMessage      string
+	CreatedAt         time.Time
 }
 
 // LogStream identifies the output stream for a log line.
@@ -132,11 +131,11 @@ const (
 
 // WorkflowJobLogLine is a single line of output from a workflow job.
 type WorkflowJobLogLine struct {
-	ID              int64
+	ID               int64
 	WorkflowJobRunID int64
-	Stream          LogStream
-	Line            string
-	CreatedAt       time.Time
+	Stream           LogStream
+	Line             string
+	CreatedAt        time.Time
 }
 
 // ---- container snapshot (for audit) ----
@@ -144,11 +143,11 @@ type WorkflowJobLogLine struct {
 // ContainerSnapshot captures the resolved container definition at run creation
 // time, frozen so subsequent config changes don't affect in-flight runs.
 type ContainerSnapshot struct {
-	Image      string            `json:"image"`
-	Build      *BuildSpec        `json:"build,omitempty"`
-	Entrypoint []string          `json:"entrypoint,omitempty"`
-	EnvKeys    []string          `json:"env_keys"` // env key names only, no values
-	Volumes    []VolumeSnapshot  `json:"volumes,omitempty"`
+	Image      string           `json:"image"`
+	Build      *BuildSpec       `json:"build,omitempty"`
+	Entrypoint []string         `json:"entrypoint,omitempty"`
+	EnvKeys    []string         `json:"env_keys"` // env key names only, no values
+	Volumes    []VolumeSnapshot `json:"volumes,omitempty"`
 }
 
 // BuildSpec mirrors agentsconfig.Build for snapshotting.
@@ -279,7 +278,6 @@ type Store interface {
 	// SetJobContainer records the container ID for a running job.
 	SetJobContainer(ctx context.Context, id int64, containerID string) error
 
-
 	// SetStepOutputs merges a step's outputs into the job's step_outputs_json.
 	// stepID identifies the step within the job (must match a declared step id).
 	// outputs is the map of key -> StepOutputValue captured from the step's stdout.
@@ -317,7 +315,6 @@ type TagEventTrigger interface {
 	TriggerTagEvent(ctx context.Context, repoID int64, ownerName, repoName, defaultBranch, tagName, commitSHA string) error
 }
 
-
 // ---- sentinel errors ----
 
 // WorkflowTokenValidator is the cross-module interface that allows other
@@ -328,9 +325,9 @@ type WorkflowTokenValidator interface {
 }
 
 var (
-	ErrNoPendingJob        = errors.New("no pending workflow job")
-	ErrJobNotFound         = errors.New("workflow job not found")
-	ErrRunNotFound         = errors.New("workflow run not found")
-	ErrInvalidStatus       = errors.New("invalid status transition")
+	ErrNoPendingJob         = errors.New("no pending workflow job")
+	ErrJobNotFound          = errors.New("workflow job not found")
+	ErrRunNotFound          = errors.New("workflow run not found")
+	ErrInvalidStatus        = errors.New("invalid status transition")
 	ErrInvalidWorkflowToken = errors.New("invalid workflow token")
 )

@@ -15,11 +15,11 @@ type AutomationConfig struct {
 
 // Task is a single scheduled automation task definition.
 type Task struct {
-	Name     string   `yaml:"name"`
-	Schedule string   `yaml:"schedule"`
+	Name     string    `yaml:"name"`
+	Schedule string    `yaml:"schedule"`
 	Issue    IssueSpec `yaml:"issue"`
-	Roles    []string `yaml:"roles"`
-	Enabled  bool     `yaml:"enabled"`
+	Roles    []string  `yaml:"roles"`
+	Enabled  bool      `yaml:"enabled"`
 }
 
 // IssueSpec is the issue-creation template within a task.

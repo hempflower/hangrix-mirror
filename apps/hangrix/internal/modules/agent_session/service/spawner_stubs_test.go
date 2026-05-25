@@ -36,8 +36,8 @@ func newStubBlob(files map[string][]byte) *stubBlob {
 // pulls in a new dependency lights up loudly. Mirrors the
 // stubKindStore pattern in repo/handler/git_http_kind_test.go.
 type stubRepoStore struct {
-	byID         map[int64]*repodomain.Repo
-	byOwnerName  map[string]*repodomain.Repo // key: ownerName + "/" + name
+	byID        map[int64]*repodomain.Repo
+	byOwnerName map[string]*repodomain.Repo // key: ownerName + "/" + name
 }
 
 func newStubRepoStore() *stubRepoStore {
@@ -158,10 +158,10 @@ func (g *stubGit) DiffRefs(string, string, string) ([]*gitdomain.FileDiff, error
 func (g *stubGit) DiffMergeBase(string, string, string) ([]*gitdomain.FileDiff, error) {
 	panic("DiffMergeBase not stubbed")
 }
-func (g *stubGit) CreateBranch(string, string, string) error     { panic("CreateBranch not stubbed") }
-func (g *stubGit) CreateBranchAt(string, string, string) error   { panic("CreateBranchAt not stubbed") }
-func (g *stubGit) DeleteBranch(string, string) error             { panic("DeleteBranch not stubbed") }
-func (g *stubGit) SetHEAD(string, string) error              { panic("SetHEAD not stubbed") }
+func (g *stubGit) CreateBranch(string, string, string) error   { panic("CreateBranch not stubbed") }
+func (g *stubGit) CreateBranchAt(string, string, string) error { panic("CreateBranchAt not stubbed") }
+func (g *stubGit) DeleteBranch(string, string) error           { panic("DeleteBranch not stubbed") }
+func (g *stubGit) SetHEAD(string, string) error                { panic("SetHEAD not stubbed") }
 func (g *stubGit) CreateLightweightTag(string, string, string) error {
 	panic("CreateLightweightTag not stubbed")
 }
@@ -192,7 +192,6 @@ func (g *stubGit) ApplyPatch(string, string, string, string, gitdomain.Signature
 func (g *stubGit) EditAndCommit(string, string, string, string, []byte, string, gitdomain.Signature, gitdomain.Signature) (string, error) {
 	panic("EditAndCommit not stubbed")
 }
-
 
 // stubRunnerRepo satisfies runnerdomain.Repo for the spawner / archiver /
 // auditor surface. The actual storage layer is the runner module's

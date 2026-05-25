@@ -521,8 +521,8 @@ roles: { r: { triggers: { issue.opened: {} }, prompt: hi, mcp: ["", playwright] 
 			target: ErrInvalidMCP,
 		},
 		{
-			name: "duplicate-role-key",
-			body: "version: 1\ncontainer: { image: x }\nroles:\n  r:\n    triggers: { issue.opened: {} }\n    prompt: hi\n  r:\n    triggers: { issue.opened: {} }\n    prompt: hi\n",
+			name:   "duplicate-role-key",
+			body:   "version: 1\ncontainer: { image: x }\nroles:\n  r:\n    triggers: { issue.opened: {} }\n    prompt: hi\n  r:\n    triggers: { issue.opened: {} }\n    prompt: hi\n",
 			target: ErrDuplicateRoleKey,
 		},
 	}
@@ -658,4 +658,3 @@ roles:
 		t.Fatalf("typo'd paths-include should leave filter empty: %+v", push)
 	}
 }
-

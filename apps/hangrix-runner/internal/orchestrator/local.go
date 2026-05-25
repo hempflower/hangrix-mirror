@@ -163,10 +163,10 @@ type localHandle struct {
 	containerID string
 }
 
-func (h *localHandle) Stdin() io.WriteCloser  { return h.stdin }
-func (h *localHandle) Stdout() io.Reader       { return h.stdout }
-func (h *localHandle) Stderr() io.Reader       { return h.stderr }
-func (h *localHandle) ContainerID() string     { return h.containerID }
+func (h *localHandle) Stdin() io.WriteCloser { return h.stdin }
+func (h *localHandle) Stdout() io.Reader     { return h.stdout }
+func (h *localHandle) Stderr() io.Reader     { return h.stderr }
+func (h *localHandle) ContainerID() string   { return h.containerID }
 func (h *localHandle) Wait() (int, error) {
 	err := h.cmd.Wait()
 	if err == nil {

@@ -138,12 +138,12 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 	//                     succeeded/cancelled → rewake the row; archived
 	//                     → spawn a fresh row that replaces the archived
 	//                     predecessor (the archived row stays on disk
-		//   alreadyForCause — (role, cause_kind, cause_id) tuple was
-		//                     already processed by ANY non-archived session.
-		//                     Re-firing the same cause onto ANY row that
-		//                     still exists (live or terminal-but-not-archived)
-		//                     is a no-op; this prevents duplicate inputs when
-		//                     a previous rewake partially failed.
+	//   alreadyForCause — (role, cause_kind, cause_id) tuple was
+	//                     already processed by ANY non-archived session.
+	//                     Re-firing the same cause onto ANY row that
+	//                     still exists (live or terminal-but-not-archived)
+	//                     is a no-op; this prevents duplicate inputs when
+	//                     a previous rewake partially failed.
 	existing, err := s.runner.ListSessionsByIssue(ctx, in.RepoID, in.IssueNumber)
 	if err != nil {
 		return nil, fmt.Errorf("spawner: list existing sessions: %w", err)

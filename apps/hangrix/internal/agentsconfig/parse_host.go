@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
-
 )
 
 // hostWire mirrors `.hangrix/agents.yml` on the wire. Unknown keys are
@@ -39,11 +38,11 @@ type reviewerRuleWire struct {
 }
 
 type containerWire struct {
-	Image      string             `yaml:"image"`
-	Build      *buildWire         `yaml:"build"`
-	Entrypoint []string           `yaml:"entrypoint"`
-	Env        map[string]string  `yaml:"env"`
-	Volumes    []volumeWire       `yaml:"volumes"`
+	Image      string            `yaml:"image"`
+	Build      *buildWire        `yaml:"build"`
+	Entrypoint []string          `yaml:"entrypoint"`
+	Env        map[string]string `yaml:"env"`
+	Volumes    []volumeWire      `yaml:"volumes"`
 }
 
 type buildWire struct {

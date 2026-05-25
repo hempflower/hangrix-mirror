@@ -84,11 +84,11 @@ type configResponse struct {
 }
 
 type publicTask struct {
-	Name     string        `json:"name"`
-	Schedule string        `json:"schedule"`
-	Issue    publicIssue   `json:"issue"`
-	Roles    []string      `json:"roles"`
-	Enabled  bool          `json:"enabled"`
+	Name     string      `json:"name"`
+	Schedule string      `json:"schedule"`
+	Issue    publicIssue `json:"issue"`
+	Roles    []string    `json:"roles"`
+	Enabled  bool        `json:"enabled"`
 }
 
 type publicIssue struct {

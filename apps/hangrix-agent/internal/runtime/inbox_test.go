@@ -32,12 +32,12 @@ func newFakeAsync() *fakeAsyncLifecycle {
 	return &fakeAsyncLifecycle{notifications: make(chan string, 16)}
 }
 
-func (f *fakeAsyncLifecycle) NotificationCh() <-chan string                            { return f.notifications }
-func (f *fakeAsyncLifecycle) HasRunningJobs() int                                       { return int(f.running.Load()) }
-func (f *fakeAsyncLifecycle) Cleanup(ctx context.Context)                               { f.cleanupCount.Add(1) }
-func (f *fakeAsyncLifecycle) Schedule(time.Duration, string) string                     { return "sleep_fake" }
-func (f *fakeAsyncLifecycle) ScheduleWithID(id string, d time.Duration, msg string)     {}
-func (f *fakeAsyncLifecycle) CancelSchedule(string)                                     {}
+func (f *fakeAsyncLifecycle) NotificationCh() <-chan string                         { return f.notifications }
+func (f *fakeAsyncLifecycle) HasRunningJobs() int                                   { return int(f.running.Load()) }
+func (f *fakeAsyncLifecycle) Cleanup(ctx context.Context)                           { f.cleanupCount.Add(1) }
+func (f *fakeAsyncLifecycle) Schedule(time.Duration, string) string                 { return "sleep_fake" }
+func (f *fakeAsyncLifecycle) ScheduleWithID(id string, d time.Duration, msg string) {}
+func (f *fakeAsyncLifecycle) CancelSchedule(string)                                 {}
 
 // TestLoopEmitsIdleAfterEvent pins the long-lived-agent contract: after
 // the assistant finishes a turn (no more tool calls), the loop must
@@ -957,5 +957,3 @@ func TestLoopMidCallEventPreventsDone(t *testing.T) {
 		t.Errorf("expected 2 LLM calls (call #1 had no tools but mid-call input forced call #2); got %d", got)
 	}
 }
-
-

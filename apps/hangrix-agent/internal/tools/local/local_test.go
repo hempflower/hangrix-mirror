@@ -533,9 +533,6 @@ func TestEditDeleteAnchorNotFound(t *testing.T) {
 	}
 }
 
-
-
-
 // TestEditCRLFCrossToolContract locks the cross-tool contract between
 // `read` (which normalises CRLF→LF via bufio.Scanner) and `edit`
 // (which now normalises its input the same way). A CRLF file read
@@ -2303,6 +2300,7 @@ func TestEditFormattingMissingFormatter(t *testing.T) {
 		t.Errorf("file should have been written despite formatting failure; got: %q", string(body))
 	}
 }
+
 // TestEditFormattingJsxTsxMjsCjs verifies that .jsx / .tsx / .mjs / .cjs
 // extensions are mapped to prettier rather than reported as unsupported.
 func TestEditFormattingJsxTsxMjsCjs(t *testing.T) {
@@ -2374,8 +2372,6 @@ func TestEditFormattingJsxTsxMjsCjs(t *testing.T) {
 		})
 	}
 }
-
-
 
 // ----- edit mid-line coexistence tests ----------------------------------------
 
@@ -2545,13 +2541,6 @@ func TestEditReplaceAllCompleteLineOnly(t *testing.T) {
 	}
 }
 
-
-
-
-
-
-
-
 func byName(ts []local.Tool) map[string]local.Tool {
 	m := map[string]local.Tool{}
 	for _, t := range ts {
@@ -2585,4 +2574,3 @@ func runOK(t *testing.T, dir, name string, args ...string) {
 		t.Fatalf("%s %v: %v\n%s", name, args, err, out)
 	}
 }
-

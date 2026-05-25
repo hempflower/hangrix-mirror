@@ -21,8 +21,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
-	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
+	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
 

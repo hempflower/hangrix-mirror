@@ -39,8 +39,8 @@ import (
 type Tool interface {
 	Name() string
 	Description() string
-	Schema() map[string]any                                              // JSON-Schema for parameters
-	Call(ctx context.Context, args json.RawMessage) (any, error)         // returns JSON-serialisable result
+	Schema() map[string]any                                      // JSON-Schema for parameters
+	Call(ctx context.Context, args json.RawMessage) (any, error) // returns JSON-serialisable result
 }
 
 // ReadTracker remembers which paths have been read in the current

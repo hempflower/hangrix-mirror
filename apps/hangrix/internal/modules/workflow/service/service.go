@@ -15,8 +15,8 @@ import (
 	"strings"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
-	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/workflowsconfig"
 )
 
@@ -347,7 +347,6 @@ func (s *Service) GetRunForJob(ctx context.Context, jobRunID int64) (*domain.Wor
 	return s.store.GetRun(ctx, job.WorkflowRunID)
 }
 
-
 // ---- event triggers ----
 
 // TriggerTagEvent implements domain.TagEventTrigger. It scans workflow
@@ -396,7 +395,6 @@ func (s *Service) TriggerTagEvent(ctx context.Context, repoID int64, ownerName, 
 	}
 	return nil
 }
-
 
 // ---- dispatch ----
 
@@ -540,7 +538,6 @@ func (s *Service) DispatchRepoPush(ctx context.Context, repo Ref, branch string,
 	}
 	return runs
 }
-
 
 // ---- token validation (domain.WorkflowTokenValidator) ----
 
@@ -788,7 +785,6 @@ func (s *Service) GetJobRun(ctx context.Context, id int64) (*domain.WorkflowJobR
 func (s *Service) ListRunsByRepo(ctx context.Context, repoID int64, workflowName string, offset, limit int32) ([]*domain.WorkflowRun, int64, error) {
 	return s.store.ListRunsByRepo(ctx, repoID, workflowName, offset, limit)
 }
-
 
 // Ensure json import is used
 var _ = json.Marshal

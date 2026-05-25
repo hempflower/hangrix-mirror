@@ -10,11 +10,11 @@ import (
 // ---- wire types (yaml-tagged, private) ----
 
 type workflowWire struct {
-	Version int              `yaml:"version"`
-	Name    string           `yaml:"name"`
-	On      yaml.Node        `yaml:"on"` // decoded manually for strict key checking
+	Version int               `yaml:"version"`
+	Name    string            `yaml:"name"`
+	On      yaml.Node         `yaml:"on"` // decoded manually for strict key checking
 	Env     map[string]string `yaml:"env"`
-	Jobs    yaml.Node        `yaml:"jobs"` // decoded manually for ordered map
+	Jobs    yaml.Node         `yaml:"jobs"` // decoded manually for ordered map
 }
 
 type jobWire struct {

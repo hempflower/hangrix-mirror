@@ -250,8 +250,8 @@ func TestLoopCompactSession(t *testing.T) {
 	t.Parallel()
 
 	var (
-		llmCallCount    atomic.Int32
-		secondCallBody  atomic.Value // []byte
+		llmCallCount   atomic.Int32
+		secondCallBody atomic.Value // []byte
 	)
 	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {

@@ -36,7 +36,7 @@ type WorkflowConfig struct {
 type EventTrigger struct {
 	Event EventName
 	// RepoPush filters (only meaningful for repo.push).
-	Branches      []string
+	Branches       []string
 	BranchesIgnore []string
 	Paths          []string
 	PathsIgnore    []string
@@ -55,11 +55,11 @@ type EventTrigger struct {
 type EventName string
 
 const (
-	EventRepoPush          EventName = "repo.push"
-	EventRepoPushTag       EventName = "repo.push_tag"
-	EventIssueOpened       EventName = "issue.opened"
-	EventIssueComment      EventName = "issue.comment"
-	EventWorkflowDispatch  EventName = "workflow.dispatch"
+	EventRepoPush         EventName = "repo.push"
+	EventRepoPushTag      EventName = "repo.push_tag"
+	EventIssueOpened      EventName = "issue.opened"
+	EventIssueComment     EventName = "issue.comment"
+	EventWorkflowDispatch EventName = "workflow.dispatch"
 )
 
 var validEventNames = map[EventName]bool{
