@@ -149,10 +149,6 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Use(h.middleware.RequireAuth)
 		r.Post("/", h.create)
 		r.Get("/me", h.listMine)
-		// Static segment, must register before the `/{owner}/{name}`
-		// catch-all so chi picks the literal route on a GET for
-		// `/api/repos/default-agents-yaml`.
-		r.Get("/default-agents-yaml", h.getDefaultAgentsYAML)
 		r.Get("/{owner}/{name}", h.getOne)
 		r.Patch("/{owner}/{name}", h.patchOne)
 		r.Delete("/{owner}/{name}", h.deleteOne)
@@ -278,13 +274,6 @@ type createReq struct {
 	// "the calling user"; a non-empty value must resolve to a user (the
 	// caller themselves) or an org of which the caller is a member.
 	Owner string `json:"owner,omitempty"`
-	// AgentsYAML is an optional override for the seeded `.hangrix/
-	// agents.yml`. Only consulted when InitReadme=true. Empty means
-	// "use the bundled template verbatim". The handler parses the
-	// body via agentsconfig.ParseHostConfig before writing — invalid
-	// yaml short-circuits with 400 so we never seed a repo with a
-	// config the runtime would reject on first spawn.
-	AgentsYAML string `json:"agents_yaml,omitempty"`
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
@@ -333,28 +322,11 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If the caller pasted a custom `.hangrix/agents.yml` body we
-	// validate it (so a bad config can't land in the seed commit and
-	// brick `agent spawn` later) then write it as the seed file. We
-	// also write stub prompt files for any role keys the body refers
-	// to that the bundled `templates/initial/.hangrix/prompts/`
-	// doesn't already cover.
-	var overrides map[string][]byte
-	if req.InitReadme && strings.TrimSpace(req.AgentsYAML) != "" {
-		files, err := prepareAgentFiles(req.AgentsYAML)
-		if err != nil {
-			_ = h.store.Delete(ctx, repo.ID)
-			httpx.WriteError(w, http.StatusBadRequest, "agents.yml: "+err.Error())
-			return
-		}
-		overrides = files
-	}
-
 	// Best-effort filesystem init. On failure we roll back the DB row so the
 	// caller can retry with the same name; otherwise the metadata row would
 	// orphan a missing bare repo. The seed commit's author identity is still
 	// the calling user regardless of who ends up owning the repo.
-	if err := h.storage.InitOnDisk(repo, ownerName, req.InitReadme, overrides, caller.Username, caller.Email); err != nil {
+	if err := h.storage.InitOnDisk(repo, ownerName, req.InitReadme, caller.Username, caller.Email); err != nil {
 		_ = h.store.Delete(ctx, repo.ID)
 		httpx.WriteError(w, http.StatusInternalServerError, "init repo: "+err.Error())
 		return
