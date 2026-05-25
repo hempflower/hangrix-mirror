@@ -424,12 +424,13 @@
     "visibilityPublicHint": "Visible to any signed-in user",
     "visibilityPrivateHint": "Only you and admins can see it",
     "defaultBranch": "Default branch",
-    "initReadme": "Initialize repository",
-    "initReadmeHint": "Seeds an initial commit with README.md plus a .hangrix/ multi-role agent starter you can tune below.",
-    "agentConfig": {
-      "title": "Agent team yaml",
-      "subtitle": "The .hangrix/agents.yml created with this repository. Edit inline; changes are validated on commit.",
-      "reset": "Reset to default"
+    "initReadme": "Initialize with README",
+    "initReadmeHint": "Creates an initial commit with a README.md. You can later use your code agent to set up Hangrix configuration.",
+    "agentInit": {
+      "title": "Initialize this repo with your code agent",
+      "hint": "Paste the prompt below to your agent. It will read the reference .txt first, then generate Hangrix config and initial code tailored to your project.",
+      "promptLabel": "Prompt",
+      "refLink": "Reference (.txt, readable by agents via webfetch)"
     },
     "submit": "Create",
     "submitting": "Creating…",

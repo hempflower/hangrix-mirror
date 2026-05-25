@@ -11,6 +11,7 @@ import {
   GitBranch,
   GitCommit,
   KeyRound,
+  Sparkles,
 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -109,6 +110,29 @@ const pushExistingSnippet = computed(() => [
   `git branch -M main`,
   `git push -u origin main`,
 ].join('\n'))
+
+const hangrixInitUrl = computed(() => {
+  const origin = import.meta.client ? window.location.origin : ''
+  return `${origin}/hangrix-init.txt`
+})
+
+const agentInitPrompt = computed(() => {
+  const origin = import.meta.client ? window.location.origin : ''
+  const repoPath = `${owner.value}/${name.value}`
+  return [
+    `Initialize this Hangrix repository (${repoPath}) with proper Hangrix configuration.`,
+    '',
+    `First, read the Hangrix initialization reference at ${origin}/hangrix-init.txt.`,
+    '',
+    'Then:',
+    '1. Create `.hangrix/agents.yml` with a minimal team configuration for this project.',
+    '2. Create role prompt files under `.hangrix/prompts/` as needed.',
+    '3. Ensure the repository has a proper README.md if not already present.',
+    '4. Set up any necessary `.gitignore` and project scaffolding.',
+    '',
+    'Follow the conventions and avoidances in the reference document.',
+  ].join('\n')
+})
 
 const canManage = computed(() => {
   if (!repo.value || !user.value) return false
@@ -438,6 +462,42 @@ onMounted(async () => {
                 {{ t('repo.files.emptyRepoHint') }}
               </p>
             </div>
+
+            <Card class="gap-0 py-0">
+              <CardHeader class="border-b px-4 py-3">
+                <CardTitle class="flex items-center gap-2 text-sm font-medium">
+                  <Sparkles class="size-4" />
+                  {{ t('repo.agentInit.title') }}
+                </CardTitle>
+              </CardHeader>
+              <CardContent class="space-y-3 p-4">
+                <p class="text-sm text-muted-foreground">
+                  {{ t('repo.agentInit.hint') }}
+                </p>
+                <div>
+                  <div class="mb-1 flex items-center justify-between">
+                    <span class="text-xs font-medium">{{ t('repo.agentInit.promptLabel') }}</span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      class="h-7 gap-1 px-2"
+                      @click="copySnippet('agent-init', agentInitPrompt)"
+                    >
+                      <component :is="copiedKey === 'agent-init' ? Check : Copy" class="size-3" />
+                      {{ copiedKey === 'agent-init' ? t('repo.copied') : t('repo.copy') }}
+                    </Button>
+                  </div>
+                  <pre class="overflow-x-auto rounded-md bg-muted/30 p-3 font-mono text-xs leading-relaxed"><code>{{ agentInitPrompt }}</code></pre>
+                </div>
+                <a
+                  :href="hangrixInitUrl"
+                  target="_blank"
+                  class="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  {{ t('repo.agentInit.refLink') }}
+                </a>
+              </CardContent>
+            </Card>
 
             <Card class="gap-0 py-0">
               <CardHeader class="border-b px-4 py-3">
