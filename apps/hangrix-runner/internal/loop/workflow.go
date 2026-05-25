@@ -165,9 +165,37 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 	for i, step := range job.Steps {
 		stepName := step.Name
 		if stepName == "" {
-			stepName = step.Run
+			if step.Type == "release" {
+				stepName = fmt.Sprintf("release %s", step.Tag)
+			} else {
+				stepName = step.Run
+			}
 		}
 		log.Printf("workflow job %d: step %d/%d %q", job.JobRunID, i+1, len(job.Steps), stepName)
+
+		if step.Type == "release" {
+			// ---- release step: call the platform release API ----
+			outputs, err := d.runReleaseStep(stepCtx, job, step, i, stepOutputs, repoCheckout)
+			if err != nil {
+				msg := fmt.Sprintf("step %q: %v", stepName, err)
+				d.appendSystemLog(ctx, job.JobRunID, msg)
+				d.reportStepResult(ctx, job, step, i, -1, nil, nil)
+				d.terminate(ctx, job, "failed", -1, msg)
+				return nil
+			}
+			// Index outputs for subsequent step interpolation.
+			// runReleaseStep already called reportStepResult on success.
+			stepID := step.ID
+			if stepID == "" {
+				stepID = fmt.Sprintf("%d", i+1)
+			}
+			if len(outputs) > 0 {
+				stepOutputs[stepID] = outputs
+			}
+			continue
+		}
+
+		// ---- run step: docker exec bash -lc <run> ----
 
 		// Expand ${{ steps.<id>.outputs.<key> }} references using
 		// outputs captured from previous steps. Fails the job when
@@ -642,6 +670,156 @@ func expandStepOutputRefs(text string, stepOutputs map[string]map[string]string)
 // variable/secret value. The runner treats all RepoVariables values as
 // potentially sensitive — matching output values are flagged so the
 // server can display them as "***".
+// ---- release step execution ----
+
+// runReleaseStep executes a "release" step by calling the platform release
+// API. It does NOT exec into the container — release steps are runner-native.
+//
+// On success it returns the fixed step outputs (release_id, tag, draft,
+// published, release_url) so the caller can index them for subsequent step
+// interpolation.
+func (d *WorkflowJobDriver) runReleaseStep(
+	ctx context.Context,
+	job *client.WorkflowJob,
+	step client.WorkflowStep,
+	stepIndex int,
+	stepOutputs map[string]map[string]string,
+	repoCheckout string,
+) (map[string]string, error) {
+	// 1. Validate required fields.
+	tag := strings.TrimSpace(step.Tag)
+	if tag == "" {
+		return nil, fmt.Errorf("release step: tag is required")
+	}
+
+	// 2. Expand ${{ steps.<id>.outputs.<key> }} references in tag, notes,
+	//    and asset paths/names.
+	expandedTag, err := expandStepOutputRefs(tag, stepOutputs)
+	if err != nil {
+		return nil, fmt.Errorf("expand tag: %w", err)
+	}
+	expandedNotes, err := expandStepOutputRefs(step.Notes, stepOutputs)
+	if err != nil {
+		return nil, fmt.Errorf("expand notes: %w", err)
+	}
+
+	expandedAssets := make([]client.WorkflowStepAsset, len(step.Assets))
+	for j, a := range step.Assets {
+		expPath, err := expandStepOutputRefs(a.Path, stepOutputs)
+		if err != nil {
+			return nil, fmt.Errorf("expand assets[%d].path: %w", j, err)
+		}
+		expName, err := expandStepOutputRefs(a.Name, stepOutputs)
+		if err != nil {
+			return nil, fmt.Errorf("expand assets[%d].name: %w", j, err)
+		}
+		expandedAssets[j] = client.WorkflowStepAsset{Path: expPath, Name: expName}
+	}
+
+	// 3. Resolve asset file paths relative to the repo checkout and
+	//    validate each file exists and is readable.
+	for j, a := range expandedAssets {
+		resolved := d.resolveAssetPath(a.Path, repoCheckout)
+		info, err := os.Stat(resolved)
+		if err != nil {
+			return nil, fmt.Errorf("asset %q: %w", a.Path, err)
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf("asset %q: is a directory", a.Path)
+		}
+		// Store resolved path back so we open the right file later.
+		expandedAssets[j].Path = resolved
+	}
+
+	// 4. Decide draft flag: default true.
+	draft := true
+	if step.Draft != nil {
+		draft = *step.Draft
+	}
+
+	// 5. Create the release via platform API.
+	d.appendSystemLog(ctx, job.JobRunID, fmt.Sprintf("creating release %q", expandedTag))
+
+	rel, err := d.Client.CreateRelease(ctx, d.BaseURL, job.Owner, job.Name, job.WorkflowToken,
+		client.CreateReleaseRequest{TagName: expandedTag, Notes: expandedNotes},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create release: %w", err)
+	}
+
+	// 6. Upload assets.
+	for _, a := range expandedAssets {
+		assetName := a.Name
+		if assetName == "" {
+			assetName = filepath.Base(a.Path)
+		}
+		d.appendSystemLog(ctx, job.JobRunID, fmt.Sprintf("uploading asset %q from %s", assetName, a.Path))
+
+		f, err := os.Open(a.Path)
+		if err != nil {
+			return nil, fmt.Errorf("open asset %q: %w", a.Path, err)
+		}
+		err = d.Client.UploadReleaseAsset(ctx, d.BaseURL, job.Owner, job.Name,
+			job.WorkflowToken, rel.ID, assetName, "", f)
+		f.Close()
+		if err != nil {
+			return nil, fmt.Errorf("upload asset %q: %w", assetName, err)
+		}
+	}
+
+	// 7. Publish if not a draft.
+	published := false
+	if !draft {
+		d.appendSystemLog(ctx, job.JobRunID, fmt.Sprintf("publishing release %d", rel.ID))
+		pubRel, err := d.Client.PublishRelease(ctx, d.BaseURL, job.Owner, job.Name,
+			job.WorkflowToken, rel.ID)
+		if err != nil {
+			return nil, fmt.Errorf("publish release: %w", err)
+		}
+		published = true
+		rel = pubRel
+	}
+
+	// 8. Build fixed step outputs.
+	releaseURL := fmt.Sprintf("%s/%s/%s/releases/%d",
+		strings.TrimRight(d.BaseURL, "/"), job.Owner, job.Name, rel.ID)
+
+	outputs := map[string]string{
+		"release_id":  strconv.FormatInt(rel.ID, 10),
+		"tag":         rel.TagName,
+		"draft":       strconv.FormatBool(rel.IsDraft),
+		"published":   strconv.FormatBool(published),
+		"release_url": releaseURL,
+	}
+
+	// Mask any output values that match repo secrets.
+	masked := maskSecretValues(outputs, job.RepoVariables)
+	d.reportStepResult(ctx, job, step, stepIndex, 0, outputs, masked)
+
+	return outputs, nil
+}
+
+// resolveAssetPath resolves an asset path (from the step YAML) to an
+// absolute host-side path. Absolute paths starting with "/workspace" are
+// mapped to repoCheckout; relative paths are resolved against
+// repoCheckout. The repoCheckout is the host-side directory that is
+// bind-mounted as /workspace inside the container.
+func (d *WorkflowJobDriver) resolveAssetPath(assetPath, repoCheckout string) string {
+	if filepath.IsAbs(assetPath) {
+		// Map /workspace/... → repoCheckout/...
+		if after, ok := strings.CutPrefix(assetPath, "/workspace/"); ok {
+			return filepath.Join(repoCheckout, after)
+		}
+		if after, ok := strings.CutPrefix(assetPath, "/workspace"); ok && after == "" {
+			return repoCheckout
+		}
+		// Other absolute paths: treat as host-native.
+		return assetPath
+	}
+	// Relative path: resolve against repoCheckout.
+	return filepath.Join(repoCheckout, assetPath)
+}
+
 func maskSecretValues(outputs, secrets map[string]string) []string {
 	if len(outputs) == 0 || len(secrets) == 0 {
 		return nil
