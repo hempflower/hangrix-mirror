@@ -656,6 +656,148 @@ func TestBuildWorkflowEnv_StepOutputFileInjected(t *testing.T) {
 	}
 }
 
+func TestExpandStepOutputRefs_NoOutputs(t *testing.T) {
+	// When no outputs are accumulated, text passes through unchanged.
+	text := "echo ${{ steps.build.outputs.version }}"
+	got, err := expandStepOutputRefs(text, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != text {
+		t.Errorf("got %q, want %q", got, text)
+	}
+
+	got, err = expandStepOutputRefs(text, map[string]map[string]string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != text {
+		t.Errorf("got %q, want %q", got, text)
+	}
+}
+
+func TestExpandStepOutputRefs_NoReferences(t *testing.T) {
+	text := "echo hello world"
+	outputs := map[string]map[string]string{
+		"build": {"version": "1.2.3"},
+	}
+	got, err := expandStepOutputRefs(text, outputs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != text {
+		t.Errorf("got %q, want %q", got, text)
+	}
+}
+
+func TestExpandStepOutputRefs_SingleReference(t *testing.T) {
+	text := "echo Version is ${{ steps.build.outputs.version }}"
+	outputs := map[string]map[string]string{
+		"build": {"version": "1.2.3"},
+	}
+	got, err := expandStepOutputRefs(text, outputs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "echo Version is 1.2.3"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandStepOutputRefs_MultipleReferences(t *testing.T) {
+	text := "echo ${{ steps.build.outputs.version }}-${{ steps.build.outputs.commit }}"
+	outputs := map[string]map[string]string{
+		"build": {"version": "1.2.3", "commit": "abc1234"},
+	}
+	got, err := expandStepOutputRefs(text, outputs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "echo 1.2.3-abc1234"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandStepOutputRefs_CrossStepReferences(t *testing.T) {
+	text := "release_id=${{ steps.create-release.outputs.release_id }}"
+	outputs := map[string]map[string]string{
+		"create-release": {"release_id": "42"},
+		"build":          {"version": "1.0.0"},
+	}
+	got, err := expandStepOutputRefs(text, outputs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "release_id=42"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandStepOutputRefs_StepNotFound(t *testing.T) {
+	text := "echo ${{ steps.build.outputs.version }}"
+	outputs := map[string]map[string]string{
+		"lint": {"issues": "0"},
+	}
+	_, err := expandStepOutputRefs(text, outputs)
+	if err == nil {
+		t.Fatal("expected error for missing step, got nil")
+	}
+	if !contains(err.Error(), `"build"`) {
+		t.Errorf("error %q should mention step build", err.Error())
+	}
+}
+
+func TestExpandStepOutputRefs_KeyNotFound(t *testing.T) {
+	text := "echo ${{ steps.build.outputs.commit }}"
+	outputs := map[string]map[string]string{
+		"build": {"version": "1.2.3"},
+	}
+	_, err := expandStepOutputRefs(text, outputs)
+	if err == nil {
+		t.Fatal("expected error for missing key, got nil")
+	}
+	if !contains(err.Error(), `"commit"`) {
+		t.Errorf("error %q should mention key commit", err.Error())
+	}
+}
+
+func TestExpandStepOutputRefs_WhitespaceInsensitive(t *testing.T) {
+	// Spaces around the expression should be tolerated.
+	text := "echo ${{  steps.build.outputs.version  }}"
+	outputs := map[string]map[string]string{
+		"build": {"version": "3.0.0"},
+	}
+	got, err := expandStepOutputRefs(text, outputs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "echo 3.0.0"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandStepOutputRefs_NoPartialMatch(t *testing.T) {
+	// ${{ env.VAR }} or ${{ inputs.name }} should NOT be matched —
+	// only steps.<id>.outputs.<key> is expanded by the runner.
+	text := "echo ${{ env.MY_KEY }} and ${{ inputs.ref }}"
+	outputs := map[string]map[string]string{
+		"env":    {"MY_KEY": "secret"},
+		"inputs": {"ref": "main"},
+	}
+	got, err := expandStepOutputRefs(text, outputs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The env/inputs references should pass through unchanged.
+	if got != text {
+		t.Errorf("got %q, want %q (env/inputs should not be expanded by runner)", got, text)
+	}
+}
+
 func TestBuildWorkflowEnv_StepOutputFileFallback(t *testing.T) {
 	driver := &WorkflowJobDriver{}
 	job := &client.WorkflowJob{

@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -156,12 +157,30 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 	stepCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Accumulated step outputs from previous steps, indexed by step ID
+	// (or 1-based index fallback when step has no ID).
+	// Shape: stepID -> {key -> value}
+	stepOutputs := make(map[string]map[string]string)
+
 	for i, step := range job.Steps {
 		stepName := step.Name
 		if stepName == "" {
 			stepName = step.Run
 		}
 		log.Printf("workflow job %d: step %d/%d %q", job.JobRunID, i+1, len(job.Steps), stepName)
+
+		// Expand ${{ steps.<id>.outputs.<key> }} references using
+		// outputs captured from previous steps. Fails the job when
+		// a referenced step id or output key is not found.
+		expanded, err := expandStepOutputRefs(step.Run, stepOutputs)
+		if err != nil {
+			msg := fmt.Sprintf("step %q: %v", stepName, err)
+			d.appendSystemLog(ctx, job.JobRunID, msg)
+			d.reportStepResult(ctx, job, step, i, -1, nil, nil)
+			d.terminate(ctx, job, "failed", -1, msg)
+			return nil
+		}
+		step.Run = expanded
 
 		exitCode, err := d.runStep(stepCtx, job, containerID, workingDir, step, i)
 		if err != nil {
@@ -180,7 +199,15 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 		}
 
 		// Capture and report step outputs on success.
-		d.captureAndReportStepOutputs(ctx, job, containerID, step, i)
+		outputs := d.captureAndReportStepOutputs(ctx, job, containerID, step, i)
+		// Index outputs for subsequent step interpolation.
+		stepID := step.ID
+		if stepID == "" {
+			stepID = fmt.Sprintf("%d", i+1)
+		}
+		if len(outputs) > 0 {
+			stepOutputs[stepID] = outputs
+		}
 	}
 
 	// 9. Success.
@@ -454,7 +481,9 @@ func (d *WorkflowJobDriver) ensureStepOutputDir(ctx context.Context, containerID
 // the container, parses key=value lines, masks any values that match
 // repo secrets, and reports the result to the platform. Called only
 // for successful steps (exit code 0).
-func (d *WorkflowJobDriver) captureAndReportStepOutputs(ctx context.Context, job *client.WorkflowJob, containerID string, step client.WorkflowStep, stepIndex int) {
+// Returns the parsed outputs map (nil when no outputs were captured)
+// so the caller can accumulate them for subsequent step interpolation.
+func (d *WorkflowJobDriver) captureAndReportStepOutputs(ctx context.Context, job *client.WorkflowJob, containerID string, step client.WorkflowStep, stepIndex int) map[string]string {
 	outputPath := stepOutputPath(step, stepIndex)
 
 	raw, err := d.readOutputFile(ctx, containerID, outputPath)
@@ -469,6 +498,8 @@ func (d *WorkflowJobDriver) captureAndReportStepOutputs(ctx context.Context, job
 
 	// Clean up the output file so stale data doesn't leak to later steps.
 	d.cleanupOutputFile(ctx, containerID, outputPath)
+
+	return outputs
 }
 
 // reportStepResult sends a step result (exit code + optional outputs)
@@ -557,7 +588,51 @@ func parseOutputLines(raw string) map[string]string {
 	return outputs
 }
 
-// maskSecretValues returns the keys whose values match any repo
+// ---- step output interpolation ----
+
+// stepOutputRefRe matches ${{ steps.<id>.outputs.<key> }} expressions.
+// Group 1: step id (must be [a-z][a-z0-9-]* per spec).
+// Group 2: output key (must be [a-zA-Z_][a-zA-Z0-9_-]* per spec).
+var stepOutputRefRe = regexp.MustCompile(`\$\{\{\s*steps\.([a-z][a-z0-9-]*)\.outputs\.([a-zA-Z_][a-zA-Z0-9_-]*)\s*\}\}`)
+
+// expandStepOutputRefs finds all ${{ steps.<id>.outputs.<key> }} references
+// in text and replaces them with values captured from previous steps.
+// Returns an error when a referenced step id or output key is not found —
+// the caller should fail the job rather than silently injecting an empty
+// string.
+func expandStepOutputRefs(text string, stepOutputs map[string]map[string]string) (string, error) {
+	if len(stepOutputs) == 0 {
+		return text, nil
+	}
+
+	var err error
+	result := stepOutputRefRe.ReplaceAllStringFunc(text, func(match string) string {
+		subs := stepOutputRefRe.FindStringSubmatch(match)
+		if len(subs) != 3 {
+			err = fmt.Errorf("invalid step output reference: %s", match)
+			return match
+		}
+		stepID := subs[1]
+		key := subs[2]
+
+		outputs, ok := stepOutputs[stepID]
+		if !ok {
+			err = fmt.Errorf("step %q not found (referenced in ${{ steps.%s.outputs.%s }})", stepID, stepID, key)
+			return match
+		}
+		val, ok := outputs[key]
+		if !ok {
+			err = fmt.Errorf("output key %q not found in step %q (referenced in ${{ steps.%s.outputs.%s }})", key, stepID, stepID, key)
+			return match
+		}
+		return val
+	})
+	if err != nil {
+		return "", err
+	}
+	return result, nil
+}
+
 // variable/secret value. The runner treats all RepoVariables values as
 // potentially sensitive — matching output values are flagged so the
 // server can display them as "***".
