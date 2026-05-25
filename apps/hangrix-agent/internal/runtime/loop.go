@@ -394,6 +394,7 @@ func (l *Loop) driveOneTurnWithID(
 			var cancel context.CancelFunc
 			if l.reasoningTimeout > 0 {
 				callCtx, cancel = context.WithTimeout(ctx, l.reasoningTimeout)
+				defer cancel()
 			}
 
 			respCh := make(chan llmResult, 1)
