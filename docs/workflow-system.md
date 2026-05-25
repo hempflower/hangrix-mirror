@@ -254,8 +254,9 @@ steps:
 
 字段：
 
+- `id: string`：可选，约束 `[a-z][a-z0-9-]*`。用于 step outputs 引用（如 `${{ steps.build.outputs.version }}`）。未指定时 runner 自动分配 1-based 序号（`"1"`, `"2"`, …）。
 - `name: string`：可选展示名
-- `run: string`：必填，使用 `bash -lc` 执行
+- `run: string`：必填，使用 `bash -lc` 执行。支持 `${{ steps.<id>.outputs.<key> }}` 模板插值引用前序步骤的输出。
 
 v1 **不支持**：
 
@@ -263,8 +264,40 @@ v1 **不支持**：
 - `with:` action inputs
 - `if:` 条件执行
 - `services:` sidecar/service containers
-- `artifacts` / `cache` / `outputs`
+- `artifacts` / `cache`
 - `matrix`
+
+#### Step outputs
+
+每个 step 在成功退出（exit code 0）后可产出若干 key=value 输出，供后续 step 通过 `${{ steps.<id>.outputs.<key> }}` 引用。
+
+**产出方式**：step 将 `key=value` 行写入 `$HANGRIX_STEP_OUTPUT_FILE`（runner 注入的环境变量，指向 `/tmp/hangrix/step-output-<id>`）：
+
+```bash
+echo "version=$(cat version.txt)" >> "$HANGRIX_STEP_OUTPUT_FILE"
+echo "release_id=$RELEASE_ID" >> "$HANGRIX_STEP_OUTPUT_FILE"
+```
+
+**引用方式**：后续 step 的 `run` 中使用 `${{ steps.<id>.outputs.<key> }}`：
+
+```yaml
+steps:
+  - id: build
+    run: |
+      make build
+      echo "version=$(cat VERSION)" >> "$HANGRIX_STEP_OUTPUT_FILE"
+  - id: deploy
+    run: |
+      echo "Deploying version ${{ steps.build.outputs.version }}"
+      ./deploy.sh --version "${{ steps.build.outputs.version }}"
+```
+
+**约束**：
+- 仅成功 step（exit code 0）的输出被捕获
+- 引用不存在的 step id 或 output key 会导致 job 直接失败（不静默替换为空字符串）
+- output key 约束 `[a-zA-Z_][a-zA-Z0-9_-]*`
+- 输出值中若匹配到 repo variable/secret 的值，会被标记为 `masked`，server 端展示为 `***`
+- runner 仅展开 `steps.<id>.outputs.<key>`；`env.<KEY>`、`inputs.<name>`、`jobs.<job>.outputs.<key>` 由 server 在 dispatch 时展开
 
 ### 严格校验规则
 
@@ -397,6 +430,9 @@ container.env
   - `HANGRIX_CHECKOUT_REF`（checkout ref，例如 `refs/heads/main` 或 `refs/tags/v1.2.3`）
   - `HANGRIX_COMMIT_SHA`（对应 commit sha）
   - `HANGRIX_TAG`（仅 `repo.push_tag` 事件注入，short tag name，如 `v1.2.3`）
+  - `HANGRIX_PLATFORM_BASE_URL`（平台 API 地址，供 step 内 `curl` 调用平台 API）
+  - `HANGRIX_WORKFLOW_TOKEN`（workflow 级 scoped token，供 step 内调用平台 API 时的认证）
+  - `HANGRIX_STEP_OUTPUT_FILE`（当前 step 的输出文件路径，step 将 `key=value` 行写入该文件即可产出 outputs）
 - `workflow.dispatch.inputs` 以 `WORKFLOW_INPUT_<UPPER_SNAKE_NAME>` 注入
 
 ### `volumes`
@@ -741,7 +777,6 @@ Web 首期建议只做可观测性：
 - artifact / cache 新系统（仅复用现有 container.volumes）
 - service containers
 - 条件表达式 `if:`
-- step outputs / job outputs
 - workflow 可视化编辑器
 - 与 agent session 共享同一长驻容器
 
