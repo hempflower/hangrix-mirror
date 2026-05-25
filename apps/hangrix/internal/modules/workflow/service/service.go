@@ -207,19 +207,14 @@ func (s *Service) CreateRun(ctx context.Context, params CreateRunParams) (*domai
 	for i, job := range params.Config.Jobs {
 		steps := make([]domain.StepInput, len(job.Steps))
 		for si, step := range job.Steps {
-			assets := make([]domain.AssetInput, len(step.Assets))
-			for ai, a := range step.Assets {
-				assets[ai] = domain.AssetInput{Path: a.Path, Name: a.Name}
-			}
 			steps[si] = domain.StepInput{
-				Id:     strPtr(step.Id),
-				Name:   step.Name,
-				Type:   step.Type,
-				Run:    step.Run,
-				Tag:    step.Tag,
-				Notes:  step.Notes,
-				Draft:  step.Draft,
-				Assets: assets,
+				Id:   strPtr(step.Id),
+				Name: step.Name,
+				Type: step.Type,
+				Run:  step.Run,
+				Env:  step.Env,
+				Dir:  step.Dir,
+				With: step.With,
 			}
 		}
 		jobDefs[i] = domain.JobDefInput{

@@ -267,21 +267,21 @@ type WorkflowContainer struct {
 type WorkflowStep struct {
 	ID   string `json:"id,omitempty"`
 	Name string `json:"name,omitempty"`
-	// Type is the step kind. Empty / "run" means a shell step; "release"
-	// means a platform-release step. The runner dispatches on this field.
+	// Type is the step kind. Empty / "run" means a shell step; other
+	// values name a built-in typed step (e.g. "release"). The runner
+	// dispatches on this field.
 	Type string `json:"type,omitempty"`
-	// Run is the shell command for "run" steps. Must be empty for "release" steps.
-	Run string `json:"run,omitempty"`
-	// ---- release step fields (only valid when Type == "release") ----
-	// Tag is the git tag name (required, must exist in the repo).
-	Tag string `json:"tag,omitempty"`
-	// Notes is the release body / description (optional).
-	Notes string `json:"notes,omitempty"`
-	// Assets is the list of files to upload as release assets.
-	Assets []WorkflowStepAsset `json:"assets,omitempty"`
-	// Draft controls whether the release is created as a draft. When nil
-	// or true the release stays draft; false means auto-publish after creation.
-	Draft *bool `json:"draft,omitempty"`
+	// ---- run step fields (Type "" / "run") ----
+	// Run is the shell command. Env is merged over the job/container env;
+	// Dir overrides the job working directory (relative paths resolve
+	// against it).
+	Run string            `json:"run,omitempty"`
+	Env map[string]string `json:"env,omitempty"`
+	Dir string            `json:"dir,omitempty"`
+	// With carries the parameters for built-in typed steps (e.g. release's
+	// tag/notes/draft/assets), mirroring GitHub Actions' `with:`. The
+	// runner decodes it per step type — see releaseParamsFromWith.
+	With map[string]any `json:"with,omitempty"`
 }
 
 // WorkflowStepAsset describes a single file to attach to a release.

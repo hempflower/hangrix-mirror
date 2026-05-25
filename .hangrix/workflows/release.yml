@@ -51,7 +51,7 @@ jobs:
           GOOS: linux
           GOARCH: amd64
           CGO_ENABLED: '0'
-        working_directory: apps/hangrix
+        dir: apps/hangrix
         run: |
           go build -trimpath -ldflags='-s -w' \
             -o "../../dist/hangrix_linux_amd64" \
@@ -62,64 +62,31 @@ jobs:
           GOOS: linux
           GOARCH: arm64
           CGO_ENABLED: '0'
-        working_directory: apps/hangrix
+        dir: apps/hangrix
         run: |
           go build -trimpath -ldflags='-s -w' \
             -o "../../dist/hangrix_linux_arm64" \
             ./cmd/hangrix
 
-      - name: List release assets
-        run: ls -la dist/
-
-      - name: Create draft release
+      # List the staged assets and surface the triggering tag as a step
+      # output, so the built-in release step can reference it. `with.tag`
+      # only interpolates ${{ steps.<id>.outputs.<key> }} — not shell env —
+      # so the tag has to ride through a step output.
+      - id: meta
+        name: Collect release metadata
         run: |
-          API="${HANGRIX_PLATFORM_BASE_URL}/api/repos/${HANGRIX_REPO_OWNER}/${HANGRIX_REPO_NAME}/releases"
-          RESP=$(curl -s -w '\n%{http_code}' \
-            -H "Authorization: Bearer ${HANGRIX_WORKFLOW_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "{\"tag_name\":\"${HANGRIX_TAG}\",\"title\":\"${HANGRIX_TAG}\"}" \
-            "$API")
-          HTTP_CODE=$(echo "$RESP" | tail -1)
-          BODY=$(echo "$RESP" | sed '$d')
-          if [ "$HTTP_CODE" != "201" ]; then
-            echo "Failed to create release: HTTP $HTTP_CODE"
-            echo "$BODY"
-            exit 1
-          fi
-          # Extract release ID from JSON response.
-          RELEASE_ID=$(echo "$BODY" | sed -n 's/.*"id": *\([0-9]*\).*/\1/p' | head -1)
-          if [ -z "$RELEASE_ID" ]; then
-            echo "Could not parse release ID from response"
-            exit 1
-          fi
-          echo "Created draft release id=$RELEASE_ID"
-          echo "$RELEASE_ID" > /tmp/release_id
+          ls -la dist/
+          echo "tag=${HANGRIX_TAG}" >> "$HANGRIX_STEP_OUTPUT_FILE"
 
-      - name: Upload release assets
-        run: |
-          RELEASE_ID=$(cat /tmp/release_id)
-          API="${HANGRIX_PLATFORM_BASE_URL}/api/repos/${HANGRIX_REPO_OWNER}/${HANGRIX_REPO_NAME}/releases/${RELEASE_ID}/assets"
-          for f in dist/*; do
-            name=$(basename "$f")
-            echo "Uploading $name..."
-            curl -s -f \
-              -H "Authorization: Bearer ${HANGRIX_WORKFLOW_TOKEN}" \
-              -F "name=${name}" \
-              -F "file=@${f}" \
-              "$API" || {
-              echo "Failed to upload $name"
-              exit 1
-            }
-          done
-
-      - name: Publish release
-        run: |
-          RELEASE_ID=$(cat /tmp/release_id)
-          API="${HANGRIX_PLATFORM_BASE_URL}/api/repos/${HANGRIX_REPO_OWNER}/${HANGRIX_REPO_NAME}/releases/${RELEASE_ID}/publish"
-          curl -s -f -X POST \
-            -H "Authorization: Bearer ${HANGRIX_WORKFLOW_TOKEN}" \
-            "$API" || {
-            echo "Failed to publish release"
-            exit 1
-          }
-          echo "Published release id=$RELEASE_ID"
+      # Built-in release step: creates the release via the platform API and
+      # uploads the assets directly (no curl). draft:false auto-publishes.
+      - name: Create and publish release
+        type: release
+        with:
+          tag: ${{ steps.meta.outputs.tag }}
+          draft: false
+          assets:
+            - dist/hangrix_linux_amd64
+            - dist/hangrix_linux_arm64
+            - dist/hangrix-runner_linux_amd64
+            - dist/hangrix-runner_linux_arm64

@@ -399,7 +399,9 @@ jobs:
 	}
 }
 
-func TestParseWorkflowConfig_RepoPushTagUnknownKey(t *testing.T) {
+func TestParseWorkflowConfig_RepoPushTagExtraKeyIgnored(t *testing.T) {
+	// Lenient parsing: an unknown sub-key under a trigger is ignored, not
+	// rejected. The known keys still apply.
 	raw := []byte(`
 version: 1
 name: release
@@ -412,9 +414,12 @@ jobs:
     steps:
       - run: echo release
 `)
-	_, err := ParseWorkflowConfig(raw, "release.yml")
-	if err == nil {
-		t.Fatal("expected error for unknown key branches in repo.push_tag, got nil")
+	cfg, err := ParseWorkflowConfig(raw, "release.yml")
+	if err != nil {
+		t.Fatalf("unexpected error (unknown key should be ignored): %v", err)
+	}
+	if len(cfg.On[0].Tags) != 1 || cfg.On[0].Tags[0] != "v*" {
+		t.Errorf("tags = %v, want [v*]", cfg.On[0].Tags)
 	}
 }
 
@@ -503,10 +508,11 @@ jobs:
     steps:
       - id: create-release
         type: release
-        tag: v1.0.0
-        notes: |
-          Release for v1.0.0
-        draft: false
+        with:
+          tag: v1.0.0
+          notes: |
+            Release for v1.0.0
+          draft: false
 `)
 	cfg, err := ParseWorkflowConfig(raw, "release.yml")
 	if err != nil {
@@ -523,81 +529,24 @@ jobs:
 	if s.Type != StepTypeRelease {
 		t.Errorf("type = %q, want %q", s.Type, StepTypeRelease)
 	}
-	if s.Tag != "v1.0.0" {
-		t.Errorf("tag = %q, want %q", s.Tag, "v1.0.0")
+	// Release params live verbatim under With; the runner interprets them.
+	if got := s.With["tag"]; got != "v1.0.0" {
+		t.Errorf("with.tag = %v, want %q", got, "v1.0.0")
 	}
-	if s.Notes != "Release for v1.0.0\n" {
-		t.Errorf("notes = %q, want %q", s.Notes, "Release for v1.0.0\n")
+	if got := s.With["notes"]; got != "Release for v1.0.0\n" {
+		t.Errorf("with.notes = %v, want %q", got, "Release for v1.0.0\n")
 	}
-	if s.Draft != false {
-		t.Errorf("draft = %v, want false", s.Draft)
+	if got := s.With["draft"]; got != false {
+		t.Errorf("with.draft = %v, want false", got)
 	}
 	if s.Run != "" {
 		t.Errorf("run = %q, want empty", s.Run)
 	}
 }
 
-func TestParseWorkflowConfig_ReleaseStepDefaultDraft(t *testing.T) {
-	raw := []byte(`
-version: 1
-name: release
-on:
-  repo.push_tag: {}
-jobs:
-  publish:
-    steps:
-      - type: release
-        tag: v1.0.0
-`)
-	cfg, err := ParseWorkflowConfig(raw, "release.yml")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	s := cfg.Jobs[0].Steps[0]
-	if s.Draft != true {
-		t.Errorf("draft = %v, want true (default)", s.Draft)
-	}
-}
-
-func TestParseWorkflowConfig_ReleaseStepWithAssets(t *testing.T) {
-	raw := []byte(`
-version: 1
-name: release
-on:
-  repo.push_tag: {}
-jobs:
-  publish:
-    steps:
-      - type: release
-        tag: v1.0.0
-        assets:
-          - dist/app.tar.gz
-          - path: dist/checksums.txt
-            name: SHA256SUMS
-`)
-	cfg, err := ParseWorkflowConfig(raw, "release.yml")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	s := cfg.Jobs[0].Steps[0]
-	if len(s.Assets) != 2 {
-		t.Fatalf("got %d assets, want 2", len(s.Assets))
-	}
-	if s.Assets[0].Path != "dist/app.tar.gz" {
-		t.Errorf("asset[0].path = %q, want %q", s.Assets[0].Path, "dist/app.tar.gz")
-	}
-	if s.Assets[0].Name != "" {
-		t.Errorf("asset[0].name = %q, want empty", s.Assets[0].Name)
-	}
-	if s.Assets[1].Path != "dist/checksums.txt" {
-		t.Errorf("asset[1].path = %q, want %q", s.Assets[1].Path, "dist/checksums.txt")
-	}
-	if s.Assets[1].Name != "SHA256SUMS" {
-		t.Errorf("asset[1].name = %q, want %q", s.Assets[1].Name, "SHA256SUMS")
-	}
-}
-
 func TestParseWorkflowConfig_ReleaseStepMissingTag(t *testing.T) {
+	// A release step still requires with.tag — that's a structural
+	// requirement, not an "unknown field".
 	raw := []byte(`
 version: 1
 name: release
@@ -607,15 +556,17 @@ jobs:
   publish:
     steps:
       - type: release
-        notes: no tag here
+        with:
+          notes: no tag here
 `)
 	_, err := ParseWorkflowConfig(raw, "release.yml")
 	if err == nil {
-		t.Fatal("expected error for release step missing tag, got nil")
+		t.Fatal("expected error for release step missing with.tag, got nil")
 	}
 }
 
-func TestParseWorkflowConfig_ReleaseStepWithRun(t *testing.T) {
+func TestParseWorkflowConfig_ReleaseStepWithRunIsLenient(t *testing.T) {
+	// Lenient: an irrelevant `run` on a release step is ignored, not rejected.
 	raw := []byte(`
 version: 1
 name: release
@@ -625,16 +576,17 @@ jobs:
   publish:
     steps:
       - type: release
-        tag: v1.0.0
-        run: echo not allowed
+        run: echo ignored
+        with:
+          tag: v1.0.0
 `)
-	_, err := ParseWorkflowConfig(raw, "release.yml")
-	if err == nil {
-		t.Fatal("expected error for release step with run, got nil")
+	if _, err := ParseWorkflowConfig(raw, "release.yml"); err != nil {
+		t.Fatalf("unexpected error (irrelevant run should be ignored): %v", err)
 	}
 }
 
-func TestParseWorkflowConfig_RunStepWithReleaseFields(t *testing.T) {
+func TestParseWorkflowConfig_RunStepExtraKeyIsLenient(t *testing.T) {
+	// Lenient: unknown top-level step keys (e.g. a stray `tag`) are ignored.
 	raw := []byte(`
 version: 1
 name: ci
@@ -645,11 +597,11 @@ jobs:
     steps:
       - type: run
         run: echo hello
-        tag: not-allowed
+        tag: ignored
+        unknown_key: also-ignored
 `)
-	_, err := ParseWorkflowConfig(raw, "ci.yml")
-	if err == nil {
-		t.Fatal("expected error for run step with tag, got nil")
+	if _, err := ParseWorkflowConfig(raw, "ci.yml"); err != nil {
+		t.Fatalf("unexpected error (unknown step keys should be ignored): %v", err)
 	}
 }
 
@@ -671,24 +623,6 @@ jobs:
 	}
 }
 
-func TestParseWorkflowConfig_StepUnknownKey(t *testing.T) {
-	raw := []byte(`
-version: 1
-name: ci
-on:
-  repo.push: {}
-jobs:
-  build:
-    steps:
-      - run: echo hello
-        unknown_key: bad
-`)
-	_, err := ParseWorkflowConfig(raw, "ci.yml")
-	if err == nil {
-		t.Fatal("expected error for unknown step key, got nil")
-	}
-}
-
 func TestParseWorkflowConfig_MixedRunAndReleaseSteps(t *testing.T) {
 	raw := []byte(`
 version: 1
@@ -703,8 +637,9 @@ jobs:
         run: make release
       - id: create-release
         type: release
-        tag: v1.0.0
-        draft: false
+        with:
+          tag: v1.0.0
+          draft: false
 `)
 	cfg, err := ParseWorkflowConfig(raw, "release.yml")
 	if err != nil {
@@ -723,48 +658,7 @@ jobs:
 	if steps[1].Type != StepTypeRelease {
 		t.Errorf("step[1].type = %q, want %q", steps[1].Type, StepTypeRelease)
 	}
-	if steps[1].Tag != "v1.0.0" {
-		t.Errorf("step[1].tag = %q, want %q", steps[1].Tag, "v1.0.0")
-	}
-}
-
-func TestParseWorkflowConfig_ReleaseStepEmptyAssetPath(t *testing.T) {
-	raw := []byte(`
-version: 1
-name: release
-on:
-  repo.push_tag: {}
-jobs:
-  publish:
-    steps:
-      - type: release
-        tag: v1.0.0
-        assets:
-          - ""
-`)
-	_, err := ParseWorkflowConfig(raw, "release.yml")
-	if err == nil {
-		t.Fatal("expected error for empty asset path, got nil")
-	}
-}
-
-func TestParseWorkflowConfig_ReleaseStepAssetUnknownKey(t *testing.T) {
-	raw := []byte(`
-version: 1
-name: release
-on:
-  repo.push_tag: {}
-jobs:
-  publish:
-    steps:
-      - type: release
-        tag: v1.0.0
-        assets:
-          - path: dist/app.tar.gz
-            unknown: bad
-`)
-	_, err := ParseWorkflowConfig(raw, "release.yml")
-	if err == nil {
-		t.Fatal("expected error for unknown asset key, got nil")
+	if got := steps[1].With["tag"]; got != "v1.0.0" {
+		t.Errorf("step[1].with.tag = %v, want %q", got, "v1.0.0")
 	}
 }

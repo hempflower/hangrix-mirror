@@ -3,7 +3,6 @@ package workflowsconfig
 import (
 	"fmt"
 	"regexp"
-	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -19,23 +18,28 @@ type workflowWire struct {
 }
 
 type jobWire struct {
-	Name             string            `yaml:"name"`
-	Env              map[string]string `yaml:"env"`
-	TimeoutMinutes   int               `yaml:"timeout_minutes"`
-	WorkingDirectory string            `yaml:"working_directory"`
-	Steps            []stepWire        `yaml:"steps"`
-	Outputs          map[string]string `yaml:"outputs"`
+	Name           string            `yaml:"name"`
+	Env            map[string]string `yaml:"env"`
+	TimeoutMinutes int               `yaml:"timeout_minutes"`
+	Dir            string            `yaml:"dir"`
+	Steps          []stepWire        `yaml:"steps"`
+	Outputs        map[string]string `yaml:"outputs"`
 }
 
 type stepWire struct {
-	Id     string      `yaml:"id"`
-	Name   string      `yaml:"name"`
-	Type   string      `yaml:"type"`
-	Run    string      `yaml:"run"`
-	Tag    string      `yaml:"tag"`
-	Notes  string      `yaml:"notes"`
-	Draft  *bool       `yaml:"draft"`  // pointer to distinguish omitted vs false
-	Assets []yaml.Node `yaml:"assets"` // decoded manually (string or object)
+	Id   string `yaml:"id"`
+	Name string `yaml:"name"`
+	Type string `yaml:"type"` // "" / "run" = shell step; otherwise a built-in type
+	// Shell-step fields (type run / omitted). Env is merged over the
+	// job/container env; Dir overrides the job working directory for
+	// this step only.
+	Run string            `yaml:"run"`
+	Env map[string]string `yaml:"env"`
+	Dir string            `yaml:"dir"`
+	// With carries parameters for built-in typed steps (e.g. release),
+	// mirroring GitHub Actions' `with:`. Interpreted per step type, so
+	// the shared step schema never grows when a new type is added.
+	With map[string]any `yaml:"with"`
 }
 
 // pushWire models the value under on.repo.push.
@@ -185,24 +189,10 @@ func decodeOn(node *yaml.Node) ([]EventTrigger, []string) {
 		case EventRepoPush:
 			var pw pushWire
 			if valNode.Kind == yaml.MappingNode && len(valNode.Content) > 0 {
+				// Lenient: unknown sub-keys are ignored, not rejected.
 				if err := valNode.Decode(&pw); err != nil {
 					errs = append(errs, fmt.Sprintf("on.repo.push: %v", err))
 					continue
-				}
-				// Strict key check
-				seen := map[string]bool{}
-				for j := 0; j < len(valNode.Content); j += 2 {
-					k := valNode.Content[j].Value
-					if seen[k] {
-						errs = append(errs, fmt.Sprintf("on.repo.push.%s: duplicate key", k))
-					}
-					seen[k] = true
-					switch k {
-					case "branches", "branches_ignore", "paths", "paths_ignore":
-						// valid
-					default:
-						errs = append(errs, fmt.Sprintf("on.repo.push.%s: unknown key", k))
-					}
 				}
 			}
 			trigger.Branches = pw.Branches
@@ -213,53 +203,25 @@ func decodeOn(node *yaml.Node) ([]EventTrigger, []string) {
 		case EventRepoPushTag:
 			var ptw pushTagWire
 			if valNode.Kind == yaml.MappingNode && len(valNode.Content) > 0 {
+				// Lenient: unknown sub-keys are ignored, not rejected.
 				if err := valNode.Decode(&ptw); err != nil {
 					errs = append(errs, fmt.Sprintf("on.repo.push_tag: %v", err))
 					continue
-				}
-				// Strict key check
-				seen := map[string]bool{}
-				for j := 0; j < len(valNode.Content); j += 2 {
-					k := valNode.Content[j].Value
-					if seen[k] {
-						errs = append(errs, fmt.Sprintf("on.repo.push_tag.%s: duplicate key", k))
-					}
-					seen[k] = true
-					switch k {
-					case "tags", "tags_ignore":
-						// valid
-					default:
-						errs = append(errs, fmt.Sprintf("on.repo.push_tag.%s: unknown key", k))
-					}
 				}
 			}
 			trigger.Tags = ptw.Tags
 			trigger.TagsIgnore = ptw.TagsIgnore
 
 		case EventIssueOpened:
-			// v1: no filters, but reject unknown keys
-			if valNode.Kind == yaml.MappingNode && len(valNode.Content) > 0 {
-				for j := 0; j < len(valNode.Content); j += 2 {
-					k := valNode.Content[j].Value
-					errs = append(errs, fmt.Sprintf("on.issue.opened.%s: unknown key (v1 issue.opened does not accept filters)", k))
-				}
-			}
+			// v1 takes no filters; any provided keys are ignored (lenient).
 
 		case EventIssueComment:
 			var cw commentWire
 			if valNode.Kind == yaml.MappingNode && len(valNode.Content) > 0 {
+				// Lenient: unknown sub-keys are ignored, not rejected.
 				if err := valNode.Decode(&cw); err != nil {
 					errs = append(errs, fmt.Sprintf("on.issue.comment: %v", err))
 					continue
-				}
-				for j := 0; j < len(valNode.Content); j += 2 {
-					k := valNode.Content[j].Value
-					switch k {
-					case "mentioned_only", "from_roles", "from_users":
-						// valid
-					default:
-						errs = append(errs, fmt.Sprintf("on.issue.comment.%s: unknown key", k))
-					}
 				}
 			}
 			trigger.MentionedOnly = cw.MentionedOnly
@@ -269,15 +231,10 @@ func decodeOn(node *yaml.Node) ([]EventTrigger, []string) {
 		case EventWorkflowDispatch:
 			var dw dispatchWire
 			if valNode.Kind == yaml.MappingNode && len(valNode.Content) > 0 {
+				// Lenient: unknown sub-keys are ignored, not rejected.
 				if err := valNode.Decode(&dw); err != nil {
 					errs = append(errs, fmt.Sprintf("on.workflow.dispatch: %v", err))
 					continue
-				}
-				for j := 0; j < len(valNode.Content); j += 2 {
-					k := valNode.Content[j].Value
-					if k != "inputs" {
-						errs = append(errs, fmt.Sprintf("on.workflow.dispatch.%s: unknown key", k))
-					}
 				}
 				// Validate inputs
 				seenInputs := map[string]bool{}
@@ -335,16 +292,7 @@ func decodeJobs(node *yaml.Node) ([]JobDefinition, []string) {
 			continue
 		}
 
-		// Strict key check
-		for j := 0; j < len(valNode.Content); j += 2 {
-			k := valNode.Content[j].Value
-			switch k {
-			case "name", "env", "timeout_minutes", "working_directory", "steps", "outputs":
-				// valid
-			default:
-				errs = append(errs, fmt.Sprintf("jobs.%s.%s: unknown key", key, k))
-			}
-		}
+		// Lenient: unknown job keys are ignored, not rejected.
 
 		prefix := fmt.Sprintf("jobs.%s", key)
 
@@ -364,7 +312,7 @@ func decodeJobs(node *yaml.Node) ([]JobDefinition, []string) {
 		}
 
 		// Working directory
-		wd := jw.WorkingDirectory
+		wd := jw.Dir
 		if wd == "" {
 			wd = "/workspace"
 		}
@@ -381,99 +329,31 @@ func decodeJobs(node *yaml.Node) ([]JobDefinition, []string) {
 			errs = append(errs, fmt.Sprintf("%s.steps: at least one step is required", prefix))
 		}
 
-		// Collect raw step nodes for strict key checking.
-		var stepNodes []*yaml.Node
-		if valNode.Kind == yaml.MappingNode {
-			for j := 0; j < len(valNode.Content); j += 2 {
-				if valNode.Content[j].Value == "steps" {
-					stepsNode := valNode.Content[j+1]
-					if stepsNode.Kind == yaml.SequenceNode {
-						for _, sn := range stepsNode.Content {
-							if sn.Kind == yaml.MappingNode {
-								stepNodes = append(stepNodes, sn)
-							}
-						}
-					}
-					break
-				}
-			}
-		}
-
-		// Validate each step with type-aware strict key checking.
+		// Per-step validation. Lenient: unknown keys are ignored rather
+		// than rejected. Only structural requirements are enforced — the
+		// required field per type and the step name length. Type-specific
+		// params for built-in steps live under `with:` and are interpreted
+		// by the runner, so adding a step type never touches this loop.
 		for si, sw := range jw.Steps {
 			sp := fmt.Sprintf("%s.steps[%d]", prefix, si)
 
-			// Resolve effective step type (default to "run").
 			stepType := sw.Type
 			if stepType == "" {
 				stepType = StepTypeRun
 			}
-
-			// Strict key checking: collect all allowed keys per type.
-			allowedKeys := map[string]bool{
-				"id":   true,
-				"name": true,
-				"type": true,
-			}
-			if stepType == StepTypeRun {
-				allowedKeys["run"] = true
-			} else if stepType == StepTypeRelease {
-				allowedKeys["tag"] = true
-				allowedKeys["notes"] = true
-				allowedKeys["draft"] = true
-				allowedKeys["assets"] = true
-			}
-
-			// Check raw step node for unknown keys.
-			if si < len(stepNodes) {
-				sn := stepNodes[si]
-				for j := 0; j < len(sn.Content); j += 2 {
-					k := sn.Content[j].Value
-					if !allowedKeys[k] {
-						errs = append(errs, fmt.Sprintf("%s.%s: unknown key for step type %q", sp, k, stepType))
-					}
-				}
-			}
-
-			// Type-specific validation.
 			switch stepType {
 			case StepTypeRun:
 				if sw.Run == "" {
 					errs = append(errs, fmt.Sprintf("%s.run: required for type run", sp))
 				}
-				// Reject release-only fields when type is run.
-				if sw.Tag != "" {
-					errs = append(errs, fmt.Sprintf("%s.tag: not allowed for type run", sp))
-				}
-				if sw.Notes != "" {
-					errs = append(errs, fmt.Sprintf("%s.notes: not allowed for type run", sp))
-				}
-				if sw.Draft != nil {
-					errs = append(errs, fmt.Sprintf("%s.draft: not allowed for type run", sp))
-				}
-				if len(sw.Assets) > 0 {
-					errs = append(errs, fmt.Sprintf("%s.assets: not allowed for type run", sp))
-				}
-
 			case StepTypeRelease:
-				if sw.Tag == "" {
-					errs = append(errs, fmt.Sprintf("%s.tag: required for type release", sp))
+				if asString(sw.With["tag"]) == "" {
+					errs = append(errs, fmt.Sprintf("%s.with.tag: required for type release", sp))
 				}
-				if sw.Run != "" {
-					errs = append(errs, fmt.Sprintf("%s.run: not allowed for type release", sp))
-				}
-				// Validate assets.
-				for ai, an := range sw.Assets {
-					asset, aerrs := decodeAssetNode(&an, fmt.Sprintf("%s.assets[%d]", sp, ai))
-					errs = append(errs, aerrs...)
-					_ = asset
-				}
-
 			default:
 				errs = append(errs, fmt.Sprintf("%s.type: unknown step type %q (must be run or release)", sp, stepType))
 			}
 
-			// Common validations.
 			if sw.Name != "" && len(sw.Name) > 200 {
 				errs = append(errs, fmt.Sprintf("%s.name: max 200 characters", sp))
 			}
@@ -493,51 +373,11 @@ func decodeJobs(node *yaml.Node) ([]JobDefinition, []string) {
 	return jobs, errs
 }
 
-// decodeAssetNode decodes a single asset YAML node which can be either
-// a plain string (path) or a mapping with path + optional name.
-func decodeAssetNode(node *yaml.Node, prefix string) (AssetDefinition, []string) {
-	switch node.Kind {
-	case yaml.ScalarNode:
-		path := strings.TrimSpace(node.Value)
-		if path == "" {
-			return AssetDefinition{}, []string{fmt.Sprintf("%s: path must not be empty", prefix)}
-		}
-		return AssetDefinition{Path: path}, nil
-
-	case yaml.MappingNode:
-		var path string
-		var name string
-		seen := map[string]bool{}
-		for j := 0; j < len(node.Content); j += 2 {
-			k := node.Content[j].Value
-			if seen[k] {
-				return AssetDefinition{}, []string{fmt.Sprintf("%s.%s: duplicate key", prefix, k)}
-			}
-			seen[k] = true
-			switch k {
-			case "path":
-				path = strings.TrimSpace(node.Content[j+1].Value)
-			case "name":
-				name = strings.TrimSpace(node.Content[j+1].Value)
-			default:
-				return AssetDefinition{}, []string{fmt.Sprintf("%s.%s: unknown key (only path and name are allowed)", prefix, k)}
-			}
-		}
-		var errs []string
-		if path == "" {
-			errs = append(errs, fmt.Sprintf("%s.path: required", prefix))
-		}
-		if name == "" && !seen["name"] {
-			// name is optional; omission is fine
-		}
-		if len(errs) > 0 {
-			return AssetDefinition{}, errs
-		}
-		return AssetDefinition{Path: path, Name: name}, nil
-
-	default:
-		return AssetDefinition{}, []string{fmt.Sprintf("%s: must be a string path or {path, name} object", prefix)}
-	}
+// asString returns the string value of a YAML-decoded `with` entry, or ""
+// for nil / non-string values. Used for lenient `with` field reads.
+func asString(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 func liftSteps(wires []stepWire) []StepDefinition {
@@ -549,28 +389,14 @@ func liftSteps(wires []stepWire) []StepDefinition {
 			stepType = StepTypeRun
 		}
 
-		// Default draft to true for release steps.
-		draft := true
-		if sw.Draft != nil {
-			draft = *sw.Draft
-		}
-
-		// Decode assets.
-		assets := make([]AssetDefinition, len(sw.Assets))
-		for ai, an := range sw.Assets {
-			asset, _ := decodeAssetNode(&an, "")
-			assets[ai] = asset
-		}
-
 		steps[i] = StepDefinition{
-			Id:     sw.Id,
-			Name:   sw.Name,
-			Type:   stepType,
-			Run:    sw.Run,
-			Tag:    sw.Tag,
-			Notes:  sw.Notes,
-			Draft:  draft,
-			Assets: assets,
+			Id:   sw.Id,
+			Name: sw.Name,
+			Type: stepType,
+			Run:  sw.Run,
+			Env:  sw.Env,
+			Dir:  sw.Dir,
+			With: sw.With,
 		}
 	}
 	return steps

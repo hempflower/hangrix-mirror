@@ -882,3 +882,45 @@ func TestResolveAssetPath_WorkspacePrefixCheck(t *testing.T) {
 		t.Fatal("expected error for /workspace-other, got nil")
 	}
 }
+
+func TestReleaseParamsFromWith(t *testing.T) {
+	with := map[string]any{
+		"tag":   "v1.2.3",
+		"notes": "hello",
+		"draft": false,
+		"assets": []any{
+			"dist/app.tar.gz",
+			map[string]any{"path": "dist/checksums.txt", "name": "SHA256SUMS"},
+		},
+	}
+	tag, notes, draft, assets := releaseParamsFromWith(with)
+	if tag != "v1.2.3" {
+		t.Errorf("tag = %q, want v1.2.3", tag)
+	}
+	if notes != "hello" {
+		t.Errorf("notes = %q, want hello", notes)
+	}
+	if draft == nil || *draft != false {
+		t.Errorf("draft = %v, want explicit false", draft)
+	}
+	if len(assets) != 2 {
+		t.Fatalf("got %d assets, want 2", len(assets))
+	}
+	if assets[0].Path != "dist/app.tar.gz" || assets[0].Name != "" {
+		t.Errorf("assets[0] = %+v, want {dist/app.tar.gz, }", assets[0])
+	}
+	if assets[1].Path != "dist/checksums.txt" || assets[1].Name != "SHA256SUMS" {
+		t.Errorf("assets[1] = %+v, want {dist/checksums.txt, SHA256SUMS}", assets[1])
+	}
+}
+
+func TestReleaseParamsFromWith_DraftDefaultsNil(t *testing.T) {
+	// Omitted draft -> nil pointer, so the caller defaults it to true.
+	tag, _, draft, _ := releaseParamsFromWith(map[string]any{"tag": "v1"})
+	if tag != "v1" {
+		t.Errorf("tag = %q, want v1", tag)
+	}
+	if draft != nil {
+		t.Errorf("draft = %v, want nil (omitted)", draft)
+	}
+}

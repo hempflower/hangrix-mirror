@@ -464,20 +464,16 @@ type workflowContainerDTO struct {
 
 // workflowStepDTO mirrors the runner's client.WorkflowStep.
 type workflowStepDTO struct {
-	ID     string              `json:"id,omitempty"`
-	Name   string              `json:"name,omitempty"`
-	Type   string              `json:"type,omitempty"`
-	Run    string              `json:"run,omitempty"`
-	Tag    string              `json:"tag,omitempty"`
-	Notes  string              `json:"notes,omitempty"`
-	Draft  bool                `json:"draft"`
-	Assets []workflowAssetDTO  `json:"assets,omitempty"`
-}
-
-// workflowAssetDTO mirrors the runner's client.WorkflowAsset.
-type workflowAssetDTO struct {
-	Path string `json:"path"`
+	ID   string `json:"id,omitempty"`
 	Name string `json:"name,omitempty"`
+	Type string `json:"type,omitempty"`
+	// Shell-step fields (type run / omitted).
+	Run string            `json:"run,omitempty"`
+	Env map[string]string `json:"env,omitempty"`
+	Dir string            `json:"dir,omitempty"`
+	// With carries built-in typed-step params (e.g. release), interpreted
+	// by the runner per step type.
+	With map[string]any `json:"with,omitempty"`
 }
 
 // pollTasks blocks up to pollWait waiting for a pending session pinned to

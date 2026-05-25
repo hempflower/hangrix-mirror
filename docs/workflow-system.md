@@ -226,7 +226,7 @@ jobs:
     env:
       FOO: bar
     timeout_minutes: 30
-    working_directory: /workspace
+    dir: /workspace
     steps:
       - name: Optional step title
         run: pnpm install --frozen-lockfile
@@ -238,7 +238,7 @@ jobs:
 - `name: string`：可选展示名，默认等于 job key
 - `env: map[string]string`：job 级 env，覆盖 workflow env 与 container env 中的同名 key
 - `timeout_minutes: int`：可选，默认 60，范围 `1..1440`
-- `working_directory: string`：默认 `/workspace`；必须是容器内绝对路径，且必须落在 `/workspace` 下
+- `dir: string`：默认 `/workspace`；job 级工作目录，必须落在 `/workspace` 下。step 可用同名 `dir` 覆盖本步骤的工作目录
 - `steps: []Step`：至少 1 个
 
 #### `steps`
@@ -259,42 +259,53 @@ v1 支持两种 step 类型，由 `type` 字段区分：
 steps:
   - name: Install deps
     run: pnpm install --frozen-lockfile
-  - run: pnpm lint
+  - name: Build
+    run: go build -o ../../dist/app ./cmd/app
+    env:
+      CGO_ENABLED: "0"
+      GOOS: linux
+    dir: apps/app
 ```
 
 专属字段：
 
 - `run: string`：必填，使用 `bash -lc` 执行。支持 `${{ steps.<id>.outputs.<key> }}` 模板插值引用前序步骤的输出。
-
-`type: run` 步骤**不接受** `tag`、`notes`、`draft`、`assets` 字段。
+- `env: map[string]string`：可选，本 step 的环境变量，合并并覆盖 job/container 级 env。
+- `dir: string`：可选，覆盖本 step 的工作目录。相对路径相对 job 工作目录（默认 `/workspace`）解析；绝对路径原样使用。
 
 ##### `type: release`（创建 Release 步骤）
 
+内置类型 step 的参数放在 `with:` 下（对齐 GitHub Actions 的 action inputs）：
+
 ```yaml
 steps:
-  - id: create-release
+  - id: build
+    run: |
+      make dist
+      echo "tag=$HANGRIX_TAG" >> "$HANGRIX_STEP_OUTPUT_FILE"
+  - name: Publish release
     type: release
-    tag: "v1.0.0"
-    notes: |
-      Release for v1.0.0
-      Commit: ${{ steps.build.outputs.sha }}
-    assets:
-      - dist/hangrix-linux-amd64.tar.gz
-      - path: dist/checksums.txt
-        name: SHA256SUMS
-    draft: false
+    with:
+      tag: ${{ steps.build.outputs.tag }}
+      notes: |
+        Release for ${{ steps.build.outputs.tag }}
+      assets:
+        - dist/hangrix-linux-amd64.tar.gz
+        - path: dist/checksums.txt
+          name: SHA256SUMS
+      draft: false
 ```
 
-专属字段：
+`with:` 字段：
 
-- `tag: string`：**必填**，要创建的 release 对应的 tag 名。该 tag 必须已存在于 bare repo 中（`refs/tags/<tag>`）。
+- `tag: string`：**必填**，要创建的 release 对应的 tag 名。该 tag 必须已存在于 bare repo 中（`refs/tags/<tag>`）。注意 `with.tag` 只做 `${{ steps.<id>.outputs.<key> }}` 插值，不读取 shell 环境变量——push_tag 触发时把 `$HANGRIX_TAG` 写成前序 step 的 output 再引用。
 - `notes: string`：可选，release 说明（markdown）。
 - `draft: bool`：可选，默认 `true`。`false` 时创建后自动 publish。
-- `assets: []asset`：可选，要上传的附件列表。每个 asset 可以是：
+- `assets: []asset`：可选，要上传的附件列表（不支持 glob，逐个列出）。每个 asset 可以是：
   - 纯字符串：文件路径（asset 名默认为文件 basename）
   - 对象形式：`path`（必填）+ `name`（可选，覆盖 asset 文件名）
 
-`type: release` 步骤**不接受** `run` 字段。`tag`、`notes`、`assets[].path`、`assets[].name` 均支持 `${{ steps.<id>.outputs.<key> }}` 插值。
+`with.tag`、`with.notes`、`with.assets[].path`、`with.assets[].name` 均支持 `${{ steps.<id>.outputs.<key> }}` 插值。
 
 `release` 步骤是 **runner 内建步骤**：runner 直接调用平台 release API（`POST /api/repos/{owner}/{name}/releases` 等），不经过 docker exec shell。文件从当前 job checkout/workdir 读取。
 
@@ -312,14 +323,17 @@ steps:
 
 指定 `type` 为 `run` / `release` 之外的任意字符串会触发解析错误。
 
+内置类型 step 的参数通过 `with:` 传入（见上）；不支持外部 `uses:` action。
+
 v1 **不支持**：
 
-- `uses:` marketplace/reusable action
-- `with:` action inputs
+- `uses:` marketplace/reusable action（仅支持内置 `type`）
 - `if:` 条件执行
 - `services:` sidecar/service containers
 - `artifacts` / `cache`
 - `matrix`
+
+> **解析容错**：配置解析对未知字段是宽松的——step / job / `on` 触发器下的未知键会被忽略而非报错。仅强制结构性要求（必填项、格式、未知 `type`/未知 event）。
 
 #### Step outputs
 
@@ -361,7 +375,7 @@ steps:
 - `on` 至少包含一个事件
 - `jobs` 至少一个 job
 - 每个 job 至少一个 step
-- `working_directory` 必须在 `/workspace` 子树内
+- `dir` 必须在 `/workspace` 子树内
 - env key 必须匹配 `[A-Z_][A-Z0-9_]*`
 
 ---
@@ -498,7 +512,7 @@ container.env
 ### 工作目录
 
 - 容器内工作目录固定挂到 `/workspace`
-- `job.working_directory` 默认 `/workspace`
+- `job.dir` 默认 `/workspace`
 - 允许设置为 `/workspace/subdir`
 - 禁止逃逸到 `/` 或其它挂载点
 

@@ -93,28 +93,23 @@ const (
 	StepTypeRelease = "release"
 )
 
-// AssetDefinition is a single asset to attach to a release step.
-type AssetDefinition struct {
-	// Path is the container-relative or absolute path to the file.
-	Path string
-	// Name overrides the uploaded asset file name. When empty, the
-	// basename of Path is used.
-	Name string
-}
-
 // StepDefinition is a single step within a job. The Type field
-// discriminates between run (shell) and release (built-in release
-// creation) steps. When Type is empty, the step is treated as
-// type "run" for backward compatibility.
+// discriminates between run (shell) and built-in typed steps (e.g.
+// release). When Type is empty, the step is treated as type "run".
 type StepDefinition struct {
-	Id      string
-	Name    string
-	Type    string            // "run" (default) or "release"
-	Run     string            // shell command (only for type=run)
-	Tag     string            // release tag name (only for type=release)
-	Notes   string            // release notes (only for type=release)
-	Draft   bool              // create as draft (only for type=release, default true)
-	Assets  []AssetDefinition // assets to upload (only for type=release)
+	Id   string
+	Name string
+	Type string // "run" (default) or a built-in type like "release"
+	// Run / Env / Dir are the shell-step fields (type=run). Env is merged
+	// over the job/container env; Dir overrides the job working directory
+	// for this step (relative paths resolve against the job workdir).
+	Run string
+	Env map[string]string
+	Dir string
+	// With carries parameters for built-in typed steps (e.g. release's
+	// tag/notes/draft/assets), mirroring GitHub Actions' `with:`.
+	// Interpreted per step type by the runner.
+	With map[string]any
 }
 
 // WorkflowConfigValidationError collects all validation errors for a single

@@ -167,7 +167,7 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 		stepName := step.Name
 		if stepName == "" {
 			if step.Type == "release" {
-				stepName = fmt.Sprintf("release %s", step.Tag)
+				stepName = fmt.Sprintf("release %s", withString(step.With, "tag"))
 			} else {
 				stepName = step.Run
 			}
@@ -257,13 +257,42 @@ func (d *WorkflowJobDriver) runStep(ctx context.Context, job *client.WorkflowJob
 		return -1, fmt.Errorf("build env: %w", err)
 	}
 
+	// Per-step env overrides the job/container env. Expand ${VAR}
+	// references against repo variables the same way job env is expanded,
+	// then merge over stepEnv so a step's own value wins.
+	if len(step.Env) > 0 {
+		se := make(map[string]string, len(step.Env))
+		for k, v := range step.Env {
+			se[k] = v
+		}
+		if err := expandEnv(se, job.RepoVariables); err != nil {
+			return -1, fmt.Errorf("expand step env: %w", err)
+		}
+		for k, v := range se {
+			stepEnv[k] = v
+		}
+	}
+
 	// Inject HANGRIX_STEP_OUTPUT_FILE so the step knows where to write
 	// key=value outputs. Use the step's explicit ID when present,
-	// otherwise fall back to the 1-based step index.
+	// otherwise fall back to the 1-based step index. Set after the
+	// step-env merge so a step can't accidentally clobber it.
 	stepOutputFile := stepOutputPath(step, stepIndex)
 	stepEnv["HANGRIX_STEP_OUTPUT_FILE"] = stepOutputFile
 
-	handle, err := d.Orchestrator.Exec(ctx, containerID, workingDir, stepEnv, "bash", "-lc", step.Run)
+	// A step may override the job working directory. Relative paths
+	// resolve against the job working directory (e.g. "apps/hangrix"
+	// under /workspace); absolute paths are used as-is.
+	stepWorkingDir := workingDir
+	if step.Dir != "" {
+		if filepath.IsAbs(step.Dir) {
+			stepWorkingDir = step.Dir
+		} else {
+			stepWorkingDir = filepath.Join(workingDir, step.Dir)
+		}
+	}
+
+	handle, err := d.Orchestrator.Exec(ctx, containerID, stepWorkingDir, stepEnv, "bash", "-lc", step.Run)
 	if err != nil {
 		return -1, fmt.Errorf("exec step: %w", err)
 	}
@@ -681,6 +710,37 @@ func expandStepOutputRefs(text string, stepOutputs map[string]map[string]string)
 // server can display them as "***".
 // ---- release step execution ----
 
+// releaseParamsFromWith decodes a release step's `with:` map into typed
+// params. It is lenient: missing/ill-typed entries yield zero values, and
+// `assets` accepts either a string path or a {path, name} object per entry.
+// draft is a pointer so the caller can distinguish "omitted" (default true)
+// from an explicit false.
+func releaseParamsFromWith(with map[string]any) (tag, notes string, draft *bool, assets []client.WorkflowStepAsset) {
+	tag = withString(with, "tag")
+	notes = withString(with, "notes")
+	if d, ok := with["draft"].(bool); ok {
+		draft = &d
+	}
+	if raw, ok := with["assets"].([]any); ok {
+		for _, e := range raw {
+			switch v := e.(type) {
+			case string:
+				assets = append(assets, client.WorkflowStepAsset{Path: v})
+			case map[string]any:
+				assets = append(assets, client.WorkflowStepAsset{Path: withString(v, "path"), Name: withString(v, "name")})
+			}
+		}
+	}
+	return
+}
+
+// withString returns the string value at key k, or "" for missing /
+// non-string entries.
+func withString(m map[string]any, k string) string {
+	s, _ := m[k].(string)
+	return s
+}
+
 // runReleaseStep executes a "release" step by calling the platform release
 // API. It does NOT exec into the container — release steps are runner-native.
 //
@@ -695,10 +755,11 @@ func (d *WorkflowJobDriver) runReleaseStep(
 	stepOutputs map[string]map[string]string,
 	repoCheckout string,
 ) (map[string]string, error) {
-	// 1. Validate required fields.
-	tag := strings.TrimSpace(step.Tag)
+	// 1. Decode release params from `with` and validate required fields.
+	tagRaw, notes, draftPtr, assets := releaseParamsFromWith(step.With)
+	tag := strings.TrimSpace(tagRaw)
 	if tag == "" {
-		return nil, fmt.Errorf("release step: tag is required")
+		return nil, fmt.Errorf("release step: with.tag is required")
 	}
 
 	// 2. Expand ${{ steps.<id>.outputs.<key> }} references in tag, notes,
@@ -707,13 +768,13 @@ func (d *WorkflowJobDriver) runReleaseStep(
 	if err != nil {
 		return nil, fmt.Errorf("expand tag: %w", err)
 	}
-	expandedNotes, err := expandStepOutputRefs(step.Notes, stepOutputs)
+	expandedNotes, err := expandStepOutputRefs(notes, stepOutputs)
 	if err != nil {
 		return nil, fmt.Errorf("expand notes: %w", err)
 	}
 
-	expandedAssets := make([]client.WorkflowStepAsset, len(step.Assets))
-	for j, a := range step.Assets {
+	expandedAssets := make([]client.WorkflowStepAsset, len(assets))
+	for j, a := range assets {
 		expPath, err := expandStepOutputRefs(a.Path, stepOutputs)
 		if err != nil {
 			return nil, fmt.Errorf("expand assets[%d].path: %w", j, err)
@@ -745,8 +806,8 @@ func (d *WorkflowJobDriver) runReleaseStep(
 
 	// 4. Decide draft flag: default true.
 	draft := true
-	if step.Draft != nil {
-		draft = *step.Draft
+	if draftPtr != nil {
+		draft = *draftPtr
 	}
 
 	// 5. Create the release via platform API.
