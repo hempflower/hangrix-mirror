@@ -378,6 +378,12 @@ type taskResp struct {
 	AgentBuild      *agentBuildSpec `json:"agent_build,omitempty"`
 	Role            string          `json:"role"`
 	Model           string          `json:"model,omitempty"`
+	// LLMMaxContextTokens is the resolved max_context_tokens from
+	// agents.yml (role.llm.max_context_tokens or team-level fallback).
+	// The runner surfaces it as HANGRIX_LLM_MAX_CONTEXT_TOKENS; the
+	// agent uses 80% of it as the default compact_session threshold.
+	// Zero means "not configured" — the agent falls back to 80000.
+	LLMMaxContextTokens int `json:"llm_max_context_tokens,omitempty"`
 	// IssueNumber is the per-repo issue this session is bound to. The runner
 	// surfaces it as HANGRIX_ISSUE_NUMBER so the agent can build its
 	// contribution-branch ref (issue-<N>/<role>/<slug>) — the same number
@@ -524,6 +530,7 @@ func (h *AgentHandler) pollTasks(w http.ResponseWriter, r *http.Request) {
 				AgentBuild:      extractBuild(sess.RoleConfig),
 				Role:            sess.Role,
 				Model:           sess.Model,
+				LLMMaxContextTokens: extractLLMMaxContextTokens(sess.RoleConfig),
 				IssueNumber:     issueNumber,
 				WorkingBranch:   sess.WorkingBranch,
 				BaseBranch:      sess.BaseBranch,
@@ -1115,6 +1122,22 @@ func extractMcpServers(roleConfig []byte) []string {
 		return nil
 	}
 	return snap.McpServers
+
+}
+// extractLLMMaxContextTokens reads llm_max_context_tokens out of the frozen
+// role_config snapshot. Returns 0 when the field is absent or the snapshot
+// is empty — the agent will fall back to the default compact threshold.
+func extractLLMMaxContextTokens(roleConfig []byte) int {
+	if len(roleConfig) == 0 {
+		return 0
+	}
+	var snap struct {
+		LLMMaxContextTokens int `json:"llm_max_context_tokens"`
+	}
+	if err := json.Unmarshal(roleConfig, &snap); err != nil {
+		return 0
+	}
+	return snap.LLMMaxContextTokens
 }
 
 // extractBuild reads container.build out of the frozen role_config
