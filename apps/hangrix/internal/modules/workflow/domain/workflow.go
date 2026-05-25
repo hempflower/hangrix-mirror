@@ -103,6 +103,17 @@ type WorkflowJobRun struct {
 	EnvJSON []byte
 	// StepsJSON stores the resolved step list for this job.
 	StepsJSON []byte
+	// StepOutputsJSON stores per-step outputs captured during job execution.
+	// Map of step_id -> {key: StepOutputValue}. Written incrementally as steps complete.
+	StepOutputsJSON []byte
+	// JobOutputsJSON stores resolved job outputs computed after job completion.
+	// Map of output_key -> StepOutputValue. Populated from ${{ }} resolution in the
+	// job's declared outputs.
+	JobOutputsJSON []byte
+	// JobOutputsRawJSON stores the raw output templates at run creation time.
+	// Map of output_key -> expression string (may contain ${{ }} references).
+	// The service resolves these against runtime context at job completion.
+	JobOutputsRawJSON []byte
 	StartedAt    *time.Time
 	FinishedAt   *time.Time
 	ExitCode     *int32
@@ -196,12 +207,24 @@ type JobDefInput struct {
 	TimeoutMinutes   int32
 	WorkingDirectory string
 	Steps            []StepInput
+	// Outputs carries the raw output templates from the job definition.
+	// Map of output_key -> expression string (may contain ${{ }} references).
+	Outputs map[string]string
 }
 
 // StepInput is a single step within a job definition.
 type StepInput struct {
+	Id   *string // optional step id for ${{ steps.<id>.outputs.<key> }} references
 	Name string
 	Run  string
+}
+
+// StepOutputValue is a single output value with masking metadata.
+// The runner reports which output keys contain secret values (masked=true),
+// and the UI uses this to render secrets as "***".
+type StepOutputValue struct {
+	Value  string `json:"value"`
+	Masked bool   `json:"masked"`
 }
 
 // ---- interfaces ----
@@ -218,8 +241,7 @@ type Store interface {
 	GetRun(ctx context.Context, id int64) (*WorkflowRun, error)
 
 	// GetRunByToken returns the repo_id and status for a workflow run
-	// identified by its workflow_token. Returns ErrRunNotFound when no
-	// match exists.
+
 	GetRunByToken(ctx context.Context, token string) (repoID int64, status RunStatus, err error)
 
 	// ListRunsByRepo returns workflow runs for a repo, ordered by created_at DESC.
@@ -256,6 +278,15 @@ type Store interface {
 
 	// SetJobContainer records the container ID for a running job.
 	SetJobContainer(ctx context.Context, id int64, containerID string) error
+
+
+	// SetStepOutputs merges a step's outputs into the job's step_outputs_json.
+	// stepID identifies the step within the job (must match a declared step id).
+	// outputs is the map of key -> StepOutputValue captured from the step's stdout.
+	SetStepOutputs(ctx context.Context, id int64, stepID string, outputs map[string]StepOutputValue) error
+
+	// SetJobOutputs writes resolved job outputs after job completion.
+	SetJobOutputs(ctx context.Context, id int64, outputs map[string]StepOutputValue) error
 
 	// ---- workflow job logs ----
 

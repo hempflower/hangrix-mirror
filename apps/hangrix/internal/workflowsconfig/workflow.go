@@ -84,10 +84,12 @@ type JobDefinition struct {
 	TimeoutMinutes   int
 	WorkingDirectory string
 	Steps            []StepDefinition
+	Outputs          map[string]string
 }
 
 // StepDefinition is a single shell step within a job.
 type StepDefinition struct {
+	Id   string
 	Name string
 	Run  string
 }

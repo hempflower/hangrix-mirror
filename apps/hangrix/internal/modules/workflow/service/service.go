@@ -206,6 +206,7 @@ func (s *Service) CreateRun(ctx context.Context, params CreateRunParams) (*domai
 		steps := make([]domain.StepInput, len(job.Steps))
 		for si, step := range job.Steps {
 			steps[si] = domain.StepInput{
+				Id:   strPtr(step.Id),
 				Name: step.Name,
 				Run:  step.Run,
 			}
@@ -217,6 +218,7 @@ func (s *Service) CreateRun(ctx context.Context, params CreateRunParams) (*domai
 			TimeoutMinutes:   int32(job.TimeoutMinutes),
 			WorkingDirectory: job.WorkingDirectory,
 			Steps:            steps,
+			Outputs:          job.Outputs,
 		}
 	}
 
@@ -554,6 +556,94 @@ func (s *Service) ValidateWorkflowToken(ctx context.Context, token string) (int6
 		return 0, domain.ErrInvalidWorkflowToken
 	}
 	return repoID, nil
+}
+
+// SetStepOutputs merges a step's outputs into the job's step_outputs_json.
+func (s *Service) SetStepOutputs(ctx context.Context, id int64, stepID string, outputs map[string]domain.StepOutputValue) error {
+	return s.store.SetStepOutputs(ctx, id, stepID, outputs)
+}
+
+// SetJobOutputs writes resolved job outputs after job completion.
+func (s *Service) SetJobOutputs(ctx context.Context, id int64, outputs map[string]domain.StepOutputValue) error {
+	return s.store.SetJobOutputs(ctx, id, outputs)
+}
+
+// ResolveJobOutputs resolves $\{\{ \}\} expressions in job output templates
+// against the step outputs captured during execution. It extracts plain string
+// values from StepOutputValue maps and resolves expressions like
+// $\{\{ steps.<id>.outputs.<key> \}\}. Resolved outputs always have masked=false.
+func (s *Service) ResolveJobOutputs(ctx context.Context, jobID int64) error {
+	job, err := s.store.GetJobRun(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("resolve job outputs: get job: %w", err)
+	}
+
+	if len(job.JobOutputsRawJSON) == 0 {
+		return nil // no outputs declared
+	}
+
+	var rawOutputs map[string]string
+	if err := json.Unmarshal(job.JobOutputsRawJSON, &rawOutputs); err != nil {
+		return fmt.Errorf("resolve job outputs: unmarshal raw: %w", err)
+	}
+
+	// Build the flat context for expression resolution.
+	// Each step output key becomes steps.<stepID>.outputs.<key> = value.
+	outputCtx := make(map[string]string)
+	if len(job.StepOutputsJSON) > 0 {
+		var stepOutputs map[string]map[string]domain.StepOutputValue
+		if err := json.Unmarshal(job.StepOutputsJSON, &stepOutputs); err != nil {
+			return fmt.Errorf("resolve job outputs: unmarshal step outputs: %w", err)
+		}
+		for stepID, outputs := range stepOutputs {
+			for key, sov := range outputs {
+				outputCtx["steps."+stepID+".outputs."+key] = sov.Value
+			}
+		}
+	}
+
+	resolved := make(map[string]domain.StepOutputValue)
+	for outputKey, template := range rawOutputs {
+		resolved[outputKey] = domain.StepOutputValue{
+			Value:  resolveExpression(template, outputCtx),
+			Masked: false,
+		}
+	}
+
+	return s.store.SetJobOutputs(ctx, jobID, resolved)
+}
+
+// strPtr returns a pointer to s, or nil if s is empty.
+func strPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// resolveExpression resolves $\{\{ \}\} expressions in s using the given context.
+// Only supports $\{\{ steps.<id>.outputs.<key> \}\} expressions in v1.
+func resolveExpression(s string, ctx map[string]string) string {
+	// Simple $\{\{ ... \}\} resolver.
+	result := s
+	for {
+		start := strings.Index(result, "${{ ")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(result[start:], " }}")
+		if end == -1 {
+			break
+		}
+		key := strings.TrimSpace(result[start+4 : start+end])
+		if val, ok := ctx[key]; ok {
+			result = result[:start] + val + result[start+end+3:]
+		} else {
+			// Unknown expression — leave as-is.
+			break
+		}
+	}
+	return result
 }
 
 // generateWorkflowToken creates a new hangrix_wf_<8>_<32> hex token.

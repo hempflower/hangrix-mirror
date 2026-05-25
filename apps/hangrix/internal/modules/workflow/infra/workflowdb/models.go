@@ -165,23 +165,26 @@ type WorkflowJobLog struct {
 }
 
 type WorkflowJobRun struct {
-	ID               int64
-	WorkflowRunID    int64
-	JobKey           string
-	DisplayName      string
-	Status           string
-	SequenceIndex    int32
-	WorkingDirectory string
-	TimeoutMinutes   int32
-	RunnerID         pgtype.Int8
-	ContainerID      pgtype.Text
-	EnvJson          []byte
-	StepsJson        []byte
-	StartedAt        pgtype.Timestamptz
-	FinishedAt       pgtype.Timestamptz
-	ExitCode         pgtype.Int4
-	ErrorMessage     string
-	CreatedAt        pgtype.Timestamptz
+	ID                int64
+	WorkflowRunID     int64
+	JobKey            string
+	DisplayName       string
+	Status            string
+	SequenceIndex     int32
+	WorkingDirectory  string
+	TimeoutMinutes    int32
+	RunnerID          pgtype.Int8
+	ContainerID       pgtype.Text
+	EnvJson           []byte
+	StepsJson         []byte
+	StartedAt         pgtype.Timestamptz
+	FinishedAt        pgtype.Timestamptz
+	ExitCode          pgtype.Int4
+	ErrorMessage      string
+	CreatedAt         pgtype.Timestamptz
+	StepOutputsJson   []byte
+	JobOutputsJson    []byte
+	JobOutputsRawJson []byte
 }
 
 type WorkflowRun struct {
