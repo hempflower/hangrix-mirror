@@ -38,13 +38,19 @@ type Config struct {
 	ToolCatalog      string
 	McpServers       []string
 
+	// LLMMaxContextTokens is the max_context_tokens from agents.yml,
+	// surfaced by the runner as HANGRIX_LLM_MAX_CONTEXT_TOKENS. When
+	// non-zero, the default CompactTokenThreshold is 80% of this value.
+	// Zero means "not configured" — the default falls back to 80000.
+	LLMMaxContextTokens int
+
 	// CompactTokenThreshold is the input-token usage above which the
 	// runtime nudges the LLM (via a synthetic system reminder injected
 	// at the next turn boundary) to call compact_session. 0 disables the
-	// nudge — the LLM still decides on its own when to compact. Set via
-	// HANGRIX_COMPACT_TOKEN_THRESHOLD; default 80000 leaves headroom on
-	// 128k-window models and is conservative enough for ~64k providers
-	// (DeepSeek) when operators want to keep it on.
+	// nudge — the LLM still decides on its own when to compact.
+	// Set explicitly via HANGRIX_COMPACT_TOKEN_THRESHOLD; when unset,
+	// defaults to 80% of LLMMaxContextTokens (or 80000 if that
+	// is also unset). A negative value disables the nudge.
 	CompactTokenThreshold int
 }
 
@@ -72,6 +78,7 @@ func (c *Config) PlatformToolsBaseURL() string {
 // runner sees a single line on stderr rather than a cascade of nil
 // dereferences when downstream code reaches for an empty endpoint.
 func NewConfig() *Config {
+	maxCtx := parseMaxContextTokens(os.Getenv("HANGRIX_LLM_MAX_CONTEXT_TOKENS"))
 	cfg := &Config{
 		SessionToken:     os.Getenv("HANGRIX_SESSION_TOKEN"),
 		PlatformBaseURL:  os.Getenv("HANGRIX_PLATFORM_BASE_URL"),
@@ -85,7 +92,8 @@ func NewConfig() *Config {
 		HostAddendumPath:      os.Getenv("HANGRIX_HOST_ADDENDUM"),
 		ToolCatalog:           os.Getenv("HANGRIX_TOOL_CATALOG"),
 		McpServers:            parseMcpServers(os.Getenv("HANGRIX_MCP_SERVERS")),
-		CompactTokenThreshold: parseCompactThreshold(os.Getenv("HANGRIX_COMPACT_TOKEN_THRESHOLD")),
+		LLMMaxContextTokens:    maxCtx,
+		CompactTokenThreshold: parseCompactThreshold(os.Getenv("HANGRIX_COMPACT_TOKEN_THRESHOLD"), maxCtx),
 	}
 
 	var missing []string
@@ -125,18 +133,42 @@ func parseMcpServers(raw string) []string {
 	return out
 }
 
-// parseCompactThreshold reads HANGRIX_COMPACT_TOKEN_THRESHOLD. Empty or
-// unparseable → default 80000 (rough 60% of a 128k window, conservative
-// enough to also trigger on 64k providers). A negative value disables
-// the nudge entirely so operators can opt out without removing the env.
-func parseCompactThreshold(raw string) int {
+
+// parseMaxContextTokens reads HANGRIX_LLM_MAX_CONTEXT_TOKENS. Returns 0
+// when unset or unparseable — the caller treats 0 as "not configured".
+func parseMaxContextTokens(raw string) int {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return 80000
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// defaultCompactThreshold returns 80% of maxCtx when maxCtx > 0,
+// otherwise falls back to 80000.
+func defaultCompactThreshold(maxCtx int) int {
+	if maxCtx > 0 {
+		return maxCtx * 80 / 100
+	}
+	return 80000
+}
+
+// parseCompactThreshold reads HANGRIX_COMPACT_TOKEN_THRESHOLD. When
+// explicitly set, returns that value (negative disables). When unset,
+// defaults to 80% of maxCtx (from LLMMaxContextTokens), or 80000 if maxCtx is zero.
+// A negative explicit value disables the nudge entirely.
+func parseCompactThreshold(raw string, maxCtx int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return defaultCompactThreshold(maxCtx)
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil {
-		return 80000
+		return defaultCompactThreshold(maxCtx)
 	}
 	if n < 0 {
 		return 0
