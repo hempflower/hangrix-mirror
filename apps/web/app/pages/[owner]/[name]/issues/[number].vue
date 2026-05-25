@@ -434,12 +434,15 @@ function eventLabel(e: any): string {
         ref: e.payload?.ref_name ?? '',
         title: e.payload?.title ?? '',
       })
-    case 'contribution_merged':
+    case 'contribution_merged': {
+      const contributor = e.payload?.agent_role ? `@agent-${e.payload.agent_role}` : '—'
       return t('issue.contributions.timeline.contributionMerged', {
         name,
+        contributor,
         title: e.payload?.title ?? '',
         sha: shortSha(e.payload?.merge_commit_sha ?? ''),
       })
+    }
     case 'contribution_rejected':
       return t('issue.contributions.timeline.contributionRejected', {
         name,

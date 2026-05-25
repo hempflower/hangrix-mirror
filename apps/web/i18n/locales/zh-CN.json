@@ -954,7 +954,7 @@
       "role": "角色 {role}",
       "timeline": {
         "contributionPushed": "{name} 推送了贡献分支 {ref}",
-        "contributionMerged": "{name} 的贡献 {title} 已合入 → {sha}",
+        "contributionMerged": "{name} 将 {contributor} 的贡献 {title} 合入 → {sha}",
         "contributionRejected": "{name} 拒绝了贡献 {ref} —— {reason}",
         "contributionClosed": "{name} 关闭了贡献 {ref}"
       }
