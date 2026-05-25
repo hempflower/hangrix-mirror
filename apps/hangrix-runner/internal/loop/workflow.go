@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -137,7 +138,13 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 		}
 	}()
 
-	// 7. Execute steps sequentially.
+	// 7. Ensure /tmp/hangrix exists inside the container for step output files.
+	if err := d.ensureStepOutputDir(ctx, containerID); err != nil {
+		log.Printf("workflow job %d: ensure /tmp/hangrix: %v", job.JobRunID, err)
+		// Non-fatal: steps can still run, but output capture may fail.
+	}
+
+	// 8. Execute steps sequentially.
 	workingDir := job.WorkingDir
 	if workingDir == "" {
 		workingDir = "/workspace"
@@ -156,22 +163,27 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 		}
 		log.Printf("workflow job %d: step %d/%d %q", job.JobRunID, i+1, len(job.Steps), stepName)
 
-		exitCode, err := d.runStep(stepCtx, job, containerID, workingDir, step)
+		exitCode, err := d.runStep(stepCtx, job, containerID, workingDir, step, i)
 		if err != nil {
 			// Infrastructure failure (exec failed, context cancelled, etc.)
 			d.appendSystemLog(ctx, job.JobRunID, fmt.Sprintf("step %q: %v", stepName, err))
+			d.reportStepResult(ctx, job, step, i, -1, nil, nil)
 			d.terminate(ctx, job, "failed", -1, err.Error())
 			return nil // step error already reported; not a driver error
 		}
 		if exitCode != 0 {
 			msg := fmt.Sprintf("step %q exited with code %d", stepName, exitCode)
 			d.appendSystemLog(ctx, job.JobRunID, msg)
+			d.reportStepResult(ctx, job, step, i, exitCode, nil, nil)
 			d.terminate(ctx, job, "failed", exitCode, msg)
 			return nil // step failure already reported
 		}
+
+		// Capture and report step outputs on success.
+		d.captureAndReportStepOutputs(ctx, job, containerID, step, i)
 	}
 
-	// 8. Success.
+	// 9. Success.
 	d.terminate(ctx, job, "success", 0, "")
 	return nil
 }
@@ -179,12 +191,21 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 // runStep executes a single workflow step inside the container via
 // docker exec bash -lc <run>. It streams stdout/stderr line-by-line
 // to the platform and returns the exit code.
-func (d *WorkflowJobDriver) runStep(ctx context.Context, job *client.WorkflowJob, containerID, workingDir string, step client.WorkflowStep) (int32, error) {
+//
+// stepIndex (0-based) is used to derive the step output file path
+// when the step has no explicit ID.
+func (d *WorkflowJobDriver) runStep(ctx context.Context, job *client.WorkflowJob, containerID, workingDir string, step client.WorkflowStep, stepIndex int) (int32, error) {
 	// Build the runtime env for this step.
 	stepEnv, err := d.buildWorkflowEnv(job)
 	if err != nil {
 		return -1, fmt.Errorf("build env: %w", err)
 	}
+
+	// Inject HANGRIX_STEP_OUTPUT_FILE so the step knows where to write
+	// key=value outputs. Use the step's explicit ID when present,
+	// otherwise fall back to the 1-based step index.
+	stepOutputFile := stepOutputPath(step, stepIndex)
+	stepEnv["HANGRIX_STEP_OUTPUT_FILE"] = stepOutputFile
 
 	handle, err := d.Orchestrator.Exec(ctx, containerID, workingDir, stepEnv, "bash", "-lc", step.Run)
 	if err != nil {
@@ -400,4 +421,161 @@ func orchestratorVolumes(vols []client.Volume, repoID int64) []orchestrator.Volu
 		out[i] = orchestrator.Volume{Name: name, Mount: v.Mount}
 	}
 	return out
+}
+
+// ---- step output capture ----
+
+// stepOutputPath returns the container-side path for the step output file.
+// Uses the step's explicit ID when present, otherwise falls back to a
+// 1-based index (e.g. "/tmp/hangrix/step-output-1").
+func stepOutputPath(step client.WorkflowStep, stepIndex int) string {
+	id := step.ID
+	if id == "" {
+		id = fmt.Sprintf("%d", stepIndex+1)
+	}
+	return fmt.Sprintf("/tmp/hangrix/step-output-%s", id)
+}
+
+// ensureStepOutputDir creates /tmp/hangrix inside the container so step
+// output files can be written. Non-fatal: the job proceeds even if this
+// fails (steps can still run, but output capture will fail).
+func (d *WorkflowJobDriver) ensureStepOutputDir(ctx context.Context, containerID string) error {
+	handle, err := d.Orchestrator.Exec(ctx, containerID, "/", nil, "mkdir", "-p", "/tmp/hangrix")
+	if err != nil {
+		return err
+	}
+	go io.Copy(io.Discard, handle.Stderr())
+	io.Copy(io.Discard, handle.Stdout())
+	_, err = handle.Wait()
+	return err
+}
+
+// captureAndReportStepOutputs reads the step output file from inside
+// the container, parses key=value lines, masks any values that match
+// repo secrets, and reports the result to the platform. Called only
+// for successful steps (exit code 0).
+func (d *WorkflowJobDriver) captureAndReportStepOutputs(ctx context.Context, job *client.WorkflowJob, containerID string, step client.WorkflowStep, stepIndex int) {
+	outputPath := stepOutputPath(step, stepIndex)
+
+	raw, err := d.readOutputFile(ctx, containerID, outputPath)
+	if err != nil {
+		log.Printf("workflow job %d: read step output %s: %v", job.JobRunID, outputPath, err)
+	}
+
+	outputs := parseOutputLines(raw)
+	masked := maskSecretValues(outputs, job.RepoVariables)
+
+	d.reportStepResult(ctx, job, step, stepIndex, 0, outputs, masked)
+
+	// Clean up the output file so stale data doesn't leak to later steps.
+	d.cleanupOutputFile(ctx, containerID, outputPath)
+}
+
+// reportStepResult sends a step result (exit code + optional outputs)
+// to the platform. Idempotent — call even when outputs are nil.
+func (d *WorkflowJobDriver) reportStepResult(ctx context.Context, job *client.WorkflowJob, step client.WorkflowStep, stepIndex int, exitCode int32, outputs map[string]string, masked []string) {
+	req := client.WorkflowStepResultRequest{
+		StepIndex: stepIndex,
+		StepID:    step.ID,
+		ExitCode:  exitCode,
+		Outputs:   outputs,
+		Masked:    masked,
+	}
+	if err := d.Client.ReportWorkflowStepResult(ctx, job.JobRunID, req); err != nil {
+		log.Printf("workflow job %d: report step result: %v", job.JobRunID, err)
+	}
+}
+
+// readOutputFile execs `cat <path>` inside the container and returns
+// the file contents. An error or non-zero exit means no outputs are
+// available (file doesn't exist or couldn't be read).
+func (d *WorkflowJobDriver) readOutputFile(ctx context.Context, containerID, path string) (string, error) {
+	handle, err := d.Orchestrator.Exec(ctx, containerID, "/", nil, "cat", path)
+	if err != nil {
+		return "", fmt.Errorf("exec cat %s: %w", path, err)
+	}
+
+	// Drain stderr in background so stdout doesn't block.
+	go io.Copy(io.Discard, handle.Stderr())
+
+	data, err := io.ReadAll(handle.Stdout())
+	if err != nil {
+		return "", fmt.Errorf("read stdout: %w", err)
+	}
+
+	exitCode, err := handle.Wait()
+	if err != nil {
+		return "", fmt.Errorf("wait: %w", err)
+	}
+	if exitCode != 0 {
+		return "", nil // file doesn't exist — no outputs
+	}
+	return string(data), nil
+}
+
+// cleanupOutputFile removes the step output file from the container.
+// Errors are silently ignored — the file will be overwritten by the
+// next step that shares the same path.
+func (d *WorkflowJobDriver) cleanupOutputFile(ctx context.Context, containerID, path string) {
+	handle, err := d.Orchestrator.Exec(ctx, containerID, "/", nil, "rm", "-f", path)
+	if err != nil {
+		return
+	}
+	go io.Copy(io.Discard, handle.Stderr())
+	io.Copy(io.Discard, handle.Stdout())
+	handle.Wait()
+}
+
+// parseOutputLines parses a raw output file into a map of key→value.
+// Each non-empty line is split on the first '='; lines without '=' are
+// skipped. Returns nil when no valid key=value pairs are found.
+func parseOutputLines(raw string) map[string]string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	outputs := make(map[string]string)
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		eq := strings.IndexByte(line, '=')
+		if eq < 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:eq])
+		val := strings.TrimSpace(line[eq+1:])
+		if key == "" {
+			continue
+		}
+		outputs[key] = val
+	}
+	if len(outputs) == 0 {
+		return nil
+	}
+	return outputs
+}
+
+// maskSecretValues returns the keys whose values match any repo
+// variable/secret value. The runner treats all RepoVariables values as
+// potentially sensitive — matching output values are flagged so the
+// server can display them as "***".
+func maskSecretValues(outputs, secrets map[string]string) []string {
+	if len(outputs) == 0 || len(secrets) == 0 {
+		return nil
+	}
+	secretValues := make(map[string]bool, len(secrets))
+	for _, v := range secrets {
+		if v != "" {
+			secretValues[v] = true
+		}
+	}
+	var masked []string
+	for k, v := range outputs {
+		if secretValues[v] {
+			masked = append(masked, k)
+		}
+	}
+	return masked
 }
