@@ -68,11 +68,12 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 	// 3. Clone the host repo and checkout the target ref/sha.
 	if job.Owner != "" && job.Name != "" && job.CommitSHA != "" {
 		cloneJob := cloneSpec{
-			BaseURL:      d.BaseURL,
-			Owner:        job.Owner,
-			Name:         job.Name,
-			SessionToken: "", // workflow jobs don't use session tokens
-			Dest:         repoCheckout,
+			BaseURL:       d.BaseURL,
+			Owner:         job.Owner,
+			Name:          job.Name,
+			SessionToken:  "",                // workflow jobs don't use session tokens
+			WorkflowToken: job.WorkflowToken, // authenticates the clone of a private host repo
+			Dest:          repoCheckout,
 			// For workflow jobs we always check out a specific ref.
 			// We clone the repo with --no-checkout, then checkout
 			// the target commit.
@@ -429,8 +430,11 @@ func (d *WorkflowJobDriver) fail(ctx context.Context, job *client.WorkflowJob, e
 // cloneWorkflowRepo clones the host repo and checks out a specific commit.
 // Unlike cloneRepo (which is designed for agent sessions with working
 // branches), this does a full clone with --no-checkout, then checks out
-// the specific commit. No credential helper is set up (workflow jobs don't
-// push).
+// the specific commit. Workflow jobs never push, but a private host repo
+// still requires read auth to clone — so when the run carries a workflow
+// token we wire the same kind of per-host inline credential helper the
+// session clone uses, reading HANGRIX_WORKFLOW_TOKEN. A public repo (no
+// token, or token rejected) clones anonymously as before.
 func (d *WorkflowJobDriver) cloneWorkflowRepo(ctx context.Context, spec cloneSpec, commitSHA string) error {
 	if err := os.RemoveAll(spec.Dest); err != nil {
 		return fmt.Errorf("clear dest %s: %w", spec.Dest, err)
@@ -447,9 +451,14 @@ func (d *WorkflowJobDriver) cloneWorkflowRepo(ctx context.Context, spec cloneSpe
 	cloneArgs := []string{
 		"clone",
 		"--no-checkout",
-		"--", gitURL, spec.Dest,
 	}
-	if err := runGitWithEnv(ctx, "", nil, cloneArgs...); err != nil {
+	var cloneEnv []string
+	if spec.WorkflowToken != "" {
+		cloneArgs = append(cloneArgs, "--config", spec.workflowCredentialHelperConfigArg())
+		cloneEnv = []string{"HANGRIX_WORKFLOW_TOKEN=" + spec.WorkflowToken}
+	}
+	cloneArgs = append(cloneArgs, "--", gitURL, spec.Dest)
+	if err := runGitWithEnv(ctx, "", cloneEnv, cloneArgs...); err != nil {
 		return fmt.Errorf("clone %s: %w", gitURL, err)
 	}
 

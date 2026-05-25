@@ -21,6 +21,7 @@ type cloneSpec struct {
 	WorkingBranch string // e.g. "issue/42"
 	BaseBranch    string // fallback branch when working branch doesn't exist remotely
 	SessionToken  string // hgxs_* plaintext — HTTP Basic password for the git server
+	WorkflowToken string // hangrix_wf_* plaintext — HTTP Basic password for workflow-job clones
 	Dest          string // absolute host path; created if missing, wiped if re-cloning
 }
 
@@ -74,6 +75,18 @@ func (s cloneSpec) credentialHelperConfigArg() string {
 	// guard against tokens that ever grow shell-metacharacters; today
 	// the wire format is [A-Za-z0-9_] so it's belt-and-braces.
 	helper := `!f() { echo username=x; echo "password=$HANGRIX_SESSION_TOKEN"; }; f`
+	return "credential." + base + ".helper=" + helper
+}
+
+// workflowCredentialHelperConfigArg is the workflow-job counterpart of
+// credentialHelperConfigArg: same per-host inline helper shape, but it
+// reads the run's workflow token (HANGRIX_WORKFLOW_TOKEN) instead of a
+// session token. The git server's identifyGitCaller accepts a
+// `hangrix_wf_*` Basic password for read-only access to the run's repo,
+// which is what a workflow job needs to clone a private host repo.
+func (s cloneSpec) workflowCredentialHelperConfigArg() string {
+	base := strings.TrimRight(s.BaseURL, "/")
+	helper := `!f() { echo username=x; echo "password=$HANGRIX_WORKFLOW_TOKEN"; }; f`
 	return "credential." + base + ".helper=" + helper
 }
 

@@ -55,6 +55,10 @@ type gitCaller struct {
 	token      *tokendomain.Token         // nil unless authMethod == "pat"
 	session    *runnerdomain.AgentSession // nil unless authMethod == "session"
 	authMethod string
+	// workflowRepoID is the repo a workflow token is scoped to. Only
+	// meaningful when authMethod == "workflow"; workflow tokens grant
+	// read-only access to exactly this repo (clone during a job).
+	workflowRepoID int64
 }
 
 func (g *gitCaller) hasWriteScope() bool {
@@ -77,6 +81,11 @@ func (g *gitCaller) hasWriteScope() bool {
 			return false
 		}
 		return true
+	case "workflow":
+		// Workflow tokens are read-only: a job clones the repo but never
+		// pushes. Receive-pack is gated by canAccessRepo(write=true) too,
+		// but deny here explicitly so the intent is unambiguous.
+		return false
 	}
 	// Cookie and password sessions are equivalent to "full user".
 	return true
@@ -578,6 +587,11 @@ func (h *Handler) canAccessRepo(ctx context.Context, caller *gitCaller, repo *do
 		}
 		return true
 	}
+	if caller.authMethod == "workflow" {
+		// Workflow tokens grant read-only access to exactly the repo the
+		// run is scoped to. Never writable; never cross-repo.
+		return !write && caller.workflowRepoID == repo.ID
+	}
 	if caller.user == nil {
 		return false
 	}
@@ -674,6 +688,19 @@ func (h *Handler) identifyGitCaller(r *http.Request) (*gitCaller, bool) {
 		// → fall through to password path. The cost is one extra failed
 		// lookup in the rare case a user's actual password happens to
 		// start with `hgx_`.
+	}
+
+	// Workflow tokens (`hangrix_wf_*`) authenticate a workflow job's clone
+	// of its host repo. They are read-only and scoped to exactly one repo
+	// (the run's repo); canAccessRepo enforces that scope. Checked before
+	// the bcrypt path because a workflow token is never a user password.
+	if h.workflowTokens != nil && strings.HasPrefix(password, "hangrix_wf_") {
+		repoID, err := h.workflowTokens.ValidateWorkflowToken(ctx, password)
+		if err == nil {
+			return &gitCaller{authMethod: "workflow", workflowRepoID: repoID}, true
+		}
+		// Soft-fail (invalid / terminal run) → fall through to the
+		// password path, mirroring the session/PAT branches above.
 	}
 
 	u, err := h.users.GetByUsername(ctx, username)

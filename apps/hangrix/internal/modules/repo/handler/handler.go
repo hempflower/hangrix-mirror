@@ -85,6 +85,10 @@ type Handler struct {
 	// tagEventTrigger fires repo.push_tag workflow runs when a tag is
 	// created via REST API. Nil when the workflow module is not loaded.
 	tagEventTrigger workflowdomain.TagEventTrigger
+	// workflowTokens validates `hangrix_wf_*` Basic-auth passwords so a
+	// workflow job can clone its (possibly private) host repo over the
+	// same Smart-HTTP endpoint. Nil when the workflow module is not loaded.
+	workflowTokens workflowdomain.WorkflowTokenValidator
 }
 
 type HandlerDeps struct {
@@ -121,6 +125,9 @@ type HandlerDeps struct {
 	// TagEventTrigger fires repo.push_tag workflow runs on tag creation.
 	// Nil when the workflow module is not loaded.
 	TagEventTrigger workflowdomain.TagEventTrigger
+	// WorkflowTokens validates `hangrix_wf_*` tokens for read-only git
+	// access during workflow jobs. Nil when the workflow module is absent.
+	WorkflowTokens workflowdomain.WorkflowTokenValidator
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
@@ -141,6 +148,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		guards:          deps.Guards,
 		observers:       deps.Observers,
 		tagEventTrigger: deps.TagEventTrigger,
+		workflowTokens:  deps.WorkflowTokens,
 	}
 }
 
