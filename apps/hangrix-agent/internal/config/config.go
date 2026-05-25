@@ -46,6 +46,20 @@ type Config struct {
 	// 128k-window models and is conservative enough for ~64k providers
 	// (DeepSeek) when operators want to keep it on.
 	CompactTokenThreshold int
+
+	// LLMReasoningTimeoutSeconds is the per-call wall-clock ceiling the
+	// runtime enforces on a single Create() invocation. When exceeded the
+	// agent cancels the HTTP request and — if retries remain — retries
+	// with the same request snapshot. <=0 disables the protection (the
+	// call falls through to the http.Client's 5-minute timeout). Set via
+	// HANGRIX_LLM_REASONING_TIMEOUT_SECONDS; default 200.
+	LLMReasoningTimeoutSeconds int
+	// LLMReasoningTimeoutRetries is the number of retries after the first
+	// timeout. Default 1 means 2 total attempts. Only reasoning-timeout
+	// errors are retried at this level; transport/5xx/429 retries stay
+	// inside llm.Client.Create. Set via HANGRIX_LLM_REASONING_TIMEOUT_RETRIES.
+	// Clamped to >=0 to prevent negative values from zeroing maxAttempts.
+	LLMReasoningTimeoutRetries int
 }
 
 // LLMEndpoint returns the URL the agent POSTs `/responses` against.
@@ -85,7 +99,9 @@ func NewConfig() *Config {
 		HostAddendumPath:      os.Getenv("HANGRIX_HOST_ADDENDUM"),
 		ToolCatalog:           os.Getenv("HANGRIX_TOOL_CATALOG"),
 		McpServers:            parseMcpServers(os.Getenv("HANGRIX_MCP_SERVERS")),
-		CompactTokenThreshold: parseCompactThreshold(os.Getenv("HANGRIX_COMPACT_TOKEN_THRESHOLD")),
+		CompactTokenThreshold:      parseCompactThreshold(os.Getenv("HANGRIX_COMPACT_TOKEN_THRESHOLD")),
+		LLMReasoningTimeoutSeconds: parseIntDefault(os.Getenv("HANGRIX_LLM_REASONING_TIMEOUT_SECONDS"), 200),
+		LLMReasoningTimeoutRetries: clampNonNegative(parseIntDefault(os.Getenv("HANGRIX_LLM_REASONING_TIMEOUT_RETRIES"), 1)),
 	}
 
 	var missing []string
@@ -142,4 +158,29 @@ func parseCompactThreshold(raw string) int {
 		return 0
 	}
 	return n
+}
+
+// parseIntDefault reads an env value as an int, falling back to def when
+// empty or unparseable. Used for simple count/duration env vars that
+// have a sensible default.
+func parseIntDefault(raw string, def int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+// clampNonNegative floors the value to 0 when negative. This guards
+// against misconfiguration (e.g. HANGRIX_LLM_REASONING_TIMEOUT_RETRIES=-1)
+// that would otherwise zero out maxAttempts and skip the LLM call entirely.
+func clampNonNegative(v int) int {
+	if v < 0 {
+		return 0
+	}
+	return v
 }
