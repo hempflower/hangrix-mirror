@@ -5,6 +5,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -241,6 +243,12 @@ func (s *Service) CreateRun(ctx context.Context, params CreateRunParams) (*domai
 		}
 	}
 
+	// Generate a short-term workflow token.
+	workflowToken, err := generateWorkflowToken()
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate workflow token: %w", err)
+	}
+
 	return s.store.CreateRun(ctx, domain.CreateRunParams{
 		RepoID:              params.Repo.ID,
 		WorkflowName:        params.Config.Name,
@@ -257,6 +265,7 @@ func (s *Service) CreateRun(ctx context.Context, params CreateRunParams) (*domai
 		JobDefs:             jobDefs,
 		DispatchInputs:      dispatchInputs,
 		TriggerPayloadJSON:  params.TriggerPayload,
+		WorkflowToken:       workflowToken,
 	})
 }
 
@@ -530,6 +539,39 @@ func (s *Service) DispatchRepoPush(ctx context.Context, repo Ref, branch string,
 	return runs
 }
 
+
+// ---- token validation (domain.WorkflowTokenValidator) ----
+
+// ValidateWorkflowToken looks up a hangrix_wf_ token and returns the repo ID
+// it is scoped to. Returns ErrInvalidWorkflowToken if the token is not found
+// or the run is in a terminal state.
+func (s *Service) ValidateWorkflowToken(ctx context.Context, token string) (int64, error) {
+	repoID, status, err := s.store.GetRunByToken(ctx, token)
+	if err != nil {
+		return 0, domain.ErrInvalidWorkflowToken
+	}
+	if domain.RunStatus(status).Terminal() {
+		return 0, domain.ErrInvalidWorkflowToken
+	}
+	return repoID, nil
+}
+
+// generateWorkflowToken creates a new hangrix_wf_<8>_<32> hex token.
+func generateWorkflowToken() (string, error) {
+	randomBytes := make([]byte, 4)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", err
+	}
+	short := hex.EncodeToString(randomBytes)
+
+	longBytes := make([]byte, 16)
+	if _, err := rand.Read(longBytes); err != nil {
+		return "", err
+	}
+	long := hex.EncodeToString(longBytes)
+
+	return "hangrix_wf_" + short + "_" + long, nil
+}
 
 // ---- helpers ----
 

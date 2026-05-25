@@ -91,6 +91,7 @@ func (r *PostgresRepo) CreateRun(ctx context.Context, params domain.CreateRunPar
 		CommitSha:             params.CommitSHA,
 		ContainerSnapshotJson: snapJSON,
 		TriggerPayloadJson:    triggerJSON,
+		WorkflowToken:         params.WorkflowToken,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("create workflow run: %w", err)
@@ -155,6 +156,19 @@ func (r *PostgresRepo) GetRun(ctx context.Context, id int64) (*domain.WorkflowRu
 		return nil, fmt.Errorf("get workflow run: %w", err)
 	}
 	return rowToRun(&dbRun), nil
+}
+
+// GetRunByToken returns the repo_id and status for a workflow run identified
+// by its workflow_token.
+func (r *PostgresRepo) GetRunByToken(ctx context.Context, token string) (int64, domain.RunStatus, error) {
+	row, err := r.q.GetWorkflowRunByToken(ctx, token)
+	if err != nil {
+		if isNoRows(err) {
+			return 0, "", domain.ErrRunNotFound
+		}
+		return 0, "", fmt.Errorf("get workflow run by token: %w", err)
+	}
+	return row.RepoID, domain.RunStatus(row.Status), nil
 }
 
 // ListRunsByRepo returns workflow runs for a repo, ordered by created_at DESC.
@@ -330,6 +344,7 @@ func rowToRun(row *workflowdb.WorkflowRun) *domain.WorkflowRun {
 		CommitSHA:             row.CommitSha,
 		ContainerSnapshotJSON: row.ContainerSnapshotJson,
 		TriggerPayloadJSON:    row.TriggerPayloadJson,
+		WorkflowToken:         row.WorkflowToken,
 		CreatedAt:             row.CreatedAt.Time,
 	}
 	if row.CauseID.Valid {
@@ -356,6 +371,7 @@ func rowToRunFromList(row *workflowdb.ListWorkflowRunsByRepoRow) *domain.Workflo
 		CommitSHA:             row.CommitSha,
 		ContainerSnapshotJSON: row.ContainerSnapshotJson,
 		TriggerPayloadJSON:    row.TriggerPayloadJson,
+		WorkflowToken:         row.WorkflowToken,
 		CreatedAt:             row.CreatedAt.Time,
 	}
 	if row.CauseID.Valid {
