@@ -153,7 +153,7 @@ func TestLoopSmoke(t *testing.T) {
 		registry,
 		"system prompt for test",
 		bundle.Async,
-		0,
+		0, 0, 0,
 	)
 
 	loopErr := make(chan error, 1)
@@ -341,7 +341,7 @@ func TestLoopCompactSession(t *testing.T) {
 		registry,
 		"system prompt for test",
 		bundle.Async,
-		0,
+		0, 0, 0,
 	)
 
 	loopErr := make(chan error, 1)
@@ -518,7 +518,7 @@ func TestLoopAtMentionNudge(t *testing.T) {
 		registry,
 		"system prompt for test",
 		bundle.Async,
-		0,
+		0, 0, 0,
 	)
 
 	loopErr := make(chan error, 1)
@@ -674,7 +674,7 @@ func TestLoopAtMentionNudgeWithToolCallsPreservesChain(t *testing.T) {
 		registry,
 		"system prompt for test",
 		bundle.Async,
-		0,
+		0, 0, 0,
 	)
 
 	loopErr := make(chan error, 1)
@@ -822,7 +822,7 @@ func TestLoopSleepGate(t *testing.T) {
 		registry,
 		"system prompt for test",
 		bundle.Async,
-		0,
+		0, 0, 0,
 	)
 
 	loopErr := make(chan error, 1)

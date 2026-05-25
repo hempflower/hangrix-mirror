@@ -82,6 +82,16 @@ type Loop struct {
 	// is first crossed and disarm it after the next compact_session
 	// invocation OR a hard reset of the context window.
 	compactNudged bool
+
+	// reasoningTimeout is the per-call wall-clock ceiling for a single
+	// llm.Create() invocation. When exceeded the agent cancels the
+	// request and — if retries remain — retries with the same snapshot.
+	// <=0 disables this protection.
+	reasoningTimeout time.Duration
+	// reasoningTimeoutRetries is the number of retries AFTER the first
+	// timeout (total attempts = retries + 1). Only reasoning-timeout
+	// errors are retried at this level.
+	reasoningTimeoutRetries int
 }
 
 func NewLoop(
@@ -93,18 +103,22 @@ func NewLoop(
 	systemPrompt string,
 	async local.AsyncLifecycle,
 	compactTokenThreshold int,
+	reasoningTimeout time.Duration,
+	reasoningTimeoutRetries int,
 ) *Loop {
 	return &Loop{
-		in:                    in,
-		out:                   out,
-		llm:                   llmClient,
-		model:                 model,
-		registry:              registry,
-		system:                systemPrompt,
-		async:                 async,
-		maxToolRounds:         999999,
-		shutdownGrace:         5 * time.Second,
-		compactTokenThreshold: compactTokenThreshold,
+		in:                      in,
+		out:                     out,
+		llm:                     llmClient,
+		model:                   model,
+		registry:                registry,
+		system:                  systemPrompt,
+		async:                   async,
+		maxToolRounds:           999999,
+		shutdownGrace:           5 * time.Second,
+		compactTokenThreshold:   compactTokenThreshold,
+		reasoningTimeout:        reasoningTimeout,
+		reasoningTimeoutRetries: reasoningTimeoutRetries,
 	}
 }
 
@@ -356,46 +370,111 @@ func (l *Loop) driveOneTurnWithID(
 			Tools:        l.registry.Catalog(),
 		}
 
-		// Run the LLM call in its own goroutine so the main goroutine
-		// can keep draining the inbox. An event or notification arriving
-		// mid-call is appended to the context but does NOT cancel the
-		// call — canceling would waste tokens, and the new input will be
-		// visible at the next round.
-		respCh := make(chan llmResult, 1)
-		go func() {
-			resp, err := l.llm.Create(ctx, req)
-			respCh <- llmResult{resp: resp, err: err}
-		}()
+		// Reasoning-timeout retry loop. Each attempt derives a fresh
+		// callCtx so a timeout on attempt N doesn't leak into attempt
+		// N+1. The outer ctx (process-wide cancellation) still
+		// short-circuits via the select.
+		//
+		// When reasoningTimeout <= 0 the protection is disabled;
+		// maxAttempts == 1 and callCtx == ctx, so the behaviour is
+		// identical to the pre-172 path.
+		maxAttempts := 1
+		if l.reasoningTimeout > 0 {
+			maxAttempts = l.reasoningTimeoutRetries + 1
+		}
 
 		var (
 			resp    *llm.CreateResponse
 			callErr error
 		)
-		waitForResp := true
-		for waitForResp {
-			select {
-			case <-ctx.Done():
-				// Process-wide cancellation. Let the in-flight LLM call
-				// settle (it inherits the same ctx and will return
-				// soon), but we don't surface a partial response.
-				return ctx.Err()
-			case r := <-respCh:
-				resp = r.resp
-				callErr = r.err
-				waitForResp = false
-			case item, ok := <-inbox:
-				if !ok {
-					// Inbox closed mid-call. Let the LLM call finish
-					// so we can record its result, then exit normally
-					// on the next outer-loop iteration.
-					r := <-respCh
+		for attempt := 0; attempt < maxAttempts; attempt++ {
+			callCtx := ctx
+			var cancel context.CancelFunc
+			if l.reasoningTimeout > 0 {
+				callCtx, cancel = context.WithTimeout(ctx, l.reasoningTimeout)
+			}
+
+			// Run the LLM call in its own goroutine so the main
+			// goroutine can keep draining the inbox. An event or
+			// notification arriving mid-call is appended to the
+			// context but does NOT cancel the call — canceling
+			// would waste tokens, and the new input will be
+			// visible at the next round (or next retry).
+			respCh := make(chan llmResult, 1)
+			go func() {
+				r, err := l.llm.Create(callCtx, req)
+				respCh <- llmResult{resp: r, err: err}
+			}()
+
+			waitForResp := true
+			for waitForResp {
+				select {
+				case <-ctx.Done():
+					// Process-wide cancellation.
+					if cancel != nil {
+						cancel()
+					}
+					return ctx.Err()
+				case r := <-respCh:
 					resp = r.resp
 					callErr = r.err
 					waitForResp = false
+				case item, ok := <-inbox:
+					if !ok {
+						// Inbox closed mid-call.
+						r := <-respCh
+						resp = r.resp
+						callErr = r.err
+						waitForResp = false
+						continue
+					}
+					l.applyInboxItem(cctx, item, pendingFrames)
+				}
+			}
+			if cancel != nil {
+				cancel()
+			}
+
+			if callErr == nil {
+				break // success
+			}
+
+			// Only reasoning-timeout errors are retried at this
+			// level. Transport errors, 5xx, 429, and 4xx are
+			// already retried exhaustively by llm.Client.Create;
+			// surfacing them here is the right last-resort path.
+			if l.reasoningTimeout > 0 && errors.Is(callErr, context.DeadlineExceeded) {
+				if attempt < maxAttempts-1 {
+					_ = l.out.Log("info", fmt.Sprintf(
+						"llm reasoning timeout (attempt %d/%d, threshold=%v); retrying in 1s",
+						attempt+1, maxAttempts, l.reasoningTimeout,
+					))
+					// Small fixed backoff — we want to
+					// quickly retry, not wait for an upstream
+					// warm-up.
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(time.Second):
+					}
 					continue
 				}
-				l.applyInboxItem(cctx, item, pendingFrames)
+				// Retries exhausted.
+				_ = l.out.Log("error", fmt.Sprintf(
+					"LLM reasoning timeout after %d attempt(s), threshold=%v",
+					maxAttempts, l.reasoningTimeout,
+				))
+				_ = l.out.Done(turnID)
+				fmt.Fprintf(os.Stderr,
+					"LLM reasoning timeout after %d attempt(s), threshold=%v\n",
+					maxAttempts, l.reasoningTimeout,
+				)
+				return fmt.Errorf("LLM reasoning timeout after %d attempt(s)", maxAttempts)
 			}
+
+			// Non-timeout error — break out and let the error
+			// handler below surface it.
+			break
 		}
 
 		// Catch anything that landed between respCh receiving and now —
