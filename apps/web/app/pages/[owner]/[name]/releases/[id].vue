@@ -179,6 +179,7 @@ async function onUploadAsset() {
   uploadError.value = null
   try {
     const form = new FormData()
+    form.append('name', uploadFile.value.name)
     form.append('file', uploadFile.value)
     const updated = await $fetch<Release>(`/api/repos/${owner.value}/${name.value}/releases/${id.value}/assets`, {
       method: 'POST',
