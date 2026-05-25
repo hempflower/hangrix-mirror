@@ -77,6 +77,10 @@ type WorkflowRun struct {
 	ContainerSnapshotJSON []byte
 	// TriggerPayloadJSON stores event-specific metadata for audit.
 	TriggerPayloadJSON []byte
+	// WorkflowToken is a short-term hangrix_wf_ token generated at run
+	// creation time. Workflow steps use it to authenticate against
+	// repo-scoped write endpoints (e.g. releases).
+	WorkflowToken string
 	StartedAt  *time.Time
 	FinishedAt *time.Time
 	CreatedAt  time.Time
@@ -180,6 +184,8 @@ type CreateRunParams struct {
 	// trigger_payload_json column. When nil, the infra auto-generates
 	// a payload from EventName + DispatchInputs.
 	TriggerPayloadJSON []byte
+	// WorkflowToken is the pre-generated hangrix_wf_ token for this run.
+	WorkflowToken string
 }
 
 // JobDefInput is the input bag for a single job within a new workflow run.
@@ -210,6 +216,11 @@ type Store interface {
 
 	// GetRun returns a single workflow run by ID.
 	GetRun(ctx context.Context, id int64) (*WorkflowRun, error)
+
+	// GetRunByToken returns the repo_id and status for a workflow run
+	// identified by its workflow_token. Returns ErrRunNotFound when no
+	// match exists.
+	GetRunByToken(ctx context.Context, token string) (repoID int64, status RunStatus, err error)
 
 	// ListRunsByRepo returns workflow runs for a repo, ordered by created_at DESC.
 	// workflowName filters to a specific workflow (empty = all).
@@ -278,9 +289,17 @@ type TagEventTrigger interface {
 
 // ---- sentinel errors ----
 
+// WorkflowTokenValidator is the cross-module interface that allows other
+// modules (e.g. release) to validate a hangrix_wf_ token and get the repo
+// ID it is scoped to. The workflow module's Service implements it.
+type WorkflowTokenValidator interface {
+	ValidateWorkflowToken(ctx context.Context, token string) (repoID int64, err error)
+}
+
 var (
-	ErrNoPendingJob   = errors.New("no pending workflow job")
-	ErrJobNotFound    = errors.New("workflow job not found")
-	ErrRunNotFound    = errors.New("workflow run not found")
-	ErrInvalidStatus  = errors.New("invalid status transition")
+	ErrNoPendingJob        = errors.New("no pending workflow job")
+	ErrJobNotFound         = errors.New("workflow job not found")
+	ErrRunNotFound         = errors.New("workflow run not found")
+	ErrInvalidStatus       = errors.New("invalid status transition")
+	ErrInvalidWorkflowToken = errors.New("invalid workflow token")
 )

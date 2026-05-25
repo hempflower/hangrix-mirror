@@ -155,6 +155,12 @@ type Task struct {
 	// container as HANGRIX_LLM_MODEL so the agent's LLM client knows
 	// which model to ask the proxy for.
 	Model string `json:"model"`
+	// LLMMaxContextTokens is the resolved max_context_tokens from
+	// agents.yml (role.llm.max_context_tokens or team-level fallback).
+	// Surfaced into the container as HANGRIX_LLM_MAX_CONTEXT_TOKENS; the
+	// agent uses 80% of it as the default compact_session threshold.
+	// Zero means "not configured" — the agent falls back to 80000.
+	LLMMaxContextTokens int `json:"llm_max_context_tokens,omitempty"`
 	// IssueNumber is the per-repo issue this session is bound to. Surfaced
 	// into the container as HANGRIX_ISSUE_NUMBER so the agent can construct
 	// its contribution-branch ref (issue-<N>/<role>/<slug>). Zero for
@@ -237,6 +243,10 @@ type WorkflowJob struct {
 	// transformed to WORKFLOW_INPUT_<UPPER_SNAKE> keys by the server.
 	// Nil/empty for non-dispatch events.
 	Inputs map[string]string `json:"inputs,omitempty"`
+	// WorkflowToken is a short-lived API token scoped to the workflow
+	// run's repo. It is injected as HANGRIX_WORKFLOW_TOKEN env var for
+	// steps that need to call authenticated platform APIs (e.g. release).
+	WorkflowToken string `json:"workflow_token,omitempty"`
 }
 
 // WorkflowContainer carries the resolved container definition for a
