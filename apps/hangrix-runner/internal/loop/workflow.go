@@ -474,9 +474,15 @@ func (d *WorkflowJobDriver) captureAndReportStepOutputs(ctx context.Context, job
 // reportStepResult sends a step result (exit code + optional outputs)
 // to the platform. Idempotent — call even when outputs are nil.
 func (d *WorkflowJobDriver) reportStepResult(ctx context.Context, job *client.WorkflowJob, step client.WorkflowStep, stepIndex int, exitCode int32, outputs map[string]string, masked []string) {
+	// Normalize unnamed steps to their 1-based index so the server
+	// always receives a non-empty step_id.
+	stepID := step.ID
+	if stepID == "" {
+		stepID = fmt.Sprintf("%d", stepIndex+1)
+	}
 	req := client.WorkflowStepResultRequest{
 		StepIndex: stepIndex,
-		StepID:    step.ID,
+		StepID:    stepID,
 		ExitCode:  exitCode,
 		Outputs:   outputs,
 		Masked:    masked,
