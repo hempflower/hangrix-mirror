@@ -98,9 +98,11 @@ func (s *Service) GetHostContainer(ctx context.Context, repo Ref) (*agentsconfig
 		return nil, fmt.Errorf("parse agents.yml: %w", err)
 	}
 
-	// Container is a value type in HostConfig; an empty image means no container.
-	if host.Container.Image == "" {
-		return nil, fmt.Errorf("agents.yml has no container image defined")
+	// Exactly one of Image or Build is guaranteed by agentsconfig validation.
+	// Both-empty is impossible here (ParseHostConfig would reject it), but we
+	// guard defensively.
+	if host.Container.Image == "" && host.Container.Build == nil {
+		return nil, fmt.Errorf("agents.yml has no container image or build defined")
 	}
 
 	return &host.Container, nil
