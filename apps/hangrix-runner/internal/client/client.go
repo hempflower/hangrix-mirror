@@ -237,6 +237,10 @@ type WorkflowJob struct {
 	// transformed to WORKFLOW_INPUT_<UPPER_SNAKE> keys by the server.
 	// Nil/empty for non-dispatch events.
 	Inputs map[string]string `json:"inputs,omitempty"`
+	// WorkflowToken is a short-lived API token scoped to the workflow
+	// run's repo. It is injected as HANGRIX_WORKFLOW_TOKEN env var for
+	// steps that need to call authenticated platform APIs (e.g. release).
+	WorkflowToken string `json:"workflow_token,omitempty"`
 }
 
 // WorkflowContainer carries the resolved container definition for a
