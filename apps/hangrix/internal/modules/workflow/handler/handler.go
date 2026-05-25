@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -70,6 +71,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Use(h.requireAgentToken)
 		r.Post("/running", h.markJobRunning)
 		r.Post("/logs", h.appendLog)
+		r.Post("/step-result", h.stepResult)
 		r.Post("/terminate", h.terminateJob)
 	})
 }
@@ -148,21 +150,23 @@ type runDTO struct {
 }
 
 type jobRunDTO struct {
-	ID               int64   `json:"id"`
-	WorkflowRunID    int64   `json:"workflow_run_id"`
-	JobKey           string  `json:"job_key"`
-	DisplayName      string  `json:"display_name"`
-	Status           string  `json:"status"`
-	SequenceIndex    int32   `json:"sequence_index"`
-	WorkingDirectory string  `json:"working_directory"`
-	TimeoutMinutes   int32   `json:"timeout_minutes"`
-	RunnerID         *int64  `json:"runner_id"`
-	ContainerID      *string `json:"container_id"`
-	StartedAt        *string `json:"started_at"`
-	FinishedAt       *string `json:"finished_at"`
-	ExitCode         *int32  `json:"exit_code"`
-	ErrorMessage     string  `json:"error_message"`
-	CreatedAt        string  `json:"created_at"`
+	ID               int64              `json:"id"`
+	WorkflowRunID    int64              `json:"workflow_run_id"`
+	JobKey           string             `json:"job_key"`
+	DisplayName      string             `json:"display_name"`
+	Status           string             `json:"status"`
+	SequenceIndex    int32              `json:"sequence_index"`
+	WorkingDirectory string             `json:"working_directory"`
+	TimeoutMinutes   int32              `json:"timeout_minutes"`
+	RunnerID         *int64             `json:"runner_id"`
+	ContainerID      *string            `json:"container_id"`
+	StepOutputs      map[string]any     `json:"step_outputs,omitempty"`
+	JobOutputs       map[string]string  `json:"job_outputs,omitempty"`
+	StartedAt        *string            `json:"started_at"`
+	FinishedAt       *string            `json:"finished_at"`
+	ExitCode         *int32             `json:"exit_code"`
+	ErrorMessage     string             `json:"error_message"`
+	CreatedAt        string             `json:"created_at"`
 }
 
 type logLineDTO struct {
@@ -248,6 +252,18 @@ func toJobRunDTO(j *domain.WorkflowJobRun) jobRunDTO {
 	if j.FinishedAt != nil {
 		s := j.FinishedAt.UTC().Format("2006-01-02T15:04:05Z")
 		dto.FinishedAt = &s
+	}
+	if len(j.StepOutputsJSON) > 0 {
+		var so map[string]any
+		if err := json.Unmarshal(j.StepOutputsJSON, &so); err == nil {
+			dto.StepOutputs = so
+		}
+	}
+	if len(j.JobOutputsJSON) > 0 {
+		var jo map[string]string
+		if err := json.Unmarshal(j.JobOutputsJSON, &jo); err == nil {
+			dto.JobOutputs = jo
+		}
 	}
 	return dto
 }
@@ -532,15 +548,85 @@ func (h *Handler) terminateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Advance the run (next job or mark terminal)
+	// Get the job and run for output resolution and advancement
 	job, err := h.svc.GetJobRun(r.Context(), jobID)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Resolve job outputs if the job succeeded
+	if status == domain.JobStatusSuccess {
+		run, err := h.svc.GetRun(r.Context(), job.WorkflowRunID)
+		if err != nil {
+			// Non-fatal — proceed with advancement
+		} else {
+			dispatchInputs := parseDispatchInputs(run.TriggerPayloadJSON)
+			if err := h.svc.ResolveJobOutputs(r.Context(), job.WorkflowRunID, jobID, dispatchInputs); err != nil {
+				// Log but don't fail — advancement proceeds
+			}
+		}
+	}
+
+	// Advance the run (next job or mark terminal)
 	if err := h.svc.AdvanceRun(r.Context(), job.WorkflowRunID); err != nil {
 		// Log but don't fail — the run advancement is best-effort
 		// The run will still be marked correctly on next job claim
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// parseDispatchInputs extracts dispatch inputs from a trigger payload JSON blob.
+// Returns an empty map when parsing fails or the payload is empty.
+func parseDispatchInputs(payload []byte) map[string]string {
+	if len(payload) == 0 {
+		return nil
+	}
+	var wrapper struct {
+		DispatchInputs map[string]string `json:"dispatch_inputs"`
+	}
+	if err := json.Unmarshal(payload, &wrapper); err != nil {
+		return nil
+	}
+	return wrapper.DispatchInputs
+}
+
+// ---- step result callback ----
+
+type stepResultReq struct {
+	StepIndex int               `json:"step_index"`
+	StepID    string            `json:"step_id,omitempty"`
+	Outputs   map[string]string `json:"outputs,omitempty"`
+}
+
+// POST /api/runner/workflow-jobs/{jobRunID}/step-result
+func (h *Handler) stepResult(w http.ResponseWriter, r *http.Request) {
+	jobID, ok := httpx.ParseID(w, chi.URLParam(r, "jobRunID"))
+	if !ok {
+		return
+	}
+
+	var req stepResultReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+
+	// Derive a stable step key: use explicit step_id when available,
+	// otherwise fall back to the 1-based step_index sent by the runner.
+	// The index-based key (e.g. "1") cannot be referenced in ${{ }}
+	// expressions (doesn't match [a-z][a-z0-9-]*), so unnamed steps
+	// have their outputs stored for API display but aren't expression-
+	// resolvable — which is the intended design.
+	stepKey := req.StepID
+	if stepKey == "" {
+		stepKey = fmt.Sprintf("%d", req.StepIndex)
+	}
+
+	if err := h.svc.SetStepOutputs(r.Context(), jobID, stepKey, req.Outputs); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)

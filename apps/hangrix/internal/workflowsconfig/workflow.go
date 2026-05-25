@@ -84,10 +84,16 @@ type JobDefinition struct {
 	TimeoutMinutes   int
 	WorkingDirectory string
 	Steps            []StepDefinition
+	// Outputs declares job-level outputs whose values may reference
+	// ${{ steps.<id>.outputs.<key> }} expressions. Optional.
+	Outputs map[string]string
 }
 
 // StepDefinition is a single shell step within a job.
 type StepDefinition struct {
+	// Id is an optional stable identifier for cross-step output references.
+	// When present it must match [a-z][a-z0-9-]* and be unique within its job.
+	Id   *string
 	Name string
 	Run  string
 }
