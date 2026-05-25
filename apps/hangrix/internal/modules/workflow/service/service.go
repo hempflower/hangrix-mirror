@@ -569,9 +569,9 @@ func (s *Service) SetJobOutputs(ctx context.Context, id int64, outputs map[strin
 }
 
 // ResolveJobOutputs resolves $\{\{ \}\} expressions in job output templates
-// against the step outputs captured during execution. It extracts plain string
-// values from StepOutputValue maps and resolves expressions like
-// $\{\{ steps.<id>.outputs.<key> \}\}. Resolved outputs always have masked=false.
+// against the step outputs captured during execution. It resolves expressions like
+// $\{\{ steps.<id>.outputs.<key> \}\} and propagates the Masked flag from the
+// referenced step output.
 func (s *Service) ResolveJobOutputs(ctx context.Context, jobID int64) error {
 	job, err := s.store.GetJobRun(ctx, jobID)
 	if err != nil {
@@ -587,9 +587,10 @@ func (s *Service) ResolveJobOutputs(ctx context.Context, jobID int64) error {
 		return fmt.Errorf("resolve job outputs: unmarshal raw: %w", err)
 	}
 
-	// Build the flat context for expression resolution.
+	// Build the flat context for expression resolution and track masked keys.
 	// Each step output key becomes steps.<stepID>.outputs.<key> = value.
 	outputCtx := make(map[string]string)
+	maskedSet := make(map[string]bool)
 	if len(job.StepOutputsJSON) > 0 {
 		var stepOutputs map[string]map[string]domain.StepOutputValue
 		if err := json.Unmarshal(job.StepOutputsJSON, &stepOutputs); err != nil {
@@ -597,16 +598,27 @@ func (s *Service) ResolveJobOutputs(ctx context.Context, jobID int64) error {
 		}
 		for stepID, outputs := range stepOutputs {
 			for key, sov := range outputs {
-				outputCtx["steps."+stepID+".outputs."+key] = sov.Value
+				ctxKey := "steps." + stepID + ".outputs." + key
+				outputCtx[ctxKey] = sov.Value
+				if sov.Masked {
+					maskedSet[ctxKey] = true
+				}
 			}
 		}
 	}
 
 	resolved := make(map[string]domain.StepOutputValue)
 	for outputKey, template := range rawOutputs {
+		masked := false
+		for ctxKey := range maskedSet {
+			if strings.Contains(template, "${{ "+ctxKey+" }}") {
+				masked = true
+				break
+			}
+		}
 		resolved[outputKey] = domain.StepOutputValue{
 			Value:  resolveExpression(template, outputCtx),
-			Masked: false,
+			Masked: masked,
 		}
 	}
 
