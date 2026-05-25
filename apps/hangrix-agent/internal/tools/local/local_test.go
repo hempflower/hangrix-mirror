@@ -217,6 +217,88 @@ func TestEditMatchFailureContext(t *testing.T) {
 	}
 }
 
+// TestReadGutterFormat pins the read output gutter: a right-aligned 1-based
+// line number, a │ separator, then the line content verbatim. The │ (not a
+// TAB) is what lets the model tell the gutter apart from leading indentation,
+// so a regression to a TAB gutter reintroduces the indentation-copying hazard
+// that drove the agent to bash. Everything after the first │ must be the
+// file line byte-for-byte.
+func TestReadGutterFormat(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.go")
+	// Tab-indented content: the gutter must not blend into the leading tabs.
+	content := "package main\n\nfunc main() {\n\tx := 1\n\t\treturn\n}\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	res, err := tools["read"].Call(context.Background(), mustJSON(map[string]any{"path": path}))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var rf struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(mustReJSON(res), &rf); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	got := strings.Split(rf.Content, "\n")
+	// Line 4 is "\tx := 1": gutter, then a single tab of indentation. With 6
+	// lines the width is 1, so the rendered line is exactly "4│\tx := 1".
+	if want := "4│\tx := 1"; got[3] != want {
+		t.Errorf("line 4 = %q, want %q", got[3], want)
+	}
+	// The content after the first │ must equal the original file line exactly.
+	orig := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
+	for i, l := range got {
+		bar := strings.IndexRune(l, '│')
+		if bar < 0 {
+			t.Fatalf("line %d missing │ gutter: %q", i+1, l)
+		}
+		// Strip the gutter rune (3 bytes for │) and compare to the source.
+		if rest := l[bar+len("│"):]; rest != orig[i] {
+			t.Errorf("line %d content after │ = %q, want verbatim %q", i+1, rest, orig[i])
+		}
+	}
+}
+
+// TestEditFailurePreviewUsesGutter pins #3: when a match fails, the file
+// preview embedded in the error uses the *same* gutter as `read` (line number
+// + │), not a separate 2-space-prefixed representation. One consistent format
+// means the model never has to guess which prefix to strip when copying text
+// to retry the edit.
+func TestEditFailurePreviewUsesGutter(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+	content := "alpha\nbeta\ngamma\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := byName(local.All())
+	if _, err := tools["read"].Call(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	_, err := tools["edit"].Call(context.Background(), mustJSON(map[string]any{
+		"path": path, "mode": "replace", "find": "nonexistent", "replace": "x",
+	}))
+	if err == nil {
+		t.Fatal("expected a match-failure error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "1│alpha") {
+		t.Errorf("preview should use the read gutter (expected \"1│alpha\"); got:\n%s", msg)
+	}
+	// The old 2-space-prefixed representation must be gone for file lines.
+	if strings.Contains(msg, "  alpha") {
+		t.Errorf("preview should not use the old 2-space prefix; got:\n%s", msg)
+	}
+}
+
 // TestEditAnchorNotFoundContext verifies that when an anchor doesn't match,
 // the error shows the file content so the LLM can fix the anchor text.
 func TestEditAnchorNotFoundContext(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	gitignore "github.com/denormal/go-gitignore"
@@ -23,6 +24,33 @@ import (
 // generated file.
 const readDefaultLimit = 2000
 
+// gutterSep separates the line-number gutter from verbatim file content in
+// `read` output. Unlike a TAB (the previous separator) it can never be
+// confused with leading indentation, so the model can recover the exact bytes
+// of any line by taking everything after the first gutterSep on that line.
+const gutterSep = "│"
+
+// gutterWidth returns the right-alignment width for line numbers up to and
+// including maxLine, so every gutterSep lands in the same column.
+func gutterWidth(maxLine int) int {
+	if maxLine < 1 {
+		return 1
+	}
+	return len(strconv.Itoa(maxLine))
+}
+
+// formatGutterLine renders one file line for `read`-style output:
+//
+//	"  93│<content>"
+//
+// (right-aligned line number, gutterSep, then the line verbatim). Everything
+// after the first gutterSep is the byte-exact content of the line. The `read`
+// tool and the `edit` match-failure preview share this so the model only ever
+// sees one representation of a file.
+func formatGutterLine(lineNo, width int, content string) string {
+	return fmt.Sprintf("%*d%s%s", width, lineNo, gutterSep, content)
+}
+
 type readArgs struct {
 	Path   string `json:"path"`
 	Offset int    `json:"offset"`
@@ -35,7 +63,7 @@ func newReadTool(t *ReadTracker) Tool { return &readTool{tracker: t} }
 
 func (t *readTool) Name() string { return "read" }
 func (t *readTool) Description() string {
-	return "Read a UTF-8 text file. Lines are returned with 1-based line numbers as a TAB-prefixed gutter (e.g. \"42\\thello\"). Defaults to the first 2000 lines; use offset/limit to page."
+	return "Read a UTF-8 text file. Each line is rendered as a right-aligned 1-based line number, a │ separator, then the line content verbatim (e.g. \"42│hello\"; an indented line looks like \"42│\\thello\"). Everything after the first │ is the exact bytes of that line including leading tabs/spaces — when copying text into the 'edit' tool, copy from just after the │ and never include the number or the │ itself. Defaults to the first 2000 lines; use offset/limit to page."
 }
 func (t *readTool) Schema() map[string]any {
 	return map[string]any{
@@ -78,10 +106,14 @@ func (t *readTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 	// JS / generated SQL — lift the default to avoid spurious errors.
 	sc.Buffer(make([]byte, 0, 64*1024), 4<<20)
 
+	type row struct {
+		no   int
+		text string
+	}
 	var (
-		lines    []string
-		lineNo   = 1
-		emitted  = 0
+		rows      []row
+		lineNo    = 1
+		emitted   = 0
 		truncated bool
 	)
 	for sc.Scan() {
@@ -90,13 +122,25 @@ func (t *readTool) Call(_ context.Context, raw json.RawMessage) (any, error) {
 				truncated = true
 				break
 			}
-			lines = append(lines, fmt.Sprintf("%d\t%s", lineNo, sc.Text()))
+			rows = append(rows, row{lineNo, sc.Text()})
 			emitted++
 		}
 		lineNo++
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
+	}
+	// Right-align line numbers to the widest number actually emitted so every
+	// │ lands in the same column and the model reads indentation against a
+	// fixed baseline.
+	maxNo := a.Offset
+	if n := len(rows); n > 0 {
+		maxNo = rows[n-1].no
+	}
+	width := gutterWidth(maxNo)
+	lines := make([]string, len(rows))
+	for i, r := range rows {
+		lines[i] = formatGutterLine(r.no, width, r.text)
 	}
 	t.tracker.MarkRead(a.Path)
 	return map[string]any{
@@ -538,17 +582,22 @@ func findOccurrenceInRegion(original, find string, lineStart, lineEnd, anchorLin
 // search fails. It includes a preview of the searched region so the LLM can
 // see what's actually in the file without an extra round-trip.
 func matchFailureError(lines []string, find, path, kind string, advice string) error {
-	// Build a preview: first 8 lines of the search region.
+	// Build a preview of the first lines of the file, rendered with the exact
+	// same gutter format `read` uses (line number + │). One consistent
+	// representation means the model never has to guess which prefix to strip
+	// when it copies text to retry.
 	previewN := len(lines)
 	if previewN > 8 {
 		previewN = 8
 	}
+	width := gutterWidth(previewN)
 	var preview strings.Builder
-	for _, l := range lines[:previewN] {
-		fmt.Fprintf(&preview, "  %s\n", l)
+	for i, l := range lines[:previewN] {
+		preview.WriteString(formatGutterLine(i+1, width, l))
+		preview.WriteByte('\n')
 	}
 	if len(lines) > previewN {
-		preview.WriteString(fmt.Sprintf("  … (%d more lines)\n", len(lines)-previewN))
+		fmt.Fprintf(&preview, "  … (%d more lines)\n", len(lines)-previewN)
 	}
 
 	return fmt.Errorf(
