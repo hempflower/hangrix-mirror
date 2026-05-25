@@ -1305,6 +1305,15 @@ func (h *Handler) tryDeleteContributionBranches(ctx context.Context, repoID int6
 				result.Reason = "delete_failed"
 			} else {
 				result.Deleted = true
+				// go-git Storer.RemoveReference bypasses hooks, so
+				// SyncContribution never sees the zero-oid update.
+				// Mark the contribution closed here explicitly.
+				contribRef := "refs/heads/" + ref.Name
+				if c, cerr := h.contributions.GetContributionByRef(ctx, contributionIssueID(ctx, h, repoID, issueNumber), contribRef); cerr == nil && c != nil && !c.Status.Terminal() {
+					if _, cerr = h.contributions.SetContributionStatus(ctx, c.ID, domain.ContribStatusClosed); cerr != nil {
+						log.Printf("issue: close contribution %d after branch delete: %v", c.ID, cerr)
+					}
+				}
 			}
 		}
 		results = append(results, result)
