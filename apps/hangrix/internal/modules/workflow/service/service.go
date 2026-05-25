@@ -77,6 +77,11 @@ func (s *Service) ScanWorkflowConfigs(ctx context.Context, repo Ref) ([]*workflo
 		// Still return what we could parse; individual files may be usable
 	}
 
+	if err := workflowsconfig.ValidateCrossReferencesFull(configs); err != nil {
+		log.Printf("workflow: repo %d cross-reference validation: %v", repo.ID, err)
+		// Still return what we could parse; individual files may be usable
+	}
+
 	return configs, nil
 }
 
