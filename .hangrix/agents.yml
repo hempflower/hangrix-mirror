@@ -79,7 +79,8 @@ roles:
       - release_upload_asset
     prompt_file: .hangrix/prompts/maintainer.md
     llm:
-      reasoning_effort: max   # bump only this; model / max_*_tokens inherit from team
+      model: deepseek-v4-flash
+      reasoning_effort: max   # max_*_tokens inherit from team
   product-designer:
     triggers:
       issue.comment:
