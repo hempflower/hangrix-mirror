@@ -954,7 +954,7 @@
       "role": "Role {role}",
       "timeline": {
         "contributionPushed": "{name} pushed contribution {ref}",
-        "contributionMerged": "{name}'s contribution {title} was merged → {sha}",
+        "contributionMerged": "{name} merged {contributor}'s contribution {title} → {sha}",
         "contributionRejected": "{name} rejected contribution {ref} — {reason}",
         "contributionClosed": "{name} closed contribution {ref}"
       }
