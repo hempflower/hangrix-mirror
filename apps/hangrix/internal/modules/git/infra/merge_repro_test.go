@@ -83,9 +83,8 @@ roles:
 	runGit(t, work, "push", "origin", "issue/1")
 
 	// Push a divergent commit on main so the merge has to go through
-	// the real three-way path (not fast-forward) — that's the path
-	// that re-builds the merged tree object via mergeTrees +
-	// buildTreeFromFlatMap. Suspecting a tree-flattening bug.
+	// the real three-way path (not fast-forward) — the `git merge-tree`
+	// path that produces the merged tree object.
 	work2 := filepath.Join(dir, "work2")
 	runGit(t, "", "clone", bare, work2)
 	mustWrite(t, filepath.Join(work2, "README.md"), []byte("hello\n"))
@@ -213,8 +212,8 @@ func TestMergeTreeSortHyphenVsDir(t *testing.T) {
 	runGit(t, work2, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-m", "add server dir")
 	runGit(t, work2, "push", "origin", "main")
 
-	// Three-way merge — this is the path that exercises mergeTrees +
-	// buildTreeFromFlatMap.
+	// Three-way merge — exercises the `git merge-tree` path, which builds
+	// correctly-sorted trees natively.
 	mergeSHA, mode, err := g.MergeBranch(bare, "main", "issue/1", "Merge issue 1",
 		domain.Signature{Name: "Tester", Email: "tester@example.com"})
 	if err != nil {
@@ -232,4 +231,3 @@ func TestMergeTreeSortHyphenVsDir(t *testing.T) {
 		t.Fatalf("server/config.yml content: %q", string(cfg))
 	}
 }
-

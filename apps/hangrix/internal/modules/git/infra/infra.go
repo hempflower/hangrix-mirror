@@ -1050,28 +1050,17 @@ func (g *GoGit) MergeBranch(path, intoBranch, fromRef, message string, author do
 	}
 
 	// Case 5: merge-commit — create a single merge commit with parents
-	// (intoBranch, fromRef) using the merge-base for the three-way merge.
-	bases, err := intoCommit.MergeBase(fromCommit)
-	if err != nil || len(bases) == 0 {
-		return "", "", fmt.Errorf("merge: merge-base: %w", err)
-	}
-
-	baseTree, err := bases[0].Tree()
+	// (intoBranch, fromRef). `git merge-tree` runs a real line-level
+	// three-way merge: it picks the merge base(s) itself, auto-resolves
+	// non-overlapping edits to the same file, and writes the merged tree
+	// into the object store. We then hang a new merge commit off that tree.
+	// Only genuine overlapping-hunk conflicts surface as ErrMergeConflict.
+	mergedTreeHash, err := mergeTreeCLI(path, intoHash.String(), fromHash.String())
 	if err != nil {
-		return "", "", fmt.Errorf("merge: base tree: %w", err)
-	}
-	intoTree, err := intoCommit.Tree()
-	if err != nil {
-		return "", "", fmt.Errorf("merge: into tree: %w", err)
-	}
-	fromTree, err := fromCommit.Tree()
-	if err != nil {
-		return "", "", fmt.Errorf("merge: from tree: %w", err)
-	}
-
-	mergedTreeHash, err := mergeTrees(repo, baseTree, intoTree, fromTree)
-	if err != nil {
-		return "", "", domain.ErrMergeConflict
+		if errors.Is(err, domain.ErrMergeConflict) {
+			return "", "", err
+		}
+		return "", "", fmt.Errorf("merge: %w", err)
 	}
 
 	when := author.When
@@ -1108,178 +1097,66 @@ func (g *GoGit) MergeBranch(path, intoBranch, fromRef, message string, author do
 	return mergeHash.String(), "merge-commit", nil
 }
 
-// mergeTrees performs a three-way tree merge keyed by path. For each path
-// touched in either side relative to base:
-//   - identical changes on both sides → keep the result.
-//   - one side changed, other side untouched → keep the changed side.
-//   - both sides changed differently → ErrMergeConflict (we do not attempt
-//     line-level resolution; M4 leaves that to a future "rebase first"
-//     workflow).
+// mergeTreeCLI performs a real three-way merge of fromHash into intoHash via
+// `git merge-tree --write-tree`. Unlike a file-granular blob compare, it
+// resolves non-overlapping edits to the same file automatically and reports
+// only genuine overlapping-hunk conflicts (the M4 "rebase first" workflow no
+// longer applies to merely co-touched files). It finds the merge base(s)
+// itself — recursively merging criss-cross bases like git's ort strategy —
+// and writes the merged tree into the bare repo's object store, returning that
+// tree's hash for the caller to build a merge commit on.
 //
-// Paths absent from base but present in both sides are merged only if
-// identical; otherwise conflict.
-func mergeTrees(repo *git.Repository, base, into, from *object.Tree) (plumbing.Hash, error) {
-	flatten := func(t *object.Tree) (map[string]flatTreeEntry, error) {
-		out := map[string]flatTreeEntry{}
-		if t == nil {
-			return out, nil
+// Exit status maps to: 0 → clean merge (stdout is the tree OID); 1 → conflicts
+// (domain.ErrMergeConflict, with the conflicting paths wrapped into the
+// message); anything else → a merge we can't complete (e.g. unrelated
+// histories), surfaced as a plain error.
+func mergeTreeCLI(path, intoHash, fromHash string) (plumbing.Hash, error) {
+	cmd := exec.Command("git", "merge-tree", "--write-tree", "--name-only",
+		intoHash, fromHash)
+	cmd.Dir = path
+	cmd.Env = append(os.Environ(), "GIT_DIR="+path)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	lines := strings.Split(strings.Trim(stdout.String(), "\n"), "\n")
+
+	if err == nil {
+		// Clean merge: the first stdout line is the merged tree OID.
+		if len(lines) == 0 || strings.TrimSpace(lines[0]) == "" {
+			return plumbing.ZeroHash, fmt.Errorf("merge-tree: empty output")
 		}
-		w := object.NewTreeWalker(t, true, nil)
-		defer w.Close()
-		for {
-			name, e, err := w.Next()
-			if err == io.EOF {
+		return plumbing.NewHash(strings.TrimSpace(lines[0])), nil
+	}
+
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return plumbing.ZeroHash, fmt.Errorf("merge-tree: %w", err)
+	}
+	if ee.ExitCode() == 1 {
+		// Conflicted: with --name-only the lines after the OID are the
+		// conflicting paths, terminated by a blank line.
+		var files []string
+		for _, l := range lines[1:] {
+			if strings.TrimSpace(l) == "" {
 				break
 			}
-			if err != nil {
-				return nil, err
-			}
-			if e.Mode == filemode.Dir {
-				continue
-			}
-			out[name] = flatTreeEntry{hash: e.Hash, mode: e.Mode}
+			files = append(files, l)
 		}
-		return out, nil
-	}
-
-	baseMap, err := flatten(base)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("merge: walk base: %w", err)
-	}
-	intoMap, err := flatten(into)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("merge: walk into: %w", err)
-	}
-	fromMap, err := flatten(from)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("merge: walk from: %w", err)
-	}
-
-	paths := map[string]struct{}{}
-	for p := range baseMap {
-		paths[p] = struct{}{}
-	}
-	for p := range intoMap {
-		paths[p] = struct{}{}
-	}
-	for p := range fromMap {
-		paths[p] = struct{}{}
-	}
-
-	merged := map[string]flatTreeEntry{}
-	for p := range paths {
-		b, bok := baseMap[p]
-		i, iok := intoMap[p]
-		f, fok := fromMap[p]
-
-		intoChanged := iok != bok || (iok && (i.hash != b.hash || i.mode != b.mode))
-		fromChanged := fok != bok || (fok && (f.hash != b.hash || f.mode != b.mode))
-
-		switch {
-		case !intoChanged && !fromChanged:
-			if iok {
-				merged[p] = i
-			}
-		case intoChanged && !fromChanged:
-			if iok {
-				merged[p] = i
-			}
-		case !intoChanged && fromChanged:
-			if fok {
-				merged[p] = f
-			}
-		default:
-			// Both sides changed. Identical resolution OK; otherwise conflict.
-			if iok && fok && i.hash == f.hash && i.mode == f.mode {
-				merged[p] = i
-				continue
-			}
+		if len(files) == 0 {
 			return plumbing.ZeroHash, domain.ErrMergeConflict
 		}
+		return plumbing.ZeroHash, fmt.Errorf("%w: conflicting paths: %s",
+			domain.ErrMergeConflict, strings.Join(files, ", "))
 	}
 
-	return buildTreeFromFlatMap(repo, merged)
-}
-
-type flatTreeEntry struct {
-	hash plumbing.Hash
-	mode filemode.FileMode
-}
-
-// buildTreeFromFlatMap rebuilds nested object.Tree objects from a flattened
-// "full path → entry" map. Recurses by grouping entries that share a leading
-// segment into subtrees, writing each tree to the storer and stitching the
-// hashes back up.
-func buildTreeFromFlatMap(repo *git.Repository, flat map[string]flatTreeEntry) (plumbing.Hash, error) {
-	return writeSubtree(repo, "", flat)
-}
-
-func writeSubtree(repo *git.Repository, prefix string, flat map[string]flatTreeEntry) (plumbing.Hash, error) {
-	type dirAccum struct {
-		entries map[string]flatTreeEntry
+	msg := strings.TrimSpace(stderr.String())
+	if msg == "" {
+		msg = strings.TrimSpace(stdout.String())
 	}
-	immediate := map[string]flatTreeEntry{}
-	subtrees := map[string]*dirAccum{}
-
-	for full, e := range flat {
-		var rel string
-		if prefix == "" {
-			rel = full
-		} else if strings.HasPrefix(full, prefix+"/") {
-			rel = strings.TrimPrefix(full, prefix+"/")
-		} else {
-			continue
-		}
-		if rel == "" {
-			continue
-		}
-		slash := strings.Index(rel, "/")
-		if slash < 0 {
-			immediate[rel] = e
-			continue
-		}
-		dir := rel[:slash]
-		acc, ok := subtrees[dir]
-		if !ok {
-			acc = &dirAccum{entries: map[string]flatTreeEntry{}}
-			subtrees[dir] = acc
-		}
-		acc.entries[full] = e
-	}
-
-	tree := &object.Tree{}
-	for name, e := range immediate {
-		tree.Entries = append(tree.Entries, object.TreeEntry{
-			Name: name,
-			Mode: e.mode,
-			Hash: e.hash,
-		})
-	}
-	for name := range subtrees {
-		var subPrefix string
-		if prefix == "" {
-			subPrefix = name
-		} else {
-			subPrefix = prefix + "/" + name
-		}
-		subHash, err := writeSubtree(repo, subPrefix, flat)
-		if err != nil {
-			return plumbing.ZeroHash, err
-		}
-		tree.Entries = append(tree.Entries, object.TreeEntry{
-			Name: name,
-			Mode: filemode.Dir,
-			Hash: subHash,
-		})
-	}
-
-	sort.Sort(object.TreeEntrySorter(tree.Entries))
-
-	obj := repo.Storer.NewEncodedObject()
-	if err := tree.Encode(obj); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("merge: encode tree: %w", err)
-	}
-	return repo.Storer.SetEncodedObject(obj)
+	return plumbing.ZeroHash, fmt.Errorf("merge-tree (exit %d): %s", ee.ExitCode(), msg)
 }
 
 // DiffMergeBase computes the diff from the merge-base of base and topic to
@@ -1620,32 +1497,7 @@ func (g *GoGit) CheckAutoMerge(path, baseRef, headRef string) (bool, string, str
 	if err != nil {
 		return false, "unknown", "cannot resolve head ref", nil
 	}
-	baseCommit, err := repo.CommitObject(baseHash)
-	if err != nil {
-		return false, "unknown", "cannot load base commit", nil
-	}
-	headCommit, err := repo.CommitObject(headHash)
-	if err != nil {
-		return false, "unknown", "cannot load head commit", nil
-	}
-	bases, err := baseCommit.MergeBase(headCommit)
-	if err != nil || len(bases) == 0 {
-		return false, "unknown", "cannot determine merge-base", nil
-	}
-
-	mbTree, err := bases[0].Tree()
-	if err != nil {
-		return false, "unknown", "cannot load merge-base tree", nil
-	}
-	baseTree, err := baseCommit.Tree()
-	if err != nil {
-		return false, "unknown", "cannot load base tree", nil
-	}
-	headTree, err := headCommit.Tree()
-	if err != nil {
-		return false, "unknown", "cannot load head tree", nil
-	}
-	if _, err := mergeTrees(repo, mbTree, baseTree, headTree); err != nil {
+	if _, err := mergeTreeCLI(path, baseHash.String(), headHash.String()); err != nil {
 		if errors.Is(err, domain.ErrMergeConflict) {
 			return false, "conflicted", "merge would conflict — resolve conflicts manually", nil
 		}
@@ -1963,5 +1815,3 @@ func encodeAndStoreTree(storer storage.Storer, entries []object.TreeEntry) (plum
 	}
 	return h, nil
 }
-
-

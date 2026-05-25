@@ -329,7 +329,10 @@ func (r *Registry) issueMergeTool() *agentapidomain.Tool {
 			)
 			if err != nil {
 				if errors.Is(err, gitdomain.ErrMergeConflict) {
-					return errorResult("merge conflict — resolve conflicts manually"), nil
+					return errorResult(fmt.Sprintf(
+						"merge conflict with `%s` — the issue branch can't be pushed directly. Resolve on a new contribution branch off the latest `issue/%d` (`git fetch origin && git rebase origin/issue/%d`), land it via the review/apply flow, then retry `issue_merge`.",
+						scope.issue.BaseBranch, scope.issue.Number, scope.issue.Number,
+					)), nil
 				}
 				return errorResult("merge: " + err.Error()), nil
 			}

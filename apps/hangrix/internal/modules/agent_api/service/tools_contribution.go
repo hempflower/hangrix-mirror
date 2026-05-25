@@ -213,7 +213,7 @@ func (r *Registry) contributionApplyTool() *agentapidomain.Tool {
 			if err != nil {
 				if errors.Is(err, gitdomain.ErrMergeConflict) {
 					_ = r.deps.Contributions.SetContributionMergeable(ctx, c.ID, false, "conflicted")
-					return errorResult("merge conflict — contributor must rebase and re-push"), nil
+					return errorResult(fmt.Sprintf("merge conflict — contributor must rebase onto the latest `issue/%d` and push a NEW slug (this branch is immutable and now marked unmergeable)", scope.issue.Number)), nil
 				}
 				return errorResult("merge: " + err.Error()), nil
 			}
