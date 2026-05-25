@@ -304,6 +304,10 @@ func (d *WorkflowJobDriver) buildWorkflowEnv(job *client.WorkflowJob) (map[strin
 	if job.EventCauseID != "" {
 		env["HANGRIX_EVENT_CAUSE_ID"] = job.EventCauseID
 	}
+	// Platform API URL and workflow-scoped token for API calls from
+	// within workflow steps (e.g. creating releases via curl).
+	env["HANGRIX_PLATFORM_BASE_URL"] = d.BaseURL
+	env["HANGRIX_WORKFLOW_TOKEN"] = job.WorkflowToken
 	// Dispatch inputs already transformed to WORKFLOW_INPUT_* keys by
 	// the server; inject them as-is so steps can use $WORKFLOW_INPUT_REF etc.
 	for k, v := range job.Inputs {
