@@ -82,6 +82,16 @@ type Loop struct {
 	// is first crossed and disarm it after the next compact_session
 	// invocation OR a hard reset of the context window.
 	compactNudged bool
+
+	// reasoningTimeout is the per-call wall-clock ceiling for a single
+	// llm.Create() invocation. When exceeded the agent cancels the
+	// request and — if retries remain — retries with the same snapshot.
+	// <=0 disables this protection.
+	reasoningTimeout time.Duration
+	// reasoningTimeoutRetries is the number of retries AFTER the first
+	// timeout (total attempts = retries + 1). Only reasoning-timeout
+	// errors are retried at this level.
+	reasoningTimeoutRetries int
 }
 
 func NewLoop(
@@ -93,18 +103,22 @@ func NewLoop(
 	systemPrompt string,
 	async local.AsyncLifecycle,
 	compactTokenThreshold int,
+		reasoningTimeout time.Duration,
+		reasoningTimeoutRetries int,
 ) *Loop {
 	return &Loop{
-		in:                    in,
-		out:                   out,
-		llm:                   llmClient,
-		model:                 model,
-		registry:              registry,
-		system:                systemPrompt,
-		async:                 async,
-		maxToolRounds:         999999,
-		shutdownGrace:         5 * time.Second,
-		compactTokenThreshold: compactTokenThreshold,
+		in:                      in,
+		out:                     out,
+		llm:                     llmClient,
+		model:                   model,
+		registry:                registry,
+		system:                  systemPrompt,
+		async:                   async,
+		maxToolRounds:           999999,
+		shutdownGrace:           5 * time.Second,
+		compactTokenThreshold:   compactTokenThreshold,
+		reasoningTimeout:        reasoningTimeout,
+		reasoningTimeoutRetries: reasoningTimeoutRetries,
 	}
 }
 

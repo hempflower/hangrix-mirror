@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"time"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/config"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/ipc"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/llm"
@@ -39,6 +40,8 @@ func NewProvider(deps *Deps) *Loop {
 		deps.Assembled.Prompt,
 		deps.Async,
 		deps.Cfg.CompactTokenThreshold,
+		time.Duration(deps.Cfg.LLMReasoningTimeoutSeconds)*time.Second,
+		deps.Cfg.LLMReasoningTimeoutRetries,
 	)
 }
 
