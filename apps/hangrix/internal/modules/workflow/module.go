@@ -20,12 +20,14 @@ func Module() *ioc.Module {
 	// Infra: Postgres implementation of domain.Store
 	m.Provide(infra.NewPostgresRepo).ToInterface(new(domain.Store))
 
-	// Service: business logic; single instance satisfies Dispatcher
-	// and TagEventTrigger for cross-module tag-event production.
+	// Service: business logic; single instance satisfies Dispatcher,
+	// TagEventTrigger, and WorkflowTokenValidator for cross-module
+	// integration.
 	svc := m.Provide(service.New)
 	svc.ToSelf()
 	svc.ToInterface(new(domain.Dispatcher))
 	svc.ToInterface(new(domain.TagEventTrigger))
+	svc.ToInterface(new(domain.WorkflowTokenValidator))
 
 	// PushObserver: triggers repo.push_tag workflows on git tag push.
 	m.Provide(handler.NewPushObserver).ToInterface(new(repodomain.PushObserver))

@@ -6,13 +6,19 @@
 -- name: CreateWorkflowRun :one
 INSERT INTO workflow_runs (
     repo_id, workflow_name, source_file, status, event_name,
-    cause_id, ref, commit_sha, container_snapshot_json, trigger_payload_json
+    cause_id, ref, commit_sha, container_snapshot_json, trigger_payload_json,
+    workflow_token
 ) VALUES (
     sqlc.arg('repo_id'), sqlc.arg('workflow_name'), sqlc.arg('source_file'),
     'pending', sqlc.arg('event_name'),
     sqlc.narg('cause_id'), sqlc.arg('ref'), sqlc.arg('commit_sha'),
-    sqlc.narg('container_snapshot_json'), sqlc.narg('trigger_payload_json')
+    sqlc.narg('container_snapshot_json'), sqlc.narg('trigger_payload_json'),
+    sqlc.arg('workflow_token')
 ) RETURNING *;
+
+-- name: GetWorkflowRunByToken :one
+SELECT repo_id, status FROM workflow_runs
+WHERE workflow_token = sqlc.arg('token') AND workflow_token <> '';
 
 -- name: GetWorkflowRun :one
 SELECT * FROM workflow_runs WHERE id = sqlc.arg('id');
