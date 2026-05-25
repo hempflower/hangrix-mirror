@@ -1,0 +1,194 @@
+# Hangrix 仓库初始化参考
+
+> 这是一份面向 code agent 的操作参考。当你被要求初始化一个 Hangrix 仓库时，
+> 先 webfetch 读取本文件，再按项目目标生成最小可用的配置与初始代码。
+> 完整规范见仓库内 docs/ 目录。
+
+---
+
+## 1. 最小目录约定
+
+初始化 Hangrix 仓库需要在仓库根目录创建以下文件/目录：
+
+```
+.hangrix/
+├── agents.yml          # 必须：团队角色定义
+├── prompts/
+│   └── <role>.md       # 可选：每个 role 的系统提示词（不内联 prompt: 时使用）
+└── workflows/
+    └── *.yml           # 可选：CI/CD 工作流定义
+```
+
+- `agents.yml` 是唯一强制文件；prompts 和 workflows 按需创建。
+- `agents.yml` 中 `prompt:` 和 `prompt_file:` 互斥：前者内联提示词，后者引用 `.hangrix/prompts/<file>.md`。
+
+---
+
+## 2. agents.yml 核心 schema 摘要
+
+```yaml
+version: 1           # 固定值，当前仅支持 1
+
+container:           # 所有 role 共享的运行时环境
+  image: <image>     # 或 build.dockerfile（二选一）
+  # build:
+  #   dockerfile: .hangrix/agent.Dockerfile
+  #   context: .
+  #   args:
+  #     GO_VERSION: "1.26"
+  env:               # 可选。key 为大写 + 下划线；值支持 ${VAR_NAME} 引用仓库变量/机密
+    NODE_ENV: development
+  volumes:           # 可选。repo-scope 命名缓存，runner 本地 bind mount
+    - name: pnpm-store
+      mount: /caches/pnpm
+
+roles:               # 至少一个 role
+  <role-key>:        # 小写字母开头，1-39 字符：[a-z][a-z0-9-]*
+    prompt: ...      # 或 prompt_file: .hangrix/prompts/<file>.md
+    triggers:        # 至少一个触发条件
+      issue.opened: {}
+      issue.comment:
+        mentioned_only: true
+      commit.pushed:
+        paths: ["src/**"]
+        paths_ignore: ["docs/**"]
+    can:             # 可选。工具白名单；不写则全部可用
+      - read
+      - write
+      - bash
+    llm:             # 可选。覆盖团队级别的 LLM 配置
+      model: ...
+```
+
+关键约束：
+- `container.image` 和 `container.build` 互斥，必须二选一。
+- 每个 role 必须声明至少一个 `triggers`。
+- 每个 role 必须声明 `prompt` 或 `prompt_file`（互斥）。
+- Role key 命名规则：`^[a-z][a-z0-9-]{0,38}$`。
+- 未知字段会被静默丢弃（前向兼容），但值类型错误会被拒绝。
+- 完整 JSON Schema 见 `agent-config.md` 和 `llm.txt`（与本文件同源，均可通过 webfetch 读取）。
+
+---
+
+## 3. 常见角色模式
+
+### 3.1 单体/通用代码仓库
+
+```yaml
+roles:
+  maintainer:
+    prompt: "你是仓库维护者..."
+    triggers: { issue.comment: { mentioned_only: true } }
+    can: [read, write, edit, bash, glob, grep]
+  product-designer:
+    prompt: "你是产品设计师..."
+    triggers: { issue.opened: {} }
+  tester:
+    prompt: "你是测试工程师..."
+    triggers: { issue.comment: { mentioned_only: true } }
+    can: [read, bash, glob, grep]
+  developer:
+    prompt: "你是开发者..."
+    triggers: { issue.comment: { mentioned_only: true } }
+  developer-reviewer:
+    prompt: "你是代码审查者..."
+    triggers: { issue.comment: { mentioned_only: true } }
+```
+
+### 3.2 Web 应用
+
+```yaml
+roles:
+  maintainer:
+    prompt: ...
+    triggers: { issue.comment: { mentioned_only: true } }
+    can: [read, write, edit, bash, glob, grep]
+  product-designer:
+    prompt: ...
+    triggers: { issue.opened: {} }
+  tester:
+    prompt: ...
+    triggers: { issue.comment: { mentioned_only: true } }
+    can: [read, bash, glob, grep]
+  backend:
+    prompt: ...
+    triggers: { issue.comment: { mentioned_only: true } }
+  backend-reviewer:
+    prompt: ...
+    triggers: { issue.comment: { mentioned_only: true } }
+  frontend:
+    prompt: ...
+    triggers: { issue.comment: { mentioned_only: true } }
+  frontend-reviewer:
+    prompt: ...
+    triggers: { issue.comment: { mentioned_only: true } }
+```
+
+### 3.3 文档/内容仓库
+
+```yaml
+roles:
+  maintainer:
+    prompt: ...
+    triggers: { issue.comment: { mentioned_only: true } }
+    can: [read, write, edit, bash, glob, grep]
+  product-designer:
+    prompt: ...
+    triggers: { issue.opened: {} }
+  tester:
+    prompt: ...
+    triggers: { issue.comment: { mentioned_only: true } }
+    can: [read, bash, glob, grep]
+  writer:
+    prompt: ...
+    triggers: { issue.comment: { mentioned_only: true } }
+  writer-reviewer:
+    prompt: ...
+    triggers: { issue.comment: { mentioned_only: true } }
+```
+
+提示：具体 prompt 内容按项目需求编写；`product-designer` 通常监听 `issue.opened` 做需求分析，
+`maintainer` 监听 `issue.comment` 做调度，其余 role 在需要时被 @ 唤醒。
+
+---
+
+## 4. 容器选择原则
+
+- **优先选已有工具链的镜像**：如 `node:22-alpine`、`golang:1.26`、`python:3.13-slim`。
+  这些镜像自带包管理器和常用工具，无需额外安装。
+- **需要持久依赖时写 Dockerfile**：如果 roles 需要 apt/pnpm/cargo 等工具且镜像里没有，
+  写 `.hangrix/agent.Dockerfile` 并在 `container.build.dockerfile` 引用它。
+  不要在 agent 运行时每次临时安装 —— 这会浪费 token 和延迟。
+- **entrypoint 不填时默认行为**：runner 用 `/usr/bin/sleep infinity` 让容器成为被动 sandbox，
+  所有操作通过 `docker exec` 执行（`bash` 工具）。如果镜像自带 supervisor（如 s6-overlay），
+  设置 `entrypoint: ["/init"]` 让其接管 PID 1。
+- **volumes 缓存加速**：为包管理器配置命名缓存（pnpm-store、go-mod、pip-cache 等），
+  避免每次 session 重新下载依赖。
+
+---
+
+## 5. 初始化任务建议
+
+按以下顺序执行初始化，从小到大逐步验证：
+
+1. **补 README.md**：至少包含项目名和一句话描述。
+2. **补 .gitignore**：按语言/框架标准模板（node_modules/、__pycache__/、*.exe 等）。
+3. **补包清单**：package.json / go.mod / requirements.txt / Cargo.toml 等，锁定语言与版本。
+4. **补最小可运行入口**：一个能 `run` / `start` / `build` 的最小代码入口（单文件即可）。
+5. **补 agents.yml**：先只配最小 team（maintainer + product-designer + 1 个 implementer），
+   跑通一个 issue 闭环后再扩展。
+6. **补 prompts/*.md**：当 inline `prompt:` 超过 20 行时，改放到 `.hangrix/prompts/<role>.md`。
+7. **补 workflows/*.yml**：在 CI/CD 需求明确后按 `docs/workflow-system.md` 创建。
+
+---
+
+## 6. 避免事项
+
+- **不要生成过多 role**：3–5 个通常足够；每增加一个 role 就是多一个需要维护的 prompt 和触发条件。
+- **不要内联超长 prompt**：超过 20 行的 prompt 应写为 `.hangrix/prompts/<role>.md` 并用 `prompt_file:` 引用。
+- **不要假设运行时临时安装可持久化**：容器每次 session 从镜像启动，apt-get/pip install 不会保留。
+  需要持久依赖就写 Dockerfile。
+- **不要忽略平台工具约束**：`can:` 白名单决定 role 能调哪些工具；不写 `can:` = 全部可用，
+  但通常应按最小权限原则显式声明。
+- **不要使用中文 role key**：role key 只允许 `[a-z][a-z0-9-]*`，提示词内容用中文没问题。
+- **不要忘记 `.hangrix/` 目录本身就是 git 追踪的**：你的配置和 prompt 会随代码一起版本控制。

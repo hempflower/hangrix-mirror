@@ -424,12 +424,13 @@
     "visibilityPublicHint": "任何登录用户可以查看",
     "visibilityPrivateHint": "仅你和管理员可见",
     "defaultBranch": "默认分支",
-    "initReadme": "初始化仓库",
-    "initReadmeHint": "创建初始提交，包含 README.md 和 Agent 团队配置模板，可在下方调整。",
-    "agentConfig": {
-      "title": "智能体团队 yaml",
-      "subtitle": "随仓库创建的 .hangrix/agents.yml。可直接编辑，提交时自动校验。",
-      "reset": "重置为默认"
+    "initReadme": "用 README 初始化",
+    "initReadmeHint": "创建包含 README.md 的初始提交。之后可用你的 code agent 来初始化 Hangrix 配置。",
+    "agentInit": {
+      "title": "用你的 code agent 初始化这个仓库",
+      "hint": "把下面提示词粘贴给你的 agent；它会先读取参考 .txt，再按你的项目需求生成 Hangrix 配置与初始代码。",
+      "promptLabel": "提示词",
+      "refLink": "参考资料（.txt，可供 agent 用 webfetch 读取）"
     },
     "submit": "创建",
     "submitting": "创建中…",
