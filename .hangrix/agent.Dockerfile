@@ -97,6 +97,12 @@ RUN go install github.com/sqlc-dev/sqlc/cmd/sqlc@${SQLC_VERSION} \
  && go install github.com/pressly/goose/v3/cmd/goose@${GOOSE_VERSION} \
  && go install github.com/air-verse/air@v1.65.1
 
+# Playwright + Chrome for Testing — for browser-based verification (web role).
+# playwright install-deps pulls shared libraries chromium needs (libnss3, etc.).
+RUN npm install -g playwright \
+        && npx playwright install-deps chrome \
+        && npx playwright install chrome
+
 ENV PNPM_HOME=/caches/pnpm
 ENV PATH=$PNPM_HOME:/go/bin:$PATH
 ENV GOMODCACHE=/go/pkg/mod
