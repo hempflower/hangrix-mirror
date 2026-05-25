@@ -1101,6 +1101,9 @@
     },
     "failureTitle": "Session ended with an error",
     "failureNoDetail": "No error detail captured. Check the message log below for the agent's last frames.",
+    "toolError": "Tool error",
+    "toolErrorNoDetail": "No error detail available.",
+    "noEditDiff": "No diff available.",
     "actions": {
       "stop": "Stop",
       "stopping": "Stopping…",

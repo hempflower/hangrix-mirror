@@ -33,6 +33,7 @@ import {
   Telescope,
   Terminal,
   Trash2,
+  XCircle,
 } from 'lucide-vue-next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -447,6 +448,55 @@ function toolBadge(m: AgentMessage): ToolBadge | null {
   }
 }
 
+// isToolCallFailed checks whether a tool call produced an error result.
+// It combines tool-specific signals (bash non-zero exit, webfetch >= 400,
+// research partial failures) with generic error indicators (error / isError /
+// ok === false fields in the result) so that any failing tool call gets
+// highlighted without needing a per-tool case.
+function isToolCallFailed(m: AgentMessage): boolean {
+  const r = payloadResult(m)
+
+  // Generic signals: explicit error/ok fields in the result payload.
+  if (r.error != null || r.isError === true || r.ok === false) return true
+
+  // Tool-specific signals that already exist in toolBadge.
+  switch (m.tool_name) {
+    case 'bash': {
+      if (r.timed_out) return true
+      const exit = asNumber(r.exit_code)
+      if (exit != null && exit !== 0) return true
+      return false
+    }
+    case 'webfetch': {
+      const s = asNumber(r.status)
+      return s != null && s >= 400
+    }
+    case 'research': {
+      const results = Array.isArray(r.results) ? r.results as AnyRecord[] : []
+      if (results.length === 0) return false
+      return results.some((x) => x.outcome !== 'ok')
+    }
+    case 'edit': {
+      // The edit tool may signal failure with error in result.
+      return false
+    }
+    default:
+      return false
+  }
+}
+
+// toolErrorMessage returns a short error summary for the collapsed-row
+// badge, extracted from the result payload.
+function toolErrorMessage(m: AgentMessage): string {
+  const r = payloadResult(m)
+  // Prefer explicit error field.
+  const err = asString(r.error)
+  if (err) return truncate(err, 40)
+  // Bash: timed_out takes priority.
+  if (m.tool_name === 'bash' && r.timed_out) return 'timed out'
+  return ''
+}
+
 // editDiffLines renders the args of an edit into a unified-diff-style
 // preview the expanded view can iterate over. For 'replace' it stacks
 // the find lines (red) on top of the replace lines (green); 'insert' is
@@ -458,6 +508,24 @@ interface DiffLine { id: string; type: 'add' | 'del' | 'ctx'; text: string }
 
 function editDiffLines(m: AgentMessage): DiffLine[] {
   const a = payloadArgs(m)
+  const r = payloadResult(m)
+
+  // Prefer server-returned diff/patch from the result payload.
+  const resultDiff = asString(r.diff) || asString(r.patch)
+  if (resultDiff) {
+    const out: DiffLine[] = []
+    let n = 0
+    for (const line of resultDiff.split('\n')) {
+      const first = line.charAt(0)
+      if (first === '+') out.push({ id: `add-${n++}`, type: 'add', text: line.slice(1) })
+      else if (first === '-') out.push({ id: `del-${n++}`, type: 'del', text: line.slice(1) })
+      else if (first === '@') out.push({ id: `ctx-${n++}`, type: 'ctx', text: line })
+      else out.push({ id: `ctx-${n++}`, type: 'ctx', text: line })
+    }
+    return out
+  }
+
+  // Fallback: assemble diff from args (find/replace/text).
   const mode = asString(a.mode)
   const out: DiffLine[] = []
   let n = 0
@@ -919,24 +987,52 @@ async function deleteSession(s: AgentSession) {
                     <button
                       type="button"
                       class="group flex w-full flex-wrap items-center gap-x-2 gap-y-0.5 px-2 py-1 text-left hover:bg-muted/40"
+                      :class="{ 'bg-destructive/5 hover:bg-destructive/10 ring-1 ring-inset ring-destructive/15': isToolCallFailed(m) }"
                       @click="toggleExpand(m.seq)"
                     >
                       <ChevronRight
                         class="size-3 shrink-0 text-muted-foreground transition-transform"
                         :class="{ 'rotate-90': isExpanded(m.seq) }"
                       />
-                      <component :is="toolIcon(m.tool_name)" class="size-3.5 shrink-0 text-muted-foreground" />
+                      <component :is="toolIcon(m.tool_name)" class="size-3.5 shrink-0" :class="isToolCallFailed(m) ? 'text-destructive' : 'text-muted-foreground'" />
                       <span class="hidden shrink-0 font-mono text-[10px] text-muted-foreground sm:inline">{{ offsetFrom(selected.created_at, m.created_at) }}</span>
-                      <span class="shrink-0 text-xs font-semibold">{{ m.tool_name }}</span>
-                      <span class="min-w-0 truncate font-mono text-xs text-muted-foreground">{{ toolSummary(m) }}</span>
+                      <span class="shrink-0 text-xs font-semibold" :class="{ 'text-destructive': isToolCallFailed(m) }">{{ m.tool_name }}</span>
+                      <span class="min-w-0 truncate font-mono text-xs" :class="isToolCallFailed(m) ? 'text-destructive/80' : 'text-muted-foreground'">{{ toolSummary(m) }}</span>
+                      <!-- Error badge: shown when isToolCallFailed, with optional error message -->
                       <span
-                        v-if="toolBadge(m)"
+                        v-if="isToolCallFailed(m)"
+                        class="ml-auto shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] bg-destructive/15 text-destructive"
+                      >
+                        <XCircle class="mr-0.5 inline size-2.5 align-[-1px]" />
+                        {{ toolErrorMessage(m) || 'error' }}
+                      </span>
+                      <!-- Normal tool badge: only shown when NOT failed, to avoid double-badging -->
+                      <span
+                        v-else-if="toolBadge(m)"
                         class="ml-auto shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px]"
                         :class="toolBadge(m)!.cls"
                       >{{ toolBadge(m)!.text }}</span>
                     </button>
 
                     <div v-if="isExpanded(m.seq)" class="border-t bg-background/60">
+                      <!-- Error detail: shown at the top when tool call failed -->
+                      <div
+                        v-if="isToolCallFailed(m)"
+                        class="border-b border-destructive/20 bg-destructive/5 px-3 py-2"
+                      >
+                        <div class="mb-1 flex items-center gap-1.5 text-xs font-medium text-destructive">
+                          <AlertTriangle class="size-3.5" />
+                          {{ t('agentSessions.toolError') }}
+                        </div>
+                        <pre
+                          v-if="payloadResult(m).error"
+                          class="mt-1 whitespace-pre-wrap break-all rounded bg-destructive/10 p-2 font-mono text-[11px] text-destructive"
+                        >{{ payloadResult(m).error }}</pre>
+                        <p v-else class="text-xs text-muted-foreground">
+                          {{ t('agentSessions.toolErrorNoDetail') }}
+                        </p>
+                      </div>
+
                       <!-- read: numbered content (pre-formatted by the tool) -->
                       <template v-if="m.tool_name === 'read'">
                         <pre class="max-h-96 overflow-auto whitespace-pre-wrap break-all bg-zinc-950 p-2 font-mono text-[11px] leading-relaxed text-zinc-100">{{ readResultContent(m) || '(empty)' }}</pre>
@@ -944,17 +1040,22 @@ async function deleteSession(s: AgentSession) {
 
                       <!-- edit: inline find/replace diff -->
                       <template v-else-if="m.tool_name === 'edit'">
-                        <div class="space-y-0.5 px-2 py-2 font-mono text-[11px]">
-                          <div
-                            v-for="line in editDiffLines(m)"
-                            :key="line.id"
-                            class="whitespace-pre-wrap wrap-break-word px-1"
-                            :class="line.type === 'add'
-                              ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                              : line.type === 'del'
-                                ? 'bg-destructive/10 text-destructive line-through decoration-destructive/60'
-                                : 'text-muted-foreground'"
-                          ><span class="mr-1 inline-block w-3 select-none opacity-70">{{ line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' ' }}</span>{{ line.text }}</div>
+                        <template v-if="editDiffLines(m).length > 0">
+                          <div class="space-y-0.5 px-2 py-2 font-mono text-[11px]">
+                            <div
+                              v-for="line in editDiffLines(m)"
+                              :key="line.id"
+                              class="whitespace-pre-wrap wrap-break-word px-1"
+                              :class="line.type === 'add'
+                                ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                                : line.type === 'del'
+                                  ? 'bg-destructive/10 text-destructive line-through decoration-destructive/60'
+                                  : 'text-muted-foreground'"
+                            ><span class="mr-1 inline-block w-3 select-none opacity-70">{{ line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' ' }}</span>{{ line.text }}</div>
+                          </div>
+                        </template>
+                        <div v-else class="px-2 py-3 text-center text-xs text-muted-foreground">
+                          {{ t('agentSessions.noEditDiff') }}
                         </div>
                       </template>
 

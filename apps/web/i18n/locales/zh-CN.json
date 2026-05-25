@@ -1101,6 +1101,9 @@
     },
     "failureTitle": "会话异常退出",
     "failureNoDetail": "没有错误详情。查看下方消息日志中 agent 最后输出的几帧来定位原因。",
+    "toolError": "工具调用失败",
+    "toolErrorNoDetail": "无错误详情。",
+    "noEditDiff": "无可用的 diff。",
     "actions": {
       "stop": "停止",
       "stopping": "停止中…",
