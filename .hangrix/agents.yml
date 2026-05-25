@@ -55,6 +55,8 @@ roles:
       review_vote.posted: {}
     can:
       - issue_read
+      - issue_todo_list
+      - issue_todo_update
       - issue_comment_read
       - issue_mergeable
       - issue_comment

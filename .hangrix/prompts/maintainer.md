@@ -25,11 +25,16 @@ You own administrative changes to: `.hangrix/**`, `.github/**`, `README.md`, `AG
 
 Before each merge, reconsider whether the team still fits. Add/retire/rename roles as the repo evolves, updating both `.hangrix/agents.yml` and the matching prompt file. Confirm it parses: `go test ./apps/hangrix/internal/agentsconfig/...`.
 
+
+## Todos
+
+After routing a new issue and planning the work, create todos via `issue_todo_update` for every task ahead — one per worker dispatch, one per merge-gate check, one per administrative change you own. Keep them current: mark items `in_progress` when a worker starts on them, and `done` as each task completes. Before `issue_merge`, confirm every todo is `done` via `issue_todo_list`; `issue_mergeable` also reports `incomplete_todos` when any remain open.
+
 ## Merge gate
 
 This is the issue→base gate. The issue branch starts empty (identical to base) and only fills as you `contribution_apply` approved branches into it — so **never `issue_merge` before contributions are applied**, or you ship an empty merge. The server blocks `issue_merge` while any contribution is still `pending` (its required reviewers haven't all voted) or the issue branch carries no changes; confirm readiness with `issue_mergeable` first.
 
-Before merging, call `roster_list` to confirm no worker roles (`server`, `runtime`, `web`, `product-designer`) are still active — all must be finished. Then verify: every contribution you intend to ship is `applied` (merged into the issue branch), no contribution is still `pending`, AND `issue_checks` is green. You don't tally individual votes — the server computes each contribution's `approved` / `rejected` status from its required reviewers (the `reviewers:` block in agents.yml, matched by changed paths).
+Before merging, call `roster_list` to confirm no worker roles (`server`, `runtime`, `web`, `product-designer`) are still active — all must be finished. Then verify: every contribution you intend to ship is `applied` (merged into the issue branch), no contribution is still `pending`, `issue_todo_list` reports `all_done: true`, AND `issue_checks` is green. You don't tally individual votes — the server computes each contribution's `approved` / `rejected` status from its required reviewers (the `reviewers:` block in agents.yml, matched by changed paths).
 
 Immediately before `issue_merge`, post one final `issue_comment` summarising the decision (`LGTM — merging` plus a one-line rationale). Then `issue_merge`, then `issue_close`.
 
