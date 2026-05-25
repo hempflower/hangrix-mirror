@@ -24,47 +24,51 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/infra"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	userdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/user/domain"
+	workflowdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
 )
 
 // Handler contains the deps the release REST endpoints need.
 type Handler struct {
-	store      releasedomain.Store
-	assets     releasedomain.AssetStore
-	storage    *infra.AssetStorage
-	git        gitdomain.Git
-	repos      repodomain.Store
-	resolver   repodomain.PathResolver
-	orgResolver orgdomain.Resolver
-	middleware authdomain.Middleware
+	store         releasedomain.Store
+	assets        releasedomain.AssetStore
+	storage       *infra.AssetStorage
+	git           gitdomain.Git
+	repos         repodomain.Store
+	resolver      repodomain.PathResolver
+	orgResolver   orgdomain.Resolver
+	middleware    authdomain.Middleware
+	wfTokenValidator workflowdomain.WorkflowTokenValidator
 }
 
 type HandlerDeps struct {
-	Store       releasedomain.Store
-	Assets      releasedomain.AssetStore
-	Storage     *infra.AssetStorage
-	Git         gitdomain.Git
-	Repos       repodomain.Store
-	Resolver    repodomain.PathResolver
-	OrgResolver orgdomain.Resolver
-	Middleware  authdomain.Middleware
+	Store             releasedomain.Store
+	Assets            releasedomain.AssetStore
+	Storage           *infra.AssetStorage
+	Git               gitdomain.Git
+	Repos             repodomain.Store
+	Resolver          repodomain.PathResolver
+	OrgResolver       orgdomain.Resolver
+	Middleware        authdomain.Middleware
+	WfTokenValidator  workflowdomain.WorkflowTokenValidator
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
-		store:       deps.Store,
-		assets:      deps.Assets,
-		storage:     deps.Storage,
-		git:         deps.Git,
-		repos:       deps.Repos,
-		resolver:    deps.Resolver,
-		orgResolver: deps.OrgResolver,
-		middleware:  deps.Middleware,
+		store:         deps.Store,
+		assets:        deps.Assets,
+		storage:       deps.Storage,
+		git:           deps.Git,
+		repos:         deps.Repos,
+		resolver:      deps.Resolver,
+		orgResolver:   deps.OrgResolver,
+		middleware:    deps.Middleware,
+		wfTokenValidator: deps.WfTokenValidator,
 	}
 }
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Route("/api/repos/{owner}/{name}/releases", func(r chi.Router) {
-		r.Use(h.middleware.RequireAuth)
+		r.Use(h.authGate)
 		r.Get("/", h.list)
 		r.Post("/", h.create)
 		r.Get("/{id}", h.get)
@@ -74,6 +78,26 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Post("/{id}/assets", h.uploadAsset)
 		r.Delete("/{id}/assets/{assetID}", h.deleteAsset)
 		r.Get("/{id}/assets/{assetID}/download", h.downloadAsset)
+	})
+}
+
+// authGate is a middleware that tries workflow token auth first, then falls
+// back to cookie-based session auth. This allows workflow containers to call
+// the release API with a Bearer token without needing a session cookie.
+func (h *Handler) authGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 1. Try workflow token (Bearer hangrix_wf_...).
+		if h.wfTokenValidator != nil {
+			tok, err := bearerTokenFromHeader(r)
+			if err == nil && strings.HasPrefix(tok, "hangrix_wf_") {
+				if _, err := h.wfTokenValidator.ValidateWorkflowToken(r.Context(), tok); err == nil {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+		}
+		// 2. Fall back to cookie auth.
+		h.middleware.RequireAuth(next).ServeHTTP(w, r)
 	})
 }
 
@@ -606,6 +630,23 @@ func (h *Handler) downloadAsset(w http.ResponseWriter, r *http.Request) {
 
 // ---- Helpers ----
 
+// bearerTokenFromHeader extracts the Bearer token from the Authorization header.
+func bearerTokenFromHeader(r *http.Request) (string, error) {
+	h := r.Header.Get("Authorization")
+	if h == "" {
+		return "", errors.New("missing authorization header")
+	}
+	const pfx = "Bearer "
+	if !strings.HasPrefix(h, pfx) {
+		return "", errors.New("authorization must be Bearer")
+	}
+	tok := strings.TrimSpace(h[len(pfx):])
+	if tok == "" {
+		return "", errors.New("empty bearer token")
+	}
+	return tok, nil
+}
+
 var safeRefRe = regexp.MustCompile(`^[A-Za-z0-9._\-/]{1,200}$`)
 
 func isSafeRefName(name string) bool {
@@ -675,6 +716,18 @@ func (h *Handler) loadRelease(w http.ResponseWriter, r *http.Request, repo *repo
 }
 
 func (h *Handler) checkWrite(w http.ResponseWriter, r *http.Request, repo *repodomain.Repo) bool {
+	// First, try workflow token auth (Bearer hangrix_wf_...).
+	if h.wfTokenValidator != nil {
+		tok, err := bearerTokenFromHeader(r)
+		if err == nil && strings.HasPrefix(tok, "hangrix_wf_") {
+			tokenRepoID, err := h.wfTokenValidator.ValidateWorkflowToken(r.Context(), tok)
+			if err == nil && tokenRepoID == repo.ID {
+				return true
+			}
+		}
+	}
+
+	// Fall back to user (cookie) auth.
 	caller, _ := authdomain.UserFromRequest(r)
 	can, err := canWriteRepo(r.Context(), h.orgResolver, caller, repo)
 	if err != nil || !can {
