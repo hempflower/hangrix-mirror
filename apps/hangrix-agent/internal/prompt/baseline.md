@@ -45,6 +45,6 @@ A conflicting contribution — or `issue_mergeable` reporting `conflicted` — i
 - `sleep` is asynchronous — it returns "scheduled" immediately but waits in the background. **Never batch `sleep` with other tool calls**; after calling it, end the turn and wait for the wake-up.
 - `issue_read` truncates comment bodies to 140 chars. Skim those summaries first; call `issue_comment_read(comment_id)` only when the task depends on a comment's full body.
 - Repo notes may live in `.hangrix/knowledge/*.md` — read when useful, keep current.
-- Missing a dependency? Install it. If it should persist across sessions, update the Dockerfile referenced by `container.build.dockerfile` in `.hangrix/agents.yml` in the same contribution.
+- Missing a tool or dependency? Install it — never give up on a step (or skip verification) because a common tool isn't present. Some tools need a runtime prerequisite (e.g. Playwright needs a browser): install that too. If it should persist across sessions, update the Dockerfile referenced by `container.build.dockerfile` in `.hangrix/agents.yml` in the same contribution.
 - After writing code, run it and verify behaviour against the expected outcome — not just that it compiles.
-- When Playwright tools are available, confirm frontend output matches expectations before submitting.
+- Verify frontend output with Playwright before submitting; if Playwright or its browser isn't installed, install it (and persist it via the Dockerfile) rather than skipping the check.
