@@ -243,7 +243,17 @@ jobs:
 
 #### `steps`
 
-v1 只支持 shell step：
+v1 支持两种 step 类型，由 `type` 字段区分：
+
+##### 通用字段
+
+所有 step 共享以下字段：
+
+- `id: string`：可选，约束 `[a-z][a-z0-9-]*`。用于 step outputs 引用（如 `${{ steps.build.outputs.version }}`）。未指定时 runner 自动分配 1-based 序号（`"1"`, `"2"`, …）。
+- `name: string`：可选展示名，最大 200 字符。
+- `type: string`：可选，值为 `run` 或 `release`。**省略时等价于 `type: run`**，保证向后兼容。
+
+##### `type: run`（shell 步骤，默认）
 
 ```yaml
 steps:
@@ -252,11 +262,55 @@ steps:
   - run: pnpm lint
 ```
 
-字段：
+专属字段：
 
-- `id: string`：可选，约束 `[a-z][a-z0-9-]*`。用于 step outputs 引用（如 `${{ steps.build.outputs.version }}`）。未指定时 runner 自动分配 1-based 序号（`"1"`, `"2"`, …）。
-- `name: string`：可选展示名
 - `run: string`：必填，使用 `bash -lc` 执行。支持 `${{ steps.<id>.outputs.<key> }}` 模板插值引用前序步骤的输出。
+
+`type: run` 步骤**不接受** `tag`、`notes`、`draft`、`assets` 字段。
+
+##### `type: release`（创建 Release 步骤）
+
+```yaml
+steps:
+  - id: create-release
+    type: release
+    tag: "v1.0.0"
+    notes: |
+      Release for v1.0.0
+      Commit: ${{ steps.build.outputs.sha }}
+    assets:
+      - dist/hangrix-linux-amd64.tar.gz
+      - path: dist/checksums.txt
+        name: SHA256SUMS
+    draft: false
+```
+
+专属字段：
+
+- `tag: string`：**必填**，要创建的 release 对应的 tag 名。该 tag 必须已存在于 bare repo 中（`refs/tags/<tag>`）。
+- `notes: string`：可选，release 说明（markdown）。
+- `draft: bool`：可选，默认 `true`。`false` 时创建后自动 publish。
+- `assets: []asset`：可选，要上传的附件列表。每个 asset 可以是：
+  - 纯字符串：文件路径（asset 名默认为文件 basename）
+  - 对象形式：`path`（必填）+ `name`（可选，覆盖 asset 文件名）
+
+`type: release` 步骤**不接受** `run` 字段。`tag`、`notes`、`assets[].path`、`assets[].name` 均支持 `${{ steps.<id>.outputs.<key> }}` 插值。
+
+`release` 步骤是 **runner 内建步骤**：runner 直接调用平台 release API（`POST /api/repos/{owner}/{name}/releases` 等），不经过 docker exec shell。文件从当前 job checkout/workdir 读取。
+
+**固定 outputs**（成功后自动写入，可供后续 step 引用）：
+
+| output key | 类型 | 说明 |
+|---|---|---|
+| `release_id` | string | 创建的 release ID |
+| `tag` | string | release 的 tag 名 |
+| `draft` | string | `"true"` 或 `"false"` |
+| `published` | string | `"true"` 或 `"false"` |
+| `release_url` | string | release 页面 URL |
+
+##### 未知 `type`
+
+指定 `type` 为 `run` / `release` 之外的任意字符串会触发解析错误。
 
 v1 **不支持**：
 

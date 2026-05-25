@@ -3,6 +3,7 @@ package workflowsconfig
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -27,9 +28,14 @@ type jobWire struct {
 }
 
 type stepWire struct {
-	Id   string `yaml:"id"`
-	Name string `yaml:"name"`
-	Run  string `yaml:"run"`
+	Id     string      `yaml:"id"`
+	Name   string      `yaml:"name"`
+	Type   string      `yaml:"type"`
+	Run    string      `yaml:"run"`
+	Tag    string      `yaml:"tag"`
+	Notes  string      `yaml:"notes"`
+	Draft  *bool       `yaml:"draft"`  // pointer to distinguish omitted vs false
+	Assets []yaml.Node `yaml:"assets"` // decoded manually (string or object)
 }
 
 // pushWire models the value under on.repo.push.
@@ -374,27 +380,102 @@ func decodeJobs(node *yaml.Node) ([]JobDefinition, []string) {
 		if len(jw.Steps) == 0 {
 			errs = append(errs, fmt.Sprintf("%s.steps: at least one step is required", prefix))
 		}
-		for si, sw := range jw.Steps {
-			sp := fmt.Sprintf("%s.steps[%d]", prefix, si)
-			if sw.Run == "" {
-				errs = append(errs, fmt.Sprintf("%s.run: required", sp))
-			}
-			// Check for unknown step keys
-			// The step node is nested; we check via the yaml.Node directly
-		}
-		// Strict step key check via the raw YAML node
+
+		// Collect raw step nodes for strict key checking.
+		var stepNodes []*yaml.Node
 		if valNode.Kind == yaml.MappingNode {
 			for j := 0; j < len(valNode.Content); j += 2 {
-				if valNode.Content[j].Value == key {
-					continue
+				if valNode.Content[j].Value == "steps" {
+					stepsNode := valNode.Content[j+1]
+					if stepsNode.Kind == yaml.SequenceNode {
+						for _, sn := range stepsNode.Content {
+							if sn.Kind == yaml.MappingNode {
+								stepNodes = append(stepNodes, sn)
+							}
+						}
+					}
+					break
 				}
 			}
 		}
-		// We'll do strict step key checking by re-traversing
+
+		// Validate each step with type-aware strict key checking.
 		for si, sw := range jw.Steps {
-			_ = si
+			sp := fmt.Sprintf("%s.steps[%d]", prefix, si)
+
+			// Resolve effective step type (default to "run").
+			stepType := sw.Type
+			if stepType == "" {
+				stepType = StepTypeRun
+			}
+
+			// Strict key checking: collect all allowed keys per type.
+			allowedKeys := map[string]bool{
+				"id":   true,
+				"name": true,
+				"type": true,
+			}
+			if stepType == StepTypeRun {
+				allowedKeys["run"] = true
+			} else if stepType == StepTypeRelease {
+				allowedKeys["tag"] = true
+				allowedKeys["notes"] = true
+				allowedKeys["draft"] = true
+				allowedKeys["assets"] = true
+			}
+
+			// Check raw step node for unknown keys.
+			if si < len(stepNodes) {
+				sn := stepNodes[si]
+				for j := 0; j < len(sn.Content); j += 2 {
+					k := sn.Content[j].Value
+					if !allowedKeys[k] {
+						errs = append(errs, fmt.Sprintf("%s.%s: unknown key for step type %q", sp, k, stepType))
+					}
+				}
+			}
+
+			// Type-specific validation.
+			switch stepType {
+			case StepTypeRun:
+				if sw.Run == "" {
+					errs = append(errs, fmt.Sprintf("%s.run: required for type run", sp))
+				}
+				// Reject release-only fields when type is run.
+				if sw.Tag != "" {
+					errs = append(errs, fmt.Sprintf("%s.tag: not allowed for type run", sp))
+				}
+				if sw.Notes != "" {
+					errs = append(errs, fmt.Sprintf("%s.notes: not allowed for type run", sp))
+				}
+				if sw.Draft != nil {
+					errs = append(errs, fmt.Sprintf("%s.draft: not allowed for type run", sp))
+				}
+				if len(sw.Assets) > 0 {
+					errs = append(errs, fmt.Sprintf("%s.assets: not allowed for type run", sp))
+				}
+
+			case StepTypeRelease:
+				if sw.Tag == "" {
+					errs = append(errs, fmt.Sprintf("%s.tag: required for type release", sp))
+				}
+				if sw.Run != "" {
+					errs = append(errs, fmt.Sprintf("%s.run: not allowed for type release", sp))
+				}
+				// Validate assets.
+				for ai, an := range sw.Assets {
+					asset, aerrs := decodeAssetNode(&an, fmt.Sprintf("%s.assets[%d]", sp, ai))
+					errs = append(errs, aerrs...)
+					_ = asset
+				}
+
+			default:
+				errs = append(errs, fmt.Sprintf("%s.type: unknown step type %q (must be run or release)", sp, stepType))
+			}
+
+			// Common validations.
 			if sw.Name != "" && len(sw.Name) > 200 {
-				errs = append(errs, fmt.Sprintf("%s.steps[%d].name: max 200 characters", prefix, si))
+				errs = append(errs, fmt.Sprintf("%s.name: max 200 characters", sp))
 			}
 		}
 
@@ -412,13 +493,84 @@ func decodeJobs(node *yaml.Node) ([]JobDefinition, []string) {
 	return jobs, errs
 }
 
+// decodeAssetNode decodes a single asset YAML node which can be either
+// a plain string (path) or a mapping with path + optional name.
+func decodeAssetNode(node *yaml.Node, prefix string) (AssetDefinition, []string) {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		path := strings.TrimSpace(node.Value)
+		if path == "" {
+			return AssetDefinition{}, []string{fmt.Sprintf("%s: path must not be empty", prefix)}
+		}
+		return AssetDefinition{Path: path}, nil
+
+	case yaml.MappingNode:
+		var path string
+		var name string
+		seen := map[string]bool{}
+		for j := 0; j < len(node.Content); j += 2 {
+			k := node.Content[j].Value
+			if seen[k] {
+				return AssetDefinition{}, []string{fmt.Sprintf("%s.%s: duplicate key", prefix, k)}
+			}
+			seen[k] = true
+			switch k {
+			case "path":
+				path = strings.TrimSpace(node.Content[j+1].Value)
+			case "name":
+				name = strings.TrimSpace(node.Content[j+1].Value)
+			default:
+				return AssetDefinition{}, []string{fmt.Sprintf("%s.%s: unknown key (only path and name are allowed)", prefix, k)}
+			}
+		}
+		var errs []string
+		if path == "" {
+			errs = append(errs, fmt.Sprintf("%s.path: required", prefix))
+		}
+		if name == "" && !seen["name"] {
+			// name is optional; omission is fine
+		}
+		if len(errs) > 0 {
+			return AssetDefinition{}, errs
+		}
+		return AssetDefinition{Path: path, Name: name}, nil
+
+	default:
+		return AssetDefinition{}, []string{fmt.Sprintf("%s: must be a string path or {path, name} object", prefix)}
+	}
+}
+
 func liftSteps(wires []stepWire) []StepDefinition {
 	steps := make([]StepDefinition, len(wires))
 	for i, sw := range wires {
+		// Default type.
+		stepType := sw.Type
+		if stepType == "" {
+			stepType = StepTypeRun
+		}
+
+		// Default draft to true for release steps.
+		draft := true
+		if sw.Draft != nil {
+			draft = *sw.Draft
+		}
+
+		// Decode assets.
+		assets := make([]AssetDefinition, len(sw.Assets))
+		for ai, an := range sw.Assets {
+			asset, _ := decodeAssetNode(&an, "")
+			assets[ai] = asset
+		}
+
 		steps[i] = StepDefinition{
-			Id:   sw.Id,
-			Name: sw.Name,
-			Run:  sw.Run,
+			Id:     sw.Id,
+			Name:   sw.Name,
+			Type:   stepType,
+			Run:    sw.Run,
+			Tag:    sw.Tag,
+			Notes:  sw.Notes,
+			Draft:  draft,
+			Assets: assets,
 		}
 	}
 	return steps
