@@ -480,3 +480,204 @@ func TestOrchestratorVolumes(t *testing.T) {
 		})
 	}
 }
+
+func TestStepOutputPath_WithID(t *testing.T) {
+	step := client.WorkflowStep{ID: "create-release", Name: "Create release", Run: "echo done"}
+	got := stepOutputPath(step, 0)
+	want := "/tmp/hangrix/step-output-create-release"
+	if got != want {
+		t.Errorf("stepOutputPath = %q, want %q", got, want)
+	}
+}
+
+func TestStepOutputPath_FallbackToIndex(t *testing.T) {
+	step := client.WorkflowStep{Name: "Lint", Run: "gofmt -w ."}
+	got := stepOutputPath(step, 3) // 0-based → 1-based "4"
+	want := "/tmp/hangrix/step-output-4"
+	if got != want {
+		t.Errorf("stepOutputPath = %q, want %q", got, want)
+	}
+}
+
+func TestParseOutputLines_Empty(t *testing.T) {
+	if got := parseOutputLines(""); got != nil {
+		t.Errorf("parseOutputLines(\"\") = %v, want nil", got)
+	}
+	if got := parseOutputLines("  \n  "); got != nil {
+		t.Errorf("parseOutputLines whitespace = %v, want nil", got)
+	}
+}
+
+func TestParseOutputLines_SingleLine(t *testing.T) {
+	out := parseOutputLines("release_id=42\n")
+	if got, want := out["release_id"], "42"; got != want {
+		t.Errorf("release_id = %q, want %q", got, want)
+	}
+	if len(out) != 1 {
+		t.Errorf("len = %d, want 1", len(out))
+	}
+}
+
+func TestParseOutputLines_MultipleLines(t *testing.T) {
+	out := parseOutputLines("foo=bar\n  baz = qux  \nhello=world\n")
+	if got, want := out["foo"], "bar"; got != want {
+		t.Errorf("foo = %q, want %q", got, want)
+	}
+	if got, want := out["baz"], "qux"; got != want {
+		t.Errorf("baz = %q, want %q", got, want)
+	}
+	if got, want := out["hello"], "world"; got != want {
+		t.Errorf("hello = %q, want %q", got, want)
+	}
+	if len(out) != 3 {
+		t.Errorf("len = %d, want 3", len(out))
+	}
+}
+
+func TestParseOutputLines_SkipsInvalid(t *testing.T) {
+	// Lines without '=', keys that are empty, and blank lines are skipped.
+	// Lines with valid keys and empty values (e.g. "keyonly=") are kept.
+	out := parseOutputLines("noequals\n=valueonly\nkeyonly=\nvalid=1\n\n  \n")
+	if got, want := out["valid"], "1"; got != want {
+		t.Errorf("valid = %q, want %q", got, want)
+	}
+	if got, want := out["keyonly"], ""; got != want {
+		t.Errorf("keyonly = %q, want %q", got, want)
+	}
+	if len(out) != 2 {
+		t.Errorf("len = %d, want 2; got %v", len(out), out)
+	}
+}
+
+func TestParseOutputLines_ValuesWithEquals(t *testing.T) {
+	// The value may contain '='; split only on the first one.
+	out := parseOutputLines("url=https://example.com?a=1&b=2\n")
+	if got, want := out["url"], "https://example.com?a=1&b=2"; got != want {
+		t.Errorf("url = %q, want %q", got, want)
+	}
+}
+
+func TestMaskSecretValues_NoMatch(t *testing.T) {
+	outputs := map[string]string{"version": "1.2.3", "count": "42"}
+	secrets := map[string]string{"MY_SECRET": "sk-abc123"}
+	masked := maskSecretValues(outputs, secrets)
+	if len(masked) != 0 {
+		t.Errorf("masked = %v, want empty", masked)
+	}
+}
+
+func TestMaskSecretValues_Match(t *testing.T) {
+	outputs := map[string]string{"api_key": "sk-abc123", "version": "1.0.0"}
+	secrets := map[string]string{"OPENAI_KEY": "sk-abc123"}
+	masked := maskSecretValues(outputs, secrets)
+	if len(masked) != 1 || masked[0] != "api_key" {
+		t.Errorf("masked = %v, want [api_key]", masked)
+	}
+}
+
+func TestMaskSecretValues_MultipleMatches(t *testing.T) {
+	outputs := map[string]string{
+		"token":    "ghp_secret",
+		"endpoint": "https://api.example.com",
+		"key":      "sk-other",
+	}
+	secrets := map[string]string{
+		"GH_TOKEN":   "ghp_secret",
+		"OPENAI_KEY": "sk-other",
+	}
+	masked := maskSecretValues(outputs, secrets)
+	if len(masked) != 2 {
+		t.Errorf("masked len = %d, want 2; got %v", len(masked), masked)
+	}
+	// Order not guaranteed; check presence.
+	has := make(map[string]bool)
+	for _, k := range masked {
+		has[k] = true
+	}
+	if !has["token"] {
+		t.Error("token should be masked")
+	}
+	if !has["key"] {
+		t.Error("key should be masked")
+	}
+}
+
+func TestMaskSecretValues_EmptyInputs(t *testing.T) {
+	if got := maskSecretValues(nil, map[string]string{"S": "v"}); got != nil {
+		t.Errorf("nil outputs: got %v, want nil", got)
+	}
+	if got := maskSecretValues(map[string]string{}, map[string]string{"S": "v"}); got != nil {
+		t.Errorf("empty outputs: got %v, want nil", got)
+	}
+	if got := maskSecretValues(map[string]string{"k": "v"}, nil); got != nil {
+		t.Errorf("nil secrets: got %v, want nil", got)
+	}
+	if got := maskSecretValues(map[string]string{"k": "v"}, map[string]string{}); got != nil {
+		t.Errorf("empty secrets: got %v, want nil", got)
+	}
+}
+
+func TestMaskSecretValues_SkipsEmptySecretValues(t *testing.T) {
+	outputs := map[string]string{"key": ""}
+	secrets := map[string]string{"EMPTY_SECRET": ""}
+	masked := maskSecretValues(outputs, secrets)
+	if len(masked) != 0 {
+		t.Errorf("masked = %v, want empty (empty secret values should not match)", masked)
+	}
+}
+
+func TestBuildWorkflowEnv_StepOutputFileInjected(t *testing.T) {
+	// Verify that runStep injects HANGRIX_STEP_OUTPUT_FILE into the env.
+	// We can't call runStep without a real orchestrator, but we can verify
+	// the path derivation via stepOutputPath, which is what runStep uses.
+	driver := &WorkflowJobDriver{}
+	job := &client.WorkflowJob{
+		WorkflowRunID: 1,
+		WorkflowName:  "ci",
+		JobKey:        "build",
+		Container: client.WorkflowContainer{
+			Image: "alpine:latest",
+			Env:   map[string]string{},
+		},
+	}
+
+	// Build the base env.
+	env, err := driver.buildWorkflowEnv(job)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Simulate what runStep does: inject HANGRIX_STEP_OUTPUT_FILE.
+	step := client.WorkflowStep{ID: "build", Run: "make"}
+	env["HANGRIX_STEP_OUTPUT_FILE"] = stepOutputPath(step, 0)
+
+	if got, want := env["HANGRIX_STEP_OUTPUT_FILE"], "/tmp/hangrix/step-output-build"; got != want {
+		t.Errorf("HANGRIX_STEP_OUTPUT_FILE = %q, want %q", got, want)
+	}
+}
+
+func TestBuildWorkflowEnv_StepOutputFileFallback(t *testing.T) {
+	driver := &WorkflowJobDriver{}
+	job := &client.WorkflowJob{
+		WorkflowRunID: 1,
+		WorkflowName:  "ci",
+		JobKey:        "lint",
+		Container: client.WorkflowContainer{
+			Image: "alpine:latest",
+			Env:   map[string]string{},
+		},
+	}
+
+	env, err := driver.buildWorkflowEnv(job)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Step without an explicit ID falls back to 1-based index.
+	step := client.WorkflowStep{Run: "echo hi"}
+	env["HANGRIX_STEP_OUTPUT_FILE"] = stepOutputPath(step, 2) // third step
+
+	if got, want := env["HANGRIX_STEP_OUTPUT_FILE"], "/tmp/hangrix/step-output-3"; got != want {
+		t.Errorf("HANGRIX_STEP_OUTPUT_FILE = %q, want %q", got, want)
+	}
+}

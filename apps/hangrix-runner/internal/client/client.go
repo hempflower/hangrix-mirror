@@ -256,6 +256,7 @@ type WorkflowContainer struct {
 
 // WorkflowStep is one shell command in a workflow job.
 type WorkflowStep struct {
+	ID   string `json:"id,omitempty"`
 	Name string `json:"name,omitempty"`
 	Run  string `json:"run"`
 }
@@ -390,6 +391,26 @@ type WorkflowJobTerminateRequest struct {
 // to the platform. Status must be "success", "failed", or "cancelled".
 func (c *Client) TerminateWorkflowJob(ctx context.Context, jobRunID int64, req WorkflowJobTerminateRequest) error {
 	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/runner/workflow-jobs/%d/terminate", jobRunID), req, nil, true)
+}
+
+// ---- workflow step result reporting ----
+
+// WorkflowStepResultRequest carries the outcome of a single step, including
+// captured outputs and which output keys contain masked (secret) values.
+type WorkflowStepResultRequest struct {
+	StepIndex int               `json:"step_index"`
+	StepID    string            `json:"step_id,omitempty"`
+	ExitCode  int32             `json:"exit_code"`
+	Outputs   map[string]string `json:"outputs,omitempty"`
+	Masked    []string          `json:"masked,omitempty"`
+}
+
+// ReportWorkflowStepResult reports a single step's outcome and captured
+// outputs to the platform. Called after each step completes (success or
+// failure). On success, Outputs and Masked are populated from the step
+// output file.
+func (c *Client) ReportWorkflowStepResult(ctx context.Context, jobRunID int64, req WorkflowStepResultRequest) error {
+	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/runner/workflow-jobs/%d/step-result", jobRunID), req, nil, true)
 }
 
 // ---- message + input forwarding ----
