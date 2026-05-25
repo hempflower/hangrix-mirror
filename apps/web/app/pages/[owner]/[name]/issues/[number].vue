@@ -890,10 +890,10 @@ onUnmounted(() => {
   </div>
 
   <aside
-  class="sticky self-start space-y-4 overflow-y-auto"
+  class="sticky self-start space-y-4 overflow-y-auto pb-6"
   :style="{
     top: `${headerHeight}px`,
-    maxHeight: `calc(100vh - ${headerHeight}px - 1.5rem)`,
+    maxHeight: `calc(100vh - ${headerHeight}px)`,
   }"
   >
           <Card class="gap-0 py-0">
@@ -1067,9 +1067,9 @@ onUnmounted(() => {
 
                 <!-- Detail list -->
                 <ul class="space-y-1.5">
-                  <li v-for="item in todos" :key="item.id" class="flex items-center gap-2 text-xs">
-                    <component :is="todoStatusIcon(item.status)" class="size-3 shrink-0" :class="todoStatusClass(item.status)" />
-                    <span class="min-w-0 flex-1 truncate">{{ item.content }}</span>
+                  <li v-for="item in todos" :key="item.id" class="flex items-start gap-2 text-xs">
+                    <component :is="todoStatusIcon(item.status)" class="size-3 shrink-0 mt-0.5" :class="todoStatusClass(item.status)" />
+                    <span class="min-w-0 flex-1 whitespace-normal break-words">{{ item.content }}</span>
                     <Badge :class="todoBadgeClass(item.status)" variant="secondary" class="shrink-0">
                       {{ t(`issue.todos.status.${item.status}`) }}
                     </Badge>
