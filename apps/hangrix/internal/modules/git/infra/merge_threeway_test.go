@@ -2,6 +2,7 @@ package infra
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -105,5 +106,62 @@ func TestMergeOverlappingSameLineConflicts(t *testing.T) {
 	if _, _, err := g.MergeBranch(bare, "main", "issue/1", "Merge issue 1",
 		domain.Signature{Name: "Tester", Email: "tester@example.com"}); !errors.Is(err, domain.ErrMergeConflict) {
 		t.Fatalf("merge: got err=%v; want ErrMergeConflict", err)
+	}
+}
+
+// TestMergeRelativeRepoPath guards the GIT_DIR regression: production passes a
+// bare-repo path relative to the server's CWD (e.g. "data/repos/<o>/<n>.git"),
+// and merge-tree must resolve it like go-git's openRepo. An earlier version
+// set both cmd.Dir and GIT_DIR to the relative path, re-rooting GIT_DIR under
+// itself and failing with exit 128 "not a git repository".
+func TestMergeRelativeRepoPath(t *testing.T) {
+	dir := t.TempDir()
+	bareAbs := filepath.Join(dir, "host.git")
+
+	g := NewGoGit(&GoGitDeps{})
+	if err := g.Init(bareAbs, "main"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if err := g.SeedInitialCommit(bareAbs, "main", map[string][]byte{
+		"foo.txt": []byte("a\nb\nc\n"),
+	}, "Tester", "tester@example.com"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// issue/1 edits the first line; main edits the last — diverged, so the
+	// merge goes through the three-way (merge-tree) path.
+	work := filepath.Join(dir, "work")
+	runGit(t, "", "clone", bareAbs, work)
+	runGit(t, work, "checkout", "-b", "issue/1")
+	mustWrite(t, filepath.Join(work, "foo.txt"), []byte("A\nb\nc\n"))
+	runGit(t, work, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-am", "issue edit")
+	runGit(t, work, "push", "origin", "issue/1")
+
+	work2 := filepath.Join(dir, "work2")
+	runGit(t, "", "clone", bareAbs, work2)
+	mustWrite(t, filepath.Join(work2, "foo.txt"), []byte("a\nb\nC\n"))
+	runGit(t, work2, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-am", "main edit")
+	runGit(t, work2, "push", "origin", "main")
+
+	// Drive the merge through a path RELATIVE to the process CWD.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	relBare, err := filepath.Rel(cwd, bareAbs)
+	if err != nil {
+		t.Fatalf("rel: %v", err)
+	}
+
+	ok, mode, hint, err := g.CheckAutoMerge(relBare, "main", "issue/1")
+	if err != nil {
+		t.Fatalf("CheckAutoMerge(%q): %v", relBare, err)
+	}
+	if !ok || mode != "merge-commit" {
+		t.Fatalf("CheckAutoMerge(%q): ok=%v mode=%q hint=%q", relBare, ok, mode, hint)
+	}
+	if _, _, err := g.MergeBranch(relBare, "main", "issue/1", "Merge issue 1",
+		domain.Signature{Name: "Tester", Email: "tester@example.com"}); err != nil {
+		t.Fatalf("MergeBranch(%q): %v", relBare, err)
 	}
 }

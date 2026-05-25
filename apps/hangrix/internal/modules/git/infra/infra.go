@@ -1113,7 +1113,11 @@ func (g *GoGit) MergeBranch(path, intoBranch, fromRef, message string, author do
 func mergeTreeCLI(path, intoHash, fromHash string) (plumbing.Hash, error) {
 	cmd := exec.Command("git", "merge-tree", "--write-tree", "--name-only",
 		intoHash, fromHash)
-	cmd.Dir = path
+	// Point git at the bare repo via GIT_DIR, resolved relative to the
+	// server's CWD exactly like go-git's openRepo(path). merge-tree needs no
+	// worktree, so we must NOT also set cmd.Dir = path: that re-roots a
+	// relative GIT_DIR under itself ("path/path") and fails with exit 128
+	// "not a git repository".
 	cmd.Env = append(os.Environ(), "GIT_DIR="+path)
 
 	var stdout, stderr bytes.Buffer
