@@ -613,16 +613,7 @@ func (h *Handler) stepResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Derive a stable step key: use explicit step_id when available,
-	// otherwise fall back to the 1-based step_index sent by the runner.
-	// The index-based key (e.g. "1") cannot be referenced in ${{ }}
-	// expressions (doesn't match [a-z][a-z0-9-]*), so unnamed steps
-	// have their outputs stored for API display but aren't expression-
-	// resolvable — which is the intended design.
-	stepKey := req.StepID
-	if stepKey == "" {
-		stepKey = fmt.Sprintf("%d", req.StepIndex)
-	}
+	stepKey := stepKeyFromRequest(req.StepID, req.StepIndex)
 
 	if err := h.svc.SetStepOutputs(r.Context(), jobID, stepKey, req.Outputs); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
@@ -630,6 +621,19 @@ func (h *Handler) stepResult(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// stepKeyFromRequest derives a stable step key for output storage.
+// Uses the explicit step_id when available; otherwise falls back to a
+// 1-based index derived from the runner's 0-based step_index.
+// The index-based key (e.g. "1") cannot be referenced in ${{ }}
+// expressions (doesn't match [a-z][a-z0-9-]*), so unnamed steps have
+// their outputs stored for API display but aren't expression-resolvable.
+func stepKeyFromRequest(stepID string, stepIndex int) string {
+	if stepID != "" {
+		return stepID
+	}
+	return fmt.Sprintf("%d", stepIndex+1)
 }
 
 // ---- compile-time check ----
