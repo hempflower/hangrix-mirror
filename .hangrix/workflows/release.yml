@@ -1,0 +1,125 @@
+# Release workflow: triggered by a semver-shaped tag push (e.g. v0.4.0).
+# Cross-compiles every Go binary in the workspace for linux/amd64 and
+# linux/arm64, creates a draft release via the platform API, uploads all
+# dist assets, and publishes the release.
+#
+# Linux-only on purpose: hangrix-agent runs inside a docker container,
+# so non-linux agent builds are dead weight. hangrix and hangrix-runner
+# are likewise intended for linux deploys.
+#
+# The embed chain (build-embed-binaries.mjs → copy-web-dist.mjs) is the
+# same single source of truth as .github/workflows/release.yml.
+version: 1
+name: release
+on:
+  repo.push_tag:
+    tags: ['v*']
+
+jobs:
+  build:
+    timeout_minutes: 30
+    steps:
+      - name: Install JS deps
+        run: pnpm install --frozen-lockfile
+
+      # Build the static web bundle once. copy-web-dist.mjs (run later)
+      # stages it under apps/hangrix/internal/web/dist/ for embedding.
+      - name: Generate web bundle
+        run: pnpm --filter web run generate
+
+      # Build the embed payload exactly once: hangrix-agent for each
+      # supported linux arch, then hangrix-runner for the same arch
+      # (with the agent embedded inside it).
+      - name: Build embed payload
+        run: node apps/hangrix/scripts/build-embed-binaries.mjs
+
+      # Surface the per-arch runner binaries as top-level release
+      # artefacts too — operators may want to install a runner via
+      # wget rather than the curl|sh installer.
+      - name: Stage runner binaries for release
+        run: |
+          mkdir -p dist
+          cp apps/hangrix/internal/modules/runner/binaries/payload/hangrix-runner_* dist/
+
+      # Stage the web bundle inside the server's embed dir, then
+      # cross-compile the server for each linux arch.
+      - name: Copy web dist into server embed
+        run: node apps/hangrix/scripts/copy-web-dist.mjs
+
+      - name: Build hangrix (linux/amd64)
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        working_directory: apps/hangrix
+        run: |
+          go build -trimpath -ldflags='-s -w' \
+            -o "../../dist/hangrix_linux_amd64" \
+            ./cmd/hangrix
+
+      - name: Build hangrix (linux/arm64)
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: '0'
+        working_directory: apps/hangrix
+        run: |
+          go build -trimpath -ldflags='-s -w' \
+            -o "../../dist/hangrix_linux_arm64" \
+            ./cmd/hangrix
+
+      - name: List release assets
+        run: ls -la dist/
+
+      - name: Create draft release
+        run: |
+          API="${HANGRIX_PLATFORM_BASE_URL}/api/repos/${HANGRIX_REPO_OWNER}/${HANGRIX_REPO_NAME}/releases"
+          RESP=$(curl -s -w '\n%{http_code}' \
+            -H "Authorization: Bearer ${HANGRIX_WORKFLOW_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\":\"${HANGRIX_TAG}\",\"title\":\"${HANGRIX_TAG}\"}" \
+            "$API")
+          HTTP_CODE=$(echo "$RESP" | tail -1)
+          BODY=$(echo "$RESP" | sed '$d')
+          if [ "$HTTP_CODE" != "201" ]; then
+            echo "Failed to create release: HTTP $HTTP_CODE"
+            echo "$BODY"
+            exit 1
+          fi
+          # Extract release ID from JSON response.
+          RELEASE_ID=$(echo "$BODY" | sed -n 's/.*"id": *\([0-9]*\).*/\1/p' | head -1)
+          if [ -z "$RELEASE_ID" ]; then
+            echo "Could not parse release ID from response"
+            exit 1
+          fi
+          echo "Created draft release id=$RELEASE_ID"
+          echo "$RELEASE_ID" > /tmp/release_id
+
+      - name: Upload release assets
+        run: |
+          RELEASE_ID=$(cat /tmp/release_id)
+          API="${HANGRIX_PLATFORM_BASE_URL}/api/repos/${HANGRIX_REPO_OWNER}/${HANGRIX_REPO_NAME}/releases/${RELEASE_ID}/assets"
+          for f in dist/*; do
+            name=$(basename "$f")
+            echo "Uploading $name..."
+            curl -s -f \
+              -H "Authorization: Bearer ${HANGRIX_WORKFLOW_TOKEN}" \
+              -F "name=${name}" \
+              -F "file=@${f}" \
+              "$API" || {
+              echo "Failed to upload $name"
+              exit 1
+            }
+          done
+
+      - name: Publish release
+        run: |
+          RELEASE_ID=$(cat /tmp/release_id)
+          API="${HANGRIX_PLATFORM_BASE_URL}/api/repos/${HANGRIX_REPO_OWNER}/${HANGRIX_REPO_NAME}/releases/${RELEASE_ID}/publish"
+          curl -s -f -X POST \
+            -H "Authorization: Bearer ${HANGRIX_WORKFLOW_TOKEN}" \
+            "$API" || {
+            echo "Failed to publish release"
+            exit 1
+          }
+          echo "Published release id=$RELEASE_ID"
