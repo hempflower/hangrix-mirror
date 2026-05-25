@@ -11,6 +11,12 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/service"
 )
 
+// emptyTreeSHA is the git hash of the empty tree — a well-known constant.
+// When diffing against it, git produces the full set of files that exist at
+// the other tree-ish, which is exactly what we need for a new-branch push
+// where the old SHA is the all-zero hash.
+const emptyTreeSHA = "4b825dc642cb6eb9a060e54bf899d9e5b9b3b06a"
+
 // PushObserver implements repodomain.PushObserver. In PostReceive it scans
 // pushed tag refs and triggers repo.push_tag workflow runs via the service.
 //
@@ -93,33 +99,26 @@ func (o *PushObserver) PostReceive(ctx context.Context, repo *repodomain.Repo, f
 }
 
 // branchChangedPaths returns the list of file paths changed between oldSHA
-// and newSHA. When oldSHA is the git zero-hash (new branch creation) we use
-// diff-tree to enumerate every file in the root tree of newSHA. Otherwise
-// git diff --name-only gives the symmetric difference. Returns nil on any
-// error — changed paths are a best-effort signal for workflow path filters.
+// and newSHA. When oldSHA is the git zero-hash (new branch creation) we diff
+// against the well-known empty-tree SHA so that ALL files in the branch
+// tip are included, covering multi-commit branch pushes. Otherwise git diff
+// --name-only gives the symmetric difference. Returns nil on any error —
+// changed paths are a best-effort signal for workflow path filters.
 func branchChangedPaths(ctx context.Context, fsPath, oldSHA, newSHA string) []string {
-	var cmd *exec.Cmd
+	oldRef := oldSHA
 	if isZeroSHA(oldSHA) {
-		// New branch: enumerate the full tree of the first commit.
-		cmd = exec.CommandContext(ctx,
-			"git",
-			"--git-dir="+fsPath,
-			"diff-tree",
-			"--no-commit-id",
-			"--name-only",
-			"-r",
-			newSHA,
-		)
-	} else {
-		cmd = exec.CommandContext(ctx,
-			"git",
-			"--git-dir="+fsPath,
-			"diff",
-			"--name-only",
-			oldSHA,
-			newSHA,
-		)
+		// New branch: diff empty tree → newSHA to capture every file
+		// in the branch tip, not just changes in the tip commit.
+		oldRef = emptyTreeSHA
 	}
+	cmd := exec.CommandContext(ctx,
+		"git",
+		"--git-dir="+fsPath,
+		"diff",
+		"--name-only",
+		oldRef,
+		newSHA,
+	)
 	out, err := cmd.Output()
 	if err != nil {
 		log.Printf("workflow: PostReceive branch changed paths %s..%s: %v", oldSHA, newSHA, err)
