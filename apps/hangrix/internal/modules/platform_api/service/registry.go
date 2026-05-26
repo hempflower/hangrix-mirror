@@ -1,3 +1,8 @@
+// Package service implements the platform business logic backing the
+// v1 REST API. The Registry owns the cross-module dependency bag and the
+// shared helpers (scope loading, mergeability/review gates, contribution
+// lifecycle, attachment upload, …); APIService (api.go) is the thin v1
+// surface that delegates to them.
 package service
 
 import (
@@ -20,13 +25,13 @@ import (
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
 
-// Registry is the platform-tool catalogue. It exposes every tool a
-// session's role may invoke over the agent HTTP API. Per-role filtering
-// happens via the session's role_config snapshot (see RoleCanList) — the catalogue
-// itself is global.
+// Registry is the platform business-logic core backing the v1 REST API.
+// It owns the cross-module dependency bag and the shared helpers
+// (scope loading, mergeability/review gates, attachment upload, …) that
+// the v1 service delegates to. It is constructed once at startup and
+// shared by the APIService.
 type Registry struct {
-	tools []*apidomain.Tool
-	deps  *RegistryDeps
+	deps *RegistryDeps
 }
 
 type RegistryDeps struct {
@@ -48,76 +53,10 @@ type RegistryDeps struct {
 	Todos         issuedomain.TodoStore
 }
 
-// NewRegistry assembles the tool catalogue at startup. Tools share the
-// same deps bag; per-tool constructors capture only what they need.
-// Order matters for catalog stability: read-only first, then mutating
-// tools (the LLM has a slight bias toward earlier tools in long
-// catalogues, and "look before you act" is the safer default ordering).
+// NewRegistry constructs the business-logic core, capturing the shared
+// cross-module dependency bag the v1 service delegates to.
 func NewRegistry(deps *RegistryDeps) *Registry {
-	r := &Registry{deps: deps}
-	r.tools = []*apidomain.Tool{
-		r.issueReadTool(),
-		r.issueReadByNumberTool(),
-		r.issueCommentReadTool(),
-		r.issueMergeableTool(),
-
-		r.issueChildrenTool(),
-		r.issueChecksTool(),
-		r.rosterListTool(),
-		r.issueCreateTool(),
-		r.issueEditTool(),
-		r.issueCommentTool(),
-		r.issueAttachmentUploadTool(),
-		r.issueReviewVoteTool(),
-		r.issueCloseTool(),
-		r.issueMergeTool(),
-		r.sessionRecoverTool(),
-		// Contribution-branch tools — read-first then mutating.
-		r.contributionListTool(),
-		r.contributionReadTool(),
-		r.contributionSetMetaTool(),
-		r.contributionApplyTool(),
-		r.contributionCloseTool(),
-		// Todo tools — read-first then mutating.
-		r.issueTodoListTool(),
-		r.issueTodoUpdateTool(),
-		r.releaseCreateTool(),
-		r.releaseUploadAssetTool(),
-		r.releasePublishTool(),
-		r.releaseUpdateTool(),
-		r.releaseDeleteTool(),
-	}
-	return r
-}
-
-// All returns the full tool catalogue. The HTTP handler intersects this
-// with the per-role `can:` filter before returning to the agent.
-func (r *Registry) All() []*apidomain.Tool { return r.tools }
-
-// ByName looks up a tool by its wire name. nil when unknown — callers
-// surface "unknown tool" as a structured tool error rather than crashing.
-func (r *Registry) ByName(name string) *apidomain.Tool {
-	for _, t := range r.tools {
-		if t.Name == name {
-			return t
-		}
-	}
-	return nil
-}
-
-// FilterForSession returns the subset of tools the session's role is
-// allowed to invoke. The ACL is read off the role_config snapshot
-// frozen at spawn time — host yaml changes mid-session don't affect
-// a running agent. Whitelist (`can:`) wins over blacklist (`not:`)
-// when both are set; an entirely empty ACL fails closed.
-func (r *Registry) FilterForSession(sess *runnerdomain.AgentSession) []*apidomain.Tool {
-	out := make([]*apidomain.Tool, 0, len(r.tools))
-	for _, t := range r.tools {
-		if CanCallTool(sess, t.Name) {
-			out = append(out, t)
-		}
-	}
-	return out
+	return &Registry{deps: deps}
 }
 
 // ---- helpers ----
@@ -176,23 +115,6 @@ func stableTime(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339Nano)
-}
-
-// strconvAtoi64 is a tiny convenience used by tools that parse cause
-// IDs (comment IDs etc.) emitted as JSON numbers or strings. We never
-// trust the LLM-emitted ID to be a specific JSON type.
-func strconvAtoi64(raw any) (int64, bool) {
-	switch v := raw.(type) {
-	case float64:
-		return int64(v), true
-	case json.Number:
-		n, err := v.Int64()
-		return n, err == nil
-	case string:
-		n, err := strconv.ParseInt(v, 10, 64)
-		return n, err == nil
-	}
-	return 0, false
 }
 
 // fanCommentMentions is used by the issue_comment tool to fire a

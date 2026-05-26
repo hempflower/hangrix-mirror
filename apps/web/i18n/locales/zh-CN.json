@@ -1114,7 +1114,8 @@
       "image": "容器镜像",
       "model": "模型",
       "repoSha": "仓库 sha",
-      "can": "工具白名单",
+      "permission": "仓库权限",
+      "not": "工具黑名单",
       "exitCode": "退出码",
       "errorMessage": "错误信息"
     },

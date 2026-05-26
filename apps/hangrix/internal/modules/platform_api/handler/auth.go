@@ -1,6 +1,5 @@
-// Package handler exposes the platform's agent API over HTTP — both the
-// legacy RPC-style POST /api/agent/tools/{name} (deprecated but still
-// functional) and the new GitHub-style REST surface under /api/v1/.
+// Package handler exposes the platform's agent API over HTTP — the
+// GitHub-style REST surface under /api/v1/.
 //
 // Shared auth middleware (bearerAuth / actorFromRequest) lives in
 // auth.go; response helpers (WriteJSON, WriteError, etc.) in respond.go.
@@ -44,10 +43,9 @@ func GetActor(r *http.Request) *apidomain.Actor {
 }
 
 // BearerAuth is a chi-compatible middleware that resolves
-// Authorization: Bearer hgxs_... → AgentSession and stores both the raw
-// session (for legacy tools) and the Actor (for v1 handlers) in the
-// request context. It also validates the hgxr_ runner token for the
-// attachment download endpoint.
+// Authorization: Bearer hgxs_... → AgentSession and stores the Actor
+// (for v1 handlers) in the request context. It also validates the hgxr_
+// runner token for the attachment download endpoint.
 //
 // 401 on missing/malformed header; 403 on token invalid/inactive.
 func BearerAuth(validator SessionTokenValidator) func(http.Handler) http.Handler {

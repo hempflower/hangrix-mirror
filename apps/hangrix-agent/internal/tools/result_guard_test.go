@@ -429,7 +429,7 @@ func TestRegistryBashForegroundSmallOutputUnchanged(t *testing.T) {
 func localBuild(t *testing.T) *Registry {
 	t.Helper()
 	lb := local.Build() // standard local bundle (without research, no LLM client)
-	return Build(lb.Tools, nil, nil, nil)
+	return Build(lb.Tools, nil, nil, nil, nil)
 }
 
 // ---------------------------------------------------------------------------

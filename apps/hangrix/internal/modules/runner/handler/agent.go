@@ -183,10 +183,10 @@ type bootstrapPayload struct {
 	Binaries map[string]binaryInfo `json:"binaries"`
 
 	// BaseURL is the single platform base the in-container agent
-	// uses to reach every backend route — LLM proxy + agent tools.
+	// uses to reach every backend route — LLM proxy + platform REST API.
 	// The runner forwards it as HANGRIX_PLATFORM_BASE_URL; the agent
 	// derives `<base>/api/llm/v1/responses` for chat completions and
-	// `<base>/api/agent/tools/<name>` for tool calls.
+	// `<base>/api/v1/...` for platform REST calls.
 	BaseURL string `json:"base_url"`
 
 	// DefaultAgentImage is what the runner falls back to when a session
@@ -261,7 +261,7 @@ func (h *AgentHandler) bootstrap(w http.ResponseWriter, r *http.Request) {
 //
 // BaseURL is the platform's public base; the agent (one container per
 // session) appends its own paths — `/api/llm/v1/responses` for chat
-// completions, `/api/agent/tools/<name>` for tool calls. Routing both
+// completions, `/api/v1/...` for platform REST calls. Routing both
 // off a single value keeps the bootstrap shape small and the agent's
 // view of "where the platform lives" minimal.
 func (h *AgentHandler) buildBootstrap(r *http.Request) bootstrapPayload {

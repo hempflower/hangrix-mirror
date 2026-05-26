@@ -1,6 +1,7 @@
-// Package platform_api wires the agent-facing HTTP API: a legacy RPC-style
-// POST /api/agent/tools/{name} (deprecated, kept for compatibility during
-// v1 migration) and the new GitHub-style REST surface under /api/v1/.
+// Package platform_api wires the agent-facing HTTP API: the GitHub-style
+// REST surface under /api/v1/. The Actor's repo permission (read/write)
+// is the coarse server-side access boundary; fine-grained per-tool
+// capability is shaped agent-side via the role's tool blacklist.
 //
 // Cross-module dependencies all flow through domain interfaces (issue,
 // repo, runner, git, agent_session). The module imports none of the

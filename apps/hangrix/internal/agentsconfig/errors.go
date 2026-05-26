@@ -88,4 +88,9 @@ var (
 	// rule missing paths / reviewers, an empty fallback, or a reviewer role
 	// that does not exist or cannot cast review votes.
 	ErrInvalidReviewers = errors.New("invalid reviewers config")
+
+	// ErrInvalidPermission fires when a role's `permission:` is set to
+	// anything other than "read" or "write". Empty is allowed and
+	// defaults to "read".
+	ErrInvalidPermission = errors.New("role permission must be read or write")
 )

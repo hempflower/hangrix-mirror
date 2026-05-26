@@ -42,7 +42,9 @@ type Actor struct {
 
 // PermissionSet is the access-control contract consumed by authorization
 // middleware. Each route handler checks Can(resource, action) before
-// performing the operation.
+// performing the operation. v1 uses a coarse, GitHub-style repo
+// permission model: read-only actions are allowed for every authenticated
+// actor scoped to the repo; mutating actions require "write".
 type PermissionSet interface {
 	Can(resource string, action string) bool
 }
@@ -65,7 +67,7 @@ func NewActor(sess *runnerdomain.AgentSession) *Actor {
 		IssueNumber: sess.IssueNumber,
 		DisplayName: sess.RoleKey,
 		RoleKey:     sess.RoleKey,
-		Permissions: &sessionPermissions{session: sess},
+		Permissions: &repoPermissions{write: roleHasWrite(sess)},
 		RawScope: Scope{
 			RepoID:               sess.RepoID,
 			IssueNumber:          sess.IssueNumber,
@@ -81,85 +83,52 @@ func (a *Actor) InRepo() bool { return a.RepoID != nil }
 // InIssue reports whether the actor is scoped to a specific issue.
 func (a *Actor) InIssue() bool { return a.RepoID != nil && a.IssueNumber != nil }
 
-// sessionPermissions adapts the legacy tool-name ACL to resource/action checks.
-type sessionPermissions struct {
-	session *runnerdomain.AgentSession
+// repoPermissions implements the coarse read/write repo permission model.
+// Read-only actions pass for any authenticated actor; mutating actions
+// require write == true.
+type repoPermissions struct {
+	write bool
 }
 
-func (p *sessionPermissions) Can(resource string, action string) bool {
-	// For v1, map resource+action to legacy tool names.
-	// This is a compatibility shim; future versions will use native
-	// resource/action ACLs from the host yaml.
-	toolName := resourceActionToTool(resource, action)
-	if toolName == "" {
-		return false
+func (p *repoPermissions) Can(resource string, action string) bool {
+	if isReadAction(resource, action) {
+		return true
 	}
-	return canCallTool(p.session, toolName)
+	return p.write
 }
 
-// resourceActionToTool maps (resource, action) pairs to legacy tool names.
-func resourceActionToTool(resource, action string) string {
-	mapping := map[string]string{
-		"issues:read":          "issue_read",
-		"issues:edit":          "issue_edit",
-		"issues:close":         "issue_close",
-		"issues:merge":         "issue_merge",
-		"issues:mergeability":  "issue_mergeable",
-		"comments:create":      "issue_comment",
-		"comments:read":        "issue_comment_read",
-		"todos:list":           "issue_todo_list",
-		"todos:update":         "issue_todo_update",
-		"issues:create":        "issue_create",
-		"contributions:list":       "contribution_list",
-		"contributions:read":       "contribution_read",
-		"contributions:set_meta":   "contribution_set_meta",
-		"contributions:apply":      "contribution_apply",
-		"contributions:close":      "contribution_close",
-		"reviews:create":       "issue_review_vote",
-		"sessions:list":        "roster_list",
-		"sessions:recover":     "session_recover",
-		"attachments:create":   "issue_attachment_upload",
-		"releases:create":      "release_create",
-		"releases:update":      "release_update",
-		"releases:delete":      "release_delete",
-		"releases:publish":     "release_publish",
-	}
-	key := resource + ":" + action
-	if t, ok := mapping[key]; ok {
-		return t
-	}
-	return ""
+// readActions enumerates every (resource:action) pair that only reads
+// state. Anything not listed here is treated as a mutation and requires
+// write permission — fail-safe, so a newly added write endpoint defaults
+// to needing write even if someone forgets to update this set.
+var readActions = map[string]struct{}{
+	"issues:read":           {},
+	"comments:read":         {},
+	"todos:list":            {},
+	"sessions:list":         {},
+	"contributions:list":    {},
+	"contributions:read":    {},
+	"issues:mergeability":   {},
 }
 
-// canCallTool is a copy of the service.CanCallTool logic to avoid a
-// circular dependency between domain and service packages.
-func canCallTool(sess *runnerdomain.AgentSession, toolName string) bool {
+func isReadAction(resource, action string) bool {
+	_, ok := readActions[resource+":"+action]
+	return ok
+}
+
+// roleHasWrite reports whether the session's frozen role_config grants
+// "write" repo permission. Anything other than an explicit "write"
+// (including a missing field or unparseable snapshot) is treated as
+// read-only — fail-safe.
+func roleHasWrite(sess *runnerdomain.AgentSession) bool {
 	if sess == nil || len(sess.RoleConfig) == 0 {
 		return false
 	}
-	// Parse the role config snapshot.
 	var snap struct {
-		Can []string `json:"can"`
-		Not []string `json:"not"`
+		Permission string `json:"permission"`
 	}
 	if err := json.Unmarshal(sess.RoleConfig, &snap); err != nil {
 		return false
 	}
-	if len(snap.Can) > 0 {
-		for _, n := range snap.Can {
-			if n == toolName {
-				return true
-			}
-		}
-		return false
-	}
-	if len(snap.Not) > 0 {
-		for _, n := range snap.Not {
-			if n == toolName {
-				return false
-			}
-		}
-		return true
-	}
-	return false
+	return snap.Permission == "write"
 }

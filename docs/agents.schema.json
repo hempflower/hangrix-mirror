@@ -168,17 +168,16 @@
             "patch.submitted": { "$ref": "#/$defs/triggerPushFilter" }
           }
         },
-        "can": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 },
-          "uniqueItems": true,
-          "description": "Platform tool whitelist. Tools not listed here are invisible via tools/list and rejected on tools/call."
+        "permission": {
+          "type": "string",
+          "enum": ["read", "write"],
+          "description": "GitHub-style repo permission level, enforced server-side on the platform v1 REST API. `read` allows read-only endpoints (GET issue/comment/todo/contribution/mergeability/sessions); `write` additionally allows every mutation (comment, edit, merge, close, review, todo update, contribution apply/close/set_meta, release ops, attachment upload, session recover, issue create). Omitted defaults to `read` (fail-safe)."
         },
         "not": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "uniqueItems": true,
-          "description": "Platform tool blacklist; only consulted when `can` is empty. When both `can` and `not` are set, `can` wins and `not` is ignored."
+          "description": "Tool blacklist. Listed tool names (local tools like bash/edit and/or platform tools like issue_merge) are hidden from the agent's LLM-facing tool schema entirely — the model never sees them. This is the fine-grained capability knob on top of the coarse `permission` level; it is enforced agent-side (schema hiding), not by the server. Omitted hides nothing."
         },
         "mcp": {
           "type": "array",

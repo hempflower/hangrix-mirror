@@ -619,7 +619,12 @@ func truncate(b []byte, n int) string {
 // All returns every platform tool the agent ships with, bound to the
 // supplied HTTP client. Order matters for catalogue stability — keep
 // read-only tools first then mutating ones.
-func All(client *Client) []local.Tool {
+//
+// When readOnly is true (HANGRIX_REPO_PERMISSION == "read"), every tool
+// whose def is marked write:true is skipped entirely — it never appears
+// in the returned slice or the LLM's tool schema. Read tools are always
+// included.
+func All(client *Client, readOnly bool) []local.Tool {
 	if client == nil {
 		return nil
 	}
@@ -634,6 +639,7 @@ func All(client *Client) []local.Tool {
 		pathParams  []string
 		queryParams []string
 		expect204   bool
+		write       bool // mutating tool; hidden when readOnly is true
 	}
 
 	defs := []toolDef{
@@ -676,7 +682,7 @@ func All(client *Client) []local.Tool {
 
 		// ---- mutating tools ----
 		{name: "issue_create", description: "Create a new issue in the current repo. Set `parent: true` to create as a sub-issue of the current issue.",
-			kind: "create_issue",
+			kind: "create_issue", write: true,
 			schema: objectSchema(map[string]any{
 				"title":  stringProp("Issue title (1-200 characters)."),
 				"body":   stringProp("Optional issue body (markdown)."),
@@ -684,7 +690,7 @@ func All(client *Client) []local.Tool {
 			}, []string{"title"}),
 		},
 		{name: "issue_comment", description: "Post a comment on the current issue. `body` is markdown; @agent-<role-key> mentions wake other roles.",
-			kind: "post", path: "/issues/current/comments",
+			kind: "post", path: "/issues/current/comments", write: true,
 			schema: objectSchema(map[string]any{
 				"body":      stringProp("The comment body. Markdown allowed; mentions follow @agent-<role-key> grammar."),
 				"file_path": stringProp("Optional path to anchor the comment to a file (inline review). Omit for top-level."),
@@ -692,11 +698,11 @@ func All(client *Client) []local.Tool {
 			}, []string{"body"}),
 		},
 		{name: "issue_edit", description: "Edit the current issue's title and/or body. At least one of `title` or `body` must be provided. When the title changes a `title_changed` event is written to the timeline; a body-only edit is silent. Title must be non-empty and ≤200 characters.",
-			kind: "patch", path: "/issues/current",
+			kind: "patch", path: "/issues/current", write: true,
 			schema: issueEditSchema(),
 		},
 		{name: "issue_review_vote", description: "Cast a structured review vote on a contribution branch (approve / reject / abstain). A branch is approved once every required reviewer votes approve/abstain; any reject rejects it. Pass the contribution_id from contribution_list; you cannot approve your own contribution.",
-			kind: "post", path: "/issues/current/reviews",
+			kind: "post", path: "/issues/current/reviews", write: true,
 			schema: objectSchema(map[string]any{
 				"contribution_id": intProp("The contribution branch this vote targets (from contribution_list)."),
 				"value":           enumProp("Vote outcome. reject means the author should revise via a new versioned branch.", []string{"approve", "reject", "abstain"}),
@@ -704,19 +710,19 @@ func All(client *Client) []local.Tool {
 			}, []string{"contribution_id", "value"}),
 		},
 		{name: "issue_close", description: "Close the current issue without merging. Archives every active agent session on it.",
-			kind: "post", path: "/issues/current/close",
+			kind: "post", path: "/issues/current/close", write: true,
 			schema: objectSchema(map[string]any{"reason": stringProp("Optional rationale, recorded on the timeline.")}, nil),
 		},
 		{name: "issue_merge", description: "Merge the issue branch into its base — tries fast-forward first, falls back to auto-rebase. Fails if there are no commits or a rebase conflict.",
-			kind: "post", path: "/issues/current/merge",
+			kind: "post", path: "/issues/current/merge", write: true,
 			schema: objectSchema(map[string]any{"message": stringProp("Optional merge message.")}, nil),
 		},
 		{name: "session_recover", description: "Recover a failed / succeeded / cancelled / idle session on the current issue. Sets it back to pending so the runner picks it up. Restricted to sessions on the same issue.",
-			kind: "post", path: "/issues/current/sessions/{session_id}/recover", pathParams: []string{"session_id"},
+			kind: "post", path: "/issues/current/sessions/{session_id}/recover", pathParams: []string{"session_id"}, write: true,
 			schema: objectSchema(map[string]any{"session_id": intProp("The session ID to recover. Must be on the same issue as the caller.")}, []string{"session_id"}),
 		},
 		{name: "issue_attachment_upload", description: "Upload a file from the workspace as an issue attachment. Returns attachment metadata including an `attachment_id`, `url`, and `markdown_snippet` — use `issue_comment` to insert the snippet into a comment body. `path` must be a workspace-relative or absolute path to an existing file. Set `inline` to true for images/videos you want rendered inline (produces `![](url)` syntax); false / omitted produces `[name](url)` link syntax.",
-			kind: "attachment",
+			kind: "attachment", write: true,
 			schema: objectSchema(map[string]any{
 				"path":         stringProp("Workspace-relative or absolute path to the file to upload. Required."),
 				"display_name": stringProp("Optional display name for the attachment. Defaults to the file's basename."),
@@ -725,7 +731,7 @@ func All(client *Client) []local.Tool {
 			}, []string{"path"}),
 		},
 		{name: "issue_todo_update", description: "Create or update a todo on the current issue. Omit `todo_id` (or pass 0) to create a new todo — `content` is required in that case. Pass a non-zero `todo_id` to update an existing todo's `status` and/or `content`. `status` must be one of: todo, in_progress, done. Returns the created/updated todo object on success.",
-			kind: "todo",
+			kind: "todo", write: true,
 			schema: objectSchema(map[string]any{
 				"todo_id":  intProp("The todo id to update. Omit or pass 0 to create a new todo instead."),
 				"status":   enumProp("New status. One of: todo, in_progress, done. Use todo when creating.", []string{"todo", "in_progress", "done"}),
@@ -734,7 +740,7 @@ func All(client *Client) []local.Tool {
 			}, []string{"status"}),
 		},
 		{name: "contribution_set_meta", description: "Set the title and description of your own contribution branch (its merge-request title/body). Only the role that owns the branch may set its metadata.",
-			kind: "patch", path: "/issues/current/contributions/{id}", pathParams: []string{"id"},
+			kind: "patch", path: "/issues/current/contributions/{id}", pathParams: []string{"id"}, write: true,
 			schema: objectSchema(map[string]any{
 				"id":          intProp("Contribution id."),
 				"title":       stringProp("Short title (1-200 chars)."),
@@ -742,21 +748,21 @@ func All(client *Client) []local.Tool {
 			}, []string{"id", "title"}),
 		},
 		{name: "contribution_apply", description: "Merge an approved contribution branch into the issue branch (first-level gate). The server validates the review gate (status must be approved) + mergeability and computes the merge commit — there is no agent push. Requires `contribution_apply` in the role's `can:` whitelist (the maintainer).",
-			kind: "post", path: "/issues/current/contributions/{id}/apply", pathParams: []string{"id"},
+			kind: "post", path: "/issues/current/contributions/{id}/apply", pathParams: []string{"id"}, write: true,
 			schema: objectSchema(map[string]any{
 				"id":      intProp("Contribution id to merge (from contribution_list)."),
 				"message": stringProp("Optional merge commit message."),
 			}, []string{"id"}),
 		},
 		{name: "contribution_close", description: "Close (abandon) your own contribution branch. Only the owning role may close it; merged contributions cannot be closed.",
-			kind: "post", path: "/issues/current/contributions/{id}/close", pathParams: []string{"id"},
+			kind: "post", path: "/issues/current/contributions/{id}/close", pathParams: []string{"id"}, write: true,
 			schema: objectSchema(map[string]any{
 				"id":     intProp("Contribution id to close."),
 				"reason": stringProp("Optional rationale, recorded on the timeline."),
 			}, []string{"id"}),
 		},
 		{name: "release_create", description: "Create a new release in draft state from an existing git tag. The tag must already exist in the repo.",
-			kind: "post", path: "/releases",
+			kind: "post", path: "/releases", write: true,
 			schema: objectSchema(map[string]any{
 				"tag_name": stringProp("The existing git tag to create the release from (required)."),
 				"title":    stringProp("Optional release title. Defaults to the tag name if omitted."),
@@ -764,7 +770,7 @@ func All(client *Client) []local.Tool {
 			}, []string{"tag_name"}),
 		},
 		{name: "release_upload_asset", description: "Upload a custom asset to a release. The file content must be base64-encoded.",
-			kind: "post", path: "/releases/{release_id}/assets", pathParams: []string{"release_id"},
+			kind: "post", path: "/releases/{release_id}/assets", pathParams: []string{"release_id"}, write: true,
 			schema: objectSchema(map[string]any{
 				"release_id":   intProp("The release ID to attach the asset to (required)."),
 				"name":         stringProp("Asset file name (required)."),
@@ -773,11 +779,11 @@ func All(client *Client) []local.Tool {
 			}, []string{"release_id", "name", "content"}),
 		},
 		{name: "release_publish", description: "Publish a draft release, making it visible as an official release with a published_at timestamp.",
-			kind: "post", path: "/releases/{release_id}/publish", pathParams: []string{"release_id"},
+			kind: "post", path: "/releases/{release_id}/publish", pathParams: []string{"release_id"}, write: true,
 			schema: objectSchema(map[string]any{"release_id": intProp("The release ID to publish (required).")}, []string{"release_id"}),
 		},
 		{name: "release_update", description: "Edit an existing release's metadata (title, notes). The tag_name can only be changed while the release is still a draft.",
-			kind: "patch", path: "/releases/{release_id}", pathParams: []string{"release_id"},
+			kind: "patch", path: "/releases/{release_id}", pathParams: []string{"release_id"}, write: true,
 			schema: objectSchema(map[string]any{
 				"release_id": intProp("The release ID to update (required)."),
 				"title":      stringProp("Optional new release title."),
@@ -786,13 +792,19 @@ func All(client *Client) []local.Tool {
 			}, []string{"release_id"}),
 		},
 		{name: "release_delete", description: "Delete a release and all of its custom assets. Derived source archives (zip/tar.gz) are not separately stored and do not need cleanup.",
-			kind: "delete", path: "/releases/{release_id}", pathParams: []string{"release_id"}, expect204: true,
+			kind: "delete", path: "/releases/{release_id}", pathParams: []string{"release_id"}, expect204: true, write: true,
 			schema: objectSchema(map[string]any{"release_id": intProp("The release ID to delete (required).")}, []string{"release_id"}),
 		},
 	}
 
 	out := make([]local.Tool, 0, len(defs))
 	for _, d := range defs {
+		// In read-only mode every mutating platform tool is hidden — it
+		// must not appear in the returned slice (and thus not in the LLM's
+		// tool schema). Read tools are always included.
+		if readOnly && d.write {
+			continue
+		}
 		schema := d.schema
 		if schema == nil {
 			schema = objectSchema(nil, nil)

@@ -520,6 +520,20 @@ func (s *Spawner) spawnRole(
 		env[k] = v
 	}
 
+	// Tool-access policy injected last so it wins over any host
+	// container.env override. HANGRIX_REPO_PERMISSION is the coarse
+	// read/write level the agent uses to hide write platform tools when
+	// read-only; HANGRIX_TOOL_DENY is the role's tool blacklist the agent
+	// strips from its LLM-facing schema. The server still enforces
+	// read/write independently — these are the agent-side schema-shaping
+	// inputs only.
+	env["HANGRIX_REPO_PERMISSION"] = role.Permission
+	if len(role.Not) > 0 {
+		if denyJSON, err := json.Marshal(role.Not); err == nil {
+			env["HANGRIX_TOOL_DENY"] = string(denyJSON)
+		}
+	}
+
 	createIn := runnerdomain.CreateSessionInput{
 		RunnerID:           runnerID,
 		RepoID:             &hostRepo.ID,
@@ -831,7 +845,7 @@ func issueBranchName(n int32) string {
 func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, addendum, model string, effective *agentsconfig.LLMConfig, resolvedImage string) ([]byte, error) {
 	type rs struct {
 		Triggers            map[string]any `json:"triggers"`
-		Can                 []string       `json:"can"`
+		Permission          string         `json:"permission"`
 		Not                 []string       `json:"not,omitempty"`
 		ScopePaths          []string       `json:"scope_paths,omitempty"`
 		HostAddendum        string         `json:"host_addendum,omitempty"`
@@ -844,7 +858,7 @@ func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, a
 	}
 	snap := rs{
 		Triggers:     serializeTriggers(role.Triggers),
-		Can:          append([]string(nil), role.Can...),
+		Permission:   role.Permission,
 		Not:          append([]string(nil), role.Not...),
 		ScopePaths:   append([]string(nil), role.Scope.Paths...),
 		HostAddendum: addendum,

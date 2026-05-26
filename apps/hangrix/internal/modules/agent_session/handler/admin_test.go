@@ -71,7 +71,7 @@ func TestAdminListByIssueRoundTrip(t *testing.T) {
 		RepoSHA:    "def",
 		CauseKind:  "issue_opened",
 		CauseID:    "comment-1",
-		RoleConfig: json.RawMessage(`{"can":["issue_read"],"model":"x"}`),
+		RoleConfig: json.RawMessage(`{"permission":"read","model":"x"}`),
 		CreatedAt:  time.Now(),
 	}
 	aud := &stubAuditor{rows: []domain.AuditSession{row}}
@@ -113,7 +113,7 @@ func TestAdminListByIssueRoundTrip(t *testing.T) {
 		t.Fatalf("cause fields lost: %+v", got)
 	}
 	// role_config flows through as a raw JSON object.
-	if string(got.RoleConfig) != `{"can":["issue_read"],"model":"x"}` {
+	if string(got.RoleConfig) != `{"permission":"read","model":"x"}` {
 		t.Fatalf("role_config = %s", string(got.RoleConfig))
 	}
 	// Auditor was called with the right scoping.

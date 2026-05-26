@@ -25,7 +25,7 @@ roles:
     triggers:
       issue.opened: {}
       issue.comment: {}
-    can: [issue_read, issue_comment, roster_list]
+    # permission omitted on purpose — must default to "read".
     prompt: |
       You are the dispatcher.
 
@@ -36,12 +36,8 @@ roles:
         from_users: [alice, bob]
     scope: { paths: ["apps/api/**", "internal/**"] }
     mcp: [playwright, playwright]   # duplicate intentionally tests dedup
-    can:
-      - issue_read
-      - issue_mergeable
-      - issue_comment
-      - read
-      - write
+    permission: write
+    not: [issue_merge, bash]
     prompt: |
       Always git pull --rebase before push.
 
@@ -53,7 +49,7 @@ roles:
       issue.comment:
         mentioned_only: true
         from_roles: [dispatcher]
-    can: [issue_read, issue_mergeable, issue_comment]
+    permission: write
     prompt_file: .hangrix/prompts/reviewer.md
     llm:
       model: claude-opus-4-7
@@ -100,6 +96,10 @@ func TestParseHostConfig_Happy(t *testing.T) {
 	if disp.Prompt == "" {
 		t.Fatalf("dispatcher prompt empty")
 	}
+	// permission omitted → defaults to "read".
+	if disp.Permission != "read" {
+		t.Fatalf("dispatcher permission: got %q, want read (default)", disp.Permission)
+	}
 	if len(disp.Triggers) != 2 {
 		t.Fatalf("dispatcher triggers: %+v", disp.Triggers)
 	}
@@ -121,6 +121,14 @@ func TestParseHostConfig_Happy(t *testing.T) {
 	// MCP: duplicate "playwright" in yaml → deduped to single entry.
 	if want := []string{"playwright"}; len(be.MCP) != 1 || be.MCP[0] != want[0] {
 		t.Fatalf("backend mcp: %+v", be.MCP)
+	}
+	// permission: write, and the `not:` blacklist round-trips verbatim
+	// (local tool `bash` + platform tool `issue_merge`).
+	if be.Permission != "write" {
+		t.Fatalf("backend permission: got %q, want write", be.Permission)
+	}
+	if want := []string{"issue_merge", "bash"}; len(be.Not) != 2 || be.Not[0] != want[0] || be.Not[1] != want[1] {
+		t.Fatalf("backend not: %+v", be.Not)
 	}
 
 	rev := cfg.Roles["reviewer"]
@@ -519,6 +527,15 @@ container: { image: x }
 roles: { r: { triggers: { issue.opened: {} }, prompt: hi, mcp: ["", playwright] } }
 `,
 			target: ErrInvalidMCP,
+		},
+		{
+			name: "bad-permission",
+			body: `
+version: 1
+container: { image: x }
+roles: { r: { triggers: { issue.opened: {} }, prompt: hi, permission: admin } }
+`,
+			target: ErrInvalidPermission,
 		},
 		{
 			name:   "duplicate-role-key",

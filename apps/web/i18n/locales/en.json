@@ -1114,7 +1114,8 @@
       "image": "image",
       "model": "model",
       "repoSha": "repo sha",
-      "can": "can",
+      "permission": "permission",
+      "not": "tool blacklist",
       "exitCode": "exit code",
       "errorMessage": "error"
     },

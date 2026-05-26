@@ -38,6 +38,18 @@ type Config struct {
 	ToolCatalog      string
 	McpServers       []string
 
+	// RepoPermission gates the write-type platform tools. The exact
+	// value "read" makes the catalogue read-only (every mutating
+	// platform tool is hidden from the LLM); anything else (including
+	// empty/unset) means write. Local tools are never affected — this
+	// concerns the platform REST API only. Set via HANGRIX_REPO_PERMISSION.
+	RepoPermission string
+
+	// ToolDeny is a JSON array of tool names to hide from the LLM,
+	// applied to both local and platform tools by name. Empty/unset
+	// denies nothing. Set via HANGRIX_TOOL_DENY.
+	ToolDeny string
+
 	// LLMMaxContextTokens is the max_context_tokens from agents.yml,
 	// surfaced by the runner as HANGRIX_LLM_MAX_CONTEXT_TOKENS. When
 	// non-zero, the default CompactTokenThreshold is 80% of this value.
@@ -106,6 +118,8 @@ func NewConfig() *Config {
 		BaseBranch:                 os.Getenv("HANGRIX_BASE_BRANCH"),
 		HostAddendumPath:           os.Getenv("HANGRIX_HOST_ADDENDUM"),
 		ToolCatalog:                os.Getenv("HANGRIX_TOOL_CATALOG"),
+		RepoPermission:             os.Getenv("HANGRIX_REPO_PERMISSION"),
+		ToolDeny:                   os.Getenv("HANGRIX_TOOL_DENY"),
 		McpServers:                 parseMcpServers(os.Getenv("HANGRIX_MCP_SERVERS")),
 		LLMMaxContextTokens:        maxCtx,
 		CompactTokenThreshold:      parseCompactThreshold(os.Getenv("HANGRIX_COMPACT_TOKEN_THRESHOLD"), maxCtx),

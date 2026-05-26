@@ -15,19 +15,19 @@ container:
 roles:
   worker:
     triggers: { issue.comment: { mentioned_only: true } }
-    can: [issue_read, issue_comment]
+    permission: read
     prompt: w
   srv-reviewer:
     triggers: { commit.pushed: {} }
-    can: [issue_read, issue_review_vote]
+    permission: write
     prompt: r
   web-reviewer:
     triggers: { commit.pushed: {} }
-    can: [issue_read, issue_review_vote]
+    permission: write
     prompt: r
   maintainer:
     triggers: { issue.opened: {} }
-    can: [issue_read, issue_review_vote, contribution_apply]
+    permission: write
     prompt: m
 %s`
 

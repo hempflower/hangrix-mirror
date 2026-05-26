@@ -77,16 +77,20 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 	if err != nil {
 		panic(fmt.Errorf("tools: parse catalog: %w", err))
 	}
+	deny, err := ParseToolDeny(deps.Cfg.ToolDeny)
+	if err != nil {
+		panic(fmt.Errorf("tools: parse deny: %w", err))
+	}
 	var platformTools []local.Tool
 	if base := deps.Cfg.PlatformV1BaseURL(); base != "" {
 		client := platform.NewClient(base, deps.Cfg.SessionToken)
-		platformTools = platform.All(client)
+		platformTools = platform.All(client, deps.Cfg.RepoPermission == "read")
 	}
 	var mcpTools []local.Tool
 	if deps.MCPBundle != nil {
 		mcpTools = deps.MCPBundle.Tools
 	}
-	return Build(deps.Bundle.Tools, platformTools, mcpTools, allow)
+	return Build(deps.Bundle.Tools, platformTools, mcpTools, allow, deny)
 }
 
 func Module() *ioc.Module {

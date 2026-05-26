@@ -221,7 +221,7 @@ func requireActor(w http.ResponseWriter, r *http.Request) *apidomain.Actor {
 // given resource/action. Writes 403 and returns false when denied.
 func requirePermission(w http.ResponseWriter, p *apidomain.Actor, resource, action string) bool {
 	if p.Permissions == nil || !p.Permissions.Can(resource, action) {
-		WriteError(w, http.StatusForbidden, "not granted to role \""+p.RoleKey+"\" (host yaml `can:` / `not:` ACL)")
+		WriteError(w, http.StatusForbidden, "role \""+p.RoleKey+"\" lacks write permission for this operation (host yaml `permission:`)")
 		return false
 	}
 	return true

@@ -32,7 +32,7 @@ func TestIssueEditSchemaIsUpstreamCompatible(t *testing.T) {
 
 func TestAllPlatformToolSchemasAreUpstreamCompatible(t *testing.T) {
 	client := NewClient("https://example.invalid", "token")
-	tools := All(client)
+	tools := All(client, false)
 
 	if len(tools) == 0 {
 		t.Fatal("All returned no platform tools")

@@ -36,7 +36,8 @@ llm:
 # leaves `pending` only once all its required reviewers have voted — approve/
 # abstain → approved, any reject → rejected. `fallback` reviews branches that
 # match no rule (kept as the maintainer so nothing ever lands unreviewed).
-# Only roles that can cast votes (issue_review_vote in `can:`) may be listed.
+# Only roles that can cast votes may be listed — a role can vote when it has
+# `permission: write` and does not blacklist issue_review_vote in its `not:`.
 reviewers:
   rules:
     - paths: ["apps/hangrix/**", "pkg/**", "go.work", "go.work.sum"]
@@ -53,39 +54,37 @@ roles:
       issue.opened: {}
       issue.comment: {}
       review_vote.posted: {}
-    can:
-      - issue_read
-      - issue_todo_list
-      - issue_todo_update
-      - issue_comment_read
-      - issue_mergeable
-      - issue_comment
-      - issue_create
-      - issue_review_vote
-      - issue_checks
-      - issue_merge
-      - contribution_list
-      - contribution_read
-      - contribution_apply
-      - contribution_close
-      - issue_close
-      - issue_attachment_upload
-      - roster_list
-      - session_recover
-      - release_create
-      - release_publish
-      - release_update
-      - release_delete
-      - release_upload_asset
+    # The maintainer orchestrates the issue: it merges, closes, applies
+    # contributions, recovers sessions and manages releases — so it keeps
+    # full write access with no tool blacklist.
+    permission: write
     prompt_file: .hangrix/prompts/maintainer.md
     llm:
       model: deepseek-v4-flash
       reasoning_effort: max   # max_*_tokens inherit from team
+  # Access model (GitHub-style): `permission:` is the coarse, server-
+  # enforced repo level — `read` allows read-only API calls, `write` adds
+  # mutations. Fine-grained capability is the `not:` tool blacklist:
+  # listed tools are hidden from the agent's LLM tool schema entirely
+  # (enforced agent-side). Most roles are `write` and share the
+  # `&dangerous` blacklist below — the irreversible / cross-role
+  # operations only the maintainer should perform. Per-role behaviour is
+  # otherwise shaped by the prompt, not by a tool whitelist.
   product-designer:
     triggers:
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_comment_read, issue_comment, issue_create, roster_list]
+    permission: write
+    not: &dangerous
+      - issue_merge
+      - issue_close
+      - contribution_apply
+      - session_recover
+      - release_create
+      - release_update
+      - release_delete
+      - release_publish
+      - release_upload_asset
     prompt_file: .hangrix/prompts/product-designer.md
     llm:
       model: gpt-5.4
@@ -94,7 +93,8 @@ roles:
     triggers:
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_comment_read, issue_comment, issue_create, roster_list]
+    permission: write
+    not: *dangerous
     prompt_file: .hangrix/prompts/architecture-designer.md
     llm:
       model: gpt-5.4
@@ -110,19 +110,8 @@ roles:
           - "apps/hangrix/internal/web/dist/**"
       issue.comment:
         mentioned_only: true
-    can:
-      - issue_read
-      - issue_comment_read
-      - issue_comment
-      - issue_review_vote
-      - contribution_list
-      - contribution_read
-      - read
-      - write
-      - edit
-      - glob
-      - grep
-      - bash
+    permission: write
+    not: *dangerous
     prompt_file: .hangrix/prompts/tester.md
     llm:
       model: deepseek-v4-flash
@@ -137,18 +126,8 @@ roles:
         - "pkg/**"
         - "go.work"
         - "go.work.sum"
-    can:
-      - issue_read
-      - issue_comment_read
-      - issue_mergeable
-      - issue_comment
-      - issue_create
-      - issue_attachment_upload
-      - contribution_list
-      - contribution_read
-      - contribution_set_meta
-      - contribution_close
-      - roster_list
+    permission: write
+    not: *dangerous
     prompt_file: .hangrix/prompts/server.md
 
   server-reviewer:
@@ -162,7 +141,8 @@ roles:
           - "**/*db/**"
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_comment_read, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
+    permission: write
+    not: *dangerous
     prompt_file: .hangrix/prompts/server-reviewer.md
     llm:
       model: gpt-5.4
@@ -176,18 +156,8 @@ roles:
       paths:
         - "apps/hangrix-agent/**"
         - "apps/hangrix-runner/**"
-    can:
-      - issue_read
-      - issue_comment_read
-      - issue_mergeable
-      - issue_comment
-      - issue_create
-      - issue_attachment_upload
-      - contribution_list
-      - contribution_read
-      - contribution_set_meta
-      - contribution_close
-      - roster_list
+    permission: write
+    not: *dangerous
     prompt_file: .hangrix/prompts/runtime.md
 
   runtime-reviewer:
@@ -198,7 +168,8 @@ roles:
           - "apps/hangrix-runner/**"
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_comment_read, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
+    permission: write
+    not: *dangerous
     prompt_file: .hangrix/prompts/runtime-reviewer.md
     llm:
       model: gpt-5.4
@@ -212,17 +183,8 @@ roles:
     scope:
       paths:
         - "apps/web/**"
-    can:
-      - issue_read
-      - issue_comment_read
-      - issue_comment
-      - issue_create
-      - issue_attachment_upload
-      - contribution_list
-      - contribution_read
-      - contribution_set_meta
-      - contribution_close
-      - roster_list
+    permission: write
+    not: *dangerous
     prompt_file: .hangrix/prompts/web.md
 
   web-reviewer:
@@ -236,7 +198,8 @@ roles:
           - "apps/web/.nuxt/**"
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_comment_read, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
+    permission: write
+    not: *dangerous
     prompt_file: .hangrix/prompts/web-reviewer.md
     llm:
       model: gpt-5.4
@@ -253,13 +216,8 @@ roles:
           - "apps/web/.nuxt/**"
       issue.comment:
         mentioned_only: true
-    can:
-      - issue_read
-      - issue_comment_read
-      - issue_comment
-      - contribution_list
-      - contribution_read
-      - roster_list
+    permission: write
+    not: *dangerous
     prompt_file: .hangrix/prompts/web-copy-lint.md
     llm:
       model: deepseek-v4-flash

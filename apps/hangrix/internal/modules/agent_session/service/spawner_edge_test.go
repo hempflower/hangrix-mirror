@@ -21,7 +21,7 @@ roles:
   backend:
     triggers:
       issue.opened: {}
-    can: [issue_read]
+    permission: read
     prompt_file: .hangrix/prompts/backend.md
 `
 
@@ -65,7 +65,7 @@ roles:
     prompt: hi
     triggers:
       issue.opened: {}
-    can: [issue_read]
+    permission: read
 `
 	h := newTestSpawner(t, []byte(yaml), nil)
 	got, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
@@ -99,7 +99,7 @@ roles:
     prompt: hi
     triggers:
       issue.opened: {}
-    can: [issue_read]
+    permission: read
     llm:
       model: claude-opus-4-7
 `
@@ -157,17 +157,17 @@ roles:
     prompt: hi
     triggers:
       issue.opened: {}
-    can: [issue_read]
+    permission: read
   dispatcher:
     prompt: hi
     triggers:
       issue.opened: {}
-    can: [issue_read]
+    permission: read
   reviewer:
     prompt: hi
     triggers:
       issue.opened: {}
-    can: [issue_read]
+    permission: read
 `
 	h := newTestSpawner(t, []byte(yaml), nil)
 	got, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{

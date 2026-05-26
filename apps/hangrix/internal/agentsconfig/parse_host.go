@@ -76,7 +76,7 @@ type roleWire struct {
 	// at decode-time, which yaml.v3 doesn't support natively. Keeping
 	// the raw node here lets buildRole walk the mapping by hand.
 	Triggers   yaml.Node  `yaml:"triggers"`
-	Can        []string   `yaml:"can"`
+	Permission string     `yaml:"permission"`
 	Not        []string   `yaml:"not"`
 	Scope      *scopeWire `yaml:"scope"`
 	Prompt     string     `yaml:"prompt"`
@@ -246,12 +246,12 @@ func buildReviewers(w *reviewersWire, roles map[string]*Role) (*ReviewersConfig,
 }
 
 // roleCanVote reports whether a role is permitted to call issue_review_vote.
-// A `can:` whitelist must list it explicitly; in the `not:` blacklist mode
-// (empty Can) the role gets every tool except those blacklisted.
+// Voting is a write operation, so the role needs "write" permission, and the
+// tool must not be hidden by the role's `not:` blacklist.
 func roleCanVote(role *Role) bool {
 	const tool = "issue_review_vote"
-	if len(role.Can) > 0 {
-		return containsStringFold(role.Can, tool)
+	if role.Permission != "write" {
+		return false
 	}
 	return !containsStringFold(role.Not, tool)
 }
@@ -407,6 +407,18 @@ func buildRole(key string, w *roleWire) (*Role, error) {
 		}
 	}
 
+	// Permission: GitHub-style repo access level. Empty defaults to
+	// "read" (fail-safe). Only "read"/"write" are accepted.
+	permission := strings.TrimSpace(strings.ToLower(w.Permission))
+	switch permission {
+	case "":
+		permission = "read"
+	case "read", "write":
+		// ok
+	default:
+		return nil, fmt.Errorf("roles.%s.permission=%q: %w", key, w.Permission, ErrInvalidPermission)
+	}
+
 	// Deduplicate and validate the MCP whitelist. Empty strings are
 	// rejected; duplicates are collapsed (first occurrence kept).
 	// We do NOT validate that server names exist in .mcp.json here
@@ -421,7 +433,7 @@ func buildRole(key string, w *roleWire) (*Role, error) {
 
 	return &Role{
 		Triggers:   triggers,
-		Can:        w.Can,
+		Permission: permission,
 		Not:        w.Not,
 		Scope:      scope,
 		Prompt:     w.Prompt,

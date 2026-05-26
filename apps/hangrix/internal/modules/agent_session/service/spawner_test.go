@@ -35,7 +35,7 @@ roles:
     prompt: hi
     triggers:
       issue.opened: {}
-    can: [issue_read, issue_comment]
+    permission: write
 `
 
 // hostYAMLMultiRole exercises trigger filtering: dispatcher subscribes
@@ -51,12 +51,12 @@ roles:
     prompt: hi
     triggers:
       issue.opened: {}
-    can: [issue_read, issue_comment, roster_list]
+    permission: write
   reviewer:
     prompt: hi
     triggers:
       commit.pushed: {}
-    can: [issue_read, issue_comment]
+    permission: write
 `
 
 // hostYAMLMentions exercises the M7b mention path: two roles each
@@ -75,13 +75,13 @@ roles:
     triggers:
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_comment]
+    permission: write
   frontend:
     prompt: hi
     triggers:
       issue.comment:
         mentioned_only: true
-    can: [issue_read, issue_comment]
+    permission: write
 `
 
 // newTestSpawner wires the unit-test stubs onto a Spawner. The host repo
@@ -233,15 +233,15 @@ func TestOnTriggerHappyPath(t *testing.T) {
 		t.Fatalf("working_branch = %q", s.WorkingBranch)
 	}
 
-	// Snapshot must round-trip as JSON and contain the role's tool ACL
-	// + the host image. We don't pin the full snapshot shape — only
-	// the keys an audit consumer would rely on.
+	// Snapshot must round-trip as JSON and contain the role's repo
+	// permission level + the host image. We don't pin the full snapshot
+	// shape — only the keys an audit consumer would rely on.
 	var snap map[string]any
 	if err := json.Unmarshal(s.RoleConfig, &snap); err != nil {
 		t.Fatalf("role_config not JSON: %v", err)
 	}
-	if got := snap["can"]; got == nil {
-		t.Fatalf("snapshot missing `can`")
+	if got := snap["permission"]; got == nil {
+		t.Fatalf("snapshot missing `permission`")
 	}
 	if got := snap["model"]; got != "claude-sonnet-4-6" {
 		t.Fatalf("snapshot model = %v", got)

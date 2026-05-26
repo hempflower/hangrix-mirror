@@ -17,18 +17,22 @@ type Role struct {
 	// declaration order.
 	Triggers map[Trigger]*TriggerSpec
 
-	// Can is the platform tool ACL whitelist for this role. Service
-	// layers higher up (the runner / dispatcher) consult this before
-	// allowing a tool call. Empty list AND empty Not means "no
-	// platform tools" — useful for roles that only run the LLM (e.g.
-	// summary bots). When Can is non-empty it takes precedence over
-	// Not (whitelist wins on conflict).
-	Can []string
+	// Permission is the role's GitHub-style repo permission level:
+	// "read" or "write". It is the coarse, server-enforced access
+	// boundary on the platform v1 REST API — "read" roles may call
+	// read-only endpoints (GET issue/comment/todo/contribution/…),
+	// "write" roles may additionally mutate (comment, edit, merge,
+	// release, …). Empty defaults to "read" (fail-safe: a role that
+	// forgets the field cannot mutate). Fine-grained per-tool control
+	// is NOT done here — see Not.
+	Permission string
 
-	// Not is the platform tool ACL blacklist for this role. It
-	// applies only when Can is empty: in that mode the role gets
-	// "every registered tool except the ones listed here". Empty
-	// list (the common case) leaves the whitelist in charge.
+	// Not is the role's tool blacklist. Listed tool names (local tools
+	// like bash/edit and/or platform tools like issue_merge) are hidden
+	// from the agent's LLM-facing tool schema entirely — the model never
+	// sees them. This is the fine-grained capability knob layered on top
+	// of the coarse Permission level. It is enforced agent-side (schema
+	// hiding), not by the server. Empty (the common case) hides nothing.
 	Not []string
 
 	// Scope is a soft constraint on which files the role typically

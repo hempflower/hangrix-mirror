@@ -59,8 +59,9 @@ type CallResult struct {
 // platform connection — useful in offline tests). The catalogue order
 // is local first then platform; within each group the supplied order
 // is preserved.
-func Build(localTools, platformTools, mcpTools []local.Tool, allow []string) *Registry {
+func Build(localTools, platformTools, mcpTools []local.Tool, allow, deny []string) *Registry {
 	allowSet := buildAllowSet(allow)
+	denySet := buildDenySet(deny)
 	r := &Registry{
 		byName:         map[string]local.Tool{},
 		platformByName: map[string]struct{}{},
@@ -69,6 +70,9 @@ func Build(localTools, platformTools, mcpTools []local.Tool, allow []string) *Re
 	register := func(tools []local.Tool, mark func(string)) {
 		for _, t := range tools {
 			if !allowSet.permit(t.Name()) {
+				continue
+			}
+			if _, denied := denySet[t.Name()]; denied {
 				continue
 			}
 			r.byName[t.Name()] = t
@@ -188,6 +192,19 @@ func (s allowSet) permit(name string) bool {
 	return ok
 }
 
+// buildDenySet turns a deny slice into a lookup set. Empty / nil deny
+// yields an empty set (nothing denied).
+func buildDenySet(deny []string) map[string]struct{} {
+	if len(deny) == 0 {
+		return map[string]struct{}{}
+	}
+	s := make(map[string]struct{}, len(deny))
+	for _, n := range deny {
+		s[n] = struct{}{}
+	}
+	return s
+}
+
 // ParseToolCatalog parses the HANGRIX_TOOL_CATALOG env var. Empty / unset
 // returns nil (no filter). Anything non-JSON is an error so a typo in the
 // runner config doesn't silently disable the filter.
@@ -199,6 +216,22 @@ func ParseToolCatalog(raw string) ([]string, error) {
 	var out []string
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		return nil, fmt.Errorf("HANGRIX_TOOL_CATALOG: %w", err)
+	}
+	return out, nil
+}
+
+// ParseToolDeny parses the HANGRIX_TOOL_DENY env var. Empty / unset
+// returns nil (deny nothing). Anything non-JSON is an error so a typo in
+// the runner config doesn't silently disable the filter. The result
+// applies to both local and platform tools by name.
+func ParseToolDeny(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, fmt.Errorf("HANGRIX_TOOL_DENY: %w", err)
 	}
 	return out, nil
 }
