@@ -85,6 +85,11 @@ type WorkflowRun struct {
 	StartedAt     *time.Time
 	FinishedAt    *time.Time
 	CreatedAt     time.Time
+	// TriggerActor is the actor who triggered this workflow run (user, agent, workflow, system).
+	TriggerActor *actor.Ref
+	// RunActor is the workflow run itself as an actor for provenance tracking
+	// of downstream side effects (e.g. releases created by this workflow).
+	RunActor *actor.Ref
 }
 
 // WorkflowJobRun is a single job execution within a workflow run.
