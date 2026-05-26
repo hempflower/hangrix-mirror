@@ -26,7 +26,7 @@ import (
 func (r *Registry) contributionListTool() *agentapidomain.Tool {
 	return &agentapidomain.Tool{
 		Name:        "contribution_list",
-		Description: "List the contribution branches on the current issue. Each entry has id, agent_role, ref_name, status (pending/approved/rejected/merged/closed), mergeable, merge_mode, head_sha, and diff stats. By default only non-terminal contributions (pending, approved, rejected) are returned — use include_closed / include_merged to also see closed or merged contributions. A contribution is created automatically when you push to refs/heads/issue-<N>/<your-role> — the git push response includes the contribution_id directly, so you don't need this tool just to discover your ID.",
+		Description: "List the contribution branches on the current issue. Each entry has id, agent_role, actor (with kind, id, display_name, role_key), ref_name, status (pending/approved/rejected/merged/closed), mergeable, merge_mode, head_sha, and diff stats. By default only non-terminal contributions (pending, approved, rejected) are returned — use include_closed / include_merged to also see closed or merged contributions. A contribution is created automatically when you push to refs/heads/issue-<N>/<your-role> — the git push response includes the contribution_id directly, so you don't need this tool just to discover your ID.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -63,7 +63,7 @@ func (r *Registry) contributionListTool() *agentapidomain.Tool {
 func (r *Registry) contributionReadTool() *agentapidomain.Tool {
 	return &agentapidomain.Tool{
 		Name:        "contribution_read",
-		Description: "Read one contribution: metadata, review status (verdict plus which required reviewers still must vote), and a checkout_hint to fetch the branch and compare locally. This tool no longer returns an inline diff — use git locally after fetching. Use the id from contribution_list.",
+		Description: "Read one contribution: metadata (id, agent_role, actor with kind/id/display_name/role_key), review status (verdict plus which required reviewers still must vote), and a checkout_hint to fetch the branch and compare locally. This tool no longer returns an inline diff — use git locally after fetching. Use the id from contribution_list.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -426,9 +426,15 @@ func (r *Registry) issueBranchAhead(scope *sessionScope) bool {
 // contributionSummary is the wire shape returned to agents for a contribution.
 func contributionSummary(c *issuedomain.Contribution) map[string]any {
 	out := map[string]any{
-		"id":            c.ID,
-		"issue_id":      c.IssueID,
-		"agent_role":    c.AgentRole,
+		"id":         c.ID,
+		"issue_id":   c.IssueID,
+		"agent_role": c.AgentRole,
+		"actor": map[string]any{
+			"kind":         string(c.Actor.Kind),
+			"id":           c.Actor.ID,
+			"display_name": c.Actor.DisplayName,
+			"role_key":     c.Actor.RoleKey,
+		},
 		"ref_name":      c.RefName,
 		"head_sha":      c.HeadSHA,
 		"base_sha":      c.BaseSHA,

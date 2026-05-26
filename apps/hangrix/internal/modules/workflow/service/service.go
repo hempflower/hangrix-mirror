@@ -14,6 +14,8 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/hangrix/hangrix/pkg/actor"
+
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
@@ -551,14 +553,29 @@ func (s *Service) DispatchRepoPush(ctx context.Context, repo Ref, branch string,
 // it is scoped to. Returns ErrInvalidWorkflowToken if the token is not found
 // or the run is in a terminal state.
 func (s *Service) ValidateWorkflowToken(ctx context.Context, token string) (int64, error) {
-	repoID, status, err := s.store.GetRunByToken(ctx, token)
+	repoID, _, _, status, err := s.store.GetRunByToken(ctx, token)
 	if err != nil {
 		return 0, domain.ErrInvalidWorkflowToken
 	}
-	if domain.RunStatus(status).Terminal() {
+	if status.Terminal() {
 		return 0, domain.ErrInvalidWorkflowToken
 	}
 	return repoID, nil
+}
+
+// ValidateWorkflowTokenWithActor validates a hangrix_wf_ token and returns
+// both the repo ID and a workflow actor.Ref for provenance tracking.
+// Returns ErrInvalidWorkflowToken if the token is not found or the run
+// is in a terminal state.
+func (s *Service) ValidateWorkflowTokenWithActor(ctx context.Context, token string) (int64, actor.Ref, error) {
+	repoID, runID, workflowName, status, err := s.store.GetRunByToken(ctx, token)
+	if err != nil {
+		return 0, actor.Ref{}, domain.ErrInvalidWorkflowToken
+	}
+	if status.Terminal() {
+		return 0, actor.Ref{}, domain.ErrInvalidWorkflowToken
+	}
+	return repoID, actor.WorkflowRef(runID, workflowName), nil
 }
 
 // SetStepOutputs merges a step's outputs into the job's step_outputs_json.

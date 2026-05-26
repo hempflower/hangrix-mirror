@@ -1,6 +1,8 @@
 -- name: CreateRelease :one
-INSERT INTO releases (repo_id, tag_name, target_commit_sha, title, notes, is_draft)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO releases (repo_id, tag_name, target_commit_sha, title, notes, is_draft,
+    created_actor_kind, created_actor_user_id, created_actor_role_key, created_actor_workflow_run_id, created_actor_display_name)
+VALUES ($1, $2, $3, $4, $5, $6,
+    $7, sqlc.narg('created_actor_user_id'), $8, sqlc.narg('created_actor_workflow_run_id'), $9)
 RETURNING *;
 
 -- name: GetReleaseByID :one
@@ -41,7 +43,12 @@ RETURNING *;
 UPDATE releases
 SET is_draft    = FALSE,
     published_at = NOW(),
-    updated_at   = NOW()
+    updated_at   = NOW(),
+    published_actor_kind = $2,
+    published_actor_user_id = sqlc.narg('published_actor_user_id'),
+    published_actor_role_key = $3,
+    published_actor_workflow_run_id = sqlc.narg('published_actor_workflow_run_id'),
+    published_actor_display_name = $4
 WHERE id = $1 AND is_draft = TRUE
 RETURNING *;
 
@@ -49,8 +56,10 @@ RETURNING *;
 DELETE FROM releases WHERE id = $1;
 
 -- name: CreateAsset :one
-INSERT INTO release_assets (release_id, name, content_type, size_bytes, storage_key)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO release_assets (release_id, name, content_type, size_bytes, storage_key,
+    uploaded_actor_kind, uploaded_actor_user_id, uploaded_actor_role_key, uploaded_actor_workflow_run_id, uploaded_actor_display_name)
+VALUES ($1, $2, $3, $4, $5,
+    $6, sqlc.narg('uploaded_actor_user_id'), $7, sqlc.narg('uploaded_actor_workflow_run_id'), $8)
 RETURNING *;
 
 -- name: GetAssetByID :one
