@@ -414,6 +414,20 @@ func (d *WorkflowJobDriver) buildWorkflowEnv(job *client.WorkflowJob) (map[strin
 	// within workflow steps (e.g. creating releases via curl).
 	env["HANGRIX_PLATFORM_BASE_URL"] = d.BaseURL
 	env["HANGRIX_WORKFLOW_TOKEN"] = job.WorkflowToken
+	// Trigger actor identity — who or what initiated this workflow run.
+	// These are injected so steps can attribute side effects (comments,
+	// releases, etc.) to the correct actor. Per the design doc, the
+	// trigger actor is distinct from the run actor (workflow:run:<id>)
+	// that the platform uses for subsequent step side effects.
+	if job.TriggerActorKind != "" {
+		env["HANGRIX_TRIGGER_ACTOR_KIND"] = job.TriggerActorKind
+	}
+	if job.TriggerActorID != "" {
+		env["HANGRIX_TRIGGER_ACTOR_ID"] = job.TriggerActorID
+	}
+	if job.TriggerActorDisplayName != "" {
+		env["HANGRIX_TRIGGER_ACTOR_DISPLAY_NAME"] = job.TriggerActorDisplayName
+	}
 	// Dispatch inputs already transformed to WORKFLOW_INPUT_* keys by
 	// the server; inject them as-is so steps can use $WORKFLOW_INPUT_REF etc.
 	for k, v := range job.Inputs {
