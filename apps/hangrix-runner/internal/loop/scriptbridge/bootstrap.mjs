@@ -188,7 +188,14 @@ const hangrix = Object.freeze({
       };
     },
     async updateTodo(input) {
-      return callPlatform("POST", `/api/repos/${ctx.repo.owner}/${ctx.repo.name}/issues/${input.issue_number || ctx.workflow.run_id}/todos`, {
+      if (!input.issue_number) {
+        const err = new Error("updateTodo: issue_number is required");
+        err.name = "HangrixApiError";
+        err.code = "validation_failed";
+        err.status = 422;
+        throw err;
+      }
+      return callPlatform("POST", `/api/repos/${ctx.repo.owner}/${ctx.repo.name}/issues/${input.issue_number}/todos`, {
         todo_id:  input.todo_id,
         content:  input.content,
         status:   input.status,
