@@ -28,7 +28,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -69,70 +68,50 @@ type Registry interface {
 
 type Handler struct {
 	registry  Registry
-	validator runnerdomain.SessionTokenValidator
+	api       AgentAPI
+	validator SessionTokenValidator
 }
 
 type HandlerDeps struct {
 	Registry  *service.Registry
-	Validator runnerdomain.SessionTokenValidator
+	API       AgentAPI
+	Validator SessionTokenValidator
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
 		registry:  deps.Registry,
+		api:       deps.API,
 		validator: deps.Validator,
 	}
 }
 
 // NewHandlerWithRegistry is the test entry point: supply a fake
 // Registry that returns whatever tools the test cares about.
-func NewHandlerWithRegistry(registry Registry, validator runnerdomain.SessionTokenValidator) *Handler {
+func NewHandlerWithRegistry(registry Registry, validator SessionTokenValidator) *Handler {
 	return &Handler{registry: registry, validator: validator}
 }
 
-type ctxKey int
-
-const ctxKeySession ctxKey = iota
-
 func (h *Handler) RegisterRoutes(r chi.Router) {
+	// Legacy tool-dispatch routes — kept for backward compatibility during
+	// migration to the v1 REST surface. Consumers should migrate to
+	// /api/agent/v1/... endpoints.
 	r.Route("/api/agent/tools", func(r chi.Router) {
-		r.Use(h.bearerAuth)
+		r.Use(BearerAuth(h.validator))
 		r.Get("/", h.list)
 		r.Post("/{name}", h.call)
 	})
+
+	// v1 REST API — resource-oriented, GitHub-style.
+	if h.api != nil {
+		r.Route("/api/v1", func(r chi.Router) {
+			r.Use(BearerAuth(h.validator))
+			RegisterV1Routes(r, h.api)
+		})
+	}
 }
 
-// bearerAuth resolves Authorization: Bearer hgxs_... → AgentSession.
-// 401 on missing/malformed header; 403 on token invalid/inactive.
-func (h *Handler) bearerAuth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw := r.Header.Get("Authorization")
-		const prefix = "Bearer "
-		if !strings.HasPrefix(raw, prefix) {
-			httpx.WriteError(w, http.StatusUnauthorized, "missing bearer token")
-			return
-		}
-		token := strings.TrimSpace(strings.TrimPrefix(raw, prefix))
-		if token == "" {
-			httpx.WriteError(w, http.StatusUnauthorized, "missing bearer token")
-			return
-		}
-		sess, err := h.validator.ValidateSessionToken(r.Context(), token)
-		if err != nil {
-			switch {
-			case errors.Is(err, runnerdomain.ErrInvalidSessionToken):
-				httpx.WriteError(w, http.StatusForbidden, "invalid session token")
-			case errors.Is(err, runnerdomain.ErrSessionTokenInactive):
-				httpx.WriteError(w, http.StatusForbidden, "session token revoked or session terminated")
-			default:
-				httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-			}
-			return
-		}
-		ctx := context.WithValue(r.Context(), ctxKeySession, sess)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
+
 
 // toolDescriptor is the JSON projection of one tool surfaced by GET
 // /api/agent/tools, so an agent that wants to verify its built-in schemas
@@ -144,7 +123,7 @@ type toolDescriptor struct {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	sess, _ := r.Context().Value(ctxKeySession).(*runnerdomain.AgentSession)
+	sess := GetSession(r)
 	if sess == nil {
 		httpx.WriteError(w, http.StatusUnauthorized, "missing bearer token")
 		return
@@ -170,7 +149,7 @@ type callResponse struct {
 }
 
 func (h *Handler) call(w http.ResponseWriter, r *http.Request) {
-	sess, _ := r.Context().Value(ctxKeySession).(*runnerdomain.AgentSession)
+	sess := GetSession(r)
 	if sess == nil {
 		httpx.WriteError(w, http.StatusUnauthorized, "missing bearer token")
 		return

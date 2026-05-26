@@ -1,8 +1,6 @@
-// Package agent_api wires the agent-facing HTTP API: a plain REST handler
-// in handler/ (POST /api/agent/tools/{name}, bearer-authed with the
-// session token), tool implementations in service/, and the thin Tool
-// descriptor in domain/. Despite the historical "MCP" name this is not an
-// MCP / JSON-RPC server — it is an ordinary JSON-over-HTTP API.
+// Package agent_api wires the agent-facing HTTP API: a legacy RPC-style
+// POST /api/agent/tools/{name} (deprecated, kept for compatibility during
+// v1 migration) and the new GitHub-style REST surface under /api/agent/v1/.
 //
 // Cross-module dependencies all flow through domain interfaces (issue,
 // repo, runner, git, agent_session). The module imports none of the
@@ -20,6 +18,7 @@ import (
 func Module() *ioc.Module {
 	m := ioc.NewModule()
 	m.Provide(service.NewRegistry).ToSelf()
+	m.Provide(service.NewAPIService).ToInterface(new(handler.AgentAPI))
 	m.Provide(handler.NewHandler).ToInterface(new(server.RouteProvider))
 	return m
 }
