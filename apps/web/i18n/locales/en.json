@@ -779,6 +779,22 @@
       "issue.opened": "Issue opened",
       "issue.comment": "Comment",
       "workflow.dispatch": "Manual"
+      },
+      "stepType": {
+        "run": "Shell",
+        "release": "Release",
+        "script": "Script",
+        "showScript": "Show script",
+        "hideScript": "Hide script"
+      },
+      "step": {
+        "showScript": "Show script",
+        "hideScript": "Hide script"
+      },
+      "error": {
+        "nodeMissing": "Node.js runtime not found in container",
+        "scriptFailed": "Script execution failed",
+        "apiCallFailed": "Platform API call failed"
       }
       }
 },

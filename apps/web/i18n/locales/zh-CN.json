@@ -779,6 +779,22 @@
       "issue.opened": "Issue 创建",
       "issue.comment": "评论",
       "workflow.dispatch": "手动触发"
+      },
+      "stepType": {
+        "run": "Shell",
+        "release": "Release",
+        "script": "脚本",
+        "showScript": "显示脚本",
+        "hideScript": "隐藏脚本"
+      },
+      "step": {
+        "showScript": "显示脚本",
+        "hideScript": "隐藏脚本"
+      },
+      "error": {
+        "nodeMissing": "容器中未找到 Node.js 运行时",
+        "scriptFailed": "脚本执行失败",
+        "apiCallFailed": "平台 API 调用失败"
       }
       }
 },

@@ -57,6 +57,7 @@ export interface WorkflowJobRun {
   exit_code: number | null
   error_message: string
   created_at: string
+  steps?: WorkflowStep[]
   step_outputs?: Record<string, Record<string, WorkflowOutputValue>>
   job_outputs?: Record<string, WorkflowOutputValue>
 }
@@ -87,4 +88,15 @@ export interface WorkflowRunListResp {
 export interface WorkflowJobLogsResp {
   lines: WorkflowJobLogLine[]
   total: number
+}
+
+export interface WorkflowStep {
+  id?: string
+  name: string
+  type: string
+  run?: string
+  script?: string
+  env?: Record<string, string>
+  dir?: string
+  with?: Record<string, any>
 }

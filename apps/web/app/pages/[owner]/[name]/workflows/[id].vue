@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { Check, ChevronDown, ChevronRight, Clock, Copy, Play, ScrollText, Terminal } from 'lucide-vue-next'
+import { Check, ChevronDown, ChevronRight, Clock, Code, Copy, Play, ScrollText, Terminal } from 'lucide-vue-next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -141,6 +141,37 @@ function streamClass(s: string) {
 // --- Outputs ---
 const expandedSteps = ref<Record<string, boolean>>({})
 const copiedKey = ref<string | null>(null)
+const expandedScripts = ref<Record<string, boolean>>({})
+
+function hasSteps(job: WorkflowJobRun): boolean {
+  return !!(job.steps && job.steps.length > 0)
+}
+
+function toggleScript(stepKey: string) {
+  expandedScripts.value = {
+    ...expandedScripts.value,
+    [stepKey]: !expandedScripts.value[stepKey],
+  }
+}
+
+function stepTypeVariant(type: string) {
+  switch (type) {
+    case 'release': return 'default' as const
+    case 'script': return 'outline' as const
+    default: return 'secondary' as const
+  }
+}
+
+function stepTypeLabel(type: string): string {
+  if (type === 'run' || type === '') return t('repo.workflows.stepType.run')
+  if (type === 'release') return t('repo.workflows.stepType.release')
+  if (type === 'script') return t('repo.workflows.stepType.script')
+  return type || 'run'
+}
+
+function stepIdKey(step: { id?: string; name: string }): string {
+  return step.id || step.name
+}
 
 function hasOutputs(job: WorkflowJobRun): boolean {
   return !!(job.job_outputs && Object.keys(job.job_outputs).length > 0)
@@ -307,6 +338,41 @@ async function copyToClipboard(value: string, id: string) {
                     </dd>
                   </div>
                 </dl>
+              </div>
+
+              <!-- Step list with type badges and script content -->
+              <div v-if="hasSteps(job)" class="px-3 py-2.5 bg-muted/30">
+                <div class="space-y-2">
+                  <div
+                    v-for="step in job.steps"
+                    :key="stepIdKey(step)"
+                  >
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="text-xs font-mono font-medium">{{ step.name }}</span>
+                      <Badge :variant="stepTypeVariant(step.type)" class="text-[10px] h-4 px-1">
+                        {{ stepTypeLabel(step.type) }}
+                      </Badge>
+                      <button
+                        v-if="step.type === 'script' && step.script"
+                        type="button"
+                        class="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                        @click="toggleScript(`${job.id}-${stepIdKey(step)}`)"
+                      >
+                        <Code class="size-3" />
+                        <template v-if="expandedScripts[`${job.id}-${stepIdKey(step)}`]">
+                          {{ t('repo.workflows.step.hideScript') }}
+                        </template>
+                        <template v-else>
+                          {{ t('repo.workflows.step.showScript') }}
+                        </template>
+                      </button>
+                    </div>
+                    <pre
+                      v-if="step.type === 'script' && step.script && expandedScripts[`${job.id}-${stepIdKey(step)}`]"
+                      class="mt-1.5 rounded bg-muted p-2 font-mono text-[11px] leading-relaxed overflow-x-auto whitespace-pre-wrap break-all"
+                    >{{ step.script }}</pre>
+                  </div>
+                </div>
               </div>
 
               <!-- Step outputs (collapsible) -->
