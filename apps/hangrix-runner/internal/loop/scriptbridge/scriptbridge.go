@@ -62,6 +62,10 @@ type Driver struct {
 	// ContainerWorkdir is the container-side working directory (typically
 	// "/workspace"). Script files are placed relative to this.
 	ContainerWorkdir string
+	// Log, when set, receives every stdout/stderr line from the script
+	// process.  stream is "stdout" or "stderr".  When nil, lines are
+	// drained and discarded.
+	Log func(stream, line string)
 }
 
 // Result captures the outcome of a script step execution.
@@ -167,9 +171,10 @@ func (d *Driver) Run(ctx context.Context, containerID string, step Step, baseEnv
 		sc := bufio.NewScanner(handle.Stdout())
 		sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
 		for sc.Scan() {
-			// stdout is consumed but not stored — the caller forwards
-			// lines to the platform log via the scriptbridge's log
-			// callback. For now we just drain.
+			line := sc.Text()
+			if d.Log != nil {
+				d.Log("stdout", line)
+			}
 		}
 		errs <- sc.Err()
 	}()
@@ -178,7 +183,11 @@ func (d *Driver) Run(ctx context.Context, containerID string, step Step, baseEnv
 		sc := bufio.NewScanner(handle.Stderr())
 		sc.Buffer(make([]byte, 0, 64*1024), 4<<20)
 		for sc.Scan() {
-			stderrLines = append(stderrLines, sc.Text())
+			line := sc.Text()
+			stderrLines = append(stderrLines, line)
+			if d.Log != nil {
+				d.Log("stderr", line)
+			}
 		}
 		errs <- sc.Err()
 	}()

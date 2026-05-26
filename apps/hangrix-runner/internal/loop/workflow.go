@@ -937,16 +937,19 @@ func (d *WorkflowJobDriver) runScriptStep(
 		return nil, fmt.Errorf("build env: %w", err)
 	}
 
-	// 2. Per-step env overrides (already expanded).
+	// 2. Per-step env overrides — expand templates, then merge into the
+	//    base env.  The expanded overrides are also passed separately to
+	//    the script bridge so it can merge them over baseEnv without
+	//    re-introducing unexpanded placeholders.
+	stepOverrides := make(map[string]string, len(step.Env))
 	if len(step.Env) > 0 {
-		se := make(map[string]string, len(step.Env))
 		for k, v := range step.Env {
-			se[k] = v
+			stepOverrides[k] = v
 		}
-		if err := expandEnv(se, job.RepoVariables); err != nil {
+		if err := expandEnv(stepOverrides, job.RepoVariables); err != nil {
 			return nil, fmt.Errorf("expand step env: %w", err)
 		}
-		for k, v := range se {
+		for k, v := range stepOverrides {
 			stepEnv[k] = v
 		}
 	}
@@ -974,12 +977,15 @@ func (d *WorkflowJobDriver) runScriptStep(
 		},
 		HostWorkdir:      repoCheckout,
 		ContainerWorkdir: workingDir,
+		Log: func(stream, line string) {
+			d.appendLog(ctx, job.JobRunID, stream, line)
+		},
 	}
 	spec := scriptbridge.Step{
 		ID:     step.ID,
 		Name:   step.Name,
 		Script: step.Script,
-		Env:    step.Env,
+		Env:    stepOverrides,
 		Dir:    step.Dir,
 	}
 
