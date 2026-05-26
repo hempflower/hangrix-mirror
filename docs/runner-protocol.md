@@ -49,7 +49,7 @@ hgxs_<...>   session (agent)   一会话    server 在 pollTasks 下行给 runne
 }
 ```
 
-`base_url` 是 agent 调平台一切后端的统一锚点。Agent 自己拼 `<base>/api/llm/v1/responses`（chat completions）和 `<base>/api/agent/tools/<name>`（POST 调用每个平台工具）。Runner 把 base 注入容器 env (`HANGRIX_PLATFORM_BASE_URL`)；用 sha256 作 content-addressed 缓存 key 维护 `~/.hangrix/agent-binaries/<sha>/`。`serve` 启动时 `GET /bootstrap` 一次刷新，sha 变了重新下载。
+`base_url` 是 agent 调平台一切后端的统一锚点。Agent 自己拼 `<base>/api/llm/v1/responses`（chat completions）和 `<base>/api/v1/...`（v1 REST 端点）。Runner 把 base 注入容器 env (`HANGRIX_PLATFORM_BASE_URL`)；用 sha256 作 content-addressed 缓存 key 维护 `~/.hangrix/agent-binaries/<sha>/`。`serve` 启动时 `GET /bootstrap` 一次刷新，sha 变了重新下载。
 
 ## 端点表
 

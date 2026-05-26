@@ -62,8 +62,8 @@ type SessionDriver struct {
 
 	// BaseURL is the platform's reachable-from-container base. The
 	// runner injects it into HANGRIX_PLATFORM_BASE_URL so the agent
-	// can derive `/api/llm/v1/responses` and `/api/agent/tools/<name>`
-	// for itself.
+	// can derive `/api/llm/v1/responses` and `/api/v1/...` REST
+	// endpoints for itself.
 	BaseURL string
 
 	// IdleTimeout / IdleTimeoutWithJobs override the package defaults
@@ -738,7 +738,7 @@ func isEnvVarName(s string) bool {
 // start from whatever the platform sent (its ExtraEnv plus any role
 // hints), then layer the runner-side override on top so the in-container
 // agent knows where the platform lives. The agent derives the LLM
-// `/api/llm/v1/responses` and tool `/api/agent/tools/<name>` paths
+// `/api/llm/v1/responses` and v1 REST `/api/v1/...` paths
 // from the same base — see apps/hangrix-agent/internal/config/config.go.
 func buildAgentEnv(task *client.Task, baseURL string) map[string]string {
 	env := map[string]string{}

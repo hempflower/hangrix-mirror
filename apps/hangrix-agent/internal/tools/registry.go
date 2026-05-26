@@ -2,7 +2,7 @@
 // the LLM: in-process locals (read / write / edit / glob / grep / bash
 // / webfetch) plus the platform tools (issue_read,
 // issue_comment, …) which are hardcoded built-ins talking HTTP to
-// `<HANGRIX_PLATFORM_BASE_URL>/api/agent/tools/<name>`.
+// `<HANGRIX_PLATFORM_BASE_URL>/api/v1/...` REST endpoints.
 //
 // HANGRIX_TOOL_CATALOG is parsed by the caller (cmd/hangrix-agent) and
 // passed in as Allow. An empty Allow means "no filter — every tool is

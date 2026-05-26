@@ -78,7 +78,7 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 		panic(fmt.Errorf("tools: parse catalog: %w", err))
 	}
 	var platformTools []local.Tool
-	if base := deps.Cfg.PlatformToolsBaseURL(); base != "" {
+	if base := deps.Cfg.PlatformV1BaseURL(); base != "" {
 		client := platform.NewClient(base, deps.Cfg.SessionToken)
 		platformTools = platform.All(client)
 	}

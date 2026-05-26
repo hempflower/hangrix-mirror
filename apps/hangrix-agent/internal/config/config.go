@@ -21,9 +21,9 @@ import (
 // Config without touching os.Getenv.
 //
 // PlatformBaseURL is the one network anchor the agent needs. Both the
-// LLM proxy (`<base>/api/llm/v1/responses`) and the platform tool
-// endpoints (`<base>/api/agent/tools/<name>`) are derived from it by
-// the llm and tools/platform modules respectively.
+// LLM proxy (`<base>/api/llm/v1/responses`) and the platform v1 REST
+// endpoints (`<base>/api/v1/...`) are derived from it by the llm and
+// tools/platform modules respectively.
 type Config struct {
 	SessionToken     string
 	PlatformBaseURL  string
@@ -70,7 +70,7 @@ type Config struct {
 
 // LLMEndpoint returns the URL the agent POSTs `/responses` against.
 // Centralised here so the suffix lives next to its sibling
-// PlatformToolsBaseURL — neither leaks into other modules.
+// PlatformV1BaseURL — neither leaks into other modules.
 func (c *Config) LLMEndpoint() string {
 	if c.PlatformBaseURL == "" {
 		return ""
@@ -78,13 +78,14 @@ func (c *Config) LLMEndpoint() string {
 	return strings.TrimRight(c.PlatformBaseURL, "/") + "/api/llm/v1"
 }
 
-// PlatformToolsBaseURL returns the base the platform tool wrappers
-// hit (one POST per tool: `<base>/<tool-name>`).
-func (c *Config) PlatformToolsBaseURL() string {
+// PlatformV1BaseURL returns the base path for the v1 REST API
+// (`<base>/api/v1`) that the platform tool wrappers use to construct
+// per-endpoint URLs (e.g. `<base>/api/v1/issues/current`).
+func (c *Config) PlatformV1BaseURL() string {
 	if c.PlatformBaseURL == "" {
 		return ""
 	}
-	return strings.TrimRight(c.PlatformBaseURL, "/") + "/api/agent/tools"
+	return strings.TrimRight(c.PlatformBaseURL, "/") + "/api/v1"
 }
 
 // NewConfig is the ioc-shaped provider: zero parameters, returns *Config.
