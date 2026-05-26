@@ -40,11 +40,11 @@ llm:
 reviewers:
   rules:
     - paths: ["apps/hangrix/**", "pkg/**", "go.work", "go.work.sum"]
-      reviewers: [server-reviewer, tester]
+      reviewers: [server-reviewer, tester, architecture-designer-reviewer]
     - paths: ["apps/hangrix-agent/**", "apps/hangrix-runner/**"]
-      reviewers: [runtime-reviewer, tester]
+      reviewers: [runtime-reviewer, tester, architecture-designer-reviewer]
     - paths: ["apps/web/**"]
-      reviewers: [web-reviewer, tester]
+      reviewers: [web-reviewer, tester, architecture-designer-reviewer]
   fallback: [maintainer]
 
 roles:
@@ -89,6 +89,31 @@ roles:
     prompt_file: .hangrix/prompts/product-designer.md
     llm:
       model: gpt-5.4
+
+  architecture-designer:
+    triggers:
+      issue.comment:
+        mentioned_only: true
+    can: [issue_read, issue_comment_read, issue_comment, issue_create, roster_list]
+    prompt_file: .hangrix/prompts/architecture-designer.md
+    llm:
+      model: gpt-5.4
+
+  architecture-designer-reviewer:
+    triggers:
+      commit.pushed:
+        paths_ignore:
+          - "**/*.md"
+          - "**/testdata/**"
+          - ".hangrix/**"
+          - "apps/hangrix/internal/web/dist/**"
+      issue.comment:
+        mentioned_only: true
+    can: [issue_read, issue_comment_read, issue_comment, issue_review_vote, contribution_list, contribution_read, roster_list]
+    prompt_file: .hangrix/prompts/architecture-designer-reviewer.md
+    llm:
+      model: gpt-5.4
+      reasoning_effort: high
 
   tester:
     triggers:

@@ -10,12 +10,14 @@ On `issue.opened` and every top-level `issue.comment`, pick the next role with `
 
 Bug reports (title/body describes broken behaviour, regression, or malfunction) → route directly to the relevant worker by affected paths, skipping product-designer.
 
-Fresh feature / enhancement issue → `@agent-product-designer`. Once a spec exists, route by paths:
+Fresh feature / enhancement issue → `@agent-product-designer`. Once a product spec exists, route to `@agent-architecture-designer` for a technical architecture plan. Once architecture is settled, route by paths:
 - `apps/hangrix/**` / `pkg/**` → `@agent-server`
 - `apps/hangrix-agent/**` / `apps/hangrix-runner/**` → `@agent-runtime`
 - `apps/web/**` → `@agent-web`
 
 Cross-module work gets multiple mentions.
+
+**Full pipeline:** product-designer → architecture-designer → workers. If the issue is purely technical (e.g. refactor, dependency upgrade), skip product-designer and go straight to architecture-designer → workers. If it's trivial, route directly to workers.
 
 ## Non-code changes
 
@@ -36,7 +38,7 @@ After routing a new issue and planning the work, create todos via `issue_todo_up
 
 This is the issue→base gate. The issue branch starts empty (identical to base) and only fills as you `contribution_apply` approved branches into it — so **never `issue_merge` before contributions are applied**, or you ship an empty merge. The server blocks `issue_merge` while any contribution is still `pending` (its required reviewers haven't all voted) or the issue branch carries no changes; confirm readiness with `issue_mergeable` first.
 
-Before merging, call `roster_list` to confirm no worker roles (`server`, `runtime`, `web`, `product-designer`) are still active — all must be finished. Then verify: every contribution you intend to ship is `applied` (merged into the issue branch), no contribution is still `pending`, `issue_todo_list` reports `all_done: true`, AND `issue_checks` is green. You don't tally individual votes — the server computes each contribution's `approved` / `rejected` status from its required reviewers (the `reviewers:` block in agents.yml, matched by changed paths).
+Before merging, call `roster_list` to confirm no worker roles (`server`, `runtime`, `web`, `product-designer`, `architecture-designer`) are still active — all must be finished. Then verify: every contribution you intend to ship is `applied` (merged into the issue branch), no contribution is still `pending`, `issue_todo_list` reports `all_done: true`, AND `issue_checks` is green. You don't tally individual votes — the server computes each contribution's `approved` / `rejected` status from its required reviewers (the `reviewers:` block in agents.yml, matched by changed paths).
 
 Immediately before `issue_merge`, post one final `issue_comment` summarising the decision (`LGTM — merging` plus a one-line rationale). Then `issue_merge`, then `issue_close`.
 
