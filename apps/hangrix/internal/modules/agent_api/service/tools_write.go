@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -358,6 +359,9 @@ func (r *Registry) issueMergeTool() *agentapidomain.Tool {
 			// disables it. Same logic as the web merge handler.
 			cleanup := r.tryDeleteIssueBranch(ctx, scope.repo.ID, scope.fsPath, scope.issue.BranchName)
 
+			// Try to delete contribution branches under the issue namespace.
+			contribCleanup := r.tryDeleteContributionBranches(ctx, scope.repo.ID, scope.fsPath, scope.issue.Number, scope.issue.ID)
+
 			if r.deps.Archiver != nil {
 				_, _ = r.deps.Archiver.OnIssueClosed(ctx, scope.repo.ID, *sess.IssueNumber)
 			}
@@ -368,6 +372,9 @@ func (r *Registry) issueMergeTool() *agentapidomain.Tool {
 			}
 			if cleanup != nil {
 				result["cleanup"] = cleanup
+			}
+			if contribCleanup != nil {
+				result["contrib_cleanup"] = contribCleanup
 			}
 			return textResult(result), nil
 		},
@@ -416,9 +423,96 @@ func (r *Registry) tryDeleteIssueBranch(ctx context.Context, repoID int64, fsPat
 	return &mergeCleanupResult{Deleted: true}
 }
 
+// tryDeleteContributionBranches attempts to delete every contribution branch
+// under the issue's namespace (issue-<N>/...) after a successful issue merge.
+// It mirrors tryDeleteContributionBranches in the issue HTTP handler.  Best-
+// effort: failures are logged but never prevent the merge from succeeding.
+// Returns nil when there are no matching branches or ListRefs failed.
+func (r *Registry) tryDeleteContributionBranches(ctx context.Context, repoID int64, fsPath string, issueNumber, issueID int64) []contribCleanupResult {
+	refs, err := r.deps.Git.ListRefs(fsPath)
+	if err != nil {
+		log.Printf("agent_api: list refs for contribution cleanup repo=%d issue=%d: %v", repoID, issueNumber, err)
+		return nil
+	}
+
+	prefix := fmt.Sprintf("issue-%d/", issueNumber)
+	var results []contribCleanupResult
+
+	for _, ref := range refs.Branches {
+		if !strings.HasPrefix(ref.Name, prefix) {
+			continue
+		}
+		result := contribCleanupResult{Branch: ref.Name}
+
+		blocked := false
+
+		// Check branch protections.
+		if r.deps.Protections != nil {
+			rules, err := r.deps.Protections.List(ctx, repoID)
+			if err == nil {
+				if rule := repodomain.MatchProtection(rules, ref.Name); rule != nil && rule.ForbidDelete {
+					result.Deleted = false
+					result.Reason = "protected"
+					blocked = true
+				}
+			}
+		}
+
+		// Run branch-write guards.
+		if !blocked {
+			for _, g := range r.deps.Guards {
+				if err := g.CheckBranchWrite(ctx, repodomain.BranchWriteOp{
+					RepoID:     repoID,
+					Branch:     ref.Name,
+					OldSHA:     ref.SHA,
+					IsDelete:   true,
+					IsInternal: true,
+				}); err != nil {
+					result.Deleted = false
+					result.Reason = "denied"
+					blocked = true
+					break
+				}
+			}
+		}
+
+		if !blocked {
+			if err := r.deps.Git.DeleteBranch(fsPath, ref.Name); err != nil {
+				log.Printf("agent_api: delete contribution branch %s repo=%d issue=%d: %v", ref.Name, repoID, issueNumber, err)
+				result.Deleted = false
+				result.Reason = "delete_failed"
+			} else {
+				result.Deleted = true
+				// go-git Storer.RemoveReference bypasses hooks, so
+				// SyncContribution never sees the zero-oid update.
+				// Mark the contribution closed here explicitly.
+				contribRef := "refs/heads/" + ref.Name
+				if c, cerr := r.deps.Contributions.GetContributionByRef(ctx, issueID, contribRef); cerr == nil && c != nil && !c.Status.Terminal() {
+					if _, cerr = r.deps.Contributions.SetContributionStatus(ctx, c.ID, issuedomain.ContribStatusClosed); cerr != nil {
+						log.Printf("agent_api: close contribution %d after branch delete: %v", c.ID, cerr)
+					}
+				}
+			}
+		}
+		results = append(results, result)
+	}
+
+	if len(results) == 0 {
+		return nil
+	}
+	return results
+}
+
 // mergeCleanupResult duplicates mergeCleanup from the issue HTTP handler
 // so the agent_api module stays decoupled from the issue handler package.
 type mergeCleanupResult struct {
+	Deleted bool   `json:"deleted"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// contribCleanupResult mirrors contribCleanupResult from the issue HTTP handler.
+type contribCleanupResult struct {
+	Branch  string `json:"branch"`
 	Deleted bool   `json:"deleted"`
 	Reason  string `json:"reason,omitempty"`
 }
