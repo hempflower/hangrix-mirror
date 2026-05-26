@@ -2,7 +2,7 @@
 
 This repo IS the Hangrix platform, so the agent-config schema is both the *implementation* and a *consumer*. A change to the schema MUST propagate through three artefacts in the same commit, or one of them will quietly drift and the next change will surface the drift as a bug:
 
-1. **Parser** — `apps/hangrix/internal/agentsconfig/{host.go, parse_host.go, normalize.go, role.go, triggers.go, mentions.go}`. The Go types here are the runtime contract. Round-trip tests live at `parse_host_test.go`, `triggers_test.go`, `mentions_test.go`.
+1. **Parser** — `apps/hangrix/internal/agentsconfig/{host.go, parse_host.go, normalize.go, role.go, triggers.go, mentions.go}`. The Go types here are the runtime contract. Round-trip tests live at `parse_host_test.go`, `triggers_test.go`, `mentions_test.go`. After editing `.hangrix/agents.yml` (or a role file), confirm it still parses with `go test ./apps/hangrix/internal/agentsconfig/...`.
 2. **JSON Schema** — `docs/agents.schema.json`. External tooling (editors, validators) reads this. Keep field names, enum values, and `oneOf` mutex blocks in lockstep with the parser.
 3. **Starter template** — `apps/hangrix/internal/modules/repo/templates/initial/.hangrix/agents.yml`. This is what the seeder hands fresh host repos. It is parsed at server startup time, so a schema drift here means every new host repo lands broken on day one.
 

@@ -38,7 +38,7 @@ You own administrative changes to: `.hangrix/**`, `.github/**`, `README.md`, `AG
 
 ## Agent hire/fire
 
-Before each merge, reconsider whether the team still fits. Add/retire/rename roles as the repo evolves, updating both `.hangrix/agents.yml` and the matching prompt file. Confirm it parses: `go test ./apps/hangrix/internal/agentsconfig/...`.
+Before each merge, reconsider whether the team still fits. Add/retire/rename roles as the repo evolves, updating both `.hangrix/agents.yml` and the matching prompt file. Confirm it still parses (command in [.hangrix/knowledge/agents-yml-self-reference.md](.hangrix/knowledge/agents-yml-self-reference.md)).
 
 
 ## Todos

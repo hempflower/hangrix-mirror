@@ -16,6 +16,20 @@ Three places Postgres + Redis live; mind which one your turn is hitting.
 
 `apps/hangrix/conf/config.yaml` is the default file; the env override prefix is `API_` (`server.addr` → `API_SERVER_ADDR`, `database.dsn` → `API_DATABASE_DSN`).
 
+## Build, smoke & test commands per surface
+
+The verification matrix used by workers before they push and by the `tester` on every push. Three stages: build/smoke → runtime smoke → test suite. Pick the row matching the contribution's changed paths.
+
+| Surface (changed paths) | Build / smoke | Runtime smoke | Test suite |
+| --- | --- | --- | --- |
+| `apps/hangrix/**`, `pkg/**` | `cd apps/hangrix && go build ./...` (or `go vet ./...` when slow) | `go build -o /tmp/hangrix . && timeout 10 /tmp/hangrix 2>&1 \| head -50` — start with a minimal config, wait for a ready/healthy signal; a panic stack or non-zero exit = fail | `go test ./...` (narrow to `./internal/modules/<x>/...` when module-local) |
+| `apps/hangrix-agent/**` | `cd apps/hangrix-agent && go build ./...` | `go build -o /tmp/hangrix-agent . && timeout 5 /tmp/hangrix-agent --help 2>&1` (starts without panic) | `go test ./...` |
+| `apps/hangrix-runner/**` | `cd apps/hangrix-runner && go build ./...` | `go build -o /tmp/hangrix-runner . && timeout 5 /tmp/hangrix-runner --help 2>&1` | `go test ./...` |
+| `apps/web/**` | `pnpm --filter web typecheck` | `cd apps/web && timeout 15 pnpm dev 2>&1 \| head -50` (watch for Nuxt ready, kill after) | `pnpm --filter web typecheck` (no vitest suite yet) — plus the visual checks in [.hangrix/knowledge/web-stack.md](.hangrix/knowledge/web-stack.md) |
+| Cross-cutting / top-level config | `pnpm build` | — | `pnpm test` |
+
+Build/vet catches compile errors; the runtime smoke catches startup panics (broken migrations, missing config, runtime-dependency failures) that compilation alone cannot. The full enrollment + container E2E for the runtime binaries (`docker compose up -d`) is in [docs/runner-protocol.md](docs/runner-protocol.md).
+
 ## Common test failure modes
 
 - **`connection refused` from pgx inside an agent container** → s6 did not start postgres. Most likely `container.entrypoint: [/init]` is missing from `.hangrix/agents.yml` (the runner reverted to `sleep infinity`), or the image was built without s6 (check [.hangrix/agent.Dockerfile](.hangrix/agent.Dockerfile)). Confirm with `pgrep -x postgres` or `pg_isready -h 127.0.0.1 -U hangrix`.

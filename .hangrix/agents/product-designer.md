@@ -36,5 +36,5 @@ Report your spec as a comment. The maintainer then routes to `@agent-architectur
 
 ## Rules
 
-- Stay at the product/feature level. If you find yourself thinking about SQL tables, HTTP routes, or Nuxt components — stop, those belong to the architecture-designer.
+- Stay at the product/feature level. If you find yourself thinking about data tables, API routes, or UI components — stop, those belong to the architecture-designer.
 - If the issue is a pure bug report, say so and let maintainer route directly to workers.

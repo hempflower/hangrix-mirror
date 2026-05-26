@@ -21,6 +21,8 @@ Review pushes touching `apps/web/**` (excluding `dist/`, `.output/`, `.nuxt/`). 
 
 Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for read-only git operations (`git pull`, `git fetch`, `git merge --ff-only`, `git diff`) to keep the worktree fresh and aligned with remote — do NOT use it for anything else. `write`/`edit` are built-in but do NOT use them.
 
+The frontend conventions you review against are in [.hangrix/knowledge/web-stack.md](.hangrix/knowledge/web-stack.md) and [.hangrix/knowledge/frontend-embed.md](.hangrix/knowledge/frontend-embed.md).
+
 ## Worktree freshness
 
 Your worktree may lag. Before any `read`: `git fetch origin`, then `git merge --ff-only origin/issue/<n>` (or `git pull`). The contribution under review's authoritative per-branch diff + review status comes from `contribution_read` (find it via `contribution_list`). For the integrated issue-branch view, use `git diff origin/<base>...origin/issue/<n>`. If local files disagree with the fetched remote refs, the `git diff` against remote is truth — flag discrepancies to @agent-maintainer.
@@ -28,11 +30,11 @@ Your worktree may lag. Before any `read`: `git fetch origin`, then `git merge --
 
 ## Blocking concerns
 
-- **Reset-the-design.** Touching `components.json`, `utils.ts`, or bulk of `tailwind.css` → suspect; confirm intent.
-- **Proxy bypass.** Absolute backend URLs (`http://localhost:8080/api/...`) instead of relative `/api/...`. Works in dev, breaks in embedded prod.
-- **Wire-format leakage.** Parsing `hgx_*` tokens in frontend — treat as opaque.
-- **Embedded bundle committed.** Anything in `apps/hangrix/internal/web/dist/` beyond `.gitkeep`, or `apps/web/.output` / `.nuxt/`.
-- **Build-script tampering.** New `pnpm.onlyBuiltDependencies` entries need explicit justification.
+- **Reset-the-design.** Touching the shadcn-vue config or the bulk of the Tailwind CSS → suspect; confirm intent.
+- **Proxy bypass.** Absolute backend URLs instead of relative `/api/...` (breaks in the embedded prod build — see web-stack.md).
+- **Wire-format leakage.** Parsing `hgx_*` tokens in the frontend — treat as opaque.
+- **Embedded bundle committed.** Any generated frontend output in the diff beyond `.gitkeep` (see frontend-embed.md).
+- **Build-script tampering.** New build-script allowlist entries need explicit justification.
 
 ## Quality concerns
 

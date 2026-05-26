@@ -11,6 +11,20 @@ Shared libs under `pkg/{common,cryptobox,ioc}/`. `go.work` ties the four Go modu
 
 The platform that this repo defines (agent config schema, runner protocol, llm proxy, agent identity) is documented under `docs/` — `agent-config.md`, `runner-protocol.md`, `llm-proxy.md`, `agent-identity.md`, `tech-stack.md`.
 
+## Runtime internals (apps/hangrix-agent, apps/hangrix-runner)
+
+Package map for work on the agent loop and orchestrator:
+
+- **`apps/hangrix-agent`** (per-session binary, one process per role, exits when the loop ends): LLM proxy `internal/llm`, IPC wire `internal/ipc`, tool catalogue `internal/tools`, work loop `internal/runtime/loop.go`, embedded baseline prompt `internal/prompt/baseline.md`.
+- **`apps/hangrix-runner`** (host process): enrollment `internal/cli`, poll loop `internal/loop`, Docker orchestration `internal/orchestrator`, agent-binary cache `internal/agentbin`, session state `internal/store`.
+
+- **IPC contract** lives in both `apps/hangrix-agent/internal/ipc` and `apps/hangrix-runner/internal/orchestrator`. Because the runner caches the agent binary, a wire change shipped to only one side wedges sessions — wire changes must land in both binaries in the same commit.
+- **Baseline prompt** (`internal/prompt/baseline.md`) is `//go:embed`-ded into the agent binary; it is the OS layer every host repo's agents inherit, on top of which each role's `.hangrix/agents/<role>.md` body is appended.
+- **Tool registration** is in `internal/tools`: local tools under `tools/local`; platform tools arrive over MCP from the server.
+- **Session token** (`hgxs_…`, see AGENTS.md "Token wire formats") flows runner → agent via the `HANGRIX_SESSION_TOKEN` env var and authenticates the agent's LLM / MCP / git calls.
+
+Build/test commands for these binaries are in [.hangrix/knowledge/local-stack.md](.hangrix/knowledge/local-stack.md); the full enrollment + container E2E is in [docs/runner-protocol.md](docs/runner-protocol.md).
+
 ## Container image lifecycle
 
 A host repo declares either `container.image:` (pull-only) or `container.build:` (Dockerfile in the repo) — the spawner computes a deterministic docker tag (auto-derived from repo id + dockerfile path + build args when build is used) and ships it to the runner. The runner's `ensureImage` in [apps/hangrix-runner/internal/orchestrator/docker.go](apps/hangrix-runner/internal/orchestrator/docker.go) probes `docker image inspect <tag>` first and only invokes `docker build` on miss, so reuses are free. BuildKit is forced on via `DOCKER_BUILDKIT=1`.

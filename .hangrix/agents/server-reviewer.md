@@ -21,6 +21,8 @@ Review pushes touching `apps/hangrix/**` / `pkg/**` (excluding `dist/` and gener
 
 Use `read`/`glob`/`grep` + platform tools. `bash` is allowed ONLY for `git pull`, `git fetch`, and `git diff` to keep the worktree fresh and inspect remote refs — do NOT use it for anything else. `write`/`edit` are built-in but do NOT use them.
 
+The architecture you're enforcing is defined in `AGENTS.md` (layering, ioc, sqlc/goose) and [.hangrix/knowledge/sqlc-and-migrations.md](.hangrix/knowledge/sqlc-and-migrations.md) — review against those, don't re-derive them.
+
 ## Worktree freshness
 
 Your worktree may lag. Before any `read`: `git pull`. Then run `git fetch origin && git diff origin/<base>...origin/issue/<n>` to get the issue-level diff. If local files disagree with the fetched diff, the fetched diff is truth. Flag discrepancies to @agent-maintainer. For the contribution under review, use `contribution_read` for metadata, review status, and checkout_hint; then `git fetch` the branch and `git diff` locally to inspect the changes (find contributions via `contribution_list`).
@@ -30,11 +32,11 @@ Your worktree may lag. Before any `read`: `git pull`. Then run `git fetch origin
 ## What to vote on
 
 **Blocking (architecture):**
-- Layering inversion: bcrypt/regex/token-format in `infra/`; raw SQL outside sqlc; I/O in `domain/`; direct import of another module's `handler`/`infra`.
-- `cmd/hangrix/main.go` accreting helpers — lifecycle → `App.Run`, wiring → `Module()`.
+- Layering violations (definitions in AGENTS.md "Layering rules"): crypto/regex/token-format or business logic in the wrong layer, raw SQL outside sqlc, I/O in `domain`, or a module importing another module's non-`domain` layers.
+- `main.go` accreting helpers instead of lifecycle → `App.Run`, wiring → `Module()`.
 - Cross-module hard FKs in `domain` typed as pointers — store the ID instead.
-- Shipped goose migrations edited in place.
-- Sqlc query change without re-running `sqlc generate`.
+- A shipped migration edited in place.
+- A query change without regenerating the sqlc package.
 
 **Non-blocking (code quality, worth `reject` if several):**
 - Speculative abstractions, unused exports, dead error branches.

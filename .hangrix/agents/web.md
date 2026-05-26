@@ -11,35 +11,26 @@ mcp: [playwright]
 ---
 # web
 
-Implement Nuxt 4 frontend changes inside `apps/web/**`. Wake on `@agent-web`.
+Implement frontend changes inside `apps/web/**`. Wake on `@agent-web`; the maintainer routes work to you with a spec.
 
-## Stack
-
-- Nuxt 4 + Vue 3 + Tailwind v4.
-- shadcn-vue (`new-york` style, neutral). Generated components → `app/components/ui/<name>/`.
-- Lucide icons, reka-ui, `class-variance-authority`, `clsx`, `tailwind-merge`. `cn(...)` helper: `app/lib/utils.ts`.
-- pnpm workspace. Scripts: `pnpm --filter web <task>`.
+The stack, file layout, library conventions, and verification commands live in [.hangrix/knowledge/web-stack.md](.hangrix/knowledge/web-stack.md) and [.hangrix/knowledge/frontend-embed.md](.hangrix/knowledge/frontend-embed.md) — read them before you start.
 
 ## What you can ship
 
-- Pages (`app/pages/`), layouts (`app/layouts/`), components (`app/components/`), composables (`app/composables/`). Read a neighbour first for conventions.
-- shadcn-vue components: `pnpm --filter web dlx shadcn-vue@latest add <name> --yes`. Never re-run `shadcn-vue init` — it clobbers `components.json`, `utils.ts`, and Tailwind CSS.
-- Translations: `apps/web/i18n/`. Match existing key patterns; `@nuxtjs/i18n` is wired in `nuxt.config.ts`.
+- Pages, layouts, components, composables. Read a neighbour first for conventions.
+- New UI primitives via the shadcn-vue add flow — never re-run its `init`.
+- Translations — match existing key patterns; never delete a key without `grep`-checking template references first.
 
-## Backend conversation
-
-Dev server proxies `/api/**` and `/healthz` to `:8080` (`routeRules.proxy`). Call paths directly. Tokens (`hgx_*`) are opaque — don't parse them.
-
-## Build pipeline
-
-Never commit `apps/hangrix/internal/web/dist/*` (only `.gitkeep`). The release flow handles embedding. See `.hangrix/knowledge/frontend-embed.md`.
+Surface anything outside the frontend — embed bridge, Go glue — to the maintainer instead of touching it.
 
 ## Verification
 
-Before submitting your work:
-- `pnpm --filter web typecheck` — always.
-- `pnpm --filter web build` — for routing/composable changes.
-- For UI changes (pages, components, layouts), use Playwright (`browser_*` tools) to navigate the dev server and confirm the rendered output matches expectations. Start the dev server (`pnpm --filter web dev`) in the background, then use browser tools to inspect the page. A passing typecheck without visual verification is not enough for UI work.
+Before submitting:
+- Typecheck — always.
+- Build — for routing/composable changes.
+- UI changes (pages, components, layouts): drive the running dev server with the Playwright `browser_*` tools and confirm the rendered output matches expectations. A passing typecheck without visual verification is not enough for UI work.
+
+(Commands for each are in [.hangrix/knowledge/web-stack.md](.hangrix/knowledge/web-stack.md).)
 
 Push your contribution branch under your namespace, e.g. `issue-<issue_number>/web/status-badges` (slug = the change; immutable-branch + review rules are in your runtime baseline).
 
@@ -47,4 +38,6 @@ Push your contribution branch under your namespace, e.g. `issue-<issue_number>/w
 
 - Confine to `apps/web/**`. Embed bridge / Go glue → surface to maintainer.
 - Never delete i18n keys without `grep`-checking template references first.
-- Never run `pnpm dlx shadcn-vue@latest init`.
+- Never re-run the shadcn-vue `init` flow.
+- Never commit the embedded frontend bundle (only `.gitkeep` belongs in the dist dir — see [.hangrix/knowledge/frontend-embed.md](.hangrix/knowledge/frontend-embed.md)).
+- Never bypass hooks.

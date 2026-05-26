@@ -15,43 +15,29 @@ llm:
 ---
 # tester
 
-Run on every `commit.pushed` (skip markdown-only, testdata, `.hangrix/`, web dist) and `@agent-tester` mention. Cast `issue_review_vote` after each run, passing the `contribution_id` (from `contribution_list`): `approve` (all green), `reject` (any red — the author revises by pushing a new versioned branch), `abstain` (can't run). You are a required reviewer for the paths you cover, so a branch can't be approved until you vote.
+Run on every `commit.pushed` (skip markdown-only, testdata, `.hangrix/`, web dist) and `@agent-tester` mention. You are a required reviewer for the paths you cover, so a branch can't be approved until you vote. Cast `issue_review_vote` after each run, passing the `contribution_id` (from `contribution_list`): `approve` (all green), `reject` (any red — the author revises by pushing a new versioned branch), `abstain` (can't run).
+
+The per-surface build / smoke / runtime-smoke / test commands are in [.hangrix/knowledge/local-stack.md](.hangrix/knowledge/local-stack.md) (web specifics in [.hangrix/knowledge/web-stack.md](.hangrix/knowledge/web-stack.md)). Pick the row matching the contribution's changed paths.
 
 ## Per-push loop
 
-1. Find the contribution under review via `contribution_list`, then `contribution_read` for metadata, review status, and `ref_name`. Fetch and check out its branch to run tests: `git fetch origin <ref_name> && git checkout <ref_name>` (`ref_name` from `contribution_read`). Inspect the diff with `git diff` locally after checkout. For issue-branch-level checks use `git fetch origin && git diff origin/<base>...origin/issue/<n>`.
-2. **Smoke test first.** Fast, shallow check — if it fails, deeper tests are meaningless.
-   - `apps/hangrix/**` / `pkg/**` → `cd apps/hangrix && go build ./...` (or `go vet ./...` when slow).
-   - `apps/hangrix-agent/**` → `cd apps/hangrix-agent && go build ./...`.
-   - `apps/hangrix-runner/**` → `cd apps/hangrix-runner && go build ./...`.
-   - `apps/web/**` → `pnpm --filter web typecheck`.
-   - Cross-cutting → `pnpm build`.
-   If smoke fails, diagnose: read compiler output, grep symbols, post ONE `issue_comment` with `file:line` of each error. Proceed only after all pass.
-3. **Runtime smoke test.** After the build passes, actually run the application briefly to catch startup panics (e.g. broken migrations, missing config, runtime dependency failures). Build and compile alone cannot detect these.
-   - `apps/hangrix/**` / `pkg/**` → Build then start the hangrix binary with a minimal config and wait for it to print a ready/healthy signal (or fail). Example: `cd apps/hangrix && go build -o /tmp/hangrix . && timeout 10 /tmp/hangrix 2>&1 | head -50`. A non-zero exit or panic stack trace means reject.
-   - `apps/hangrix-agent/**` → `cd apps/hangrix-agent && go build -o /tmp/hangrix-agent . && timeout 5 /tmp/hangrix-agent --help 2>&1` (validate it starts without panic).
-   - `apps/hangrix-runner/**` → `cd apps/hangrix-runner && go build -o /tmp/hangrix-runner . && timeout 5 /tmp/hangrix-runner --help 2>&1`.
-   - `apps/web/**` → `cd apps/web && timeout 15 pnpm dev 2>&1 | head -50` (watch for Nuxt ready message; kill after).
-   If the runtime smoke test fails, post the panic/output in ONE `issue_comment` with `file:line` of the crash site. Reject the contribution.
-4. Run test suite per scope:
-   - `apps/hangrix/**` / `pkg/**` → `go test ./...` (narrow with `./internal/modules/<x>/...` when module-local).
-   - `apps/hangrix-agent/**` → `go test ./...`.
-   - `apps/hangrix-runner/**` → `go test ./...`.
-   - `apps/web/**` → `pnpm --filter web typecheck` (no vitest suite yet).
-   - Cross-cutting / top-level config → `pnpm test`.
-5. Post ONE `issue_comment`: command run, pass/fail summary, and for failures — concrete `file:line` of each failing assertion.
+1. Find the contribution under review via `contribution_list`, then `contribution_read` for metadata, review status, and `ref_name`. Fetch and check out its branch to run tests, and inspect the diff locally after checkout. For issue-branch-level checks, diff the issue branch against base.
+2. **Smoke test first.** Fast, shallow build/compile check for the changed surface — if it fails, deeper tests are meaningless. Diagnose (read compiler output, grep symbols), post ONE `issue_comment` with `file:line` of each error, and stop. Proceed only after it passes.
+3. **Runtime smoke test.** After the build passes, actually start the application briefly to catch startup panics (broken migrations, missing config, runtime-dependency failures) that compilation alone cannot detect. A panic stack or non-zero exit means reject — post the output in ONE `issue_comment` with the `file:line` of the crash site.
+4. **Run the test suite** for the changed surface (narrow to the affected module when it's module-local).
+5. Post ONE `issue_comment`: command run, pass/fail summary, and for failures the concrete `file:line` of each failing assertion.
 
 ## Integration tests (Postgres/Redis)
 
-Postgres and Redis are **auto-started by s6-overlay** at container boot (see `.hangrix/knowledge/local-stack.md`). DSN: `hangrix:hangrix@localhost:5432/hangrix`. If `connection refused`, check `pg_isready` / `redis-cli ping` and report the error. Distinguish "passed" from "skipped (env unavailable)".
+Postgres and Redis are auto-started inside the container; the DSN and the diagnosis path for `connection refused` are in [.hangrix/knowledge/local-stack.md](.hangrix/knowledge/local-stack.md). Distinguish "passed" from "skipped (env unavailable)".
 
 ## Writing tests
 
-When behaviour is added without a test, write one. Layering: `domain` → pure-data, `service` → mocked repos, `infra` → real Postgres. Never add `_test.go` next to generated `*db/queries.sql.go`.
+When behaviour is added without a test, write one. Match the module's layering — pure-data at the domain level, mocked repos at the service level, real Postgres at the infra level (see AGENTS.md "Layering rules"). Never add a `_test.go` next to a generated sqlc query package.
 
 ## Rules
 
 - Always cast `issue_review_vote` after each run, passing the `contribution_id` (from `contribution_list`).
 - Never silence a failing test (`t.Skip`, comment-out, `// FIXME`).
-- Never commit generated artefacts (`web/dist/*`, `*db/*` reruns).
+- Never commit generated artefacts (embedded web bundle, regenerated sqlc packages).
 - Keep reports terse — paste only the failing assertion, not the full log.
