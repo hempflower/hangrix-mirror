@@ -3,6 +3,7 @@ package loop
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hangrix/hangrix/apps/hangrix-runner/internal/client"
+	"github.com/hangrix/hangrix/apps/hangrix-runner/internal/loop/scriptbridge"
 	"github.com/hangrix/hangrix/apps/hangrix-runner/internal/orchestrator"
 )
 
@@ -166,9 +168,12 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 	for i, step := range job.Steps {
 		stepName := step.Name
 		if stepName == "" {
-			if step.Type == "release" {
+			switch step.Type {
+			case "release":
 				stepName = fmt.Sprintf("release %s", withString(step.With, "tag"))
-			} else {
+			case "script":
+				stepName = "script"
+			default:
 				stepName = step.Run
 			}
 		}
@@ -186,6 +191,27 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 			}
 			// Index outputs for subsequent step interpolation.
 			// runReleaseStep already called reportStepResult on success.
+			stepID := step.ID
+			if stepID == "" {
+				stepID = fmt.Sprintf("%d", i+1)
+			}
+			if len(outputs) > 0 {
+				stepOutputs[stepID] = outputs
+			}
+			continue
+		}
+
+		if step.Type == "script" {
+			// ---- script step: execute via Node.js with hangrix SDK ----
+			outputs, err := d.runScriptStep(stepCtx, job, containerID, workingDir, step, i, stepOutputs, repoCheckout)
+			if err != nil {
+				msg := fmt.Sprintf("step %q: %v", stepName, err)
+				d.appendSystemLog(ctx, job.JobRunID, msg)
+				d.reportStepResult(ctx, job, step, i, -1, nil, nil)
+				d.terminate(ctx, job, "failed", -1, msg)
+				return nil
+			}
+			// Index outputs for subsequent step interpolation.
 			stepID := step.ID
 			if stepID == "" {
 				stepID = fmt.Sprintf("%d", i+1)
@@ -882,6 +908,95 @@ func (d *WorkflowJobDriver) runReleaseStep(
 	// Mask any output values that match repo secrets.
 	masked := maskSecretValues(outputs, job.RepoVariables)
 	d.reportStepResult(ctx, job, step, stepIndex, 0, outputs, masked)
+
+	return outputs, nil
+}
+
+// ---- script step execution ----
+
+// runScriptStep executes a "script" step by running the user's JavaScript
+// via Node.js inside the container, with the hangrix SDK injected by the
+// bootstrap bridge.
+//
+// On success it returns the captured step outputs so the caller can index
+// them for subsequent step interpolation. Step outputs are read from the
+// $HANGRIX_STEP_OUTPUT_FILE written by the bootstrap's flushOutputs().
+func (d *WorkflowJobDriver) runScriptStep(
+	ctx context.Context,
+	job *client.WorkflowJob,
+	containerID string,
+	workingDir string,
+	step client.WorkflowStep,
+	stepIndex int,
+	stepOutputs map[string]map[string]string,
+	repoCheckout string,
+) (map[string]string, error) {
+	// 1. Build the base runtime env for this step.
+	stepEnv, err := d.buildWorkflowEnv(job)
+	if err != nil {
+		return nil, fmt.Errorf("build env: %w", err)
+	}
+
+	// 2. Per-step env overrides (already expanded).
+	if len(step.Env) > 0 {
+		se := make(map[string]string, len(step.Env))
+		for k, v := range step.Env {
+			se[k] = v
+		}
+		if err := expandEnv(se, job.RepoVariables); err != nil {
+			return nil, fmt.Errorf("expand step env: %w", err)
+		}
+		for k, v := range se {
+			stepEnv[k] = v
+		}
+	}
+
+	// 3. Inject HANGRIX_STEP_OUTPUT_FILE so the bootstrap knows where to
+	//    write key=value outputs.
+	stepOutputFile := stepOutputPath(step, stepIndex)
+	stepEnv["HANGRIX_STEP_OUTPUT_FILE"] = stepOutputFile
+
+	// 4. Serialise accumulated step outputs as JSON so the bootstrap's
+	//    getStepOutputs() can serve them.
+	stepOutputsJSON := ""
+	if len(stepOutputs) > 0 {
+		b, err := json.Marshal(stepOutputs)
+		if err != nil {
+			return nil, fmt.Errorf("marshal step outputs: %w", err)
+		}
+		stepOutputsJSON = string(b)
+	}
+
+	// 5. Build the scriptbridge driver and step spec.
+	sd := &scriptbridge.Driver{
+		Exec: func(ctx context.Context, cid, wd string, env map[string]string, args ...string) (scriptbridge.ExecHandle, error) {
+			return d.Orchestrator.Exec(ctx, cid, wd, env, args...)
+		},
+		HostWorkdir:      repoCheckout,
+		ContainerWorkdir: workingDir,
+	}
+	spec := scriptbridge.Step{
+		ID:     step.ID,
+		Name:   step.Name,
+		Script: step.Script,
+		Env:    step.Env,
+		Dir:    step.Dir,
+	}
+
+	// 6. Run the script via the bridge.
+	result := sd.Run(ctx, containerID, spec, stepEnv, stepOutputsJSON)
+	if result.ErrorKind != "" {
+		msg := result.ErrorMessage
+		if result.ErrorDetails != nil {
+			if code, ok := result.ErrorDetails["code"]; ok {
+				msg = fmt.Sprintf("%s (code=%v)", msg, code)
+			}
+		}
+		return nil, fmt.Errorf("%s: %s", result.ErrorKind, msg)
+	}
+
+	// 7. Read captured step outputs from the output file.
+	outputs := d.captureAndReportStepOutputs(ctx, job, containerID, step, stepIndex)
 
 	return outputs, nil
 }
