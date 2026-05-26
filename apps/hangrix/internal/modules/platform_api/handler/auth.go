@@ -22,12 +22,6 @@ const (
 	ctxKeyActor               // *apidomain.Actor (v1)
 )
 
-// SessionTokenValidator is the subset of runnerdomain.SessionTokenValidator
-// the platform_api module depends on.
-type SessionTokenValidator interface {
-	ValidateSessionToken(ctx context.Context, plaintext string) (*runnerdomain.AgentSession, error)
-}
-
 // GetSession returns the AgentSession stored by the legacy bearerAuth
 // middleware. Returns nil when the middleware hasn't run.
 func GetSession(r *http.Request) *runnerdomain.AgentSession {
@@ -48,7 +42,7 @@ func GetActor(r *http.Request) *apidomain.Actor {
 // runner token for the attachment download endpoint.
 //
 // 401 on missing/malformed header; 403 on token invalid/inactive.
-func BearerAuth(validator SessionTokenValidator) func(http.Handler) http.Handler {
+func BearerAuth(validator runnerdomain.SessionTokenValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw := r.Header.Get("Authorization")

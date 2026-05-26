@@ -11,16 +11,18 @@ package handler
 
 import (
 	"github.com/go-chi/chi/v5"
+
+	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
 
 type Handler struct {
 	api       AgentAPI
-	validator SessionTokenValidator
+	validator runnerdomain.SessionTokenValidator
 }
 
 type HandlerDeps struct {
 	API       AgentAPI
-	Validator SessionTokenValidator
+	Validator runnerdomain.SessionTokenValidator
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
