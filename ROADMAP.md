@@ -37,6 +37,7 @@ Hangrix 是一个 **AI-Native 的 git 平台**。
 - Runner ↔ 服务端协议 → [docs/runner-protocol.md](docs/runner-protocol.md)
 - Agent / host yaml schema → [docs/agent-config.md](docs/agent-config.md)
 - 技术栈与前端布局 → [docs/tech-stack.md](docs/tech-stack.md)
+- 长期计划系统（制定 / 推进 / 可见，M9+）→ [docs/plan-dependencies.md](docs/plan-dependencies.md)（依赖边 + planner，原型）· [docs/plan-engine.md](docs/plan-engine.md)（推进引擎，原型）· [docs/plan-view.md](docs/plan-view.md)（计划视图）
 
 ## 里程碑
 
