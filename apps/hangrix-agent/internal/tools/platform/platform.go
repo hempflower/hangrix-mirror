@@ -515,7 +515,7 @@ func All(client *Client) []local.Tool {
 
 		{
 			name:        "contribution_list",
-			description: "List the contribution branches on the current issue. Each entry has id, agent_role, ref_name, status (pending/approved/rejected/merged/closed), mergeable, merge_mode, head_sha, and diff stats. By default excludes closed and merged contributions. Use include_closed and include_merged to optionally include them. A contribution is created automatically when you push to issue-<N>/<your-role>/<slug>.",
+			description: "List the contribution branches on the current issue. Each entry has id, agent_role (the owning agent role key; maps to actor.role_key in the unified actor model), ref_name, status (pending/approved/rejected/merged/closed), mergeable, merge_mode, head_sha, and diff stats. By default excludes closed and merged contributions. Use include_closed and include_merged to optionally include them. A contribution is created automatically when you push to issue-<N>/<your-role>/<slug>.",
 			schema: objectSchema(map[string]any{
 				"include_closed": boolProp("When true, include contributions with status 'closed' in the results. Default: false (closed contributions are excluded)."),
 				"include_merged": boolProp("When true, include contributions with status 'merged' in the results. Default: false (merged contributions are excluded)."),
@@ -523,7 +523,7 @@ func All(client *Client) []local.Tool {
 		},
 		{
 			name:        "contribution_read",
-			description: "Read one contribution: metadata (id, agent_role, ref_name, status, mergeable, merge_mode, head_sha, diff stats), review status (verdict, required reviewers still pending), and a checkout_hint with the branch ref and issue branch names so you can fetch the contribution branch locally and inspect its diff with git. Use the id from contribution_list.",
+			description: "Read one contribution: metadata (id, agent_role — the owning role key, maps to actor.role_key; ref_name, status, mergeable, merge_mode, head_sha, diff stats), review status (verdict, required reviewers still pending), and a checkout_hint with the branch ref and issue branch names so you can fetch the contribution branch locally and inspect its diff with git. Use the id from contribution_list.",
 			schema: objectSchema(map[string]any{
 				"id": intProp("Contribution id to read (from contribution_list)."),
 			}, []string{"id"}),

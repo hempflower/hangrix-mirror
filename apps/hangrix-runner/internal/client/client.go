@@ -248,6 +248,16 @@ type WorkflowJob struct {
 	// run's repo. It is injected as HANGRIX_WORKFLOW_TOKEN env var for
 	// steps that need to call authenticated platform APIs (e.g. release).
 	WorkflowToken string `json:"workflow_token,omitempty"`
+	// TriggerActorKind identifies the kind of entity that triggered this
+	// workflow run: "user", "agent", "workflow", or "system".
+	TriggerActorKind string `json:"trigger_actor_kind,omitempty"`
+	// TriggerActorID is the stable actor identifier (e.g. "user:1",
+	// "agent:maintainer", "workflow:run:45", "system:server").
+	TriggerActorID string `json:"trigger_actor_id,omitempty"`
+	// TriggerActorDisplayName is the human-readable name for the
+	// triggering actor (e.g. "hempflower", "@agent-maintainer",
+	// "workflow/release#45").
+	TriggerActorDisplayName string `json:"trigger_actor_display_name,omitempty"`
 }
 
 // WorkflowContainer carries the resolved container definition for a
