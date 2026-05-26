@@ -352,20 +352,8 @@ func rowToRelease(r releasedb.Release) *domain.Release {
 		Title:           r.Title,
 		Notes:           r.Notes,
 		IsDraft:         r.IsDraft,
-		CreatedActor: actor.Ref{
-			Kind:          actor.Kind(r.CreatedActorKind),
-			DisplayName:   r.CreatedActorDisplayName,
-			UserID:        r.CreatedActorUserID.Int64,
-			RoleKey:       r.CreatedActorRoleKey,
-			WorkflowRunID: r.CreatedActorWorkflowRunID.Int64,
-		},
-		PublishedActor: actor.Ref{
-			Kind:          actor.Kind(r.PublishedActorKind),
-			DisplayName:   r.PublishedActorDisplayName,
-			UserID:        r.PublishedActorUserID.Int64,
-			RoleKey:       r.PublishedActorRoleKey,
-			WorkflowRunID: r.PublishedActorWorkflowRunID.Int64,
-		},
+		CreatedActor:    releaseActorRef(r.CreatedActorKind, r.CreatedActorUserID, r.CreatedActorRoleKey, r.CreatedActorWorkflowRunID, r.CreatedActorDisplayName),
+		PublishedActor:  releaseActorRef(r.PublishedActorKind, r.PublishedActorUserID, r.PublishedActorRoleKey, r.PublishedActorWorkflowRunID, r.PublishedActorDisplayName),
 		CreatedAt: r.CreatedAt.Time,
 		UpdatedAt: r.UpdatedAt.Time,
 	}
@@ -384,13 +372,38 @@ func rowToAsset(r releasedb.ReleaseAsset) *domain.Asset {
 		ContentType: r.ContentType,
 		SizeBytes:   r.SizeBytes,
 		StorageKey:  r.StorageKey,
-		UploadedActor: actor.Ref{
-			Kind:          actor.Kind(r.UploadedActorKind),
-			DisplayName:   r.UploadedActorDisplayName,
-			UserID:        r.UploadedActorUserID.Int64,
-			RoleKey:       r.UploadedActorRoleKey,
-			WorkflowRunID: r.UploadedActorWorkflowRunID.Int64,
-		},
+		UploadedActor: releaseActorRef(r.UploadedActorKind, r.UploadedActorUserID, r.UploadedActorRoleKey, r.UploadedActorWorkflowRunID, r.UploadedActorDisplayName),
 		CreatedAt: r.CreatedAt.Time,
+	}
+}
+
+// releaseActorRef builds an actor.Ref from release/asset actor columns,
+// filling the stable business-key ID that the frontend contract expects.
+func releaseActorRef(kind string, userID pgtype.Int8, roleKey string, workflowRunID pgtype.Int8, displayName string) actor.Ref {
+	k := actor.Kind(kind)
+	if k == "" {
+		return actor.Ref{}
+	}
+	return actor.Ref{
+		Kind:          k,
+		ID:            actorIDForKind(k, userID.Int64, roleKey, workflowRunID.Int64),
+		DisplayName:   displayName,
+		UserID:        userID.Int64,
+		RoleKey:       roleKey,
+		WorkflowRunID: workflowRunID.Int64,
+	}
+}
+
+// actorIDForKind builds the stable ID string from kind-specific identifiers.
+func actorIDForKind(k actor.Kind, userID int64, roleKey string, workflowRunID int64) string {
+	switch k {
+	case actor.KindUser:
+		return fmt.Sprintf("user:%d", userID)
+	case actor.KindAgent:
+		return fmt.Sprintf("agent:%s", roleKey)
+	case actor.KindWorkflow:
+		return fmt.Sprintf("workflow:run:%d", workflowRunID)
+	default:
+		return "system:server"
 	}
 }

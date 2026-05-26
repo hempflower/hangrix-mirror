@@ -81,17 +81,47 @@ func (r *PostgresRepo) CreateRun(ctx context.Context, params domain.CreateRunPar
 		causeID = pgtype.Int8{Int64: *params.CauseID, Valid: true}
 	}
 
+	// Translate trigger actor to sqlc params.
+	var trigUserID pgtype.Int8
+	if params.TriggerActor.UserID > 0 {
+		trigUserID = pgtype.Int8{Int64: params.TriggerActor.UserID, Valid: true}
+	}
+	var trigWfID pgtype.Int8
+	if params.TriggerActor.WorkflowRunID > 0 {
+		trigWfID = pgtype.Int8{Int64: params.TriggerActor.WorkflowRunID, Valid: true}
+	}
+
+	// Translate run actor to sqlc params.
+	var runUserID pgtype.Int8
+	if params.RunActor.UserID > 0 {
+		runUserID = pgtype.Int8{Int64: params.RunActor.UserID, Valid: true}
+	}
+	var runWfID pgtype.Int8
+	if params.RunActor.WorkflowRunID > 0 {
+		runWfID = pgtype.Int8{Int64: params.RunActor.WorkflowRunID, Valid: true}
+	}
+
 	dbRun, err := r.q.CreateWorkflowRun(ctx, workflowdb.CreateWorkflowRunParams{
-		RepoID:                params.RepoID,
-		WorkflowName:          params.WorkflowName,
-		SourceFile:            params.SourceFile,
-		EventName:             string(params.EventName),
-		CauseID:               causeID,
-		Ref:                   params.Ref,
-		CommitSha:             params.CommitSHA,
-		ContainerSnapshotJson: snapJSON,
-		TriggerPayloadJson:    triggerJSON,
-		WorkflowToken:         params.WorkflowToken,
+		RepoID:                    params.RepoID,
+		WorkflowName:              params.WorkflowName,
+		SourceFile:                params.SourceFile,
+		EventName:                 string(params.EventName),
+		CauseID:                   causeID,
+		Ref:                       params.Ref,
+		CommitSha:                 params.CommitSHA,
+		ContainerSnapshotJson:     snapJSON,
+		TriggerPayloadJson:        triggerJSON,
+		WorkflowToken:             params.WorkflowToken,
+		TriggerActorKind:          string(params.TriggerActor.Kind),
+		TriggerActorUserID:        trigUserID,
+		TriggerActorRoleKey:       params.TriggerActor.RoleKey,
+		TriggerActorWorkflowRunID: trigWfID,
+		TriggerActorDisplayName:   params.TriggerActor.DisplayName,
+		RunActorKind:              string(params.RunActor.Kind),
+		RunActorUserID:            runUserID,
+		RunActorRoleKey:           params.RunActor.RoleKey,
+		RunActorWorkflowRunID:     runWfID,
+		RunActorDisplayName:       params.RunActor.DisplayName,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("create workflow run: %w", err)
