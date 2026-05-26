@@ -744,6 +744,7 @@
       "cancel": "取消运行",
       "cancelConfirm": "确定取消此 workflow 运行？正在执行的 job 将被终止。",
       "cancelFailed": "取消失败",
+      "triggeredBy": "触发者",
       "job": {
       "title": "Job",
       "empty": "暂无 job。",
@@ -1016,7 +1017,9 @@
     },
     "tag": "Tag",
     "commit": "提交",
-    "status": "状态"
+    "status": "状态",
+    "createdBy": "创建者",
+    "publishedBy": "发布者"
   },
   "pat": {
     "title": "Personal Access Tokens",

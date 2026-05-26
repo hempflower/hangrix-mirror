@@ -1,3 +1,4 @@
+import type { ActorRef } from './actor'
 export type IssueState = 'open' | 'merged' | 'closed'
 
 export interface Issue {
@@ -6,6 +7,9 @@ export interface Issue {
   number: number
   author_id: number
   author_username: string
+  // actor is the unified actor object (preferred). When absent the
+  // frontend falls back to author_username for backward compatibility.
+  actor?: ActorRef
   title: string
   body: string
   state: IssueState
@@ -40,7 +44,11 @@ export interface IssueComment {
   // agent_role is set on agent-authored comments. Empty for human comments.
   // The frontend uses it to render `@agent-<role>` plus a bot avatar in the
   // timeline so agent-emitted comments aren't shown with a blank author.
+  // DEPRECATED: prefer actor (unified actor model). Fall back to these
+  // legacy fields when actor is absent.
   agent_role?: string
+  // actor is the unified actor object (preferred).
+  actor?: ActorRef
   body: string
   file_path: string
   line: number
@@ -68,7 +76,11 @@ export interface IssueEvent {
   actor_username: string
   // agent_role is set on agent-authored events (e.g. review_vote posted by
   // the reviewer role). Empty for human / system events.
+  // DEPRECATED: prefer actor (unified actor model). Fall back to these
+  // legacy fields when actor is absent.
   agent_role?: string
+  // actor is the unified actor object (preferred).
+  actor?: ActorRef
   created_at: string
 }
 
@@ -187,6 +199,9 @@ export interface Contribution {
   issue_id: number
   session_id: number
   agent_role: string          // role key, e.g. "server"
+  // actor is the unified actor object (preferred). When absent the
+  // frontend falls back to agent_role for backward compatibility.
+  actor?: ActorRef
   ref_name: string            // "refs/heads/issue-5/server"
   head_sha: string
   base_sha: string
@@ -244,6 +259,8 @@ export interface IssueAttachment {
   comment_id: number
   author_id: number | null
   agent_role: string
+  // actor is the unified actor object (preferred).
+  actor?: ActorRef
   original_name: string
   display_name: string
   inline: boolean

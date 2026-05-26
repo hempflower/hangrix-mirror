@@ -744,6 +744,7 @@
       "cancel": "Cancel run",
       "cancelConfirm": "Cancel this workflow run? Running jobs will be terminated.",
       "cancelFailed": "Cancel failed",
+      "triggeredBy": "Triggered by",
       "job": {
       "title": "Jobs",
       "empty": "No jobs yet.",
@@ -1016,7 +1017,9 @@
     },
     "tag": "Tag",
     "commit": "Commit",
-    "status": "Status"
+    "status": "Status",
+    "createdBy": "Created by",
+    "publishedBy": "Published by"
   },
   "pat": {
     "title": "Personal Access Tokens",
