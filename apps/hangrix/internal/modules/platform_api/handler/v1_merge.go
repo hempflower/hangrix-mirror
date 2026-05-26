@@ -11,6 +11,9 @@ func v1Mergeability(api AgentAPI) http.HandlerFunc {
 		if p == nil {
 			return
 		}
+		if !requirePermission(w, p, "issues", "mergeability") {
+			return
+		}
 		result, err := api.GetMergeability(r.Context(), p)
 		if err != nil {
 			writeServiceError(w, err)
@@ -24,6 +27,9 @@ func v1MergeIssue(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "issues", "merge") {
 			return
 		}
 		var req struct {
@@ -43,6 +49,9 @@ func v1CloseIssue(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "issues", "close") {
 			return
 		}
 		var req struct {

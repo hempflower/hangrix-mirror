@@ -1,6 +1,6 @@
 // Package handler exposes the platform's agent API over HTTP — both the
 // legacy RPC-style POST /api/agent/tools/{name} (deprecated but still
-// functional) and the new GitHub-style REST surface under /api/agent/v1/.
+// functional) and the new GitHub-style REST surface under /api/v1/.
 //
 // Shared auth middleware (bearerAuth / actorFromRequest) lives in
 // auth.go; response helpers (WriteJSON, WriteError, etc.) in respond.go.
@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"strings"
 
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
 
@@ -20,11 +20,11 @@ type ctxKey int
 
 const (
 	ctxKeySession   ctxKey = iota // *runnerdomain.AgentSession (legacy)
-	ctxKeyActor               // *agentapidomain.Actor (v1)
+	ctxKeyActor               // *apidomain.Actor (v1)
 )
 
 // SessionTokenValidator is the subset of runnerdomain.SessionTokenValidator
-// the agent_api module depends on.
+// the platform_api module depends on.
 type SessionTokenValidator interface {
 	ValidateSessionToken(ctx context.Context, plaintext string) (*runnerdomain.AgentSession, error)
 }
@@ -38,8 +38,8 @@ func GetSession(r *http.Request) *runnerdomain.AgentSession {
 
 // GetActor returns the Actor stored by the v1 auth middleware.
 // Returns nil when the middleware hasn't run.
-func GetActor(r *http.Request) *agentapidomain.Actor {
-	p, _ := r.Context().Value(ctxKeyActor).(*agentapidomain.Actor)
+func GetActor(r *http.Request) *apidomain.Actor {
+	p, _ := r.Context().Value(ctxKeyActor).(*apidomain.Actor)
 	return p
 }
 
@@ -76,7 +76,7 @@ func BearerAuth(validator SessionTokenValidator) func(http.Handler) http.Handler
 				}
 				return
 			}
-			actor := agentapidomain.NewActor(sess)
+			actor := apidomain.NewActor(sess)
 			ctx := context.WithValue(r.Context(), ctxKeySession, sess)
 			ctx = context.WithValue(ctx, ctxKeyActor, actor)
 			next.ServeHTTP(w, r.WithContext(ctx))

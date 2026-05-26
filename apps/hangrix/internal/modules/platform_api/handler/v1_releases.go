@@ -6,13 +6,16 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 )
 
 func v1CreateRelease(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "releases", "create") {
 			return
 		}
 		var req struct {
@@ -26,7 +29,7 @@ func v1CreateRelease(api AgentAPI) http.HandlerFunc {
 		}
 		if req.TagName == "" {
 			WriteFieldError(w, http.StatusUnprocessableEntity, "tag_name is required",
-				agentapidomain.FieldError{Field: "tag_name", Code: "missing"},
+				apidomain.FieldError{Field: "tag_name", Code: "missing"},
 			)
 			return
 		}
@@ -43,6 +46,9 @@ func v1UpdateRelease(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "releases", "update") {
 			return
 		}
 		id, ok := parseIDParam(w, chi.URLParam(r, "id"))
@@ -73,6 +79,9 @@ func v1DeleteRelease(api AgentAPI) http.HandlerFunc {
 		if p == nil {
 			return
 		}
+		if !requirePermission(w, p, "releases", "delete") {
+			return
+		}
 		id, ok := parseIDParam(w, chi.URLParam(r, "id"))
 		if !ok {
 			return
@@ -89,6 +98,9 @@ func v1PublishRelease(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "releases", "publish") {
 			return
 		}
 		id, ok := parseIDParam(w, chi.URLParam(r, "id"))
@@ -110,6 +122,9 @@ func v1UploadReleaseAsset(api AgentAPI) http.HandlerFunc {
 		if p == nil {
 			return
 		}
+		if !requirePermission(w, p, "releases", "create") {
+			return
+		}
 		id, ok := parseIDParam(w, chi.URLParam(r, "id"))
 		if !ok {
 			return
@@ -125,13 +140,13 @@ func v1UploadReleaseAsset(api AgentAPI) http.HandlerFunc {
 		}
 		if req.Name == "" {
 			WriteFieldError(w, http.StatusUnprocessableEntity, "name is required",
-				agentapidomain.FieldError{Field: "name", Code: "missing"},
+				apidomain.FieldError{Field: "name", Code: "missing"},
 			)
 			return
 		}
 		if req.Content == "" {
 			WriteFieldError(w, http.StatusUnprocessableEntity, "content is required",
-				agentapidomain.FieldError{Field: "content", Code: "missing"},
+				apidomain.FieldError{Field: "content", Code: "missing"},
 			)
 			return
 		}

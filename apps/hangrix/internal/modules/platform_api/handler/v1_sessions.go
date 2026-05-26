@@ -12,6 +12,9 @@ func v1ListSessions(api AgentAPI) http.HandlerFunc {
 		if p == nil {
 			return
 		}
+		if !requirePermission(w, p, "sessions", "list") {
+			return
+		}
 		items, err := api.ListSessions(r.Context(), p)
 		if err != nil {
 			writeServiceError(w, err)
@@ -25,6 +28,9 @@ func v1RecoverSession(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "sessions", "recover") {
 			return
 		}
 		sessionID, ok := parseIDParam(w, chi.URLParam(r, "sessionID"))

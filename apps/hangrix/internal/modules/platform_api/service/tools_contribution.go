@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
@@ -23,8 +23,8 @@ import (
 // setting metadata, the server-side merge into the issue branch, and closing.
 
 // contributionListTool lists the contributions on the current issue.
-func (r *Registry) contributionListTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) contributionListTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "contribution_list",
 		Description: "List the contribution branches on the current issue. Each entry has id, agent_role, actor (with kind, id, display_name, role_key), ref_name, status (pending/approved/rejected/merged/closed), mergeable, merge_mode, head_sha, and diff stats. By default only non-terminal contributions (pending, approved, rejected) are returned — use include_closed / include_merged to also see closed or merged contributions. A contribution is created automatically when you push to refs/heads/issue-<N>/<your-role> — the git push response includes the contribution_id directly, so you don't need this tool just to discover your ID.",
 		InputSchema: map[string]any{
@@ -34,7 +34,7 @@ func (r *Registry) contributionListTool() *agentapidomain.Tool {
 				"include_merged": map[string]any{"type": "boolean", "description": "When true, also return contributions with status 'merged'. Default false."},
 			},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -60,8 +60,8 @@ func (r *Registry) contributionListTool() *agentapidomain.Tool {
 // contributionReadTool returns contribution metadata, review status, and a
 // local-checkout hint. It no longer returns a server-computed diff; the agent
 // should fetch the branch and run git locally to inspect changes.
-func (r *Registry) contributionReadTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) contributionReadTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "contribution_read",
 		Description: "Read one contribution: metadata (id, agent_role, actor with kind/id/display_name/role_key), review status (verdict plus which required reviewers still must vote), and a checkout_hint to fetch the branch and compare locally. This tool no longer returns an inline diff — use git locally after fetching. Use the id from contribution_list.",
 		InputSchema: map[string]any{
@@ -71,7 +71,7 @@ func (r *Registry) contributionReadTool() *agentapidomain.Tool {
 			},
 			"required": []string{"id"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -103,8 +103,8 @@ func (r *Registry) contributionReadTool() *agentapidomain.Tool {
 
 // contributionSetMetaTool lets the owning role set the title/description of its
 // own contribution (the PR title/body).
-func (r *Registry) contributionSetMetaTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) contributionSetMetaTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "contribution_set_meta",
 		Description: "Set the title and description of your own contribution branch (its merge-request title/body). Only the role that owns the branch may set its metadata.",
 		InputSchema: map[string]any{
@@ -116,7 +116,7 @@ func (r *Registry) contributionSetMetaTool() *agentapidomain.Tool {
 			},
 			"required": []string{"id", "title"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -153,8 +153,8 @@ func (r *Registry) contributionSetMetaTool() *agentapidomain.Tool {
 // contribution branch into the issue branch, server-side. The commit SHA is
 // computed by the server (no agent push). Gated by the `contribution_apply`
 // capability in the role's `can:` whitelist (the maintainer role).
-func (r *Registry) contributionApplyTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) contributionApplyTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "contribution_apply",
 		Description: "Merge an approved contribution branch into the issue branch (first-level gate). The server validates the review gate + mergeability and computes the merge commit — there is no agent push. Requires `contribution_apply` in the role's `can:` whitelist.",
 		InputSchema: map[string]any{
@@ -165,7 +165,7 @@ func (r *Registry) contributionApplyTool() *agentapidomain.Tool {
 			},
 			"required": []string{"id"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -192,7 +192,7 @@ func (r *Registry) contributionApplyTool() *agentapidomain.Tool {
 			}
 			if rs := issuedomain.ComputeContributionReviewStatus(c, r.requiredReviewers(ctx, scope.repo.ID, c), events); rs.MergeBlocked {
 				blockJSON, _ := json.Marshal(map[string]any{"error": "merge blocked", "block_reason": rs.BlockReason})
-				return agentapidomain.Result{Text: string(blockJSON), IsError: true}, nil
+				return apidomain.Result{Text: string(blockJSON), IsError: true}, nil
 			}
 
 			contribBranch := strings.TrimPrefix(c.RefName, "refs/heads/")
@@ -244,8 +244,8 @@ func (r *Registry) contributionApplyTool() *agentapidomain.Tool {
 }
 
 // contributionCloseTool lets the owning role abandon its contribution branch.
-func (r *Registry) contributionCloseTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) contributionCloseTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "contribution_close",
 		Description: "Close (abandon) your own contribution branch. Only the owning role may close it; merged contributions cannot be closed.",
 		InputSchema: map[string]any{
@@ -256,7 +256,7 @@ func (r *Registry) contributionCloseTool() *agentapidomain.Tool {
 			},
 			"required": []string{"id"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -293,7 +293,7 @@ func (r *Registry) contributionCloseTool() *agentapidomain.Tool {
 
 // loadContribution reads the {id} arg and resolves it to a contribution scoped
 // to the caller's issue. Returns a tool error Result on any failure.
-func (r *Registry) loadContribution(ctx context.Context, scope *sessionScope, args json.RawMessage) (*issuedomain.Contribution, *agentapidomain.Result) {
+func (r *Registry) loadContribution(ctx context.Context, scope *sessionScope, args json.RawMessage) (*issuedomain.Contribution, *apidomain.Result) {
 	var req struct {
 		ID int64 `json:"id"`
 	}
@@ -306,7 +306,7 @@ func (r *Registry) loadContribution(ctx context.Context, scope *sessionScope, ar
 
 // getContributionScoped loads a contribution by id and verifies it belongs to
 // the caller's issue.
-func (r *Registry) getContributionScoped(ctx context.Context, scope *sessionScope, id int64) (*issuedomain.Contribution, *agentapidomain.Result) {
+func (r *Registry) getContributionScoped(ctx context.Context, scope *sessionScope, id int64) (*issuedomain.Contribution, *apidomain.Result) {
 	if id <= 0 {
 		res := errorResult("id is required and must be positive")
 		return nil, &res

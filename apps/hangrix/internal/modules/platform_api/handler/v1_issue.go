@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 )
 
 // ---- Issue read / edit ----
@@ -15,6 +15,9 @@ func v1ReadIssue(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "issues", "read") {
 			return
 		}
 		issue, err := api.ReadIssue(r.Context(), p)
@@ -32,6 +35,9 @@ func v1EditIssue(api AgentAPI) http.HandlerFunc {
 		if p == nil {
 			return
 		}
+		if !requirePermission(w, p, "issues", "edit") {
+			return
+		}
 		var req struct {
 			Title *string `json:"title"`
 			Body  *string `json:"body"`
@@ -42,8 +48,8 @@ func v1EditIssue(api AgentAPI) http.HandlerFunc {
 		}
 		if req.Title == nil && req.Body == nil {
 			WriteFieldError(w, http.StatusUnprocessableEntity, "at least one of title or body is required",
-				agentapidomain.FieldError{Field: "title", Code: "missing"},
-				agentapidomain.FieldError{Field: "body", Code: "missing"},
+				apidomain.FieldError{Field: "title", Code: "missing"},
+				apidomain.FieldError{Field: "body", Code: "missing"},
 			)
 			return
 		}
@@ -62,6 +68,9 @@ func v1ReadIssueByNumber(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "issues", "read") {
 			return
 		}
 		// Support both forms:
@@ -103,6 +112,9 @@ func v1CreateIssue(api AgentAPI) http.HandlerFunc {
 		if p == nil {
 			return
 		}
+		if !requirePermission(w, p, "issues", "create") {
+			return
+		}
 		repoID, ok := parseIDParam(w, chi.URLParam(r, "repoID"))
 		if !ok {
 			return
@@ -122,7 +134,7 @@ func v1CreateIssue(api AgentAPI) http.HandlerFunc {
 		}
 		if req.Title == "" {
 			WriteFieldError(w, http.StatusUnprocessableEntity, "title is required",
-				agentapidomain.FieldError{Field: "title", Code: "missing"},
+				apidomain.FieldError{Field: "title", Code: "missing"},
 			)
 			return
 		}
@@ -143,6 +155,9 @@ func v1CreateComment(api AgentAPI) http.HandlerFunc {
 		if p == nil {
 			return
 		}
+		if !requirePermission(w, p, "comments", "create") {
+			return
+		}
 		var req struct {
 			Body     string `json:"body"`
 			FilePath string `json:"file_path"`
@@ -154,7 +169,7 @@ func v1CreateComment(api AgentAPI) http.HandlerFunc {
 		}
 		if req.Body == "" {
 			WriteFieldError(w, http.StatusUnprocessableEntity, "body is required",
-				agentapidomain.FieldError{Field: "body", Code: "missing"},
+				apidomain.FieldError{Field: "body", Code: "missing"},
 			)
 			return
 		}
@@ -173,6 +188,9 @@ func v1GetComment(api AgentAPI) http.HandlerFunc {
 		if p == nil {
 			return
 		}
+		if !requirePermission(w, p, "comments", "read") {
+			return
+		}
 		commentID, ok := parseIDParam(w, chi.URLParam(r, "commentID"))
 		if !ok {
 			return
@@ -188,15 +206,25 @@ func v1GetComment(api AgentAPI) http.HandlerFunc {
 
 // ---- Helpers ----
 
-// requireActor extracts the Principal from the request or writes a
+// requireActor extracts the Actor from the request or writes a
 // 401 and returns nil.
-func requireActor(w http.ResponseWriter, r *http.Request) *agentapidomain.Actor {
+func requireActor(w http.ResponseWriter, r *http.Request) *apidomain.Actor {
 	p := GetActor(r)
 	if p == nil {
 		WriteError(w, http.StatusUnauthorized, "missing bearer token")
 		return nil
 	}
 	return p
+}
+
+// requirePermission checks whether the Actor's Permissions allow the
+// given resource/action. Writes 403 and returns false when denied.
+func requirePermission(w http.ResponseWriter, p *apidomain.Actor, resource, action string) bool {
+	if p.Permissions == nil || !p.Permissions.Can(resource, action) {
+		WriteError(w, http.StatusForbidden, "not granted to role \""+p.RoleKey+"\" (host yaml `can:` / `not:` ACL)")
+		return false
+	}
+	return true
 }
 
 // writeServiceError maps common service-layer errors to HTTP status codes.

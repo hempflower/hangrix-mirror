@@ -6,13 +6,16 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 )
 
 func v1ListTodos(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "todos", "list") {
 			return
 		}
 		result, err := api.ListTodos(r.Context(), p)
@@ -30,6 +33,9 @@ func v1CreateTodo(api AgentAPI) http.HandlerFunc {
 		if p == nil {
 			return
 		}
+		if !requirePermission(w, p, "todos", "update") {
+			return
+		}
 		var req struct {
 			Content  string `json:"content"`
 			Status   string `json:"status"`
@@ -41,7 +47,7 @@ func v1CreateTodo(api AgentAPI) http.HandlerFunc {
 		}
 		if req.Content == "" {
 			WriteFieldError(w, http.StatusUnprocessableEntity, "content is required",
-				agentapidomain.FieldError{Field: "content", Code: "missing"},
+				apidomain.FieldError{Field: "content", Code: "missing"},
 			)
 			return
 		}
@@ -58,6 +64,9 @@ func v1UpdateTodo(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "todos", "update") {
 			return
 		}
 		todoID, ok := parseIDParam(w, chi.URLParam(r, "todoID"))

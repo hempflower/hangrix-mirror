@@ -5,7 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 )
 
 // RegisterV1Routes mounts every /api/v1 endpoint on the given chi router.
@@ -64,10 +64,10 @@ func RegisterV1Routes(r chi.Router, api AgentAPI) {
 
 // v1Root returns the API root with top-level links.
 func v1Root(w http.ResponseWriter, r *http.Request) {
-	WriteOK(w, &agentapidomain.RootResponse{
+	WriteOK(w, &apidomain.RootResponse{
 		Version:   "v1",
 		APIPrefix: "/api/v1",
-		Links: agentapidomain.Links{
+		Links: apidomain.Links{
 			"self":          {Href: "/api/v1/"},
 			"me":            {Href: "/api/v1/me"},
 			"issues":        {Href: "/api/v1/issues"},

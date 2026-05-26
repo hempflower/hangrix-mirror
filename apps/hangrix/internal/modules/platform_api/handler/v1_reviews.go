@@ -4,13 +4,16 @@ import (
 	"encoding/json"
 	"net/http"
 
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 )
 
 func v1CreateReview(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "reviews", "create") {
 			return
 		}
 		var req struct {
@@ -24,13 +27,13 @@ func v1CreateReview(api AgentAPI) http.HandlerFunc {
 		}
 		if req.ContributionID <= 0 {
 			WriteFieldError(w, http.StatusUnprocessableEntity, "contribution_id is required",
-				agentapidomain.FieldError{Field: "contribution_id", Code: "missing"},
+				apidomain.FieldError{Field: "contribution_id", Code: "missing"},
 			)
 			return
 		}
 		if req.Value == "" {
 			WriteFieldError(w, http.StatusUnprocessableEntity, "value is required (approve, reject, or abstain)",
-				agentapidomain.FieldError{Field: "value", Code: "missing"},
+				apidomain.FieldError{Field: "value", Code: "missing"},
 			)
 			return
 		}

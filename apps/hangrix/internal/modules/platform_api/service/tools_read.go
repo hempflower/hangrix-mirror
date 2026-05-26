@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
@@ -16,15 +16,15 @@ import (
 // issueReadTool emits the issue metadata + comment + event timeline as
 // a single JSON blob. The agent uses this to get oriented at the start
 // of a turn — comment thread, recent commit_pushed events, etc.
-func (r *Registry) issueReadTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) issueReadTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "issue_read",
 		Description: "Read the current issue's metadata, comments, and timeline events.",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, _ json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, _ json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -77,8 +77,8 @@ func (r *Registry) issueReadTool() *agentapidomain.Tool {
 // issue and later needs to read its full state without switching sessions.
 // Scope is limited to the calling session's repo — cross-repo lookups
 // return a unified "not found / out of scope" soft error.
-func (r *Registry) issueReadByNumberTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) issueReadByNumberTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "issue_read_by_number",
 		Description: "Read an issue's metadata, comments, and timeline events by its number (e.g. 91). Only issues in the same repository as the current session are accessible.",
 		InputSchema: map[string]any{
@@ -91,7 +91,7 @@ func (r *Registry) issueReadByNumberTool() *agentapidomain.Tool {
 			},
 			"required": []any{"issue_number"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -164,8 +164,8 @@ func (r *Registry) issueReadByNumberTool() *agentapidomain.Tool {
 // current session's issue are accessible — cross-issue lookups return a
 // "not found" soft error. The body is returned in full (no truncation),
 // unlike the summaries emitted by issue_read / issue_read_by_number.
-func (r *Registry) issueCommentReadTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) issueCommentReadTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "issue_comment_read",
 		Description: "Read a single comment by its id. Only comments on the current session's issue are accessible — cross-issue lookups return 'not found'. Returns the full body (no truncation).",
 		InputSchema: map[string]any{
@@ -178,7 +178,7 @@ func (r *Registry) issueCommentReadTool() *agentapidomain.Tool {
 			},
 			"required": []any{"comment_id"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -222,15 +222,15 @@ func (r *Registry) issueCommentReadTool() *agentapidomain.Tool {
 
 // issueChildrenTool lists sub-issues whose parent is the current issue.
 // Returns a small array; merge_subissue flows in M4 use this.
-func (r *Registry) issueChildrenTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) issueChildrenTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "issue_children",
 		Description: "List sub-issues (child issues) of the current issue.",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, _ json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, _ json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -257,15 +257,15 @@ func (r *Registry) issueChildrenTool() *agentapidomain.Tool {
 // later milestone; today this returns an empty list with a stable schema
 // so the maintainer role can ship its merge gate now and have it
 // auto-populate when checks come online.
-func (r *Registry) issueChecksTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) issueChecksTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "issue_checks",
 		Description: "List the latest state of each CI check on the issue's head commit. Currently always returns [].",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
 		},
-		Call: func(_ context.Context, _ *runnerdomain.AgentSession, _ json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(_ context.Context, _ *runnerdomain.AgentSession, _ json.RawMessage) (apidomain.Result, error) {
 			return textResult(map[string]any{"checks": []any{}}), nil
 		},
 	}
@@ -273,15 +273,15 @@ func (r *Registry) issueChecksTool() *agentapidomain.Tool {
 
 // rosterListTool lists every active role session on the current issue.
 // Dispatcher uses this to know who's already on the call.
-func (r *Registry) rosterListTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) rosterListTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "roster_list",
 		Description: "List every active role session on the current issue.",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, _ json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, _ json.RawMessage) (apidomain.Result, error) {
 			if sess.RepoID == nil || sess.IssueNumber == nil {
 				return errorResult("session has no (repo, issue) scope"), nil
 			}
@@ -423,15 +423,15 @@ type mergeableResult struct {
 // vs its base. A no-parameter read-only tool — the scope is determined from
 // the session's repo+issue. Agents call this before issue_merge to avoid a
 // failed merge round-trip.
-func (r *Registry) issueMergeableTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) issueMergeableTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "issue_mergeable",
 		Description: "Check whether the issue branch can be merged into its base — tries fast-forward first, then checks whether a merge commit would succeed. mergeable=true means issue_merge is expected to succeed. Returns mergeable, mode, base_branch, base_sha, head_sha, and hint.",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, _ json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, _ json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil

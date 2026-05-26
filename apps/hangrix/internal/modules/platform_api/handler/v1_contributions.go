@@ -6,13 +6,16 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 )
 
 func v1ListContributions(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "contributions", "list") {
 			return
 		}
 		includeClosed := parseBoolQuery(r, "include_closed")
@@ -30,6 +33,9 @@ func v1ReadContribution(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "contributions", "read") {
 			return
 		}
 		id, ok := parseIDParam(w, chi.URLParam(r, "id"))
@@ -51,6 +57,9 @@ func v1SetContributionMeta(api AgentAPI) http.HandlerFunc {
 		if p == nil {
 			return
 		}
+		if !requirePermission(w, p, "contributions", "set_meta") {
+			return
+		}
 		id, ok := parseIDParam(w, chi.URLParam(r, "id"))
 		if !ok {
 			return
@@ -65,7 +74,7 @@ func v1SetContributionMeta(api AgentAPI) http.HandlerFunc {
 		}
 		if req.Title == "" {
 			WriteFieldError(w, http.StatusUnprocessableEntity, "title is required",
-				agentapidomain.FieldError{Field: "title", Code: "missing"},
+				apidomain.FieldError{Field: "title", Code: "missing"},
 			)
 			return
 		}
@@ -82,6 +91,9 @@ func v1ApplyContribution(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "contributions", "apply") {
 			return
 		}
 		id, ok := parseIDParam(w, chi.URLParam(r, "id"))
@@ -105,6 +117,9 @@ func v1CloseContribution(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "contributions", "close") {
 			return
 		}
 		id, ok := parseIDParam(w, chi.URLParam(r, "id"))

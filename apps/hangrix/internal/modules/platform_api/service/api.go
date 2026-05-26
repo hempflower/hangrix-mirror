@@ -12,7 +12,7 @@ import (
 
 	"github.com/hangrix/hangrix/pkg/actor"
 
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
@@ -55,14 +55,14 @@ func decodeBase64(s string) ([]byte, error) {
 
 // ---- scope helpers ----
 
-func (s *APIService) loadScope(ctx context.Context, p *agentapidomain.Actor) (*sessionScope, error) {
+func (s *APIService) loadScope(ctx context.Context, p *apidomain.Actor) (*sessionScope, error) {
 	if !p.InRepo() || !p.InIssue() {
 		return nil, errors.New("session has no (repo, issue) scope")
 	}
 	return s.r.loadScope(ctx, p.Session)
 }
 
-func (s *APIService) mustLoadScope(ctx context.Context, p *agentapidomain.Actor) (*sessionScope, error) {
+func (s *APIService) mustLoadScope(ctx context.Context, p *apidomain.Actor) (*sessionScope, error) {
 	sc, err := s.loadScope(ctx, p)
 	if err != nil {
 		return nil, fmt.Errorf("session scope: %w", err)
@@ -178,7 +178,7 @@ type apiReleaseItem struct {
 // ---- Identity ----
 
 // GetMe returns the authenticated agent's identity.
-func (s *APIService) GetMe(ctx context.Context, p *agentapidomain.Actor) (any, error) {
+func (s *APIService) GetMe(ctx context.Context, p *apidomain.Actor) (any, error) {
 	active := p.Session.SessionTokenActive(timeNow())
 	return map[string]any{
 		"session_id":     p.SessionID,
@@ -193,7 +193,7 @@ func (s *APIService) GetMe(ctx context.Context, p *agentapidomain.Actor) (any, e
 // ---- Issue ----
 
 // ReadIssue returns the current issue with comments, events, and todos.
-func (s *APIService) ReadIssue(ctx context.Context, p *agentapidomain.Actor) (any, error) {
+func (s *APIService) ReadIssue(ctx context.Context, p *apidomain.Actor) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -227,7 +227,7 @@ func (s *APIService) ReadIssue(ctx context.Context, p *agentapidomain.Actor) (an
 }
 
 // EditIssue updates the current issue's title and/or body.
-func (s *APIService) EditIssue(ctx context.Context, p *agentapidomain.Actor, title, body *string) (any, error) {
+func (s *APIService) EditIssue(ctx context.Context, p *apidomain.Actor, title, body *string) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -263,7 +263,7 @@ func (s *APIService) EditIssue(ctx context.Context, p *agentapidomain.Actor, tit
 }
 
 // ReadIssueByNumber reads any issue in the same repo by number.
-func (s *APIService) ReadIssueByNumber(ctx context.Context, p *agentapidomain.Actor, issueNumber int64) (any, error) {
+func (s *APIService) ReadIssueByNumber(ctx context.Context, p *apidomain.Actor, issueNumber int64) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -298,7 +298,7 @@ func (s *APIService) ReadIssueByNumber(ctx context.Context, p *agentapidomain.Ac
 }
 
 // CreateIssue creates a new issue, optionally as a child of the current one.
-func (s *APIService) CreateIssue(ctx context.Context, p *agentapidomain.Actor, title, body string, parent bool) (any, error) {
+func (s *APIService) CreateIssue(ctx context.Context, p *apidomain.Actor, title, body string, parent bool) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -329,7 +329,7 @@ func (s *APIService) CreateIssue(ctx context.Context, p *agentapidomain.Actor, t
 // ---- Comments ----
 
 // CreateComment posts an agent-authored comment on the current issue.
-func (s *APIService) CreateComment(ctx context.Context, p *agentapidomain.Actor, body, filePath string, line int) (any, error) {
+func (s *APIService) CreateComment(ctx context.Context, p *apidomain.Actor, body, filePath string, line int) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -351,7 +351,7 @@ func (s *APIService) CreateComment(ctx context.Context, p *agentapidomain.Actor,
 }
 
 // GetComment reads a single comment by id.
-func (s *APIService) GetComment(ctx context.Context, p *agentapidomain.Actor, commentID int64) (any, error) {
+func (s *APIService) GetComment(ctx context.Context, p *apidomain.Actor, commentID int64) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -381,7 +381,7 @@ func (s *APIService) GetComment(ctx context.Context, p *agentapidomain.Actor, co
 // ---- Children / Checks ----
 
 // ListChildren lists sub-issues of the current issue.
-func (s *APIService) ListChildren(ctx context.Context, p *agentapidomain.Actor) (any, error) {
+func (s *APIService) ListChildren(ctx context.Context, p *apidomain.Actor) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -400,14 +400,14 @@ func (s *APIService) ListChildren(ctx context.Context, p *agentapidomain.Actor) 
 }
 
 // ListChecks returns CI check state (empty list for now).
-func (s *APIService) ListChecks(ctx context.Context, p *agentapidomain.Actor) (any, error) {
+func (s *APIService) ListChecks(ctx context.Context, p *apidomain.Actor) (any, error) {
 	return []any{}, nil
 }
 
 // ---- Todos ----
 
 // ListTodos returns todos for the current issue.
-func (s *APIService) ListTodos(ctx context.Context, p *agentapidomain.Actor) (any, error) {
+func (s *APIService) ListTodos(ctx context.Context, p *apidomain.Actor) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -423,7 +423,7 @@ func (s *APIService) ListTodos(ctx context.Context, p *agentapidomain.Actor) (an
 }
 
 // CreateTodo creates a new todo on the current issue.
-func (s *APIService) CreateTodo(ctx context.Context, p *agentapidomain.Actor, content, status string, position int) (any, error) {
+func (s *APIService) CreateTodo(ctx context.Context, p *apidomain.Actor, content, status string, position int) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -443,7 +443,7 @@ func (s *APIService) CreateTodo(ctx context.Context, p *agentapidomain.Actor, co
 }
 
 // UpdateTodo updates an existing todo's status and/or content.
-func (s *APIService) UpdateTodo(ctx context.Context, p *agentapidomain.Actor, todoID int64, status string, content *string) (any, error) {
+func (s *APIService) UpdateTodo(ctx context.Context, p *apidomain.Actor, todoID int64, status string, content *string) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -477,7 +477,7 @@ func (s *APIService) UpdateTodo(ctx context.Context, p *agentapidomain.Actor, to
 // ---- Contributions ----
 
 // ListContributions lists contributions on the current issue.
-func (s *APIService) ListContributions(ctx context.Context, p *agentapidomain.Actor, includeClosed, includeMerged bool) (any, error) {
+func (s *APIService) ListContributions(ctx context.Context, p *apidomain.Actor, includeClosed, includeMerged bool) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -494,7 +494,7 @@ func (s *APIService) ListContributions(ctx context.Context, p *agentapidomain.Ac
 }
 
 // ReadContribution returns full contribution detail with review status.
-func (s *APIService) ReadContribution(ctx context.Context, p *agentapidomain.Actor, id int64) (any, error) {
+func (s *APIService) ReadContribution(ctx context.Context, p *apidomain.Actor, id int64) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -524,7 +524,7 @@ func (s *APIService) ReadContribution(ctx context.Context, p *agentapidomain.Act
 }
 
 // SetContributionMeta sets the title/description of the owner's contribution.
-func (s *APIService) SetContributionMeta(ctx context.Context, p *agentapidomain.Actor, id int64, title, description string) (any, error) {
+func (s *APIService) SetContributionMeta(ctx context.Context, p *apidomain.Actor, id int64, title, description string) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -551,7 +551,7 @@ func (s *APIService) SetContributionMeta(ctx context.Context, p *agentapidomain.
 }
 
 // ApplyContribution merges an approved contribution into the issue branch.
-func (s *APIService) ApplyContribution(ctx context.Context, p *agentapidomain.Actor, id int64, message string) (any, error) {
+func (s *APIService) ApplyContribution(ctx context.Context, p *apidomain.Actor, id int64, message string) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -609,7 +609,7 @@ func (s *APIService) ApplyContribution(ctx context.Context, p *agentapidomain.Ac
 }
 
 // CloseContribution abandons the owner's contribution branch.
-func (s *APIService) CloseContribution(ctx context.Context, p *agentapidomain.Actor, id int64, reason string) (any, error) {
+func (s *APIService) CloseContribution(ctx context.Context, p *apidomain.Actor, id int64, reason string) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -641,7 +641,7 @@ func (s *APIService) CloseContribution(ctx context.Context, p *agentapidomain.Ac
 // ---- Reviews ----
 
 // CreateReview casts a review vote on a contribution.
-func (s *APIService) CreateReview(ctx context.Context, p *agentapidomain.Actor, contributionID int64, value, reason string) (any, error) {
+func (s *APIService) CreateReview(ctx context.Context, p *apidomain.Actor, contributionID int64, value, reason string) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -687,7 +687,7 @@ func (s *APIService) CreateReview(ctx context.Context, p *agentapidomain.Actor, 
 // ---- Merge / Close ----
 
 // GetMergeability checks if the issue branch is mergeable.
-func (s *APIService) GetMergeability(ctx context.Context, p *agentapidomain.Actor) (any, error) {
+func (s *APIService) GetMergeability(ctx context.Context, p *apidomain.Actor) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -757,7 +757,7 @@ func (s *APIService) GetMergeability(ctx context.Context, p *agentapidomain.Acto
 }
 
 // MergeIssue merges the issue branch into base.
-func (s *APIService) MergeIssue(ctx context.Context, p *agentapidomain.Actor, message string) (any, error) {
+func (s *APIService) MergeIssue(ctx context.Context, p *apidomain.Actor, message string) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -805,7 +805,7 @@ func (s *APIService) MergeIssue(ctx context.Context, p *agentapidomain.Actor, me
 }
 
 // CloseIssue closes the current issue without merging.
-func (s *APIService) CloseIssue(ctx context.Context, p *agentapidomain.Actor, reason string) (any, error) {
+func (s *APIService) CloseIssue(ctx context.Context, p *apidomain.Actor, reason string) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -830,7 +830,7 @@ func (s *APIService) CloseIssue(ctx context.Context, p *agentapidomain.Actor, re
 // ---- Sessions ----
 
 // ListSessions lists active sessions on the current issue.
-func (s *APIService) ListSessions(ctx context.Context, p *agentapidomain.Actor) (any, error) {
+func (s *APIService) ListSessions(ctx context.Context, p *apidomain.Actor) (any, error) {
 	if p.RepoID == nil || p.IssueNumber == nil {
 		return nil, errors.New("session has no (repo, issue) scope")
 	}
@@ -852,7 +852,7 @@ func (s *APIService) ListSessions(ctx context.Context, p *agentapidomain.Actor) 
 }
 
 // RecoverSession recovers a terminal/idle session to pending.
-func (s *APIService) RecoverSession(ctx context.Context, p *agentapidomain.Actor, sessionID int64) (any, error) {
+func (s *APIService) RecoverSession(ctx context.Context, p *apidomain.Actor, sessionID int64) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -891,7 +891,7 @@ func (s *APIService) RecoverSession(ctx context.Context, p *agentapidomain.Actor
 // ---- Attachments ----
 
 // UploadAttachment uploads a file as an issue attachment.
-func (s *APIService) UploadAttachment(ctx context.Context, p *agentapidomain.Actor, fileBytes []byte, name, displayName string, inline bool, commentID int64) (any, error) {
+func (s *APIService) UploadAttachment(ctx context.Context, p *apidomain.Actor, fileBytes []byte, name, displayName string, inline bool, commentID int64) (any, error) {
 	_, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -924,7 +924,7 @@ func (s *APIService) UploadAttachment(ctx context.Context, p *agentapidomain.Act
 // ---- Releases ----
 
 // CreateRelease creates a draft release.
-func (s *APIService) CreateRelease(ctx context.Context, p *agentapidomain.Actor, tagName, title, notes string) (any, error) {
+func (s *APIService) CreateRelease(ctx context.Context, p *apidomain.Actor, tagName, title, notes string) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -954,7 +954,7 @@ func (s *APIService) CreateRelease(ctx context.Context, p *agentapidomain.Actor,
 }
 
 // UpdateRelease updates a release's metadata.
-func (s *APIService) UpdateRelease(ctx context.Context, p *agentapidomain.Actor, id int64, tagName, title, notes *string) (any, error) {
+func (s *APIService) UpdateRelease(ctx context.Context, p *apidomain.Actor, id int64, tagName, title, notes *string) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -1001,7 +1001,7 @@ func (s *APIService) UpdateRelease(ctx context.Context, p *agentapidomain.Actor,
 }
 
 // DeleteRelease deletes a release and its assets.
-func (s *APIService) DeleteRelease(ctx context.Context, p *agentapidomain.Actor, id int64) error {
+func (s *APIService) DeleteRelease(ctx context.Context, p *apidomain.Actor, id int64) error {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return err
@@ -1032,7 +1032,7 @@ func (s *APIService) DeleteRelease(ctx context.Context, p *agentapidomain.Actor,
 }
 
 // PublishRelease publishes a draft release.
-func (s *APIService) PublishRelease(ctx context.Context, p *agentapidomain.Actor, id int64) (any, error) {
+func (s *APIService) PublishRelease(ctx context.Context, p *apidomain.Actor, id int64) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -1057,7 +1057,7 @@ func (s *APIService) PublishRelease(ctx context.Context, p *agentapidomain.Actor
 }
 
 // UploadReleaseAsset uploads a base64-encoded asset to a release.
-func (s *APIService) UploadReleaseAsset(ctx context.Context, p *agentapidomain.Actor, releaseID int64, name, contentB64, contentType string) (any, error) {
+func (s *APIService) UploadReleaseAsset(ctx context.Context, p *apidomain.Actor, releaseID int64, name, contentB64, contentType string) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err

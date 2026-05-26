@@ -89,6 +89,8 @@ func (m *Module) Provide(constructor any) *ModuleProviderBinder {
 					dependencies = append(dependencies, field.Type)
 				} else if field.Type.Kind() == reflect.Slice && field.Type.Elem().Kind() == reflect.Interface {
 					dependencies = append(dependencies, field.Type)
+				} else if field.Type.Kind() == reflect.Slice && field.Type.Elem().Kind() == reflect.Ptr && field.Type.Elem().Elem().Kind() == reflect.Struct {
+					dependencies = append(dependencies, field.Type)
 				} else {
 					panic("constructor parameter fields must be pointers to structs or interfaces")
 				}

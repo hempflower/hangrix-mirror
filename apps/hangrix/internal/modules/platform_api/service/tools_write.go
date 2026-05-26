@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
@@ -24,8 +24,8 @@ import (
 // agent_role carries the role key from the session's snapshot. Mentions
 // inside the body fan out the same way human comments do — re-using the
 // spawner pipeline so the wakeup behaviour is identical.
-func (r *Registry) issueCommentTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) issueCommentTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "issue_comment",
 		Description: "Post a comment on the current issue. `body` is markdown; @agent-<role-key> mentions wake other roles.",
 		InputSchema: map[string]any{
@@ -46,7 +46,7 @@ func (r *Registry) issueCommentTool() *agentapidomain.Tool {
 			},
 			"required": []string{"body"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -92,8 +92,8 @@ func (r *Registry) issueCommentTool() *agentapidomain.Tool {
 // Persistence: an issue_events row of kind=review_vote whose payload binds the
 // vote to the head it was cast against, so a later push silently dismisses it.
 // Side-effect: fires the review_vote.posted trigger so maintainer roles wake.
-func (r *Registry) issueReviewVoteTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) issueReviewVoteTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "issue_review_vote",
 		Description: "Cast a structured review vote (approve / reject / abstain) on a contribution branch. A branch is approved once every required reviewer has voted approve/abstain; any reject rejects it (the author pushes a new versioned branch). Pass the `contribution_id` from contribution_list. You cannot approve your own contribution.",
 		InputSchema: map[string]any{
@@ -115,7 +115,7 @@ func (r *Registry) issueReviewVoteTool() *agentapidomain.Tool {
 			},
 			"required": []string{"contribution_id", "value"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -207,8 +207,8 @@ func (r *Registry) issueReviewVoteTool() *agentapidomain.Tool {
 // archives all sessions on it. Idempotent — closing an already-closed
 // issue returns a "no change" result. Re-opening is intentionally not
 // available to agents.
-func (r *Registry) issueCloseTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) issueCloseTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "issue_close",
 		Description: "Close the current issue without merging. Archives every active agent session on it.",
 		InputSchema: map[string]any{
@@ -220,7 +220,7 @@ func (r *Registry) issueCloseTool() *agentapidomain.Tool {
 				},
 			},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -234,7 +234,7 @@ func (r *Registry) issueCloseTool() *agentapidomain.Tool {
 			// Todos gate: all todos must be completed before closing (agent path only).
 			if block, incomplete := r.todosCompletionBlock(ctx, scope); block != "" {
 				blockJSON, _ := json.Marshal(map[string]any{"error": "close blocked", "block_reason": block, "incomplete_todos": incomplete})
-				return agentapidomain.Result{Text: string(blockJSON), IsError: true}, nil
+				return apidomain.Result{Text: string(blockJSON), IsError: true}, nil
 			}
 			var req struct {
 				Reason string `json:"reason"`
@@ -267,8 +267,8 @@ func (r *Registry) issueCloseTool() *agentapidomain.Tool {
 // canManage permission check here because the `can: [issue_merge]`
 // ACL on the role is the authorization gate — only roles the operator
 // explicitly grants merge get to call this tool.
-func (r *Registry) issueMergeTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) issueMergeTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "issue_merge",
 		Description: "Merge the issue branch into its base using a merge-commit strategy: fast-forward if possible, otherwise create a merge commit. Fails if there are no commits or the merge would conflict.",
 		InputSchema: map[string]any{
@@ -280,7 +280,7 @@ func (r *Registry) issueMergeTool() *agentapidomain.Tool {
 				},
 			},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -294,12 +294,12 @@ func (r *Registry) issueMergeTool() *agentapidomain.Tool {
 			// contribution has been applied into it.
 			if block := r.issueMergeBlock(ctx, scope); block != "" {
 				blockJSON, _ := json.Marshal(map[string]any{"error": "merge blocked", "block_reason": block})
-				return agentapidomain.Result{Text: string(blockJSON), IsError: true}, nil
+				return apidomain.Result{Text: string(blockJSON), IsError: true}, nil
 			}
 			// Todos gate: all todos must be completed before merging (agent path only).
 			if block, incomplete := r.todosCompletionBlock(ctx, scope); block != "" {
 				blockJSON, _ := json.Marshal(map[string]any{"error": "merge blocked", "block_reason": block, "incomplete_todos": incomplete})
-				return agentapidomain.Result{Text: string(blockJSON), IsError: true}, nil
+				return apidomain.Result{Text: string(blockJSON), IsError: true}, nil
 			}
 
 			headSHA, err := r.deps.Git.ResolveCommit(scope.fsPath, scope.issue.BranchName)
@@ -431,7 +431,7 @@ func (r *Registry) tryDeleteIssueBranch(ctx context.Context, repoID int64, fsPat
 func (r *Registry) tryDeleteContributionBranches(ctx context.Context, repoID int64, fsPath string, issueNumber, issueID int64) []contribCleanupResult {
 	refs, err := r.deps.Git.ListRefs(fsPath)
 	if err != nil {
-		log.Printf("agent_api: list refs for contribution cleanup repo=%d issue=%d: %v", repoID, issueNumber, err)
+		log.Printf("platform_api: list refs for contribution cleanup repo=%d issue=%d: %v", repoID, issueNumber, err)
 		return nil
 	}
 
@@ -478,7 +478,7 @@ func (r *Registry) tryDeleteContributionBranches(ctx context.Context, repoID int
 
 		if !blocked {
 			if err := r.deps.Git.DeleteBranch(fsPath, ref.Name); err != nil {
-				log.Printf("agent_api: delete contribution branch %s repo=%d issue=%d: %v", ref.Name, repoID, issueNumber, err)
+				log.Printf("platform_api: delete contribution branch %s repo=%d issue=%d: %v", ref.Name, repoID, issueNumber, err)
 				result.Deleted = false
 				result.Reason = "delete_failed"
 			} else {
@@ -489,7 +489,7 @@ func (r *Registry) tryDeleteContributionBranches(ctx context.Context, repoID int
 				contribRef := "refs/heads/" + ref.Name
 				if c, cerr := r.deps.Contributions.GetContributionByRef(ctx, issueID, contribRef); cerr == nil && c != nil && !c.Status.Terminal() {
 					if _, cerr = r.deps.Contributions.SetContributionStatus(ctx, c.ID, issuedomain.ContribStatusClosed); cerr != nil {
-						log.Printf("agent_api: close contribution %d after branch delete: %v", c.ID, cerr)
+						log.Printf("platform_api: close contribution %d after branch delete: %v", c.ID, cerr)
 					}
 				}
 			}
@@ -504,7 +504,7 @@ func (r *Registry) tryDeleteContributionBranches(ctx context.Context, repoID int
 }
 
 // mergeCleanupResult duplicates mergeCleanup from the issue HTTP handler
-// so the agent_api module stays decoupled from the issue handler package.
+// so the platform_api module stays decoupled from the issue handler package.
 type mergeCleanupResult struct {
 	Deleted bool   `json:"deleted"`
 	Reason  string `json:"reason,omitempty"`
@@ -526,8 +526,8 @@ type contribCleanupResult struct {
 // Uses Controller.Recover() (not Resume) so the target session receives a
 // manual.recover event whose payload carries the caller's role key
 // (recovered_by), as required by spec AC 5.
-func (r *Registry) sessionRecoverTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) sessionRecoverTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "session_recover",
 		Description: "Recover a failed / succeeded / cancelled / idle agent session on the current issue back to pending so a runner picks it up again. `session_id` is required. Only sessions on the same issue can be recovered; cross-issue and archived sessions are rejected. Requires `session_recover` in the role's `can:` whitelist.",
 		InputSchema: map[string]any{
@@ -540,7 +540,7 @@ func (r *Registry) sessionRecoverTool() *agentapidomain.Tool {
 			},
 			"required": []string{"session_id"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -610,8 +610,8 @@ func (r *Registry) sessionRecoverTool() *agentapidomain.Tool {
 // File bytes arrive via multipart/form-data (handled by the HTTP handler,
 // which calls Registry.UploadAttachment). The JSON code path returns a
 // clear error directing callers to use multipart.
-func (r *Registry) issueAttachmentUploadTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) issueAttachmentUploadTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "issue_attachment_upload",
 		Description: "Upload a file from the workspace as an issue attachment. Use multipart/form-data with parts: `file` (binary, required), `display_name` (optional), `inline` (boolean, default false), `comment_id` (optional). Returns attachment metadata including an `attachment_id`, native `url` (/api/attachments/N/download), and `markdown_snippet` (standard Markdown `![](url)` or `[name](url)`) — use `issue_comment` to insert the snippet into a comment body.",
 		InputSchema: map[string]any{
@@ -636,7 +636,7 @@ func (r *Registry) issueAttachmentUploadTool() *agentapidomain.Tool {
 			},
 			"required": []string{"name"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			return errorResult("issue_attachment_upload requires multipart/form-data — send file bytes as a `file` part, not JSON"), nil
 		},
 	}
@@ -653,7 +653,7 @@ func (r *Registry) UploadAttachment(
 	name, displayName string,
 	inline bool,
 	commentID int64,
-) (agentapidomain.Result, error) {
+) (apidomain.Result, error) {
 	_, err := r.loadScope(ctx, sess)
 	if err != nil {
 		return errorResult(err.Error()), nil
@@ -708,8 +708,8 @@ func attachmentMarkdownSnippet(id int64, displayName, originalName string, kind 
 // current issue). When parent=true the new issue's base_branch is set
 // to the current issue's branch so merging a child fast-forwards into
 // the parent's working line. Author is the agent (authorID=0).
-func (r *Registry) issueCreateTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) issueCreateTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "issue_create",
 		Description: "Create a new issue (optionally as a child of the current one). Returns the new issue's number, title, state, and branch_name.",
 		InputSchema: map[string]any{
@@ -730,7 +730,7 @@ func (r *Registry) issueCreateTool() *agentapidomain.Tool {
 			},
 			"required": []string{"title"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -802,8 +802,8 @@ func (r *Registry) issueCreateTool() *agentapidomain.Tool {
 // of title/body must be supplied. When title changes, a title_changed
 // timeline event is emitted. Body-only changes do not create an event.
 // Access is gated by the role's `can:` whitelist (issue_edit).
-func (r *Registry) issueEditTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) issueEditTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "issue_edit",
 		Description: "Edit the current issue's title and/or body. At least one of `title` or `body` is required. Title changes write a `title_changed` timeline event. Requires `issue_edit` in the role's `can:` whitelist.",
 		InputSchema: map[string]any{
@@ -819,7 +819,7 @@ func (r *Registry) issueEditTool() *agentapidomain.Tool {
 				},
 			},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil

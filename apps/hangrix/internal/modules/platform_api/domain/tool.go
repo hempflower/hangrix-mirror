@@ -2,7 +2,7 @@
 // every platform tool implements, the dispatch envelopes the handler
 // uses, and the cross-module dependencies tool implementations consume.
 //
-// The agent_api module sits above the issue / repo / runner / git
+// The platform_api module sits above the issue / repo / runner / git
 // modules. It does NOT own its own persistence — every tool calls into
 // existing domain interfaces. The split is deliberate: when the same
 // "merge an issue" action is reachable both from the web UI (issue
@@ -57,7 +57,7 @@ type Result struct {
 	IsError bool
 }
 
-// ToolProvider is the seam between the agent_api service layer and
+// ToolProvider is the seam between the platform_api service layer and
 // the handler. Every tool registers as one *Tool via the ioc container's
 // []ToolProvider slice dependency. Adding a new tool = one new constructor
 // returning *Tool, bound `.ToInterface(new(domain.ToolProvider))`.

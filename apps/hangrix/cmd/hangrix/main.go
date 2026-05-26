@@ -7,7 +7,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/app"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/kv"
-	agentapi "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api"
+	platformapi "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api"
 	agentsession "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth"
@@ -55,7 +55,7 @@ func main() {
 		runner.Module(),
 		agentsession.Module(),
 		dashboard.Module(),
-		agentapi.Module(),
+		platformapi.Module(),
 		automation.Module(),
 		workflow.Module(),
 		web.Module(),

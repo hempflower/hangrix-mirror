@@ -11,14 +11,14 @@ import (
 
 	"github.com/hangrix/hangrix/pkg/actor"
 
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 	releasedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
 
 // releaseCreateTool creates a draft release for the session's repo.
-func (r *Registry) releaseCreateTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) releaseCreateTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "release_create",
 		Description: "Create a draft release. The tag must already exist in the repository. Returns the release with id, tag_name, and draft status.",
 		InputSchema: map[string]any{
@@ -39,7 +39,7 @@ func (r *Registry) releaseCreateTool() *agentapidomain.Tool {
 			},
 			"required": []string{"tag_name"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -88,8 +88,8 @@ func (r *Registry) releaseCreateTool() *agentapidomain.Tool {
 // releaseUploadAssetTool uploads a custom asset to a release.
 // The file content is passed as base64 so the platform can persist it
 // without needing access to the agent's filesystem.
-func (r *Registry) releaseUploadAssetTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) releaseUploadAssetTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "release_upload_asset",
 		Description: "Upload a custom asset to a release. The file content must be base64-encoded.",
 		InputSchema: map[string]any{
@@ -114,7 +114,7 @@ func (r *Registry) releaseUploadAssetTool() *agentapidomain.Tool {
 			},
 			"required": []string{"release_id", "name", "content"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -189,8 +189,8 @@ func (r *Registry) releaseUploadAssetTool() *agentapidomain.Tool {
 }
 
 // releasePublishTool publishes a draft release.
-func (r *Registry) releasePublishTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) releasePublishTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "release_publish",
 		Description: "Publish a draft release, making it visible as an official release.",
 		InputSchema: map[string]any{
@@ -203,7 +203,7 @@ func (r *Registry) releasePublishTool() *agentapidomain.Tool {
 			},
 			"required": []string{"release_id"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -244,8 +244,8 @@ func (r *Registry) releasePublishTool() *agentapidomain.Tool {
 }
 
 // releaseUpdateTool updates a release's title, notes, or tag_name.
-func (r *Registry) releaseUpdateTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) releaseUpdateTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "release_update",
 		Description: "Update a release's title, notes, or tag_name. Only draft releases can change tag_name.",
 		InputSchema: map[string]any{
@@ -270,7 +270,7 @@ func (r *Registry) releaseUpdateTool() *agentapidomain.Tool {
 			},
 			"required": []string{"release_id"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -339,8 +339,8 @@ func (r *Registry) releaseUpdateTool() *agentapidomain.Tool {
 }
 
 // releaseDeleteTool deletes a release and its assets.
-func (r *Registry) releaseDeleteTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) releaseDeleteTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "release_delete",
 		Description: "Delete a release and all its custom assets.",
 		InputSchema: map[string]any{
@@ -353,7 +353,7 @@ func (r *Registry) releaseDeleteTool() *agentapidomain.Tool {
 			},
 			"required": []string{"release_id"},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil

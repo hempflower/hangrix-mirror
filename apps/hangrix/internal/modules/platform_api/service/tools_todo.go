@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
@@ -14,8 +14,8 @@ import (
 // issueTodoUpdateTool is a combined create+update tool for issue todos.
 // When todo_id is 0 or absent, it creates a new todo. When todo_id is set,
 // it updates the existing todo's status and optionally its content.
-func (r *Registry) issueTodoUpdateTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) issueTodoUpdateTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "issue_todo_update",
 		Description: "Create or update a todo item on the current issue. Pass todo_id=0 (or omit) to create a new todo (content required); pass a valid todo_id to update an existing todo's status and optionally its content.",
 		InputSchema: map[string]any{
@@ -40,7 +40,7 @@ func (r *Registry) issueTodoUpdateTool() *agentapidomain.Tool {
 				},
 			},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, args json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil
@@ -102,15 +102,15 @@ func (r *Registry) issueTodoUpdateTool() *agentapidomain.Tool {
 
 // issueTodoListTool returns the todos and todo_summary for the current issue.
 // Lighter than issue_read when the agent only wants to check todo state.
-func (r *Registry) issueTodoListTool() *agentapidomain.Tool {
-	return &agentapidomain.Tool{
+func (r *Registry) issueTodoListTool() *apidomain.Tool {
+	return &apidomain.Tool{
 		Name:        "issue_todo_list",
 		Description: "List todos for the current issue with a completion summary. Lighter than issue_read — use when you only need todo state.",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
 		},
-		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, _ json.RawMessage) (agentapidomain.Result, error) {
+		Call: func(ctx context.Context, sess *runnerdomain.AgentSession, _ json.RawMessage) (apidomain.Result, error) {
 			scope, err := r.loadScope(ctx, sess)
 			if err != nil {
 				return errorResult(err.Error()), nil

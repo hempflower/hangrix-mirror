@@ -37,8 +37,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
-	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/service"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/service"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
 
@@ -57,13 +57,13 @@ const maxRequestBody = 1 << 20
 // instantiating the whole tool catalogue (with its issue / runner / git
 // deps).
 type Registry interface {
-	ByName(name string) *agentapidomain.Tool
-	FilterForSession(sess *runnerdomain.AgentSession) []*agentapidomain.Tool
+	ByName(name string) *apidomain.Tool
+	FilterForSession(sess *runnerdomain.AgentSession) []*apidomain.Tool
 	// UploadAttachment handles multipart file upload for the
 	// issue_attachment_upload tool. It receives the raw file bytes and
 	// metadata parsed from the multipart form, loads the session scope,
 	// and delegates to the attachment service.
-	UploadAttachment(ctx context.Context, sess *runnerdomain.AgentSession, fileBytes []byte, name, displayName string, inline bool, commentID int64) (agentapidomain.Result, error)
+	UploadAttachment(ctx context.Context, sess *runnerdomain.AgentSession, fileBytes []byte, name, displayName string, inline bool, commentID int64) (apidomain.Result, error)
 }
 
 type Handler struct {
@@ -95,7 +95,7 @@ func NewHandlerWithRegistry(registry Registry, validator SessionTokenValidator) 
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	// Legacy tool-dispatch routes — kept for backward compatibility during
 	// migration to the v1 REST surface. Consumers should migrate to
-	// /api/agent/v1/... endpoints.
+	// /api/v1/... endpoints.
 	r.Route("/api/agent/tools", func(r chi.Router) {
 		r.Use(BearerAuth(h.validator))
 		r.Get("/", h.list)
@@ -223,10 +223,10 @@ func (h *Handler) call(w http.ResponseWriter, r *http.Request) {
 // issue_attachment_upload. Expected parts: file (binary, required),
 // display_name, inline, comment_id. Delegates to the registry's
 // UploadAttachment which handles scope loading and service call.
-func (h *Handler) handleMultipartUpload(ctx context.Context, sess *runnerdomain.AgentSession, r *http.Request) agentapidomain.Result {
+func (h *Handler) handleMultipartUpload(ctx context.Context, sess *runnerdomain.AgentSession, r *http.Request) apidomain.Result {
 	// 1 MiB for metadata fields; the file part may spill to disk.
 	if err := r.ParseMultipartForm(1 << 20); err != nil {
-		return agentapidomain.Result{
+		return apidomain.Result{
 			IsError: true,
 			Text:    "issue_attachment_upload: parse multipart form: " + err.Error(),
 		}
@@ -234,7 +234,7 @@ func (h *Handler) handleMultipartUpload(ctx context.Context, sess *runnerdomain.
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		return agentapidomain.Result{
+		return apidomain.Result{
 			IsError: true,
 			Text:    "issue_attachment_upload: missing or invalid 'file' part: " + err.Error(),
 		}
@@ -243,7 +243,7 @@ func (h *Handler) handleMultipartUpload(ctx context.Context, sess *runnerdomain.
 
 	fileBytes, err := io.ReadAll(file)
 	if err != nil {
-		return agentapidomain.Result{
+		return apidomain.Result{
 			IsError: true,
 			Text:    "issue_attachment_upload: read file: " + err.Error(),
 		}
@@ -255,7 +255,7 @@ func (h *Handler) handleMultipartUpload(ctx context.Context, sess *runnerdomain.
 	commentID := int64(0)
 	if raw := strings.TrimSpace(r.FormValue("comment_id")); raw != "" {
 		if n, err := fmt.Sscanf(raw, "%d", &commentID); err != nil || n != 1 {
-			return agentapidomain.Result{
+			return apidomain.Result{
 				IsError: true,
 				Text:    "issue_attachment_upload: invalid comment_id: " + raw,
 			}
@@ -264,7 +264,7 @@ func (h *Handler) handleMultipartUpload(ctx context.Context, sess *runnerdomain.
 
 	res, err := h.registry.UploadAttachment(ctx, sess, fileBytes, name, displayName, inline, commentID)
 	if err != nil {
-		return agentapidomain.Result{
+		return apidomain.Result{
 			IsError: true,
 			Text:    "issue_attachment_upload: " + err.Error(),
 		}

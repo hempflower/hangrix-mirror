@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 )
 
 // ---- v1 JSON response helpers ----
@@ -23,23 +23,23 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 //
 //	{"message": "...", "documentation_url": "..."}
 func WriteError(w http.ResponseWriter, status int, msg string) {
-	WriteJSON(w, status, agentapidomain.NewErrorResponse(msg))
+	WriteJSON(w, status, apidomain.NewErrorResponse(msg))
 }
 
 // WriteFieldError writes an error response with field-level details.
-func WriteFieldError(w http.ResponseWriter, status int, msg string, fieldErrors ...agentapidomain.FieldError) {
-	WriteJSON(w, status, agentapidomain.NewErrorResponse(msg, fieldErrors...))
+func WriteFieldError(w http.ResponseWriter, status int, msg string, fieldErrors ...apidomain.FieldError) {
+	WriteJSON(w, status, apidomain.NewErrorResponse(msg, fieldErrors...))
 }
 
 // WriteOK writes a 200 with the given payload wrapped in a singleton
 // response envelope.
 func WriteOK(w http.ResponseWriter, data any) {
-	WriteJSON(w, http.StatusOK, &agentapidomain.SingletonResponse{Data: data})
+	WriteJSON(w, http.StatusOK, &apidomain.SingletonResponse{Data: data})
 }
 
 // WriteCreated writes a 201 with the given payload.
 func WriteCreated(w http.ResponseWriter, data any) {
-	WriteJSON(w, http.StatusCreated, &agentapidomain.SingletonResponse{Data: data})
+	WriteJSON(w, http.StatusCreated, &apidomain.SingletonResponse{Data: data})
 }
 
 // WriteNoContent writes a 204 with no body.
@@ -50,9 +50,9 @@ func WriteNoContent(w http.ResponseWriter) {
 // WriteList writes a paginated collection response. If total is negative
 // the total_count field is omitted.
 func WriteList(w http.ResponseWriter, items any, page, perPage, total int) {
-	resp := &agentapidomain.ListResponse{
+	resp := &apidomain.ListResponse{
 		Items: items,
-		Pagination: agentapidomain.Pagination{
+		Pagination: apidomain.Pagination{
 			Page:    page,
 			PerPage: perPage,
 		},
@@ -105,8 +105,8 @@ func WriteListWithLinks(w http.ResponseWriter, r *http.Request, items any, page,
 }
 
 // parsePagination extracts page/per_page from query params with defaults.
-func parsePagination(r *http.Request) agentapidomain.ListOptions {
-	opts := agentapidomain.DefaultListOptions()
+func parsePagination(r *http.Request) apidomain.ListOptions {
+	opts := apidomain.DefaultListOptions()
 	if p := r.URL.Query().Get("page"); p != "" {
 		if n, err := strconv.Atoi(p); err == nil && n > 0 {
 			opts.Page = n

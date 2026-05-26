@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
@@ -25,7 +25,7 @@ import (
 // happens via the session's role_config snapshot (see RoleCanList) — the catalogue
 // itself is global.
 type Registry struct {
-	tools []*agentapidomain.Tool
+	tools []*apidomain.Tool
 	deps  *RegistryDeps
 }
 
@@ -55,7 +55,7 @@ type RegistryDeps struct {
 // catalogues, and "look before you act" is the safer default ordering).
 func NewRegistry(deps *RegistryDeps) *Registry {
 	r := &Registry{deps: deps}
-	r.tools = []*agentapidomain.Tool{
+	r.tools = []*apidomain.Tool{
 		r.issueReadTool(),
 		r.issueReadByNumberTool(),
 		r.issueCommentReadTool(),
@@ -92,11 +92,11 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 
 // All returns the full tool catalogue. The HTTP handler intersects this
 // with the per-role `can:` filter before returning to the agent.
-func (r *Registry) All() []*agentapidomain.Tool { return r.tools }
+func (r *Registry) All() []*apidomain.Tool { return r.tools }
 
 // ByName looks up a tool by its wire name. nil when unknown — callers
 // surface "unknown tool" as a structured tool error rather than crashing.
-func (r *Registry) ByName(name string) *agentapidomain.Tool {
+func (r *Registry) ByName(name string) *apidomain.Tool {
 	for _, t := range r.tools {
 		if t.Name == name {
 			return t
@@ -110,8 +110,8 @@ func (r *Registry) ByName(name string) *agentapidomain.Tool {
 // frozen at spawn time — host yaml changes mid-session don't affect
 // a running agent. Whitelist (`can:`) wins over blacklist (`not:`)
 // when both are set; an entirely empty ACL fails closed.
-func (r *Registry) FilterForSession(sess *runnerdomain.AgentSession) []*agentapidomain.Tool {
-	out := make([]*agentapidomain.Tool, 0, len(r.tools))
+func (r *Registry) FilterForSession(sess *runnerdomain.AgentSession) []*apidomain.Tool {
+	out := make([]*apidomain.Tool, 0, len(r.tools))
 	for _, t := range r.tools {
 		if CanCallTool(sess, t.Name) {
 			out = append(out, t)
@@ -154,19 +154,19 @@ func (r *Registry) loadScope(ctx context.Context, sess *runnerdomain.AgentSessio
 	return &sessionScope{repo: repo, fsPath: fsPath, issue: iss}, nil
 }
 
-func textResult(v any) agentapidomain.Result {
+func textResult(v any) apidomain.Result {
 	body, err := json.Marshal(v)
 	if err != nil {
-		return agentapidomain.Result{
+		return apidomain.Result{
 			Text:    fmt.Sprintf(`{"error":"marshal: %s"}`, err),
 			IsError: true,
 		}
 	}
-	return agentapidomain.Result{Text: string(body)}
+	return apidomain.Result{Text: string(body)}
 }
 
-func errorResult(msg string) agentapidomain.Result {
-	return agentapidomain.Result{Text: msg, IsError: true}
+func errorResult(msg string) apidomain.Result {
+	return apidomain.Result{Text: msg, IsError: true}
 }
 
 // stableTime serialises a time.Time as RFC3339 so JSON output is

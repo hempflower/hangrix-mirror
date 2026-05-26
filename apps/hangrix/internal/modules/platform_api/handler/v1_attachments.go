@@ -6,13 +6,16 @@ import (
 	"strconv"
 	"strings"
 
-	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 )
 
 func v1UploadAttachment(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
 		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "attachments", "create") {
 			return
 		}
 		if !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
@@ -27,7 +30,7 @@ func v1UploadAttachment(api AgentAPI) http.HandlerFunc {
 		file, header, err := r.FormFile("file")
 		if err != nil {
 			WriteFieldError(w, http.StatusUnprocessableEntity, "missing or invalid 'file' part",
-				agentapidomain.FieldError{Field: "file", Code: "missing"},
+				apidomain.FieldError{Field: "file", Code: "missing"},
 			)
 			return
 		}
