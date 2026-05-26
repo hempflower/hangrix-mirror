@@ -108,23 +108,30 @@ func TestLoopSmoke(t *testing.T) {
 	}))
 	t.Cleanup(llmServer.Close)
 
-	// (3) Mock platform tools server. POST /<tool-name> returns the
-	// REST envelope the real handler produces: {is_error, text}. We
-	// hard-code one canned reply for issue_read; any other tool path
-	// 404s so a typo in the test surfaces immediately.
+	// (3) Mock platform tools server. The v1 platform client sends
+	// REST requests (e.g. GET /issues/current) and expects the v1
+	// envelope {"data":...} on success; 4xx errors come back as the
+	// structured {"message":"...","errors":[...]} envelope which the
+	// platform.Tool layer translates to {"is_error":true,"status":…,
+	// "error":"…"} for the registry.  We hard-code one canned reply
+	// for issue_read; any other path 404s so a typo surfaces fast.
 	platformServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		if r.URL.Path != "/issues/current" {
+			http.Error(w, "unknown tool", http.StatusNotFound)
 			return
 		}
-		if !strings.HasSuffix(r.URL.Path, "/issue_read") {
-			http.Error(w, "unknown tool", http.StatusNotFound)
+		if r.Method != http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"message": "method not allowed",
+				"errors":  []map[string]any{{"code": "method_not_allowed"}},
+			})
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"is_error": false,
-			"text":     "pong",
+			"data": map[string]any{"text": "pong"},
 		})
 	}))
 	t.Cleanup(platformServer.Close)
