@@ -738,6 +738,14 @@ func renderEventMessage(event string, payload json.RawMessage) (string, error) {
 
 func toolPayload(r tools.CallResult) string {
 	if r.IsError {
+		// When the error carries a structured ResultJSON (platform
+		// soft-errors like `{is_error,status,error}`), surface it
+		// verbatim so the LLM sees the full detail. Fall back to a
+		// simple {error: ErrMsg} for Go-level errors (transport
+		// failures, unknown tools) where ResultJSON is nil.
+		if len(r.ResultJSON) > 0 {
+			return string(r.ResultJSON)
+		}
 		out, _ := json.Marshal(map[string]any{"error": r.ErrMsg})
 		return string(out)
 	}

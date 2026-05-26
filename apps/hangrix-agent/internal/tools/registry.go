@@ -123,11 +123,12 @@ func (r *Registry) makeResult(src Source, value any, err error) CallResult {
 	if value == nil {
 		return CallResult{Source: src, ResultJSON: json.RawMessage("null")}
 	}
-	// Platform tools return a structured `{is_error, text}` envelope on
-	// soft failure (see internal/tools/platform/platform.go). Project
-	// the IsError flag onto our CallResult so the runtime can mark the
-	// tool_call frame; the body itself still rides in ResultJSON so the
-	// LLM sees the explanation verbatim.
+	// Platform tools return a structured `{is_error, ...}` envelope on
+	// soft failure. The legacy shape is `{is_error, text}`; the v1 REST
+	// shape is `{is_error, status, error}`. Project the IsError flag
+	// onto our CallResult so the runtime can mark the tool_call frame;
+	// the body itself still rides in ResultJSON so the LLM sees the
+	// explanation verbatim.
 	if m, ok := value.(map[string]any); ok {
 		if flag, has := m["is_error"].(bool); has && flag {
 			raw, mErr := json.Marshal(value)
@@ -135,6 +136,9 @@ func (r *Registry) makeResult(src Source, value any, err error) CallResult {
 				return CallResult{Source: src, IsError: true, ErrMsg: fmt.Sprintf("marshal result: %s", mErr)}
 			}
 			text, _ := m["text"].(string)
+			if text == "" {
+				text, _ = m["error"].(string)
+			}
 			return CallResult{Source: src, ResultJSON: raw, IsError: true, ErrMsg: text}
 		}
 	}
