@@ -28,9 +28,13 @@ type APIService struct {
 	r *Registry
 }
 
+type APIServiceDeps struct {
+	Registry *Registry
+}
+
 // NewAPIService creates an APIService backed by the given Registry.
-func NewAPIService(r *Registry) *APIService {
-	return &APIService{r: r}
+func NewAPIService(deps *APIServiceDeps) *APIService {
+	return &APIService{r: deps.Registry}
 }
 
 // ---- Helpers ----
