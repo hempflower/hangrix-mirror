@@ -20,69 +20,74 @@ import (
 // so the spawner test cases don't drift between runs.
 const testEncryptionKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
 
-// hostYAML returns a minimal valid `.hangrix/agents.yml` body. Tests
-// override roles by passing a sprintf-style block — keeps the bulk of
-// the YAML hidden so test bodies stay focused on what's being tested.
-const hostYAML = `version: 1
+// hostFixture bundles a team-only `.hangrix/agents.yml` body with the
+// per-role `.hangrix/agents/<role>.md` files. Roles no longer live in
+// agents.yml — each is a Markdown file (YAML front matter + prompt body)
+// under .hangrix/agents/ that LoadHostConfig assembles. newTestSpawner
+// registers both the team yaml and every role file under the `main:` ref
+// so the stub blob's ReadBlob + ListBlobs serve them like git would.
+type hostFixture struct {
+	yaml  string            // team-only agents.yml body
+	roles map[string]string // role key → full `.md` file body (front matter + prompt)
+}
+
+// agentMD assembles a `.hangrix/agents/<role>.md` body from a front-matter
+// block (trigger/permission/tools/scope, no fences) and a short prompt.
+func agentMD(frontMatter, prompt string) string {
+	return "---\n" + frontMatter + "\n---\n" + prompt + "\n"
+}
+
+// teamYAML is the shared team-only agents.yml: version, container (with a
+// NODE_ENV env var some tests assert flows through), team llm, and an
+// `all: ["*"]` tool rule every fixture role references.
+const teamYAML = `version: 1
 container:
   image: ghcr.io/acme/dev:1.2.3
   env:
     NODE_ENV: development
 llm:
   model: claude-sonnet-4-6
-roles:
-  backend:
-    prompt: hi
-    triggers:
-      issue.opened: {}
-    permission: write
+tools:
+  all: ["*"]
 `
 
-// hostYAMLMultiRole exercises trigger filtering: dispatcher subscribes
-// to issue.opened, reviewer to commit.pushed. A spawn fired with
+// hostSingleRole: one `backend` role on issue.opened, permission write.
+func hostSingleRole() *hostFixture {
+	return &hostFixture{
+		yaml: teamYAML,
+		roles: map[string]string{
+			"backend": agentMD("triggers:\n  issue.opened: {}\npermission: write\ntools: [all]", "hi"),
+		},
+	}
+}
+
+// hostMultiRole exercises trigger filtering: dispatcher subscribes to
+// issue.opened, reviewer to commit.pushed. A spawn fired with
 // issue.opened should ONLY create the dispatcher session.
-const hostYAMLMultiRole = `version: 1
-container:
-  image: ghcr.io/acme/dev:1.2.3
-llm:
-  model: claude-sonnet-4-6
-roles:
-  dispatcher:
-    prompt: hi
-    triggers:
-      issue.opened: {}
-    permission: write
-  reviewer:
-    prompt: hi
-    triggers:
-      commit.pushed: {}
-    permission: write
-`
+func hostMultiRole() *hostFixture {
+	return &hostFixture{
+		yaml: teamYAML,
+		roles: map[string]string{
+			"dispatcher": agentMD("triggers:\n  issue.opened: {}\npermission: write\ntools: [all]", "hi"),
+			"reviewer":   agentMD("triggers:\n  commit.pushed: {}\npermission: write\ntools: [all]", "hi"),
+		},
+	}
+}
 
-// hostYAMLMentions exercises the M7b mention path: two roles each
-// subscribe to issue.comment with mentioned_only=true. A spawn fired
-// with TriggerIssueComment + RoleKey="backend" should wake backend
-// only — frontend stays cold even though it also subscribes to the
-// trigger.
-const hostYAMLMentions = `version: 1
-container:
-  image: ghcr.io/acme/dev:1.2.3
-llm:
-  model: claude-sonnet-4-6
-roles:
-  backend:
-    prompt: hi
-    triggers:
-      issue.comment:
-        mentioned_only: true
-    permission: write
-  frontend:
-    prompt: hi
-    triggers:
-      issue.comment:
-        mentioned_only: true
-    permission: write
-`
+// hostMentions exercises the M7b mention path: two roles each subscribe
+// to issue.comment with mentioned_only=true. A spawn fired with
+// TriggerIssueComment + RoleKey="backend" should wake backend only —
+// frontend stays cold even though it also subscribes to the trigger.
+func hostMentions() *hostFixture {
+	cmtFM := "triggers:\n  issue.comment:\n    mentioned_only: true\npermission: write\ntools: [all]"
+	return &hostFixture{
+		yaml: teamYAML,
+		roles: map[string]string{
+			"backend":  agentMD(cmtFM, "hi"),
+			"frontend": agentMD(cmtFM, "hi"),
+		},
+	}
+}
 
 // newTestSpawner wires the unit-test stubs onto a Spawner. The host repo
 // + agent repo rows + their on-disk shas are passed in so tests can
@@ -95,7 +100,7 @@ type testHarness struct {
 	blob    *stubBlob
 }
 
-func newTestSpawner(t *testing.T, hostBody, lockBody []byte) *testHarness {
+func newTestSpawner(t *testing.T, fixture *hostFixture, lockBody []byte) *testHarness {
 	t.Helper()
 	cfg := &config.Config{
 		LLM:    config.LLMConfig{EncryptionKey: testEncryptionKey},
@@ -152,8 +157,16 @@ func newTestSpawner(t *testing.T, hostBody, lockBody []byte) *testHarness {
 	git.add("/fake/acme/dispatcher.git", "v1.0.0", "dispatcherSHA000000000000000000000000")
 	git.add("/fake/acme/reviewer.git", "v1.0.0", "reviewerSHA00000000000000000000000000")
 
-	files := map[string][]byte{
-		"main:.hangrix/agents.yml": hostBody,
+	// Register the team-only agents.yml plus one `.hangrix/agents/<role>.md`
+	// per role, all under the host's `main:` ref so the stub blob's
+	// ReadBlob + ListBlobs serve them exactly the way GitBlobReader does
+	// off a real bare repo at the default-branch tip.
+	files := map[string][]byte{}
+	if fixture != nil {
+		files["main:"+agentsconfig.HostConfigPath] = []byte(fixture.yaml)
+		for key, body := range fixture.roles {
+			files["main:"+agentsconfig.AgentsDir+"/"+key+".md"] = []byte(body)
+		}
 	}
 	if lockBody != nil {
 		files["main:.hangrix/agents.lock"] = lockBody
@@ -189,7 +202,7 @@ func TestEncryptionKeyShape(t *testing.T) {
 // the role key. The history frame is no longer seeded onto /inputs —
 // the runner fetches it from GET /sessions/{id}/history at agent boot.
 func TestOnTriggerHappyPath(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAML), nil)
+	h := newTestSpawner(t, hostSingleRole(), nil)
 	got, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
 		CauseKind:   domain.CauseKindIssueOpened,
@@ -299,7 +312,7 @@ func TestOnTriggerHappyPath(t *testing.T) {
 // yaml with dispatcher (issue.opened) + reviewer (commit.pushed) fired
 // with issue.opened produces exactly one row, dispatcher only.
 func TestOnTriggerFiltersByTrigger(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAMLMultiRole), nil)
+	h := newTestSpawner(t, hostMultiRole(), nil)
 	got, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
 		CauseKind:   domain.CauseKindIssueOpened,
@@ -322,7 +335,7 @@ func TestOnTriggerFiltersByTrigger(t *testing.T) {
 // spawn and confirms the second call returns zero new sessions. The
 // in-memory stub keeps the original row.
 func TestOnTriggerIdempotent(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAML), nil)
+	h := newTestSpawner(t, hostSingleRole(), nil)
 	in := domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
 		CauseKind:   domain.CauseKindIssueOpened,
@@ -347,7 +360,7 @@ func TestOnTriggerIdempotent(t *testing.T) {
 // `.hangrix/agents.yml` produces zero sessions and no error — the
 // common case for non-agent repos.
 func TestOnTriggerMissingHostYAMLNoOp(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAML), nil)
+	h := newTestSpawner(t, hostSingleRole(), nil)
 	// Drop the host yaml from the blob store, simulating a non-agent
 	// repo (push observer never wrote `.hangrix/agents.yml`).
 	h.blob.files = map[string][]byte{}
@@ -370,7 +383,7 @@ func TestOnTriggerMissingHostYAMLNoOp(t *testing.T) {
 // TestArchiverFlipsActiveSessions covers the issue.closed / .merged
 // path: every non-archived row on the (repo, issue) flips to archived.
 func TestArchiverFlipsActiveSessions(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAML), nil)
+	h := newTestSpawner(t, hostSingleRole(), nil)
 	// Spawn one session first.
 	_, _ = h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
@@ -405,7 +418,7 @@ func TestArchiverFlipsActiveSessions(t *testing.T) {
 // silenced. The archived row is left in place for audit; the new row
 // becomes the canonical session for the (issue, role).
 func TestOnTriggerArchivedRoleSpawnsReplacement(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAMLMentions), nil)
+	h := newTestSpawner(t, hostMentions(), nil)
 	in := domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueComment,
 		Comment:     &domain.CommentContext{Mentions: []string{"backend"}},
@@ -468,7 +481,7 @@ func TestOnTriggerArchivedRoleSpawnsReplacement(t *testing.T) {
 // backend only, even though frontend also subscribes to the same
 // trigger.
 func TestOnTriggerRoleKeyScopesToOneRole(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAMLMentions), nil)
+	h := newTestSpawner(t, hostMentions(), nil)
 	got, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueComment,
 		Comment:     &domain.CommentContext{Mentions: []string{"backend"}},
@@ -501,7 +514,7 @@ func TestOnTriggerRoleKeyScopesToOneRole(t *testing.T) {
 // mention with a different CauseID appends an event frame to the
 // existing row's inputs queue instead of creating a duplicate row.
 func TestOnTriggerEnqueueOntoLiveSession(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAMLMentions), nil)
+	h := newTestSpawner(t, hostMentions(), nil)
 	first, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueComment,
 		Comment:     &domain.CommentContext{Mentions: []string{"backend"}},
@@ -559,7 +572,7 @@ func TestOnTriggerEnqueueOntoLiveSession(t *testing.T) {
 // identity stable keeps audit trails coherent and avoids gratuitous
 // DB churn on every wake.
 func TestOnTriggerRewakePreservesIdleToken(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAML), nil)
+	h := newTestSpawner(t, hostSingleRole(), nil)
 	first, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
 		CauseKind:   domain.CauseKindIssueOpened,
@@ -616,7 +629,7 @@ func TestOnTriggerRewakePreservesIdleToken(t *testing.T) {
 // EnqueueInput-succeeded-but-ResumeSession-failed path are never
 // cross-cause replayed). The old failed row stays as a tombstone.
 func TestOnTriggerSpawnAfterFailed(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAML), nil)
+	h := newTestSpawner(t, hostSingleRole(), nil)
 	if _, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
 		CauseKind:   domain.CauseKindIssueOpened,
@@ -674,7 +687,7 @@ func TestOnTriggerSpawnAfterFailed(t *testing.T) {
 // rewoken. Instead, a new trigger with a different cause spawns a fresh
 // session with a freshly minted token. The legacy row stays as a tombstone.
 func TestOnTriggerSpawnAfterLegacyFailed(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAML), nil)
+	h := newTestSpawner(t, hostSingleRole(), nil)
 	if _, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
 		CauseKind:   domain.CauseKindIssueOpened,
@@ -725,7 +738,7 @@ func TestOnTriggerSpawnAfterLegacyFailed(t *testing.T) {
 // field is layered onto the input frame's payload object — the agent
 // sees comment_body etc. directly on its stdin without a tool call.
 func TestOnTriggerPayloadMergedIntoCauseFrame(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAML), nil)
+	h := newTestSpawner(t, hostSingleRole(), nil)
 	extra, _ := json.Marshal(map[string]any{
 		"comment_id":   42,
 		"comment_body": "please add /healthz",
@@ -758,7 +771,7 @@ func TestOnTriggerPayloadMergedIntoCauseFrame(t *testing.T) {
 // handler uses to resolve `@agent-<role-key>` mentions against the
 // host yaml's role declarations.
 func TestLoadHostConfigReturnsParsedRoles(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAMLMentions), nil)
+	h := newTestSpawner(t, hostMentions(), nil)
 	cfg, err := h.spawner.LoadHostConfig(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("LoadHostConfig err: %v", err)
@@ -773,7 +786,7 @@ func TestLoadHostConfigReturnsParsedRoles(t *testing.T) {
 
 // TestLoadHostConfigMissingReturnsNil — non-agent repo returns (nil, nil).
 func TestLoadHostConfigMissingReturnsNil(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAML), nil)
+	h := newTestSpawner(t, hostSingleRole(), nil)
 	h.blob.files = map[string][]byte{}
 	cfg, err := h.spawner.LoadHostConfig(context.Background(), 1)
 	if err != nil {
@@ -795,7 +808,7 @@ func roleKeyNames(roles map[string]*agentsconfig.Role) []string {
 // TestAuditorReturnsSnapshotColumns confirms ListByIssue surfaces the
 // frozen pins (agent_sha, repo_sha, cause_kind, etc.) in spawn order.
 func TestAuditorReturnsSnapshotColumns(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAML), nil)
+	h := newTestSpawner(t, hostSingleRole(), nil)
 	_, _ = h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
 		CauseKind:   domain.CauseKindIssueOpened,
@@ -835,7 +848,7 @@ func TestAuditorReturnsSnapshotColumns(t *testing.T) {
 // to mark the session as 'failed'. This prevents the session from being
 // silently stuck in a non-live state with orphaned inputs.
 func TestOnTriggerRewakeResumeFailureMarksFailed(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAML), nil)
+	h := newTestSpawner(t, hostSingleRole(), nil)
 
 	// Step 1: spawn a session.
 	first, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
@@ -899,7 +912,7 @@ func TestOnTriggerRewakeResumeFailureMarksFailed(t *testing.T) {
 // live ones. A retrigger with the same (role, cause_kind, cause_id) on
 // an idle/failed/succeeded session is a no-op — no duplicate input.
 func TestOnTriggerSameCauseIdempotentAcrossNonLive(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAML), nil)
+	h := newTestSpawner(t, hostSingleRole(), nil)
 
 	// Spawn a session.
 	first, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{

@@ -1,3 +1,14 @@
+---
+triggers:
+  issue.comment:
+    mentioned_only: true
+permission: write
+tools: [worker]
+scope:
+  paths:
+    - "apps/web/**"
+mcp: [playwright]
+---
 # web
 
 Implement Nuxt 4 frontend changes inside `apps/web/**`. Wake on `@agent-web`.

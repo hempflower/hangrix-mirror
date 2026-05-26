@@ -15,12 +15,12 @@ import (
 // against an older agent server without bricking the parser). The wire
 // type is private so domain stays free of yaml struct tags.
 type hostWire struct {
-	Version   int                  `yaml:"version"`
-	Container *containerWire       `yaml:"container"`
-	LLM       *llmWire             `yaml:"llm"`
-	Issues    *issuesWire          `yaml:"issues"`
-	Reviewers *reviewersWire       `yaml:"reviewers"`
-	Roles     map[string]*roleWire `yaml:"roles"`
+	Version   int                 `yaml:"version"`
+	Container *containerWire      `yaml:"container"`
+	LLM       *llmWire            `yaml:"llm"`
+	Issues    *issuesWire         `yaml:"issues"`
+	Reviewers *reviewersWire      `yaml:"reviewers"`
+	Tools     map[string][]string `yaml:"tools"`
 }
 
 type issuesWire struct {
@@ -69,6 +69,9 @@ type llmWire struct {
 	TopP             *float64 `yaml:"top_p"`
 }
 
+// roleWire mirrors the YAML front matter of a `.hangrix/agents/<role>.md`
+// file. The role's prompt is the Markdown body after the front matter,
+// not a wire field. Unknown keys are dropped (forward-compat).
 type roleWire struct {
 	// Triggers is a yaml.Node holding the per-trigger filter mapping.
 	// The wire shape rejects unknown filter keys per trigger; doing
@@ -77,10 +80,8 @@ type roleWire struct {
 	// the raw node here lets buildRole walk the mapping by hand.
 	Triggers   yaml.Node  `yaml:"triggers"`
 	Permission string     `yaml:"permission"`
-	Not        []string   `yaml:"not"`
+	Tools      []string   `yaml:"tools"`
 	Scope      *scopeWire `yaml:"scope"`
-	Prompt     string     `yaml:"prompt"`
-	PromptFile string     `yaml:"prompt_file"`
 	LLM        *llmWire   `yaml:"llm"`
 	Mcp        []string   `yaml:"mcp"`
 }
@@ -115,14 +116,6 @@ type scopeWire struct {
 // 'collaborators' explicitly" apart from "user wrote nothing" if they
 // ever need to.
 func ParseHostConfig(body []byte) (*HostConfig, error) {
-	// Duplicate role-key scan first. yaml.v3 silently keeps the last
-	// value for a duplicate mapping key, which would let a copy-paste
-	// drift undetected — we explicitly reject that one case so the
-	// operator sees "did you accidentally declare backend twice?".
-	if err := rejectDuplicateRoleKeys(body); err != nil {
-		return nil, err
-	}
-
 	var wire hostWire
 	dec := yaml.NewDecoder(bytes.NewReader(body))
 	if err := dec.Decode(&wire); err != nil {
@@ -153,28 +146,17 @@ func ParseHostConfig(body []byte) (*HostConfig, error) {
 		teamLLM = llm
 	}
 
-	if len(wire.Roles) == 0 {
-		return nil, ErrEmptyRoles
-	}
-
-	roles := make(map[string]*Role, len(wire.Roles))
-	for key, rw := range wire.Roles {
-		if !isValidRoleKey(key) {
-			return nil, fmt.Errorf("%w: %q", ErrInvalidRoleKey, key)
-		}
-		if rw == nil {
-			return nil, fmt.Errorf("roles.%s: empty role body", key)
-		}
-		role, err := buildRole(key, rw)
-		if err != nil {
-			return nil, err
-		}
-		roles[key] = role
-	}
-
 	issues := buildIssues(wire.Issues)
 
-	reviewers, err := buildReviewers(wire.Reviewers, roles)
+	tools, err := buildToolRules(wire.Tools)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reviewers structure is validated here; reviewer-role existence and
+	// vote-capability are checked later in AssembleHostConfig, once the
+	// per-role files have been loaded.
+	reviewers, err := buildReviewers(wire.Reviewers)
 	if err != nil {
 		return nil, err
 	}
@@ -185,30 +167,47 @@ func ParseHostConfig(body []byte) (*HostConfig, error) {
 		LLM:       teamLLM,
 		Issues:    issues,
 		Reviewers: reviewers,
-		Roles:     roles,
+		Tools:     tools,
+		// Roles are populated by LoadHostConfig from .hangrix/agents/*.md.
 	}, nil
 }
 
-// buildReviewers validates and lifts the optional `reviewers:` block. An
-// absent block yields nil (no review gate). When present, every referenced
-// reviewer role must exist and be able to cast review votes, every rule must
-// declare both paths and reviewers, and `fallback:` must be non-empty (so a
-// contribution can never be left with no possible reviewer).
-func buildReviewers(w *reviewersWire, roles map[string]*Role) (*ReviewersConfig, error) {
+// buildToolRules validates and lifts the `tools:` rule map. Each rule is
+// a named whitelist of platform tool-name glob patterns. Rule names must
+// be non-empty; patterns must be non-empty (a `*` wildcard is allowed).
+// nil map is fine (no rules).
+func buildToolRules(w map[string][]string) (map[string][]string, error) {
+	if len(w) == 0 {
+		return nil, nil
+	}
+	out := make(map[string][]string, len(w))
+	for name, patterns := range w {
+		if strings.TrimSpace(name) == "" {
+			return nil, fmt.Errorf("%w: empty rule name", ErrInvalidToolRule)
+		}
+		ps := make([]string, 0, len(patterns))
+		for i, p := range patterns {
+			if strings.TrimSpace(p) == "" {
+				return nil, fmt.Errorf("%w: tools.%s[%d] empty pattern", ErrInvalidToolRule, name, i)
+			}
+			ps = append(ps, p)
+		}
+		out[name] = ps
+	}
+	return out, nil
+}
+
+// buildReviewers validates and lifts the structure of the optional
+// `reviewers:` block. An absent block yields nil (no review gate). Every
+// rule must declare both paths and reviewers, and `fallback:` must be
+// non-empty (so a contribution can never be left with no possible
+// reviewer). Reviewer-ROLE existence and vote-capability are NOT checked
+// here — that happens in validateReviewers during AssembleHostConfig,
+// after the per-role files are loaded.
+func buildReviewers(w *reviewersWire) (*ReviewersConfig, error) {
 	if w == nil {
 		return nil, nil
 	}
-	validReviewer := func(field, key string) error {
-		role, ok := roles[key]
-		if !ok {
-			return fmt.Errorf("%w: %s references unknown role %q", ErrInvalidReviewers, field, key)
-		}
-		if !roleCanVote(role) {
-			return fmt.Errorf("%w: %s reviewer %q lacks the issue_review_vote capability", ErrInvalidReviewers, field, key)
-		}
-		return nil
-	}
-
 	cfg := &ReviewersConfig{}
 	for i, rw := range w.Rules {
 		field := fmt.Sprintf("reviewers.rules[%d]", i)
@@ -223,11 +222,6 @@ func buildReviewers(w *reviewersWire, roles map[string]*Role) (*ReviewersConfig,
 				return nil, fmt.Errorf("%w: %s.paths contains an empty pattern", ErrInvalidReviewers, field)
 			}
 		}
-		for _, rv := range rw.Reviewers {
-			if err := validReviewer(field+".reviewers", rv); err != nil {
-				return nil, err
-			}
-		}
 		cfg.Rules = append(cfg.Rules, ReviewerRule{
 			Paths:     append([]string(nil), rw.Paths...),
 			Reviewers: append([]string(nil), rw.Reviewers...),
@@ -236,24 +230,52 @@ func buildReviewers(w *reviewersWire, roles map[string]*Role) (*ReviewersConfig,
 	if len(w.Fallback) == 0 {
 		return nil, fmt.Errorf("%w: reviewers.fallback is required (used when no rule matches)", ErrInvalidReviewers)
 	}
-	for _, rv := range w.Fallback {
-		if err := validReviewer("reviewers.fallback", rv); err != nil {
-			return nil, err
-		}
-	}
 	cfg.Fallback = append([]string(nil), w.Fallback...)
 	return cfg, nil
 }
 
+// validateReviewers checks that every reviewer role referenced by the
+// `reviewers:` block exists and can cast review votes. Called from
+// AssembleHostConfig once roles (and their resolved ToolPatterns) exist.
+func validateReviewers(cfg *ReviewersConfig, roles map[string]*Role) error {
+	if cfg == nil {
+		return nil
+	}
+	check := func(field, key string) error {
+		role, ok := roles[key]
+		if !ok {
+			return fmt.Errorf("%w: %s references unknown role %q", ErrInvalidReviewers, field, key)
+		}
+		if !roleCanVote(role) {
+			return fmt.Errorf("%w: %s reviewer %q cannot cast votes (needs permission: write and issue_review_vote in its tool rules)", ErrInvalidReviewers, field, key)
+		}
+		return nil
+	}
+	for i, r := range cfg.Rules {
+		field := fmt.Sprintf("reviewers.rules[%d].reviewers", i)
+		for _, rv := range r.Reviewers {
+			if err := check(field, rv); err != nil {
+				return err
+			}
+		}
+	}
+	for _, rv := range cfg.Fallback {
+		if err := check("reviewers.fallback", rv); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // roleCanVote reports whether a role is permitted to call issue_review_vote.
-// Voting is a write operation, so the role needs "write" permission, and the
-// tool must not be hidden by the role's `not:` blacklist.
+// Voting is a write operation, so the role needs "write" permission, and
+// issue_review_vote must be permitted by the role's resolved tool
+// whitelist (ToolPatterns).
 func roleCanVote(role *Role) bool {
-	const tool = "issue_review_vote"
 	if role.Permission != "write" {
 		return false
 	}
-	return !containsStringFold(role.Not, tool)
+	return matchesAnyGlob(role.ToolPatterns, "issue_review_vote")
 }
 
 func containsStringFold(list []string, want string) bool {
@@ -362,29 +384,14 @@ func buildIssues(w *issuesWire) *IssuesConfig {
 	return cfg
 }
 
-// buildRole validates and lifts one role. The role key is passed in so
-// error messages can include it without the caller re-wrapping every
-// returned error.
-//
-// Every role MUST supply exactly one of `prompt:` / `prompt_file:` —
-// host yaml is the single source of truth for role prompts (M7c).
+// buildRole validates and lifts one role from its parsed front matter.
+// The role key is passed in (it is the `.md` filename) so error messages
+// can include it. The prompt is NOT here — ParseAgentFile sets it from
+// the Markdown body after the front matter.
 func buildRole(key string, w *roleWire) (*Role, error) {
 	triggers, err := buildTriggers(key, &w.Triggers)
 	if err != nil {
 		return nil, err
-	}
-
-	if w.Prompt != "" && w.PromptFile != "" {
-		return nil, fmt.Errorf("roles.%s: %w", key, ErrPromptMutuallyExclusive)
-	}
-	if w.PromptFile != "" && !strings.HasPrefix(w.PromptFile, ".hangrix/prompts/") {
-		return nil, fmt.Errorf("roles.%s.prompt_file=%q: %w", key, w.PromptFile, ErrInvalidPromptFilePath)
-	}
-	if w.PromptFile != "" && strings.Contains(w.PromptFile, "..") {
-		return nil, fmt.Errorf("roles.%s.prompt_file=%q: %w", key, w.PromptFile, ErrInvalidPromptFilePath)
-	}
-	if w.Prompt == "" && w.PromptFile == "" {
-		return nil, fmt.Errorf("roles.%s: %w", key, ErrPromptMissing)
 	}
 
 	var roleLLM *LLMConfig
@@ -401,9 +408,12 @@ func buildRole(key string, w *roleWire) (*Role, error) {
 		scope.Paths = w.Scope.Paths
 	}
 
-	for i, n := range w.Not {
+	// Tools: list of reusable rule names referenced by this role. Each
+	// must be non-empty; existence in the host's `tools:` map is checked
+	// at assembly time (LoadHostConfig), where the map is available.
+	for i, n := range w.Tools {
 		if strings.TrimSpace(n) == "" {
-			return nil, fmt.Errorf("roles.%s.not[%d]: empty tool name", key, i)
+			return nil, fmt.Errorf("roles.%s.tools[%d]: empty rule name", key, i)
 		}
 	}
 
@@ -434,10 +444,8 @@ func buildRole(key string, w *roleWire) (*Role, error) {
 	return &Role{
 		Triggers:   triggers,
 		Permission: permission,
-		Not:        w.Not,
+		Tools:      append([]string(nil), w.Tools...),
 		Scope:      scope,
-		Prompt:     w.Prompt,
-		PromptFile: w.PromptFile,
 		MCP:        mcp,
 		LLM:        roleLLM,
 	}, nil
@@ -619,38 +627,3 @@ func isValidMountPath(s string) bool {
 	return true
 }
 
-// rejectDuplicateRoleKeys walks the raw yaml tree for the `roles:`
-// mapping and flags any key that appears more than once. yaml.v3's
-// default behaviour is to silently keep the last entry, which would
-// let a config drift undetected after a copy-paste.
-func rejectDuplicateRoleKeys(body []byte) error {
-	var root yaml.Node
-	if err := yaml.Unmarshal(body, &root); err != nil {
-		return nil // strict decode will fail with the canonical msg
-	}
-	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
-		return nil
-	}
-	top := root.Content[0]
-	if top.Kind != yaml.MappingNode {
-		return nil
-	}
-	for i := 0; i+1 < len(top.Content); i += 2 {
-		if top.Content[i].Value != "roles" {
-			continue
-		}
-		rolesNode := top.Content[i+1]
-		if rolesNode.Kind != yaml.MappingNode {
-			return nil
-		}
-		seen := make(map[string]struct{}, len(rolesNode.Content)/2)
-		for j := 0; j+1 < len(rolesNode.Content); j += 2 {
-			k := rolesNode.Content[j].Value
-			if _, dup := seen[k]; dup {
-				return fmt.Errorf("%w: %q", ErrDuplicateRoleKey, k)
-			}
-			seen[k] = struct{}{}
-		}
-	}
-	return nil
-}

@@ -93,4 +93,14 @@ var (
 	// anything other than "read" or "write". Empty is allowed and
 	// defaults to "read".
 	ErrInvalidPermission = errors.New("role permission must be read or write")
+
+	// ErrInvalidToolRule fires when the `tools:` rule map is malformed
+	// (empty rule name or empty glob pattern), or when a role references
+	// a rule name that is not declared in the host's `tools:` map.
+	ErrInvalidToolRule = errors.New("invalid tool rule")
+
+	// ErrInvalidAgentFile fires when a `.hangrix/agents/<role>.md` file
+	// is malformed: missing/unterminated YAML front matter, an empty
+	// prompt body, or a filename that is not a valid role key.
+	ErrInvalidAgentFile = errors.New("invalid agent file")
 )

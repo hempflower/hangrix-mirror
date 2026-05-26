@@ -48,178 +48,59 @@ reviewers:
       reviewers: [web-reviewer, tester]
   fallback: [maintainer]
 
-roles:
-  maintainer:
-    triggers:
-      issue.opened: {}
-      issue.comment: {}
-      review_vote.posted: {}
-    # The maintainer orchestrates the issue: it merges, closes, applies
-    # contributions, recovers sessions and manages releases — so it keeps
-    # full write access with no tool blacklist.
-    permission: write
-    prompt_file: .hangrix/prompts/maintainer.md
-    llm:
-      model: deepseek-v4-flash
-      reasoning_effort: max   # max_*_tokens inherit from team
-  # Access model (GitHub-style): `permission:` is the coarse, server-
-  # enforced repo level — `read` allows read-only API calls, `write` adds
-  # mutations. Fine-grained capability is the `not:` tool blacklist:
-  # listed tools are hidden from the agent's LLM tool schema entirely
-  # (enforced agent-side). Most roles are `write` and share the
-  # `&dangerous` blacklist below — the irreversible / cross-role
-  # operations only the maintainer should perform. Per-role behaviour is
-  # otherwise shaped by the prompt, not by a tool whitelist.
-  product-designer:
-    triggers:
-      issue.comment:
-        mentioned_only: true
-    permission: write
-    not: &dangerous
-      - issue_merge
-      - issue_close
-      - contribution_apply
-      - session_recover
-      - release_create
-      - release_update
-      - release_delete
-      - release_publish
-      - release_upload_asset
-    prompt_file: .hangrix/prompts/product-designer.md
-    llm:
-      model: gpt-5.4
-
-  architecture-designer:
-    triggers:
-      issue.comment:
-        mentioned_only: true
-    permission: write
-    not: *dangerous
-    prompt_file: .hangrix/prompts/architecture-designer.md
-    llm:
-      model: gpt-5.4
-
-
-  tester:
-    triggers:
-      commit.pushed:
-        paths_ignore:
-          - "**/*.md"
-          - "**/testdata/**"
-          - ".hangrix/**"
-          - "apps/hangrix/internal/web/dist/**"
-      issue.comment:
-        mentioned_only: true
-    permission: write
-    not: *dangerous
-    prompt_file: .hangrix/prompts/tester.md
-    llm:
-      model: deepseek-v4-flash
-
-  server:
-    triggers:
-      issue.comment:
-        mentioned_only: true
-    scope:
-      paths:
-        - "apps/hangrix/**"
-        - "pkg/**"
-        - "go.work"
-        - "go.work.sum"
-    permission: write
-    not: *dangerous
-    prompt_file: .hangrix/prompts/server.md
-
-  server-reviewer:
-    triggers:
-      commit.pushed:
-        paths:
-          - "apps/hangrix/**"
-          - "pkg/**"
-        paths_ignore:
-          - "apps/hangrix/internal/web/dist/**"
-          - "**/*db/**"
-      issue.comment:
-        mentioned_only: true
-    permission: write
-    not: *dangerous
-    prompt_file: .hangrix/prompts/server-reviewer.md
-    llm:
-      model: gpt-5.4
-      reasoning_effort: high
-
-  runtime:
-    triggers:
-      issue.comment:
-        mentioned_only: true
-    scope:
-      paths:
-        - "apps/hangrix-agent/**"
-        - "apps/hangrix-runner/**"
-    permission: write
-    not: *dangerous
-    prompt_file: .hangrix/prompts/runtime.md
-
-  runtime-reviewer:
-    triggers:
-      commit.pushed:
-        paths:
-          - "apps/hangrix-agent/**"
-          - "apps/hangrix-runner/**"
-      issue.comment:
-        mentioned_only: true
-    permission: write
-    not: *dangerous
-    prompt_file: .hangrix/prompts/runtime-reviewer.md
-    llm:
-      model: gpt-5.4
-      reasoning_effort: high
-
-  web:
-    triggers:
-      issue.comment:
-        mentioned_only: true
-    mcp: [playwright]   # browser automation for frontend verification
-    scope:
-      paths:
-        - "apps/web/**"
-    permission: write
-    not: *dangerous
-    prompt_file: .hangrix/prompts/web.md
-
-  web-reviewer:
-    triggers:
-      commit.pushed:
-        paths:
-          - "apps/web/**"
-        paths_ignore:
-          - "apps/web/dist/**"
-          - "apps/web/.output/**"
-          - "apps/web/.nuxt/**"
-      issue.comment:
-        mentioned_only: true
-    permission: write
-    not: *dangerous
-    prompt_file: .hangrix/prompts/web-reviewer.md
-    llm:
-      model: gpt-5.4
-      reasoning_effort: high
-
-  web-copy-lint:
-    triggers:
-      commit.pushed:
-        paths:
-          - "apps/web/**"
-        paths_ignore:
-          - "apps/web/dist/**"
-          - "apps/web/.output/**"
-          - "apps/web/.nuxt/**"
-      issue.comment:
-        mentioned_only: true
-    permission: write
-    not: *dangerous
-    prompt_file: .hangrix/prompts/web-copy-lint.md
-    llm:
-      model: deepseek-v4-flash
-      reasoning_effort: low
+# Reusable tool rules: named whitelists of platform tool-name globs (`*`
+# wildcard). A role's `tools:` front-matter field lists rule names; the role
+# sees the union of their patterns. Platform tools only — local tools
+# (read/write/edit/glob/grep/bash/webfetch) are never restricted. Enforced
+# agent-side (hidden from the LLM tool schema); the server gates the v1 API
+# by `permission:` (read/write) alone.
+tools:
+  all: ["*"]
+  worker:
+    - issue_read
+    - issue_read_by_number
+    - issue_comment_read
+    - issue_comment
+    - issue_create
+    - issue_edit
+    - issue_mergeable
+    - issue_todo_list
+    - issue_todo_update
+    - issue_attachment_upload
+    - issue_children
+    - issue_checks
+    - contribution_list
+    - contribution_read
+    - contribution_set_meta
+    - contribution_close
+    - roster_list
+  reviewer:
+    - issue_read
+    - issue_read_by_number
+    - issue_comment_read
+    - issue_comment
+    - issue_review_vote
+    - issue_mergeable
+    - issue_children
+    - issue_checks
+    - contribution_list
+    - contribution_read
+    - roster_list
+  designer:
+    - issue_read
+    - issue_read_by_number
+    - issue_comment_read
+    - issue_comment
+    - issue_create
+    - issue_children
+    - roster_list
+  linter:
+    - issue_read
+    - issue_read_by_number
+    - issue_comment_read
+    - issue_comment
+    - issue_children
+    - contribution_list
+    - contribution_read
+    - roster_list
 

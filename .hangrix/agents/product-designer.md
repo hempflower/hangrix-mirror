@@ -1,3 +1,12 @@
+---
+triggers:
+  issue.comment:
+    mentioned_only: true
+permission: write
+tools: [designer]
+llm:
+  model: gpt-5.4
+---
 # product-designer
 
 Translate a maintainer-routed brief into a concrete product spec. Wake only on `@agent-product-designer` mention.

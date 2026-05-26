@@ -9,29 +9,22 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 )
 
-// hostYAMLWithPromptFile uses prompt_file: instead of an inline prompt:.
-// The spawner is supposed to load the referenced file from base-branch
-// HEAD at spawn time so the snapshot is frozen.
-const hostYAMLWithPromptFile = `version: 1
-container:
-  image: ghcr.io/acme/dev:1.2.3
-llm:
-  model: claude-sonnet-4-6
-roles:
-  backend:
-    triggers:
-      issue.opened: {}
-    permission: read
-    prompt_file: .hangrix/prompts/backend.md
-`
-
-// TestSpawnerLoadsPromptFile confirms PromptFile resolution: the
-// addendum on the persisted session must come from the file blob, not a
-// hardcoded inline string. (If a future regression silently swallows
-// the file content, this test fails.)
-func TestSpawnerLoadsPromptFile(t *testing.T) {
-	h := newTestSpawner(t, []byte(hostYAMLWithPromptFile), nil)
-	h.blob.files["main:.hangrix/prompts/backend.md"] = []byte("You are the backend role. Push to issue/<n> only.")
+// TestSpawnerLoadsRolePrompt confirms prompt resolution under the new
+// contract: a role's prompt is the Markdown body of its
+// `.hangrix/agents/<role>.md` file, loaded and frozen into role.Prompt by
+// LoadHostConfig and copied verbatim onto the persisted session's
+// HostAddendum. (If a future regression silently swallows the body, this
+// test fails.)
+func TestSpawnerLoadsRolePrompt(t *testing.T) {
+	fixture := &hostFixture{
+		yaml: teamYAML,
+		roles: map[string]string{
+			"backend": agentMD(
+				"triggers:\n  issue.opened: {}\npermission: read\ntools: [all]",
+				"You are the backend role. Push to issue/<n> only."),
+		},
+	}
+	h := newTestSpawner(t, fixture, nil)
 
 	got, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
@@ -48,7 +41,7 @@ func TestSpawnerLoadsPromptFile(t *testing.T) {
 	}
 	addendum := h.runner.sessions[0].HostAddendum
 	if !strings.HasPrefix(addendum, "You are the backend role.") {
-		t.Fatalf("HostAddendum = %q, want it to start with the prompt-file body", addendum)
+		t.Fatalf("HostAddendum = %q, want it to start with the role prompt body", addendum)
 	}
 }
 
@@ -57,17 +50,20 @@ func TestSpawnerLoadsPromptFile(t *testing.T) {
 // runner's env injection would emit `MODEL=` which the agent's LLM
 // client would crash on).
 func TestSpawnerRequiresLLMModel(t *testing.T) {
-	yaml := `version: 1
+	// Team yaml omits the `llm:` block entirely; the backend role also
+	// omits per-role llm — so no model can be resolved.
+	fixture := &hostFixture{
+		yaml: `version: 1
 container:
   image: ghcr.io/acme/dev:1.2.3
-roles:
-  backend:
-    prompt: hi
-    triggers:
-      issue.opened: {}
-    permission: read
-`
-	h := newTestSpawner(t, []byte(yaml), nil)
+tools:
+  all: ["*"]
+`,
+		roles: map[string]string{
+			"backend": agentMD("triggers:\n  issue.opened: {}\npermission: read\ntools: [all]", "hi"),
+		},
+	}
+	h := newTestSpawner(t, fixture, nil)
 	got, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
 		CauseKind:   domain.CauseKindIssueOpened,
@@ -89,21 +85,15 @@ roles:
 // over the team-level default. The audit row stores the resolved model
 // so changes here are observable downstream.
 func TestSpawnerPerRoleLLMOverridesHost(t *testing.T) {
-	yaml := `version: 1
-container:
-  image: ghcr.io/acme/dev:1.2.3
-llm:
-  model: claude-sonnet-4-6
-roles:
-  backend:
-    prompt: hi
-    triggers:
-      issue.opened: {}
-    permission: read
-    llm:
-      model: claude-opus-4-7
-`
-	h := newTestSpawner(t, []byte(yaml), nil)
+	fixture := &hostFixture{
+		yaml: teamYAML, // team default model: claude-sonnet-4-6
+		roles: map[string]string{
+			"backend": agentMD(
+				"triggers:\n  issue.opened: {}\npermission: read\ntools: [all]\nllm:\n  model: claude-opus-4-7",
+				"hi"),
+		},
+	}
+	h := newTestSpawner(t, fixture, nil)
 	_, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
 		CauseKind:   domain.CauseKindIssueOpened,
@@ -126,7 +116,7 @@ roles:
 // whole-config error that propagates up so the issue handler can log.
 // Other roles aren't tried — the file is bad as a whole.
 func TestSpawnerHostYAMLInvalidReturnsError(t *testing.T) {
-	h := newTestSpawner(t, []byte("not: valid: yaml:::"), nil)
+	h := newTestSpawner(t, &hostFixture{yaml: "not: valid: yaml:::"}, nil)
 	_, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
 		CauseKind:   domain.CauseKindIssueOpened,
@@ -147,29 +137,16 @@ func TestSpawnerHostYAMLInvalidReturnsError(t *testing.T) {
 // readable timeline reproduction; the underlying map iteration is
 // not stable, so the spawner sorts keys before iterating.
 func TestSpawnerMultiRoleDeterministicOrder(t *testing.T) {
-	yaml := `version: 1
-container:
-  image: ghcr.io/acme/dev:1.2.3
-llm:
-  model: claude-sonnet-4-6
-roles:
-  backend:
-    prompt: hi
-    triggers:
-      issue.opened: {}
-    permission: read
-  dispatcher:
-    prompt: hi
-    triggers:
-      issue.opened: {}
-    permission: read
-  reviewer:
-    prompt: hi
-    triggers:
-      issue.opened: {}
-    permission: read
-`
-	h := newTestSpawner(t, []byte(yaml), nil)
+	fm := "triggers:\n  issue.opened: {}\npermission: read\ntools: [all]"
+	fixture := &hostFixture{
+		yaml: teamYAML,
+		roles: map[string]string{
+			"backend":    agentMD(fm, "hi"),
+			"dispatcher": agentMD(fm, "hi"),
+			"reviewer":   agentMD(fm, "hi"),
+		},
+	}
+	h := newTestSpawner(t, fixture, nil)
 	got, err := h.spawner.OnTrigger(context.Background(), domain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
 		CauseKind:   domain.CauseKindIssueOpened,

@@ -1,3 +1,20 @@
+---
+triggers:
+  commit.pushed:
+    paths:
+      - "apps/hangrix/**"
+      - "pkg/**"
+    paths_ignore:
+      - "apps/hangrix/internal/web/dist/**"
+      - "**/*db/**"
+  issue.comment:
+    mentioned_only: true
+permission: write
+tools: [reviewer]
+llm:
+  model: gpt-5.4
+  reasoning_effort: high
+---
 # server-reviewer
 
 Review pushes touching `apps/hangrix/**` / `pkg/**` (excluding `dist/` and generated `*db/`). Wake on `@agent-server-reviewer` mention.

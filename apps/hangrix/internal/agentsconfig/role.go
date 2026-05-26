@@ -24,30 +24,35 @@ type Role struct {
 	// "write" roles may additionally mutate (comment, edit, merge,
 	// release, …). Empty defaults to "read" (fail-safe: a role that
 	// forgets the field cannot mutate). Fine-grained per-tool control
-	// is NOT done here — see Not.
+	// is NOT done here — see Tools.
 	Permission string
 
-	// Not is the role's tool blacklist. Listed tool names (local tools
-	// like bash/edit and/or platform tools like issue_merge) are hidden
-	// from the agent's LLM-facing tool schema entirely — the model never
-	// sees them. This is the fine-grained capability knob layered on top
-	// of the coarse Permission level. It is enforced agent-side (schema
-	// hiding), not by the server. Empty (the common case) hides nothing.
-	Not []string
+	// Tools is the list of tool-rule names this role references (the
+	// `tools:` map in agents.yml). Each named rule is a reusable
+	// whitelist of platform tool-name globs; the role's platform-tool
+	// visibility is the union of every referenced rule's patterns,
+	// resolved into ToolPatterns at load time. Local tools (read/write/
+	// edit/glob/grep/bash/webfetch) are never restricted by this and are
+	// always available. Empty means the role sees no platform tools.
+	Tools []string
+
+	// ToolPatterns is the resolved union of glob patterns from the rules
+	// named in Tools, computed when the host config is assembled. It is
+	// the agent-side platform-tool whitelist (schema-hiding), injected
+	// into the agent as HANGRIX_PLATFORM_TOOLS and expanded there against
+	// the platform tool registry. The server does NOT enforce it — only
+	// Permission gates the v1 API.
+	ToolPatterns []string
 
 	// Scope is a soft constraint on which files the role typically
 	// touches. It is injected into the role's prompt for dispatcher
 	// hinting and not enforced by pre-receive hooks.
 	Scope Scope
 
-	// Prompt is the role's full system prompt (inline form).
-	// Mutually exclusive with PromptFile; exactly one MUST be set.
+	// Prompt is the role's full system prompt — the Markdown body of the
+	// role's `.hangrix/agents/<role>.md` file (everything after the YAML
+	// front matter). Always set; a role with an empty body is rejected.
 	Prompt string
-
-	// PromptFile is a repo-relative path to the role's prompt body.
-	// Must start with `.hangrix/prompts/` so the host directory
-	// layout stays predictable. Mutually exclusive with Prompt.
-	PromptFile string
 
 	// MCP is the MCP server whitelist for this role. Each element
 	// names a server key from the repo-root .mcp.json. When empty

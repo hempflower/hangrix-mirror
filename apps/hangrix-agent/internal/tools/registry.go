@@ -2,14 +2,20 @@
 // the LLM: in-process locals (read / write / edit / glob / grep / bash
 // / webfetch) plus the platform tools (issue_read,
 // issue_comment, …) which are hardcoded built-ins talking HTTP to
-// `<HANGRIX_PLATFORM_BASE_URL>/api/v1/...` REST endpoints.
+// `<HANGRIX_PLATFORM_BASE_URL>/api/v1/...` REST endpoints, plus any MCP
+// tools wired in from configured MCP servers.
 //
-// HANGRIX_TOOL_CATALOG is parsed by the caller (cmd/hangrix-agent) and
-// passed in as Allow. An empty Allow means "no filter — every tool is
-// visible"; a non-empty Allow restricts the catalogue to listed names
-// (unknown names are dropped silently). The filter applies to *both*
-// local and platform tools so a role can shut off `bash` or
-// `issue_merge` symmetrically.
+// Filtering follows a PLATFORM-TOOL WHITELIST model. Local tools and MCP
+// tools are ALWAYS registered — the whitelist never touches them. Only
+// platform tools are gated: HANGRIX_PLATFORM_TOOLS is parsed by the
+// caller into a slice of shell-style glob patterns and passed in as
+// platformAllow. A platform tool is registered only if its name matches
+// at least one pattern (exact match or Go path.Match — tool names carry
+// no `/` so `*` matches the whole name). An empty/nil platformAllow
+// registers NO platform tools (strict whitelist). This composes with the
+// read/write hiding performed earlier by platform.All: a read-only role
+// has already dropped the mutating platform tools before they reach the
+// whitelist.
 package tools
 
 import (
@@ -17,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/llm"
@@ -57,22 +64,22 @@ type CallResult struct {
 
 // Build assembles the registry. platformTools may be empty (no
 // platform connection — useful in offline tests). The catalogue order
-// is local first then platform; within each group the supplied order
-// is preserved.
-func Build(localTools, platformTools, mcpTools []local.Tool, allow, deny []string) *Registry {
-	allowSet := buildAllowSet(allow)
-	denySet := buildDenySet(deny)
+// is local first then platform then MCP; within each group the supplied
+// order is preserved.
+//
+// Local and MCP tools are always registered. Platform tools are gated by
+// platformAllow: a platform tool is registered only if its name matches
+// at least one glob pattern (see matchPlatformAllow). An empty/nil
+// platformAllow registers NO platform tools.
+func Build(localTools, platformTools, mcpTools []local.Tool, platformAllow []string) *Registry {
 	r := &Registry{
 		byName:         map[string]local.Tool{},
 		platformByName: map[string]struct{}{},
 		mcpByName:      map[string]struct{}{},
 	}
-	register := func(tools []local.Tool, mark func(string)) {
+	register := func(tools []local.Tool, gate func(string) bool, mark func(string)) {
 		for _, t := range tools {
-			if !allowSet.permit(t.Name()) {
-				continue
-			}
-			if _, denied := denySet[t.Name()]; denied {
+			if gate != nil && !gate(t.Name()) {
 				continue
 			}
 			r.byName[t.Name()] = t
@@ -86,9 +93,9 @@ func Build(localTools, platformTools, mcpTools []local.Tool, allow, deny []strin
 			})
 		}
 	}
-	register(localTools, nil)
-	register(platformTools, func(n string) { r.platformByName[n] = struct{}{} })
-	register(mcpTools, func(n string) { r.mcpByName[n] = struct{}{} })
+	register(localTools, nil, nil)
+	register(platformTools, func(n string) bool { return matchPlatformAllow(platformAllow, n) }, func(n string) { r.platformByName[n] = struct{}{} })
+	register(mcpTools, nil, func(n string) { r.mcpByName[n] = struct{}{} })
 	return r
 }
 
@@ -166,72 +173,37 @@ func (r *Registry) knownNames() []string {
 	return names
 }
 
-// allowSet wraps "no filter" vs "explicit list" so call sites don't
-// have to special-case empty everywhere.
-type allowSet struct {
-	none  bool
-	names map[string]struct{}
+// matchPlatformAllow reports whether name matches at least one of the
+// whitelist glob patterns. Each pattern is tested as an exact string
+// match first (fast path) then as a Go path.Match glob. Tool names carry
+// no `/`, so `*` and `?` match across the entire name. A malformed
+// pattern (path.ErrBadPattern) simply fails to match — it never panics.
+// An empty/nil patterns slice matches nothing (strict whitelist).
+func matchPlatformAllow(patterns []string, name string) bool {
+	for _, p := range patterns {
+		if p == name {
+			return true
+		}
+		if ok, err := path.Match(p, name); err == nil && ok {
+			return true
+		}
+	}
+	return false
 }
 
-func buildAllowSet(allow []string) allowSet {
-	if len(allow) == 0 {
-		return allowSet{none: true}
-	}
-	s := allowSet{names: make(map[string]struct{}, len(allow))}
-	for _, n := range allow {
-		s.names[n] = struct{}{}
-	}
-	return s
-}
-
-func (s allowSet) permit(name string) bool {
-	if s.none {
-		return true
-	}
-	_, ok := s.names[name]
-	return ok
-}
-
-// buildDenySet turns a deny slice into a lookup set. Empty / nil deny
-// yields an empty set (nothing denied).
-func buildDenySet(deny []string) map[string]struct{} {
-	if len(deny) == 0 {
-		return map[string]struct{}{}
-	}
-	s := make(map[string]struct{}, len(deny))
-	for _, n := range deny {
-		s[n] = struct{}{}
-	}
-	return s
-}
-
-// ParseToolCatalog parses the HANGRIX_TOOL_CATALOG env var. Empty / unset
-// returns nil (no filter). Anything non-JSON is an error so a typo in the
-// runner config doesn't silently disable the filter.
-func ParseToolCatalog(raw string) ([]string, error) {
+// ParsePlatformTools parses the HANGRIX_PLATFORM_TOOLS env var into the
+// platform-tool whitelist. Empty / unset returns nil (no platform tools).
+// Anything non-JSON is an error so a typo in the runner config doesn't
+// silently disable every platform tool. The patterns are shell-style
+// globs (matched by matchPlatformAllow) applied to platform tools only.
+func ParsePlatformTools(raw string) ([]string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, nil
 	}
 	var out []string
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil, fmt.Errorf("HANGRIX_TOOL_CATALOG: %w", err)
-	}
-	return out, nil
-}
-
-// ParseToolDeny parses the HANGRIX_TOOL_DENY env var. Empty / unset
-// returns nil (deny nothing). Anything non-JSON is an error so a typo in
-// the runner config doesn't silently disable the filter. The result
-// applies to both local and platform tools by name.
-func ParseToolDeny(raw string) ([]string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
-	}
-	var out []string
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil, fmt.Errorf("HANGRIX_TOOL_DENY: %w", err)
+		return nil, fmt.Errorf("HANGRIX_PLATFORM_TOOLS: %w", err)
 	}
 	return out, nil
 }

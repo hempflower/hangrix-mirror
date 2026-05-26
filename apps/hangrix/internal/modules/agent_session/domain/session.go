@@ -397,6 +397,11 @@ type HostBlobReader interface {
 	// the blob is missing — callers treat "no .hangrix/agents.yml" as
 	// "no roles", not as an error.
 	ReadBlob(ctx context.Context, repoFsPath, ref, path string) ([]byte, bool)
+
+	// ListBlobs returns the repo-relative paths of the entries directly
+	// under <ref>:<dir>. (nil, false) when the directory is missing.
+	// Used to enumerate `.hangrix/agents/*.md` role files.
+	ListBlobs(ctx context.Context, repoFsPath, ref, dir string) ([]string, bool)
 }
 
 // Sentinel errors. Spawner propagates these so the issue handler can log

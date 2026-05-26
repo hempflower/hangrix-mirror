@@ -1,3 +1,14 @@
+---
+triggers:
+  issue.comment:
+    mentioned_only: true
+permission: write
+tools: [worker]
+scope:
+  paths:
+    - "apps/hangrix-agent/**"
+    - "apps/hangrix-runner/**"
+---
 # runtime
 
 Implement changes to the agent loop (`apps/hangrix-agent`) and container orchestrator (`apps/hangrix-runner`). Wake on `@agent-runtime`.

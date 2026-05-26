@@ -1,3 +1,20 @@
+---
+triggers:
+  commit.pushed:
+    paths:
+      - "apps/web/**"
+    paths_ignore:
+      - "apps/web/dist/**"
+      - "apps/web/.output/**"
+      - "apps/web/.nuxt/**"
+  issue.comment:
+    mentioned_only: true
+permission: write
+tools: [linter]
+llm:
+  model: deepseek-v4-flash
+  reasoning_effort: low
+---
 # web-copy-lint
 
 Scan `apps/web/**` pushes for leaked requirement text in user-facing copy. Read and comment only — never write, edit, or vote.

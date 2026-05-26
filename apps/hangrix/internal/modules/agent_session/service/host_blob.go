@@ -14,6 +14,7 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"strings"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 )
@@ -46,6 +47,37 @@ func (r *GitBlobReader) ReadBlob(ctx context.Context, repoFsPath, ref, path stri
 		return nil, false
 	}
 	return out, true
+}
+
+// ListBlobs satisfies domain.HostBlobReader. It returns the repo-relative
+// paths of the entries directly under <ref>:<dir> via
+// `git ls-tree --name-only <ref> <dir>/`. (nil, false) when the directory
+// does not exist at that ref (the trailing slash makes git list the
+// directory's children rather than the dir entry itself).
+func (r *GitBlobReader) ListBlobs(ctx context.Context, repoFsPath, ref, dir string) ([]string, bool) {
+	cmd := exec.CommandContext(ctx,
+		"git",
+		"--git-dir="+repoFsPath,
+		"ls-tree",
+		"--name-only",
+		ref,
+		strings.TrimSuffix(dir, "/")+"/",
+	)
+	cmd.Stderr = io.Discard
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, false
+	}
+	var paths []string
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			paths = append(paths, line)
+		}
+	}
+	if len(paths) == 0 {
+		return nil, false
+	}
+	return paths, true
 }
 
 // compile-time check

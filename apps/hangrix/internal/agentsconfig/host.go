@@ -123,10 +123,20 @@ type HostConfig struct {
 	// contributions have no required reviewers (the gate is a no-op).
 	Reviewers *ReviewersConfig
 
-	// Roles maps role-key → Role. The map is guaranteed non-empty by
-	// the parser; an empty `roles:` is a misconfiguration. Iteration
-	// order is not stable — callers that need deterministic order
-	// (audit, etc.) must sort keys themselves.
+	// Tools is the map of reusable tool-rule name → platform tool-name
+	// glob patterns, declared under `tools:` in agents.yml. Roles
+	// reference rules by name in their `tools:` front-matter field; the
+	// loader resolves each role's references into Role.ToolPatterns.
+	// Whitelist-only, platform tools only (local tools are never
+	// restricted), wildcard `*` supported. May be nil (no rules).
+	Tools map[string][]string
+
+	// Roles maps role-key → Role. Populated by LoadHostConfig from the
+	// per-role files under `.hangrix/agents/<role>.md` (ParseHostConfig
+	// alone leaves it nil — agents.yml no longer carries roles). The map
+	// is guaranteed non-empty by LoadHostConfig; iteration order is not
+	// stable — callers that need deterministic order (audit, etc.) must
+	// sort keys themselves.
 	Roles map[string]*Role
 }
 

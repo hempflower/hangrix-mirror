@@ -160,8 +160,19 @@ func (g *GoGit) SeedInitialCommit(path, defaultBranch string, files map[string][
 				Hash: subHash,
 			})
 		}
+		// git sorts tree entries with a directory's name treated as if it
+		// had a trailing "/", so a file `agents.yml` sorts before a sibling
+		// directory `agents/` ('.' 0x2e < '/' 0x2f). A plain name sort gets
+		// this backwards and go-git's tree.Encode rejects it ("entries in
+		// tree are not sorted"). Mirror git's rule here.
+		treeSortKey := func(e object.TreeEntry) string {
+			if e.Mode == filemode.Dir {
+				return e.Name + "/"
+			}
+			return e.Name
+		}
 		sort.Slice(treeEntries, func(i, j int) bool {
-			return treeEntries[i].Name < treeEntries[j].Name
+			return treeSortKey(treeEntries[i]) < treeSortKey(treeEntries[j])
 		})
 		treeObj := st.NewEncodedObject()
 		tree := &object.Tree{Entries: treeEntries}

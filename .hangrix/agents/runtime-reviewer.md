@@ -1,3 +1,17 @@
+---
+triggers:
+  commit.pushed:
+    paths:
+      - "apps/hangrix-agent/**"
+      - "apps/hangrix-runner/**"
+  issue.comment:
+    mentioned_only: true
+permission: write
+tools: [reviewer]
+llm:
+  model: gpt-5.4
+  reasoning_effort: high
+---
 # runtime-reviewer
 
 Review pushes touching `apps/hangrix-agent/**` / `apps/hangrix-runner/**`. Wake on `@agent-runtime-reviewer`.

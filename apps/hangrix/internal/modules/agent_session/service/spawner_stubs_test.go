@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
@@ -25,6 +27,38 @@ func (s *stubBlob) ReadBlob(_ context.Context, _, ref, path string) ([]byte, boo
 	}
 	body, ok := s.files[ref+":"+path]
 	return body, ok
+}
+
+// ListBlobs mirrors GitBlobReader.ListBlobs over the in-memory files map:
+// it returns the repo-relative paths of the entries directly under
+// <ref>:<dir>. Keys are "<ref>:<path>"; we match the "<ref>:<dir>/"
+// prefix, strip the "<ref>:" so the returned paths are repo-relative,
+// and only emit direct children (no deeper nesting). (nil,false) when
+// the dir has no entries — same stance as the production reader.
+func (s *stubBlob) ListBlobs(_ context.Context, _, ref, dir string) ([]string, bool) {
+	if s.files == nil {
+		return nil, false
+	}
+	dir = strings.TrimSuffix(dir, "/")
+	keyPrefix := ref + ":" + dir + "/"
+	var out []string
+	for key := range s.files {
+		if !strings.HasPrefix(key, keyPrefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(key, keyPrefix)
+		// Direct children only.
+		if strings.Contains(rest, "/") {
+			continue
+		}
+		// Repo-relative path = key minus the "<ref>:" prefix.
+		out = append(out, strings.TrimPrefix(key, ref+":"))
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	sort.Strings(out)
+	return out, true
 }
 
 func newStubBlob(files map[string][]byte) *stubBlob {

@@ -6,39 +6,71 @@ import (
 	"testing"
 )
 
-// reviewersHost is a minimal valid host yaml with a reviewers block. The
-// `%s` slot lets each test swap in a different reviewers section.
-const reviewersHostTmpl = `
-version: 1
+// reviewersTeamTmpl is a team-only agents.yml carrying the tool rules the
+// reviewer roles reference (a `voter` rule that INCLUDES issue_review_vote
+// and a `nonvoter` rule that does NOT) plus the `reviewers:` block. The
+// `%s` slot is where each test swaps in a different reviewers section.
+const reviewersTeamTmpl = `version: 1
 container:
   image: ghcr.io/acme/dev:1
-roles:
-  worker:
-    triggers: { issue.comment: { mentioned_only: true } }
-    permission: read
-    prompt: w
-  srv-reviewer:
-    triggers: { commit.pushed: {} }
-    permission: write
-    prompt: r
-  web-reviewer:
-    triggers: { commit.pushed: {} }
-    permission: write
-    prompt: r
-  maintainer:
-    triggers: { issue.opened: {} }
-    permission: write
-    prompt: m
+tools:
+  voter: [issue_read, issue_comment, issue_review_vote]
+  nonvoter: [issue_read, issue_comment]
 %s`
 
-func parseReviewersHost(t *testing.T, reviewers string) (*HostConfig, error) {
+// reviewerAgentFiles are the per-role `.hangrix/agents/<role>.md` files
+// the reviewers tests share. worker is a permission:write role whose
+// tools rule (`nonvoter`) LACKS issue_review_vote so it cannot vote; the
+// reviewer roles use the `voter` rule and permission: write so they can.
+func reviewerAgentFiles() map[string][]byte {
+	return map[string][]byte{
+		AgentsDir + "/worker.md": []byte(`---
+triggers: { issue.comment: { mentioned_only: true } }
+permission: write
+tools: [nonvoter]
+---
+w
+`),
+		AgentsDir + "/srv-reviewer.md": []byte(`---
+triggers: { commit.pushed: {} }
+permission: write
+tools: [voter]
+---
+r
+`),
+		AgentsDir + "/web-reviewer.md": []byte(`---
+triggers: { commit.pushed: {} }
+permission: write
+tools: [voter]
+---
+r
+`),
+		AgentsDir + "/maintainer.md": []byte(`---
+triggers: { issue.opened: {} }
+permission: write
+tools: [voter]
+---
+m
+`),
+	}
+}
+
+// loadReviewersHost builds the host config via the map-backed
+// FileProvider: agents.yml (tool rules + reviewers block) plus the shared
+// per-role agent files. Reviewer-role existence + vote-capability is
+// validated in LoadHostConfig (AssembleHostConfig); structural reviewer
+// errors surface from ParseHostConfig — both wrap ErrInvalidReviewers.
+func loadReviewersHost(t *testing.T, reviewers string) (*HostConfig, error) {
 	t.Helper()
-	yaml := reviewersHostTmpl[:len(reviewersHostTmpl)-2] + reviewers // drop trailing "%s"
-	return ParseHostConfig([]byte(yaml))
+	// reviewersTeamTmpl ends with "%s\n"-less "%s"; substitute directly.
+	yaml := reviewersTeamTmpl[:len(reviewersTeamTmpl)-2] + reviewers // drop trailing "%s"
+	files := reviewerAgentFiles()
+	files[HostConfigPath] = []byte(yaml)
+	return LoadHostConfig(&mapFileProvider{files: files})
 }
 
 func TestReviewers_RequiredReviewers(t *testing.T) {
-	cfg, err := parseReviewersHost(t, `
+	cfg, err := loadReviewersHost(t, `
 reviewers:
   rules:
     - paths: ["apps/api/**", "pkg/**"]
@@ -48,7 +80,7 @@ reviewers:
   fallback: [maintainer]
 `)
 	if err != nil {
-		t.Fatalf("parse: %v", err)
+		t.Fatalf("load: %v", err)
 	}
 	if cfg.Reviewers == nil {
 		t.Fatal("expected reviewers config")
@@ -71,9 +103,9 @@ reviewers:
 }
 
 func TestReviewers_NilWhenAbsent(t *testing.T) {
-	cfg, err := parseReviewersHost(t, "")
+	cfg, err := loadReviewersHost(t, "")
 	if err != nil {
-		t.Fatalf("parse: %v", err)
+		t.Fatalf("load: %v", err)
 	}
 	if cfg.Reviewers != nil {
 		t.Errorf("expected nil reviewers when block absent, got %+v", cfg.Reviewers)
@@ -127,7 +159,7 @@ reviewers:
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := parseReviewersHost(t, tc.reviewers)
+			_, err := loadReviewersHost(t, tc.reviewers)
 			if !errors.Is(err, ErrInvalidReviewers) {
 				t.Errorf("err = %v, want ErrInvalidReviewers", err)
 			}

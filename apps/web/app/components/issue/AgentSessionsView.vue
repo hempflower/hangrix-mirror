@@ -60,7 +60,7 @@ interface AgentSession {
   role_config: {
     triggers?: string[]
     permission?: string
-    not?: string[]
+    tool_patterns?: string[]
     model?: string
     host_addendum?: string
     container?: { image?: string }
@@ -910,15 +910,15 @@ async function deleteSession(s: AgentSession) {
             <dd class="font-mono">{{ shortSha(selected.repo_sha) || '—' }}</dd>
             <dt class="text-muted-foreground">{{ t('agentSessions.field.permission') }}</dt>
             <dd class="font-mono">{{ selected.role_config?.permission || 'read' }}</dd>
-            <dt class="text-muted-foreground">{{ t('agentSessions.field.not') }}</dt>
+            <dt class="text-muted-foreground">{{ t('agentSessions.field.tools') }}</dt>
             <dd class="flex flex-wrap gap-1">
               <Badge
-                v-for="tool in selected.role_config?.not ?? []"
+                v-for="tool in selected.role_config?.tool_patterns ?? []"
                 :key="tool"
                 variant="outline"
                 class="text-[10px]"
               >{{ tool }}</Badge>
-              <span v-if="!(selected.role_config?.not ?? []).length" class="text-muted-foreground">—</span>
+              <span v-if="!(selected.role_config?.tool_patterns ?? []).length" class="text-muted-foreground">—</span>
             </dd>
           </dl>
 

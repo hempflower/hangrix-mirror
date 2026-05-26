@@ -145,7 +145,7 @@ func TestLoopSmoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, platform.All(platformClient, false), nil, nil, nil)
+	registry := tools.Build(bundle.Tools, platform.All(platformClient, false), nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -333,7 +333,7 @@ func TestLoopCompactSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -510,7 +510,7 @@ func TestLoopAtMentionNudge(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -666,7 +666,7 @@ func TestLoopAtMentionNudgeWithToolCallsPreservesChain(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -814,7 +814,7 @@ func TestLoopSleepGate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -941,7 +941,7 @@ func TestLoopReasoningTimeoutRetrySuccess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -1016,7 +1016,7 @@ func TestLoopReasoningTimeoutRetryExhausted(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -1090,7 +1090,7 @@ func TestLoopReasoningTimeoutNonTimeoutErrorNoRetry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -1195,7 +1195,7 @@ func TestLoopReasoningTimeoutInboxDrain(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()

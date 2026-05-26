@@ -1115,7 +1115,7 @@
       "model": "模型",
       "repoSha": "仓库 sha",
       "permission": "仓库权限",
-      "not": "工具黑名单",
+      "tools": "平台工具",
       "exitCode": "退出码",
       "errorMessage": "错误信息"
     },

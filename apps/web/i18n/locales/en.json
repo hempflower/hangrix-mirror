@@ -1115,7 +1115,7 @@
       "model": "model",
       "repoSha": "repo sha",
       "permission": "permission",
-      "not": "tool blacklist",
+      "tools": "platform tools",
       "exitCode": "exit code",
       "errorMessage": "error"
     },

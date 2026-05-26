@@ -1,3 +1,20 @@
+---
+triggers:
+  commit.pushed:
+    paths:
+      - "apps/web/**"
+    paths_ignore:
+      - "apps/web/dist/**"
+      - "apps/web/.output/**"
+      - "apps/web/.nuxt/**"
+  issue.comment:
+    mentioned_only: true
+permission: write
+tools: [reviewer]
+llm:
+  model: gpt-5.4
+  reasoning_effort: high
+---
 # web-reviewer
 
 Review pushes touching `apps/web/**` (excluding `dist/`, `.output/`, `.nuxt/`). Wake on `@agent-web-reviewer`.

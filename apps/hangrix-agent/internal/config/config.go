@@ -35,7 +35,6 @@ type Config struct {
 	WorkingBranch    string
 	BaseBranch       string
 	HostAddendumPath string
-	ToolCatalog      string
 	McpServers       []string
 
 	// RepoPermission gates the write-type platform tools. The exact
@@ -45,10 +44,15 @@ type Config struct {
 	// concerns the platform REST API only. Set via HANGRIX_REPO_PERMISSION.
 	RepoPermission string
 
-	// ToolDeny is a JSON array of tool names to hide from the LLM,
-	// applied to both local and platform tools by name. Empty/unset
-	// denies nothing. Set via HANGRIX_TOOL_DENY.
-	ToolDeny string
+	// PlatformTools is a JSON array of shell-style glob patterns that
+	// whitelists which platform tools (issue_*, contribution_*, …) are
+	// shown to the LLM. A platform tool surfaces only if its name matches
+	// at least one pattern; an empty array or unset value hides every
+	// platform tool (strict whitelist). Local and MCP tools are never
+	// affected by this whitelist. Composes with RepoPermission: a
+	// read-only role still hides write platform tools regardless of the
+	// whitelist. Set via HANGRIX_PLATFORM_TOOLS.
+	PlatformTools string
 
 	// LLMMaxContextTokens is the max_context_tokens from agents.yml,
 	// surfaced by the runner as HANGRIX_LLM_MAX_CONTEXT_TOKENS. When
@@ -117,9 +121,8 @@ func NewConfig() *Config {
 		WorkingBranch:              os.Getenv("HANGRIX_WORKING_BRANCH"),
 		BaseBranch:                 os.Getenv("HANGRIX_BASE_BRANCH"),
 		HostAddendumPath:           os.Getenv("HANGRIX_HOST_ADDENDUM"),
-		ToolCatalog:                os.Getenv("HANGRIX_TOOL_CATALOG"),
 		RepoPermission:             os.Getenv("HANGRIX_REPO_PERMISSION"),
-		ToolDeny:                   os.Getenv("HANGRIX_TOOL_DENY"),
+		PlatformTools:              os.Getenv("HANGRIX_PLATFORM_TOOLS"),
 		McpServers:                 parseMcpServers(os.Getenv("HANGRIX_MCP_SERVERS")),
 		LLMMaxContextTokens:        maxCtx,
 		CompactTokenThreshold:      parseCompactThreshold(os.Getenv("HANGRIX_COMPACT_TOKEN_THRESHOLD"), maxCtx),

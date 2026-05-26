@@ -66,7 +66,7 @@ func TestLoopEmitsIdleAfterEvent(t *testing.T) {
 
 	llmClient := llm.New(llmServer.URL, "test-token")
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -171,7 +171,7 @@ func TestLoopProcessesMultipleEvents(t *testing.T) {
 
 	llmClient := llm.New(llmServer.URL, "test-token")
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -266,7 +266,7 @@ func TestLoopShutdownInvokesBashCleanup(t *testing.T) {
 	fake.running.Store(2) // pretend two bash jobs are still alive
 
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -383,7 +383,7 @@ func TestLoopNotificationDuringEvent(t *testing.T) {
 
 	llmClient := llm.New(llmServer.URL, "test-token")
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -493,7 +493,7 @@ func TestLoopEventDuringTurnFoldsIn(t *testing.T) {
 
 	llmClient := llm.New(llmServer.URL, "test-token")
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -601,7 +601,7 @@ func TestLoopNotificationDrivesIdleTurn(t *testing.T) {
 
 	llmClient := llm.New(llmServer.URL, "test-token")
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -698,7 +698,7 @@ func TestLoopEventArrivesAfterReady(t *testing.T) {
 
 	llmClient := llm.New(llmServer.URL, "test-token")
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -872,7 +872,7 @@ func TestLoopMidCallEventPreventsDone(t *testing.T) {
 
 	llmClient := llm.New(llmServer.URL, "test-token")
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, nil, nil, nil, nil)
+	registry := tools.Build(bundle.Tools, nil, nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()

@@ -56,30 +56,30 @@ type AsyncLifecycleDeps struct {
 
 func NewAsyncLifecycle(deps *AsyncLifecycleDeps) local.AsyncLifecycle { return deps.Bundle.Async }
 
-// NewRegistry parses HANGRIX_TOOL_CATALOG and builds the merged
-// (local + platform) registry. Both steps happen exactly once at init
-// time; once built the registry is read-only and safe to share across
-// the runtime loop's concurrent tool calls.
+// NewRegistry parses HANGRIX_PLATFORM_TOOLS and builds the merged
+// (local + platform + MCP) registry. Both steps happen exactly once at
+// init time; once built the registry is read-only and safe to share
+// across the runtime loop's concurrent tool calls.
 //
-// ParseToolCatalog can fail (malformed allowlist). ioc constructors
-// can't return errors, so we panic and let main.go's recover translate.
+// ParsePlatformTools can fail (malformed whitelist JSON). ioc
+// constructors can't return errors, so we panic and let main.go's
+// recover translate.
 //
 // The platform tools are wired conditionally on PlatformBaseURL: if
 // the agent is running with no platform connection (offline / unit
-// tests) only the local tools surface.
+// tests) only the local tools surface. platform.All already drops the
+// mutating platform tools for a read-only role; the parsed glob
+// whitelist then further restricts which of the remaining platform
+// tools the LLM sees. Local and MCP tools bypass the whitelist entirely.
 //
 // The local set comes from NewLocalBundle (which calls
 // local.BuildWithResearch). NewRegistry consumes the same bundle so
 // that the tool instances the registry serves and the lifecycle
 // handle the runtime drains are guaranteed to be one-and-the-same.
 func NewRegistry(deps *RegistryDeps) *Registry {
-	allow, err := ParseToolCatalog(deps.Cfg.ToolCatalog)
+	platformAllow, err := ParsePlatformTools(deps.Cfg.PlatformTools)
 	if err != nil {
-		panic(fmt.Errorf("tools: parse catalog: %w", err))
-	}
-	deny, err := ParseToolDeny(deps.Cfg.ToolDeny)
-	if err != nil {
-		panic(fmt.Errorf("tools: parse deny: %w", err))
+		panic(fmt.Errorf("tools: parse platform tools: %w", err))
 	}
 	var platformTools []local.Tool
 	if base := deps.Cfg.PlatformV1BaseURL(); base != "" {
@@ -90,7 +90,7 @@ func NewRegistry(deps *RegistryDeps) *Registry {
 	if deps.MCPBundle != nil {
 		mcpTools = deps.MCPBundle.Tools
 	}
-	return Build(deps.Bundle.Tools, platformTools, mcpTools, allow, deny)
+	return Build(deps.Bundle.Tools, platformTools, mcpTools, platformAllow)
 }
 
 func Module() *ioc.Module {

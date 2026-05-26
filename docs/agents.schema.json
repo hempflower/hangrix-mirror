@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://hangrix.dev/schemas/agents.schema.json",
   "title": "Hangrix host repo agents.yml",
-  "description": "Schema for .hangrix/agents.yml. Mirrors the parse contract enforced by internal/agentsconfig. Unknown keys are silently dropped for forward compatibility; duplicate role keys, malformed value types, and out-of-range values are still rejected.",
+  "description": "Schema for the TEAM-LEVEL .hangrix/agents.yml. Mirrors the parse contract enforced by internal/agentsconfig. Roles are NOT declared here — each role is a separate file .hangrix/agents/<role-key>.md whose YAML front matter follows the #/$defs/agentFrontMatter shape below (the Markdown body is the role's prompt). Unknown keys are silently dropped for forward compatibility; malformed value types and out-of-range values are still rejected.",
   "type": "object",
-  "required": ["version", "container", "roles"],
+  "required": ["version", "container"],
   "properties": {
     "version": {
       "description": "Schema version. Only 1 is currently accepted.",
@@ -14,15 +14,14 @@
     "llm": { "$ref": "#/$defs/llm" },
     "issues": { "$ref": "#/$defs/issues" },
     "reviewers": { "$ref": "#/$defs/reviewers" },
-    "roles": {
-      "description": "Map of role-key to Role. At least one role is required.",
+    "tools": {
+      "description": "Reusable tool rules: map of rule-name to a list of platform tool-name glob patterns (`*` wildcard). A role references rule names in its `tools:` front-matter field and sees the union of their patterns. Whitelist-only and platform-tools-only — local tools (read/write/edit/glob/grep/bash/webfetch) are never restricted. Enforced agent-side (hidden from the LLM tool schema); the server gates the v1 API by `permission:` alone.",
       "type": "object",
-      "minProperties": 1,
-      "propertyNames": {
-        "description": "Role keys match the mention-protocol grammar: lowercase alnum + dash, 1-39 chars, starts with a letter.",
-        "pattern": "^[a-z][a-z0-9-]{0,38}$"
-      },
-      "additionalProperties": { "$ref": "#/$defs/role" }
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "minItems": 1
+      }
     }
   },
   "$defs": {
@@ -138,20 +137,10 @@
         }
       }
     },
-    "role": {
+    "agentFrontMatter": {
       "type": "object",
       "required": ["triggers"],
-      "description": "One agent role. Must declare at least one trigger and exactly one of `prompt` or `prompt_file`.",
-      "oneOf": [
-        {
-          "required": ["prompt"],
-          "not": { "required": ["prompt_file"] }
-        },
-        {
-          "required": ["prompt_file"],
-          "not": { "required": ["prompt"] }
-        }
-      ],
+      "description": "Shape of the YAML front matter in a `.hangrix/agents/<role-key>.md` file (the role-key is the filename). The Markdown body after the front matter is the role's prompt and is required (it is not a front-matter field). This `$def` is documentation: the Go parser validates each agent file, not agents.yml, against this shape.",
       "properties": {
         "triggers": {
           "type": "object",
@@ -173,11 +162,11 @@
           "enum": ["read", "write"],
           "description": "GitHub-style repo permission level, enforced server-side on the platform v1 REST API. `read` allows read-only endpoints (GET issue/comment/todo/contribution/mergeability/sessions); `write` additionally allows every mutation (comment, edit, merge, close, review, todo update, contribution apply/close/set_meta, release ops, attachment upload, session recover, issue create). Omitted defaults to `read` (fail-safe)."
         },
-        "not": {
+        "tools": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "uniqueItems": true,
-          "description": "Tool blacklist. Listed tool names (local tools like bash/edit and/or platform tools like issue_merge) are hidden from the agent's LLM-facing tool schema entirely — the model never sees them. This is the fine-grained capability knob on top of the coarse `permission` level; it is enforced agent-side (schema hiding), not by the server. Omitted hides nothing."
+          "description": "List of tool-rule names (from the team-level agents.yml `tools:` map) this role references. The role's platform-tool visibility is the union of the named rules' glob patterns; everything else is hidden from the LLM tool schema (agent-side). Local tools are never restricted. Omitted = no platform tools. The fine-grained capability knob on top of the coarse `permission` level."
         },
         "mcp": {
           "type": "array",
@@ -194,17 +183,6 @@
             }
           },
           "description": "Soft path-glob hint injected into the role's prompt; not enforced by pre-receive."
-        },
-        "prompt": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Inline system prompt. Mutually exclusive with prompt_file."
-        },
-        "prompt_file": {
-          "type": "string",
-          "description": "Repo-relative path to the prompt body. Must start with `.hangrix/prompts/` and not contain `..`.",
-          "pattern": "^\\.hangrix/prompts/",
-          "not": { "pattern": "\\.\\." }
         },
         "llm": { "$ref": "#/$defs/llm" }
       }

@@ -453,13 +453,10 @@ func (s *Spawner) spawnRole(
 		return domain.SpawnedSession{}, fmt.Errorf("no llm model resolved (role + host both empty)")
 	}
 
-	// host_addendum: role.Prompt is the inline string; PromptFile is a
-	// path under .hangrix/prompts/ to load at session-spawn. We resolve
-	// the file at spawn time so the snapshot is frozen.
-	addendum, err := s.resolveHostAddendum(ctx, hostRepo, role)
-	if err != nil {
-		return domain.SpawnedSession{}, err
-	}
+	// host_addendum: the role's prompt is the Markdown body of its
+	// `.hangrix/agents/<role>.md` file, already loaded and frozen into
+	// role.Prompt by LoadHostConfig.
+	addendum := role.Prompt
 
 	// Snapshot the resolved role config — host_addendum (after file
 	// resolution), can list, scope, llm, container — so the audit row
@@ -523,15 +520,14 @@ func (s *Spawner) spawnRole(
 	// Tool-access policy injected last so it wins over any host
 	// container.env override. HANGRIX_REPO_PERMISSION is the coarse
 	// read/write level the agent uses to hide write platform tools when
-	// read-only; HANGRIX_TOOL_DENY is the role's tool blacklist the agent
-	// strips from its LLM-facing schema. The server still enforces
-	// read/write independently — these are the agent-side schema-shaping
-	// inputs only.
+	// read-only; HANGRIX_PLATFORM_TOOLS is the role's resolved platform-
+	// tool whitelist (glob patterns) the agent matches against its
+	// platform tool registry, hiding everything else from the LLM schema.
+	// The server still enforces read/write independently — these are the
+	// agent-side schema-shaping inputs only.
 	env["HANGRIX_REPO_PERMISSION"] = role.Permission
-	if len(role.Not) > 0 {
-		if denyJSON, err := json.Marshal(role.Not); err == nil {
-			env["HANGRIX_TOOL_DENY"] = string(denyJSON)
-		}
+	if patternsJSON, err := json.Marshal(role.ToolPatterns); err == nil {
+		env["HANGRIX_PLATFORM_TOOLS"] = string(patternsJSON)
 	}
 
 	createIn := runnerdomain.CreateSessionInput{
@@ -594,50 +590,43 @@ func (s *Spawner) spawnRole(
 	}, nil
 }
 
-// loadHostConfig reads `.hangrix/agents.yml` from the base-branch tip and
-// parses it. Returns (nil, nil) when the file is absent (non-agent host);
-// (nil, ErrHostConfigInvalid) on parse failure so callers can log and
-// skip rather than re-derive the error.
+// hostFileProvider adapts HostBlobReader to agentsconfig.FileProvider for
+// a fixed (repo fs, ref). The context is bound so the FileProvider
+// interface can stay ctx-free; the adapter is short-lived (one load).
+type hostFileProvider struct {
+	ctx    context.Context
+	blob   domain.HostBlobReader
+	hostFs string
+	ref    string
+}
+
+func (p *hostFileProvider) ReadFile(path string) ([]byte, bool) {
+	return p.blob.ReadBlob(p.ctx, p.hostFs, p.ref, path)
+}
+
+func (p *hostFileProvider) ListDir(dir string) ([]string, bool) {
+	return p.blob.ListBlobs(p.ctx, p.hostFs, p.ref, dir)
+}
+
+// loadHostConfig reads `.hangrix/agents.yml` (team config + tool rules)
+// plus every `.hangrix/agents/<role>.md` role file from the base-branch
+// tip and assembles them. Returns (nil, nil) when agents.yml is absent
+// (non-agent host); (nil, ErrHostConfigInvalid) on parse/validation
+// failure so callers can log and skip rather than re-derive the error.
 func (s *Spawner) loadHostConfig(ctx context.Context, hostFs, branch string) (*agentsconfig.HostConfig, error) {
-	body, ok := s.blob.ReadBlob(ctx, hostFs, branch, hostConfigPath)
-	if !ok {
-		return nil, nil
-	}
-	cfg, err := agentsconfig.ParseHostConfig(body)
+	fp := &hostFileProvider{ctx: ctx, blob: s.blob, hostFs: hostFs, ref: branch}
+	cfg, err := agentsconfig.LoadHostConfig(fp)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", domain.ErrHostConfigInvalid, err)
+	}
+	if cfg == nil {
+		return nil, nil
 	}
 	// NormalizeHostConfig is currently a no-op; we still call it so
 	// future schema-level defaults can land in one well-known place
 	// without every consumer needing to be re-touched.
 	agentsconfig.NormalizeHostConfig(cfg)
 	return cfg, nil
-}
-
-// resolveHostAddendum returns the role's prompt text. Inline `prompt:`
-// wins when set; otherwise the file at `prompt_file:` is loaded from
-// the base-branch tip and frozen into the snapshot. Empty string for
-// roles with neither (rejected by the parser, but the helper stays
-// defensive).
-func (s *Spawner) resolveHostAddendum(ctx context.Context, hostRepo *repodomain.Repo, role *agentsconfig.Role) (string, error) {
-	if role.Prompt != "" {
-		return role.Prompt, nil
-	}
-	if role.PromptFile == "" {
-		return "", nil
-	}
-	hostFs, err := s.storage.ResolvePath(hostRepo.OwnerName, hostRepo.Name)
-	if err != nil {
-		return "", fmt.Errorf("resolve host fs path for addendum: %w", err)
-	}
-	body, ok := s.blob.ReadBlob(ctx, hostFs, hostRepo.DefaultBranch, role.PromptFile)
-	if !ok {
-		// Missing prompt file is a config error in the host yaml; we
-		// don't silently fall back to empty because that would erase a
-		// behavioural contract.
-		return "", fmt.Errorf("host yaml: prompt_file %q not found at %s", role.PromptFile, hostRepo.DefaultBranch)
-	}
-	return string(body), nil
 }
 
 // pickRunner returns nil on the default "any-runner" policy. Spec
@@ -846,7 +835,7 @@ func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, a
 	type rs struct {
 		Triggers            map[string]any `json:"triggers"`
 		Permission          string         `json:"permission"`
-		Not                 []string       `json:"not,omitempty"`
+		ToolPatterns        []string       `json:"tool_patterns,omitempty"`
 		ScopePaths          []string       `json:"scope_paths,omitempty"`
 		HostAddendum        string         `json:"host_addendum,omitempty"`
 		Model               string         `json:"model"`
@@ -859,7 +848,7 @@ func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, a
 	snap := rs{
 		Triggers:     serializeTriggers(role.Triggers),
 		Permission:   role.Permission,
-		Not:          append([]string(nil), role.Not...),
+		ToolPatterns: append([]string(nil), role.ToolPatterns...),
 		ScopePaths:   append([]string(nil), role.Scope.Paths...),
 		HostAddendum: addendum,
 		Model:        model,

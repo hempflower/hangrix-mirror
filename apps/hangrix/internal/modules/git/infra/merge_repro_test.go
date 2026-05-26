@@ -14,10 +14,11 @@ import (
 )
 
 // TestMergeAddsNewAgentsAndPromptFiles reproduces the seeder-team flow:
-// an issue branch rewrites `.hangrix/agents.yml` to declare new roles
-// AND drops the matching `.hangrix/prompts/<key>.md` files alongside.
-// After merge, the platform must see both the new yaml and the new
-// prompt files at the default-branch tip.
+// an issue branch rewrites `.hangrix/agents.yml` (team config + tool
+// rules) AND drops one `.hangrix/agents/<role>.md` file per new role
+// (YAML front matter + Markdown prompt body). After merge, the platform
+// must be able to LoadHostConfig at the default-branch tip and see both
+// new roles, with their prompts coming from the per-role files.
 func TestMergeAddsNewAgentsAndPromptFiles(t *testing.T) {
 	dir := t.TempDir()
 	bare := filepath.Join(dir, "host.git")
@@ -28,19 +29,21 @@ func TestMergeAddsNewAgentsAndPromptFiles(t *testing.T) {
 	}
 
 	// Seed mirrors what `repo.InitOnDisk(..., seedReadme=true)` does:
-	// one initial commit shipping the bundled template's seeder yaml.
+	// one initial commit shipping the bundled template's seeder team
+	// config. We seed the team yaml only (no `.hangrix/agents/` subdir)
+	// because SeedInitialCommit's tree encoder sorts entries by plain
+	// name, which cannot represent a tree that holds both the file
+	// `agents.yml` and the directory `agents/` side by side (git sorts
+	// dirs as if they had a trailing '/', so `agents.yml` < `agents/`).
+	// The new role files arrive via the issue-branch merge below, whose
+	// `git merge-tree` path builds correctly-sorted trees natively.
 	seederYaml := []byte(`version: 1
 container:
   image: ubuntu:22.04
 llm:
   model: deepseek-v4-pro
-roles:
-  seeder:
-    triggers:
-      issue.opened: {}
-    can: [read]
-    prompt: |
-      seed the repo
+tools:
+  all: ["*"]
 `)
 	if err := g.SeedInitialCommit(bare, "main", map[string][]byte{
 		".hangrix/agents.yml": seederYaml,
@@ -49,35 +52,44 @@ roles:
 	}
 
 	// Push the seeder's output via shell git — same as the agent's
-	// `bash` tool + `git push` does in production.
+	// `bash` tool + `git push` does in production. The issue branch
+	// rewrites the team yaml and drops new per-role agent files.
 	work := filepath.Join(dir, "work")
 	runGit(t, "", "clone", bare, work)
 	runGit(t, work, "checkout", "-b", "issue/1")
-	mustMkdir(t, filepath.Join(work, ".hangrix/prompts"))
+	mustMkdir(t, filepath.Join(work, ".hangrix/agents"))
 	newYaml := []byte(`version: 1
 container:
   image: ubuntu:22.04
 llm:
   model: deepseek-v4-pro
-roles:
-  maintainer:
-    triggers:
-      issue.opened: {}
-      issue.comment: {}
-    can: [issue_read, issue_comment]
-    prompt_file: .hangrix/prompts/maintainer.md
-  backend:
-    triggers:
-      issue.comment:
-        mentioned_only: true
-    can: [issue_read, issue_comment, read, write, edit]
-    prompt_file: .hangrix/prompts/backend.md
+tools:
+  reader: [issue_read, issue_comment]
+  writer: [issue_read, issue_comment]
 `)
 	mustWrite(t, filepath.Join(work, ".hangrix/agents.yml"), newYaml)
-	mustWrite(t, filepath.Join(work, ".hangrix/prompts/maintainer.md"),
-		[]byte("# Maintainer\nYou route work.\n"))
-	mustWrite(t, filepath.Join(work, ".hangrix/prompts/backend.md"),
-		[]byte("# Backend\nYou write features.\n"))
+	mustWrite(t, filepath.Join(work, ".hangrix/agents/maintainer.md"),
+		[]byte(`---
+triggers:
+  issue.opened: {}
+  issue.comment: {}
+permission: read
+tools: [reader]
+---
+# Maintainer
+You route work.
+`))
+	mustWrite(t, filepath.Join(work, ".hangrix/agents/backend.md"),
+		[]byte(`---
+triggers:
+  issue.comment:
+    mentioned_only: true
+permission: write
+tools: [writer]
+---
+# Backend
+You write features.
+`))
 	runGit(t, work, "-c", "user.email=t@e", "-c", "user.name=t", "add", ".")
 	runGit(t, work, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-m", "seed team")
 	runGit(t, work, "push", "origin", "issue/1")
@@ -99,27 +111,74 @@ roles:
 	}
 	t.Logf("merge: sha=%s mode=%s", mergeSHA, mode)
 
-	// 1. The merged agents.yml must parse and expose both new roles.
-	yamlBody := readBlobOrFail(t, bare, "main", ".hangrix/agents.yml")
-	t.Logf("post-merge agents.yml:\n%s", string(yamlBody))
-	cfg, err := agentsconfig.ParseHostConfig(yamlBody)
+	// 1. LoadHostConfig at the merged tip must assemble both new roles
+	//    from the team yaml + per-role agent files. The FileProvider
+	//    below reads them the same way the spawner does (git cat-file /
+	//    git ls-tree on the bare repo at the default-branch tip).
+	fp := &gitFileProvider{t: t, bare: bare, ref: "main"}
+	cfg, err := agentsconfig.LoadHostConfig(fp)
 	if err != nil {
-		t.Fatalf("ParseHostConfig: %v", err)
+		t.Fatalf("LoadHostConfig: %v", err)
+	}
+	if cfg == nil {
+		t.Fatalf("LoadHostConfig returned nil at merged tip")
 	}
 	for _, want := range []string{"maintainer", "backend"} {
 		if _, ok := cfg.Roles[want]; !ok {
-			t.Fatalf("post-merge agents.yml missing role %q; roles=%v", want, mapKeys(cfg.Roles))
+			t.Fatalf("post-merge config missing role %q; roles=%v", want, mapKeys(cfg.Roles))
 		}
 	}
 
-	// 2. The prompt files must be reachable at the same ref. The
-	//    spawner reads them via the same `git cat-file -p` path.
-	for _, p := range []string{".hangrix/prompts/maintainer.md", ".hangrix/prompts/backend.md"} {
-		body := readBlobOrFail(t, bare, "main", p)
-		if !strings.HasPrefix(string(body), "#") {
-			t.Fatalf("blob at %s looks empty/wrong: %q", p, string(body))
+	// 2. The per-role prompt bodies must survive the merge: each role's
+	//    prompt is the Markdown body of its `.hangrix/agents/<role>.md`.
+	if got := cfg.Roles["maintainer"].Prompt; !strings.HasPrefix(got, "# Maintainer") {
+		t.Fatalf("maintainer prompt = %q, want it to start with the file body", got)
+	}
+	if got := cfg.Roles["backend"].Prompt; !strings.HasPrefix(got, "# Backend") {
+		t.Fatalf("backend prompt = %q, want it to start with the file body", got)
+	}
+}
+
+// gitFileProvider satisfies agentsconfig.FileProvider over a bare repo at
+// a fixed ref, mirroring the production GitBlobReader: ReadFile is
+// `git cat-file -p <ref>:<path>` and ListDir is
+// `git ls-tree --name-only <ref> <dir>/`.
+type gitFileProvider struct {
+	t    *testing.T
+	bare string
+	ref  string
+}
+
+func (p *gitFileProvider) ReadFile(path string) ([]byte, bool) {
+	cmd := exec.CommandContext(context.Background(), "git",
+		"--git-dir="+p.bare, "cat-file", "-p", p.ref+":"+path)
+	cmd.Stderr = io.Discard
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+func (p *gitFileProvider) ListDir(dir string) ([]string, bool) {
+	cmd := exec.CommandContext(context.Background(), "git",
+		"--git-dir="+p.bare, "ls-tree", "--name-only", p.ref,
+		strings.TrimSuffix(dir, "/")+"/")
+	cmd.Stderr = io.Discard
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, false
+	}
+	var paths []string
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			paths = append(paths, line)
 		}
 	}
+	if len(paths) == 0 {
+		return nil, false
+	}
+	return paths, true
 }
 
 func mustMkdir(t *testing.T, p string) {
