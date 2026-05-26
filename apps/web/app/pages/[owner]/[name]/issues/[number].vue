@@ -729,7 +729,7 @@ onUnmounted(() => {
                     </span>
                   </div>
                   <div class="px-4 py-3 text-sm">
-                    <MarkdownBody v-if="issue.body" :source="issue.body"  />
+                    <FoldableBody v-if="issue.body" :source="issue.body" />
                     <p v-else class="text-muted-foreground">—</p>
                   </div>
                 </CardContent>
@@ -751,7 +751,7 @@ onUnmounted(() => {
                       </span>
                     </div>
                     <div class="px-4 py-3 text-sm">
-                      <MarkdownBody :source="it.data.body"  />
+                      <FoldableBody :source="it.data.body" />
                     </div>
                   </CardContent>
                 </Card>
