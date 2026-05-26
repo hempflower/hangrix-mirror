@@ -18,6 +18,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/infra/workflowdb"
+	"github.com/hangrix/hangrix/pkg/actor"
 )
 
 //go:embed migrations/*.sql
@@ -421,6 +422,26 @@ func rowToRun(row *workflowdb.WorkflowRun) *domain.WorkflowRun {
 	if row.FinishedAt.Valid {
 		r.FinishedAt = &row.FinishedAt.Time
 	}
+	if row.TriggerActorKind != "" {
+		ref := actor.RefFromColumns(
+			actor.Kind(row.TriggerActorKind),
+			row.TriggerActorUserID.Int64,
+			row.TriggerActorRoleKey,
+			row.TriggerActorWorkflowRunID.Int64,
+			row.TriggerActorDisplayName,
+		)
+		r.TriggerActor = &ref
+	}
+	if row.RunActorKind != "" {
+		ref := actor.RefFromColumns(
+			actor.Kind(row.RunActorKind),
+			row.RunActorUserID.Int64,
+			row.RunActorRoleKey,
+			row.RunActorWorkflowRunID.Int64,
+			row.RunActorDisplayName,
+		)
+		r.RunActor = &ref
+	}
 	return r
 }
 
@@ -447,6 +468,26 @@ func rowToRunFromList(row *workflowdb.ListWorkflowRunsByRepoRow) *domain.Workflo
 	}
 	if row.FinishedAt.Valid {
 		r.FinishedAt = &row.FinishedAt.Time
+	}
+	if row.TriggerActorKind != "" {
+		ref := actor.RefFromColumns(
+			actor.Kind(row.TriggerActorKind),
+			row.TriggerActorUserID.Int64,
+			row.TriggerActorRoleKey,
+			row.TriggerActorWorkflowRunID.Int64,
+			row.TriggerActorDisplayName,
+		)
+		r.TriggerActor = &ref
+	}
+	if row.RunActorKind != "" {
+		ref := actor.RefFromColumns(
+			actor.Kind(row.RunActorKind),
+			row.RunActorUserID.Int64,
+			row.RunActorRoleKey,
+			row.RunActorWorkflowRunID.Int64,
+			row.RunActorDisplayName,
+		)
+		r.RunActor = &ref
 	}
 	return r
 }

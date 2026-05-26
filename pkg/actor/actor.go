@@ -97,6 +97,39 @@ func FromLegacy(authorID int64, authorName, agentRole string) Ref {
 	return SystemRef()
 }
 
+// RefFromColumns reconstructs a Ref from the flat DB columns written by
+// the dual-write strategy. Callers should only pass this when kind is
+// non-empty; the zero-Ref case is handled by callers checking kind first.
+func RefFromColumns(kind Kind, userID int64, roleKey string, workflowRunID int64, displayName string) Ref {
+	switch kind {
+	case KindUser:
+		return Ref{
+			Kind:        KindUser,
+			ID:          fmt.Sprintf("user:%d", userID),
+			DisplayName: displayName,
+			UserID:      userID,
+		}
+	case KindAgent:
+		return Ref{
+			Kind:        KindAgent,
+			ID:          fmt.Sprintf("agent:%s", roleKey),
+			DisplayName: displayName,
+			RoleKey:     roleKey,
+		}
+	case KindWorkflow:
+		return Ref{
+			Kind:          KindWorkflow,
+			ID:            fmt.Sprintf("workflow:run:%d", workflowRunID),
+			DisplayName:   displayName,
+			WorkflowRunID: workflowRunID,
+		}
+	case KindSystem:
+		return SystemRef()
+	default:
+		return Ref{}
+	}
+}
+
 // IsZero reports whether r is the zero value (no actor set).
 func (r Ref) IsZero() bool { return r.Kind == "" }
 
