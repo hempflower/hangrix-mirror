@@ -661,6 +661,37 @@ func (q *Queries) SetWorkflowJobStepOutputs(ctx context.Context, arg SetWorkflow
 	return err
 }
 
+const setWorkflowRunActor = `-- name: SetWorkflowRunActor :exec
+UPDATE workflow_runs
+SET run_actor_kind = $1,
+    run_actor_user_id = $2,
+    run_actor_role_key = $3,
+    run_actor_workflow_run_id = $4,
+    run_actor_display_name = $5
+WHERE id = $6
+`
+
+type SetWorkflowRunActorParams struct {
+	RunActorKind          string
+	RunActorUserID        pgtype.Int8
+	RunActorRoleKey       string
+	RunActorWorkflowRunID pgtype.Int8
+	RunActorDisplayName   string
+	ID                    int64
+}
+
+func (q *Queries) SetWorkflowRunActor(ctx context.Context, arg SetWorkflowRunActorParams) error {
+	_, err := q.db.Exec(ctx, setWorkflowRunActor,
+		arg.RunActorKind,
+		arg.RunActorUserID,
+		arg.RunActorRoleKey,
+		arg.RunActorWorkflowRunID,
+		arg.RunActorDisplayName,
+		arg.ID,
+	)
+	return err
+}
+
 const skipRemainingWorkflowJobs = `-- name: SkipRemainingWorkflowJobs :exec
 UPDATE workflow_job_runs
 SET status = 'skipped', finished_at = NOW()

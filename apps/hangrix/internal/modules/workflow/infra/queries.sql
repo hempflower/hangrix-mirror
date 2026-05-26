@@ -49,6 +49,15 @@ UPDATE workflow_runs
 SET status = sqlc.arg('status'), finished_at = NOW()
 WHERE id = sqlc.arg('id') AND status IN ('pending', 'running');
 
+-- name: SetWorkflowRunActor :exec
+UPDATE workflow_runs
+SET run_actor_kind = sqlc.arg('run_actor_kind'),
+    run_actor_user_id = sqlc.narg('run_actor_user_id'),
+    run_actor_role_key = sqlc.arg('run_actor_role_key'),
+    run_actor_workflow_run_id = sqlc.narg('run_actor_workflow_run_id'),
+    run_actor_display_name = sqlc.arg('run_actor_display_name')
+WHERE id = sqlc.arg('id');
+
 -- ---- workflow_job_runs ----
 
 -- name: CreateWorkflowJobRun :one
