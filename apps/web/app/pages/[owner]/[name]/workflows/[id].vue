@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import ActorBadge from '@/components/ActorBadge.vue'
 import type {
   WorkflowJobLogLine,
   WorkflowJobLogsResp,
@@ -206,6 +207,13 @@ async function copyToClipboard(value: string, id: string) {
               <code class="font-mono text-xs">{{ shortSha(detail.run.commit_sha) }}</code>
               <span>·</span>
               <span>{{ rel(detail.run.created_at) }}</span>
+              <template v-if="detail.run.trigger_actor">
+                <span>·</span>
+                <span class="inline-flex items-center gap-1">
+                  {{ t('repo.workflows.triggeredBy') }}:
+                  <ActorBadge :actor="detail.run.trigger_actor" size="sm" />
+                </span>
+              </template>
               <template v-if="detail.run.started_at">
                 <span>·</span>
                 <span>{{ duration(detail.run.started_at, detail.run.finished_at) }}</span>

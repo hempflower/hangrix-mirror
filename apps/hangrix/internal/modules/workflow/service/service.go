@@ -14,6 +14,8 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/hangrix/hangrix/pkg/actor"
+
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
@@ -177,6 +179,12 @@ type CreateRunParams struct {
 	// TriggerPayload, when non-nil, is stored verbatim in trigger_payload_json.
 	// When nil, the infra auto-generates a payload from EventName + DispatchInputs.
 	TriggerPayload []byte
+	// TriggerActor is the actor who triggered this workflow run.
+	// When zero, the service derives it from the trigger payload or event context.
+	TriggerActor actor.Ref
+	// RunActor is the workflow run itself as an actor for downstream side effects.
+	// When zero, the service derives a workflow actor from the config name.
+	RunActor actor.Ref
 }
 
 // CreateRun creates a new workflow run and all associated pending job runs.
@@ -257,6 +265,16 @@ func (s *Service) CreateRun(ctx context.Context, params CreateRunParams) (*domai
 		return nil, nil, fmt.Errorf("generate workflow token: %w", err)
 	}
 
+	// Derive actors if not explicitly provided by the caller.
+	triggerActor := params.TriggerActor
+	if triggerActor.IsZero() {
+		triggerActor = deriveTriggerActor(params.TriggerPayload, params.EventName)
+	}
+	runActor := params.RunActor
+	if runActor.IsZero() {
+		runActor = actor.WorkflowRef(0, params.Config.Name)
+	}
+
 	return s.store.CreateRun(ctx, domain.CreateRunParams{
 		RepoID:              params.Repo.ID,
 		WorkflowName:        params.Config.Name,
@@ -274,6 +292,8 @@ func (s *Service) CreateRun(ctx context.Context, params CreateRunParams) (*domai
 		DispatchInputs:      dispatchInputs,
 		TriggerPayloadJSON:  params.TriggerPayload,
 		WorkflowToken:       workflowToken,
+		TriggerActor:        triggerActor,
+		RunActor:            runActor,
 	})
 }
 
@@ -551,14 +571,29 @@ func (s *Service) DispatchRepoPush(ctx context.Context, repo Ref, branch string,
 // it is scoped to. Returns ErrInvalidWorkflowToken if the token is not found
 // or the run is in a terminal state.
 func (s *Service) ValidateWorkflowToken(ctx context.Context, token string) (int64, error) {
-	repoID, status, err := s.store.GetRunByToken(ctx, token)
+	repoID, _, _, status, err := s.store.GetRunByToken(ctx, token)
 	if err != nil {
 		return 0, domain.ErrInvalidWorkflowToken
 	}
-	if domain.RunStatus(status).Terminal() {
+	if status.Terminal() {
 		return 0, domain.ErrInvalidWorkflowToken
 	}
 	return repoID, nil
+}
+
+// ValidateWorkflowTokenWithActor validates a hangrix_wf_ token and returns
+// both the repo ID and a workflow actor.Ref for provenance tracking.
+// Returns ErrInvalidWorkflowToken if the token is not found or the run
+// is in a terminal state.
+func (s *Service) ValidateWorkflowTokenWithActor(ctx context.Context, token string) (int64, actor.Ref, error) {
+	repoID, runID, workflowName, status, err := s.store.GetRunByToken(ctx, token)
+	if err != nil {
+		return 0, actor.Ref{}, domain.ErrInvalidWorkflowToken
+	}
+	if status.Terminal() {
+		return 0, actor.Ref{}, domain.ErrInvalidWorkflowToken
+	}
+	return repoID, actor.WorkflowRef(runID, workflowName), nil
 }
 
 // SetStepOutputs merges a step's outputs into the job's step_outputs_json.
@@ -626,6 +661,37 @@ func (s *Service) ResolveJobOutputs(ctx context.Context, jobID int64) error {
 	}
 
 	return s.store.SetJobOutputs(ctx, jobID, resolved)
+}
+
+// deriveTriggerActor parses the trigger actor from the trigger payload when
+// available (e.g. pusher_user_id / pusher_agent_role for push events).
+// Falls back to system when no actor can be determined.
+func deriveTriggerActor(triggerPayload []byte, eventName workflowsconfig.EventName) actor.Ref {
+	if len(triggerPayload) == 0 {
+		return actor.SystemRef()
+	}
+	var payload struct {
+		PusherUserID    int64  `json:"pusher_user_id"`
+		PusherAgentRole string `json:"pusher_agent_role"`
+		AuthorID        int64  `json:"author_id"`
+		AgentRole       string `json:"agent_role"`
+	}
+	if err := json.Unmarshal(triggerPayload, &payload); err != nil {
+		return actor.SystemRef()
+	}
+	if payload.PusherAgentRole != "" {
+		return actor.AgentRef(payload.PusherAgentRole)
+	}
+	if payload.PusherUserID > 0 {
+		return actor.UserRef(payload.PusherUserID, "")
+	}
+	if payload.AgentRole != "" {
+		return actor.AgentRef(payload.AgentRole)
+	}
+	if payload.AuthorID > 0 {
+		return actor.UserRef(payload.AuthorID, "")
+	}
+	return actor.SystemRef()
 }
 
 // strPtr returns a pointer to s, or nil if s is empty.

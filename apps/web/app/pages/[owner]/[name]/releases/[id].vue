@@ -23,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import ActorBadge from '@/components/ActorBadge.vue'
 import MarkdownBody from '@/components/MarkdownBody.vue'
 import type { Release, ReleaseAsset } from '~/types/release'
 import { relativeTime } from '~/utils/time'
@@ -248,6 +249,17 @@ async function onDeleteAsset(asset: ReleaseAsset) {
               <span>·</span>
               <span>{{ release.is_draft ? rel(release.created_at) : rel(release.published_at) }}</span>
             </p>
+            <!-- Actors -->
+            <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <span v-if="release.created_actor" class="inline-flex items-center gap-1">
+                {{ t('release.createdBy') }}:
+                <ActorBadge :actor="release.created_actor" size="sm" />
+              </span>
+              <span v-if="release.published_actor" class="inline-flex items-center gap-1">
+                {{ t('release.publishedBy') }}:
+                <ActorBadge :actor="release.published_actor" size="sm" />
+              </span>
+            </div>
           </div>
           <div class="flex items-center gap-2">
             <Button v-if="release.is_draft" @click="onPublish">

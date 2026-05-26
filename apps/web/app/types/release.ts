@@ -1,3 +1,4 @@
+import type { ActorRef } from './actor'
 // Release data model matching the server-side REST API
 // /api/repos/{owner}/{name}/releases
 
@@ -25,6 +26,10 @@ export interface Release {
   title: string
   notes: string
   is_draft: boolean
+  // created_actor is the actor that created this release.
+  created_actor?: ActorRef
+  // published_actor is the actor that published this release (absent for drafts).
+  published_actor?: ActorRef
   published_at: string | null
   created_at: string
   updated_at: string

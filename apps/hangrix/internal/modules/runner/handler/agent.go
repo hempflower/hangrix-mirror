@@ -23,6 +23,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hangrix/hangrix/pkg/actor"
+
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
 	repoDomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/binaries"
@@ -451,6 +453,13 @@ type workflowJobDTO struct {
 	RepoVariables  map[string]string    `json:"repo_variables"`
 	Inputs         map[string]string    `json:"inputs,omitempty"`
 	WorkflowToken  string               `json:"workflow_token,omitempty"`
+	// TriggerActorKind, TriggerActorID, TriggerActorDisplayName carry the
+	// actor identity of whoever triggered this workflow run (e.g. the user
+	// who pushed, or the commenter who mentioned a workflow). These are
+	// surfaced to the runner as HANGRIX_TRIGGER_ACTOR_* env vars.
+	TriggerActorKind        string `json:"trigger_actor_kind,omitempty"`
+	TriggerActorID          string `json:"trigger_actor_id,omitempty"`
+	TriggerActorDisplayName string `json:"trigger_actor_display_name,omitempty"`
 }
 
 // workflowContainerDTO mirrors the runner's client.WorkflowContainer.
@@ -697,6 +706,9 @@ func (h *AgentHandler) buildWorkflowJobDTO(ctx context.Context, job *workflowdom
 		tag = strings.TrimPrefix(run.Ref, "refs/tags/")
 	}
 
+	// Derive trigger actor from the run's event and trigger payload.
+	triggerKind, triggerID, triggerDisplay := triggerActorFromRun(run)
+
 	return &workflowJobDTO{
 		JobRunID:       job.ID,
 		WorkflowRunID:  run.ID,
@@ -717,7 +729,48 @@ func (h *AgentHandler) buildWorkflowJobDTO(ctx context.Context, job *workflowdom
 		RepoVariables:  repoVars,
 		Inputs:         inputs,
 		WorkflowToken:  run.WorkflowToken,
+		TriggerActorKind:        triggerKind,
+		TriggerActorID:          triggerID,
+		TriggerActorDisplayName: triggerDisplay,
 	}, nil
+}
+
+// triggerActorFromRun derives the trigger actor (kind, id, display_name)
+// from a workflow run's event and trigger payload. For push events it reads
+// pusher_user_id / pusher_agent_role from the payload; for other event types
+// it falls back to system.
+func triggerActorFromRun(run *workflowdomain.WorkflowRun) (kind, id, display string) {
+	if len(run.TriggerPayloadJSON) == 0 {
+		return string(actor.KindSystem), "system:server", "System"
+	}
+	var payload struct {
+		PusherUserID    int64  `json:"pusher_user_id"`
+		PusherAgentRole string `json:"pusher_agent_role"`
+		AuthorID        int64  `json:"author_id"`
+		AuthorUsername  string `json:"author_username"`
+		AgentRole       string `json:"agent_role"`
+	}
+	if err := json.Unmarshal(run.TriggerPayloadJSON, &payload); err != nil {
+		return string(actor.KindSystem), "system:server", "System"
+	}
+	if payload.PusherAgentRole != "" {
+		ref := actor.AgentRef(payload.PusherAgentRole)
+		return string(ref.Kind), ref.ID, ref.DisplayName
+	}
+	if payload.PusherUserID > 0 {
+		ref := actor.UserRef(payload.PusherUserID, "")
+		return string(ref.Kind), ref.ID, ref.DisplayName
+	}
+	if payload.AgentRole != "" {
+		ref := actor.AgentRef(payload.AgentRole)
+		return string(ref.Kind), ref.ID, ref.DisplayName
+	}
+	if payload.AuthorID > 0 {
+		display := payload.AuthorUsername
+		ref := actor.UserRef(payload.AuthorID, display)
+		return string(ref.Kind), ref.ID, ref.DisplayName
+	}
+	return string(actor.KindSystem), "system:server", "System"
 }
 
 // ---- session lifecycle ----

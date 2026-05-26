@@ -18,6 +18,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/infra/workflowdb"
+	"github.com/hangrix/hangrix/pkg/actor"
 )
 
 //go:embed migrations/*.sql
@@ -81,23 +82,52 @@ func (r *PostgresRepo) CreateRun(ctx context.Context, params domain.CreateRunPar
 		causeID = pgtype.Int8{Int64: *params.CauseID, Valid: true}
 	}
 
+	// Translate trigger actor to sqlc params.
+	var trigUserID pgtype.Int8
+	if params.TriggerActor.UserID > 0 {
+		trigUserID = pgtype.Int8{Int64: params.TriggerActor.UserID, Valid: true}
+	}
+	var trigWfID pgtype.Int8
+	if params.TriggerActor.WorkflowRunID > 0 {
+		trigWfID = pgtype.Int8{Int64: params.TriggerActor.WorkflowRunID, Valid: true}
+	}
+
 	dbRun, err := r.q.CreateWorkflowRun(ctx, workflowdb.CreateWorkflowRunParams{
-		RepoID:                params.RepoID,
-		WorkflowName:          params.WorkflowName,
-		SourceFile:            params.SourceFile,
-		EventName:             string(params.EventName),
-		CauseID:               causeID,
-		Ref:                   params.Ref,
-		CommitSha:             params.CommitSHA,
-		ContainerSnapshotJson: snapJSON,
-		TriggerPayloadJson:    triggerJSON,
-		WorkflowToken:         params.WorkflowToken,
+		RepoID:                    params.RepoID,
+		WorkflowName:              params.WorkflowName,
+		SourceFile:                params.SourceFile,
+		EventName:                 string(params.EventName),
+		CauseID:                   causeID,
+		Ref:                       params.Ref,
+		CommitSha:                 params.CommitSHA,
+		ContainerSnapshotJson:     snapJSON,
+		TriggerPayloadJson:        triggerJSON,
+		WorkflowToken:             params.WorkflowToken,
+		TriggerActorKind:          string(params.TriggerActor.Kind),
+		TriggerActorUserID:        trigUserID,
+		TriggerActorRoleKey:       params.TriggerActor.RoleKey,
+		TriggerActorWorkflowRunID: trigWfID,
+		TriggerActorDisplayName:   params.TriggerActor.DisplayName,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("create workflow run: %w", err)
 	}
 
+	// Persist the correct RunActor now that the real run ID is known.
+	runActor := actor.WorkflowRef(dbRun.ID, params.WorkflowName)
+	if err := r.q.SetWorkflowRunActor(ctx, workflowdb.SetWorkflowRunActorParams{
+		RunActorKind:          string(runActor.Kind),
+		RunActorUserID:        pgtype.Int8{Int64: 0, Valid: false},
+		RunActorRoleKey:       runActor.RoleKey,
+		RunActorWorkflowRunID: pgtype.Int8{Int64: runActor.WorkflowRunID, Valid: true},
+		RunActorDisplayName:   runActor.DisplayName,
+		ID:                    dbRun.ID,
+	}); err != nil {
+		return nil, nil, fmt.Errorf("set workflow run actor: %w", err)
+	}
+
 	run := rowToRun(&dbRun)
+	run.RunActor = &runActor
 
 	// Create all job rows
 	jobs := make([]*domain.WorkflowJobRun, 0, len(params.JobDefs))
@@ -168,17 +198,17 @@ func (r *PostgresRepo) GetRun(ctx context.Context, id int64) (*domain.WorkflowRu
 	return rowToRun(&dbRun), nil
 }
 
-// GetRunByToken returns the repo_id and status for a workflow run identified
-// by its workflow_token.
-func (r *PostgresRepo) GetRunByToken(ctx context.Context, token string) (int64, domain.RunStatus, error) {
+// GetRunByToken returns id, repo_id, workflow_name, and status for a workflow
+// run identified by its workflow_token.
+func (r *PostgresRepo) GetRunByToken(ctx context.Context, token string) (int64, int64, string, domain.RunStatus, error) {
 	row, err := r.q.GetWorkflowRunByToken(ctx, token)
 	if err != nil {
 		if isNoRows(err) {
-			return 0, "", domain.ErrRunNotFound
+			return 0, 0, "", "", domain.ErrRunNotFound
 		}
-		return 0, "", fmt.Errorf("get workflow run by token: %w", err)
+		return 0, 0, "", "", fmt.Errorf("get workflow run by token: %w", err)
 	}
-	return row.RepoID, domain.RunStatus(row.Status), nil
+	return row.RepoID, row.ID, row.WorkflowName, domain.RunStatus(row.Status), nil
 }
 
 // ListRunsByRepo returns workflow runs for a repo, ordered by created_at DESC.
@@ -391,6 +421,26 @@ func rowToRun(row *workflowdb.WorkflowRun) *domain.WorkflowRun {
 	if row.FinishedAt.Valid {
 		r.FinishedAt = &row.FinishedAt.Time
 	}
+	if row.TriggerActorKind != "" {
+		ref := actor.RefFromColumns(
+			actor.Kind(row.TriggerActorKind),
+			row.TriggerActorUserID.Int64,
+			row.TriggerActorRoleKey,
+			row.TriggerActorWorkflowRunID.Int64,
+			row.TriggerActorDisplayName,
+		)
+		r.TriggerActor = &ref
+	}
+	if row.RunActorKind != "" {
+		ref := actor.RefFromColumns(
+			actor.Kind(row.RunActorKind),
+			row.RunActorUserID.Int64,
+			row.RunActorRoleKey,
+			row.RunActorWorkflowRunID.Int64,
+			row.RunActorDisplayName,
+		)
+		r.RunActor = &ref
+	}
 	return r
 }
 
@@ -417,6 +467,26 @@ func rowToRunFromList(row *workflowdb.ListWorkflowRunsByRepoRow) *domain.Workflo
 	}
 	if row.FinishedAt.Valid {
 		r.FinishedAt = &row.FinishedAt.Time
+	}
+	if row.TriggerActorKind != "" {
+		ref := actor.RefFromColumns(
+			actor.Kind(row.TriggerActorKind),
+			row.TriggerActorUserID.Int64,
+			row.TriggerActorRoleKey,
+			row.TriggerActorWorkflowRunID.Int64,
+			row.TriggerActorDisplayName,
+		)
+		r.TriggerActor = &ref
+	}
+	if row.RunActorKind != "" {
+		ref := actor.RefFromColumns(
+			actor.Kind(row.RunActorKind),
+			row.RunActorUserID.Int64,
+			row.RunActorRoleKey,
+			row.RunActorWorkflowRunID.Int64,
+			row.RunActorDisplayName,
+		)
+		r.RunActor = &ref
 	}
 	return r
 }

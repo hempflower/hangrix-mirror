@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/hangrix/hangrix/pkg/actor"
 )
 
 // ---- status enums ----
@@ -83,6 +85,11 @@ type WorkflowRun struct {
 	StartedAt     *time.Time
 	FinishedAt    *time.Time
 	CreatedAt     time.Time
+	// TriggerActor is the actor who triggered this workflow run (user, agent, workflow, system).
+	TriggerActor *actor.Ref
+	// RunActor is the workflow run itself as an actor for provenance tracking
+	// of downstream side effects (e.g. releases created by this workflow).
+	RunActor *actor.Ref
 }
 
 // WorkflowJobRun is a single job execution within a workflow run.
@@ -196,6 +203,10 @@ type CreateRunParams struct {
 	TriggerPayloadJSON []byte
 	// WorkflowToken is the pre-generated hangrix_wf_ token for this run.
 	WorkflowToken string
+	// TriggerActor is the actor who triggered this workflow run (user, agent, etc.).
+	TriggerActor actor.Ref
+	// RunActor is the workflow run itself as an actor for downstream side effects.
+	RunActor actor.Ref
 }
 
 // JobDefInput is the input bag for a single job within a new workflow run.
@@ -253,9 +264,9 @@ type Store interface {
 	// GetRun returns a single workflow run by ID.
 	GetRun(ctx context.Context, id int64) (*WorkflowRun, error)
 
-	// GetRunByToken returns the repo_id and status for a workflow run
-
-	GetRunByToken(ctx context.Context, token string) (repoID int64, status RunStatus, err error)
+	// GetRunByToken returns id, repo_id, workflow_name, and status for a
+	// workflow run identified by its workflow_token.
+	GetRunByToken(ctx context.Context, token string) (repoID int64, runID int64, workflowName string, status RunStatus, err error)
 
 	// ListRunsByRepo returns workflow runs for a repo, ordered by created_at DESC.
 	// workflowName filters to a specific workflow (empty = all).
@@ -335,7 +346,13 @@ type TagEventTrigger interface {
 // modules (e.g. release) to validate a hangrix_wf_ token and get the repo
 // ID it is scoped to. The workflow module's Service implements it.
 type WorkflowTokenValidator interface {
+	// ValidateWorkflowToken returns the repo ID for a valid, non-terminal token.
 	ValidateWorkflowToken(ctx context.Context, token string) (repoID int64, err error)
+
+	// ValidateWorkflowTokenWithActor returns repo ID + the workflow actor for
+	// provenance tracking. Callers that record side effects (e.g. release writes)
+	// should use this to attribute the action to the correct workflow actor.
+	ValidateWorkflowTokenWithActor(ctx context.Context, token string) (repoID int64, actor actor.Ref, err error)
 }
 
 var (

@@ -22,6 +22,7 @@ import {
   ThumbsUp,
 } from 'lucide-vue-next'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import ActorBadge from '@/components/ActorBadge.vue'
 import AgentSessionsView from '@/components/issue/AgentSessionsView.vue'
 import ContributionsView from '@/components/issue/ContributionsView.vue'
 import { Badge } from '@/components/ui/badge'
@@ -33,6 +34,7 @@ import FoldableBody from '@/components/issue/FoldableBody.vue'
 import MentionTextarea from '@/components/issue/MentionTextarea.vue'
 import AttachmentUploader from '@/components/issue/AttachmentUploader.vue'
 import type { Issue, IssueState, IssueTimeline, IssueMergeResp, ReviewStatus, ReviewVerdict, ReviewVoteValue, TodoStatus } from '~/types/issue'
+import type { ActorRef } from '~/types/actor'
 import type { Commit, FileDiff } from '~/types/repo'
 import { useWindowScroll } from '@vueuse/core'
 import { relativeTime } from '~/utils/time'
@@ -364,6 +366,66 @@ function initialOf(s?: string) {
   return s ? s.charAt(0).toUpperCase() : '?'
 }
 
+// --- actor normalization helpers ---
+// These derive an ActorRef from either the unified `actor` field (preferred)
+// or fall back to the legacy author_id/author_username/agent_role fields.
+// This keeps the template rendering unified while the backend migration
+// is in progress.
+
+function normalizeActor(
+  actor: ActorRef | undefined | null,
+  legacy: { author_id?: number | null; author_username?: string | null; agent_role?: string | null },
+): ActorRef | null {
+  if (actor) return actor
+  // Fallback: reconstruct from legacy fields
+  if (legacy.agent_role) {
+    return {
+      kind: 'agent',
+      id: `agent:${legacy.agent_role}`,
+      display_name: `@agent-${legacy.agent_role}`,
+      role_key: legacy.agent_role,
+    }
+  }
+  if (legacy.author_username) {
+    return {
+      kind: 'user',
+      id: legacy.author_id ? `user:${legacy.author_id}` : `user:${legacy.author_username}`,
+      display_name: legacy.author_username,
+      user_id: legacy.author_id ?? undefined,
+    }
+  }
+  // Both empty → system
+  return {
+    kind: 'system',
+    id: 'system:server',
+    display_name: 'System',
+  }
+}
+
+function commentActor(c: any): ActorRef | null {
+  return normalizeActor(c.actor, {
+    author_id: c.author_id,
+    author_username: c.author_username,
+    agent_role: c.agent_role,
+  })
+}
+
+function eventActor(e: any): ActorRef | null {
+  return normalizeActor(e.actor, {
+    author_id: e.actor_id,
+    author_username: e.actor_username,
+    agent_role: e.agent_role,
+  })
+}
+
+function issueActor(issue: Issue): ActorRef | null {
+  return normalizeActor(issue.actor, {
+    author_id: issue.author_id,
+    author_username: issue.author_username,
+    agent_role: null,
+  })
+}
+
 function stateBadgeClass(s: IssueState) {
   switch (s) {
     case 'open': return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
@@ -399,11 +461,8 @@ const timelineItems = computed<TimelineItem[]>(() => {
 })
 
 function eventLabel(e: any): string {
-  // Agent-authored events carry agent_role instead of actor_username
-  // (e.g. an agent push surfaces with actor_id=NULL + agent_role=<role>).
-  // Render them with the same "@agent-<role>" form the review_vote card
-  // uses so the whole timeline shows one consistent agent identity.
-  const name = e.agent_role ? `@agent-${e.agent_role}` : (e.actor_username || '—')
+  const actor = eventActor(e)
+  const name = actor?.display_name || '—'
   switch (e.kind) {
     case 'commit_pushed': {
       const n = e.payload?.commits?.length ?? 0
@@ -620,7 +679,7 @@ onUnmounted(() => {
   </Badge>
   </div>
   <p class="text-sm text-muted-foreground">
-  {{ t('issue.openedBy', { name: issue.author_username, time: rel(issue.created_at) }) }}
+  {{ t('issue.openedBy', { name: issueActor(issue)?.display_name || issue.author_username || '—', time: rel(issue.created_at) }) }}
   </p>
   </header>
   <div class="border-b border-border overflow-x-auto pb-2">
@@ -663,12 +722,7 @@ onUnmounted(() => {
               <Card class="gap-0 py-0">
                 <CardContent class="p-0">
                   <div class="flex items-center gap-2 border-b bg-muted/40 px-3 py-2 text-xs">
-                    <Avatar class="size-6 shrink-0">
-                      <AvatarFallback class="bg-primary/10 text-[10px] text-primary">
-                        {{ initialOf(issue.author_username) }}
-                      </AvatarFallback>
-                    </Avatar>
-                    <span class="font-medium text-foreground">{{ issue.author_username }}</span>
+                    <ActorBadge :actor="issueActor(issue)" size="sm" />
                     <span class="text-muted-foreground">{{ t('issue.opened') }}</span>
                     <span class="text-muted-foreground" :title="formatDate(issue.created_at)">
                       {{ rel(issue.created_at) }}
@@ -690,15 +744,7 @@ onUnmounted(() => {
                 <Card v-if="it.kind === 'comment'" class="gap-0 py-0">
                   <CardContent class="p-0">
                     <div class="flex items-center gap-2 border-b bg-muted/40 px-3 py-2 text-xs">
-                      <Avatar class="size-6 shrink-0">
-                        <AvatarFallback class="bg-primary/10 text-[10px] text-primary">
-                          <Bot v-if="it.data.agent_role" class="size-3" />
-                          <template v-else>{{ initialOf(it.data.author_username) }}</template>
-                        </AvatarFallback>
-                      </Avatar>
-                      <span class="font-medium text-foreground">
-                        {{ it.data.agent_role ? `@agent-${it.data.agent_role}` : (it.data.author_username || '—') }}
-                      </span>
+                      <ActorBadge :actor="commentActor(it.data)" size="sm" />
                       <span class="text-muted-foreground">{{ t('issue.commented') }}</span>
                       <span class="text-muted-foreground" :title="formatDate(it.data.created_at)">
                         {{ rel(it.data.created_at) }}
@@ -720,15 +766,7 @@ onUnmounted(() => {
                 >
                   <CardContent class="p-0">
                     <div class="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-3 py-2 text-xs">
-                      <Avatar class="size-6 shrink-0">
-                        <AvatarFallback class="bg-primary/10 text-[10px] text-primary">
-                          <Bot v-if="it.data.agent_role" class="size-3" />
-                          <template v-else>{{ initialOf(it.data.actor_username) }}</template>
-                        </AvatarFallback>
-                      </Avatar>
-                      <span class="font-medium text-foreground">
-                        {{ it.data.agent_role ? `@agent-${it.data.agent_role}` : (it.data.actor_username || '—') }}
-                      </span>
+                      <ActorBadge :actor="eventActor(it.data)" size="sm" />
                       <Badge
                         :class="voteValueClass(it.data.payload?.value)"
                         variant="secondary"
@@ -1142,7 +1180,7 @@ onUnmounted(() => {
   </p>
 
   <Button
-  v-if="issue.state !== 'merged' && (issue.author_id === user?.id || canManage)"
+  v-if="issue.state !== 'merged' && (issue.author_id === user?.id || issue.actor?.user_id === user?.id || canManage)"
               variant="outline"
               class="w-full"
               :disabled="stateBusy"

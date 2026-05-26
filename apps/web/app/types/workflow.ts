@@ -1,3 +1,4 @@
+import type { ActorRef } from './actor'
 // Workflow types — kept in sync with the server-side workflow domain model
 // (apps/hangrix/internal/modules/workflow/domain/).
 //
@@ -29,6 +30,10 @@ export interface WorkflowRun {
   status: WorkflowRunStatus
   event_name: WorkflowEventName
   cause_id: number | null
+  // trigger_actor is the actor that triggered this run (e.g. a user, agent, or another workflow).
+  trigger_actor?: ActorRef
+  // run_actor is the workflow-as-actor identity used when this run produces side effects.
+  run_actor?: ActorRef
   ref: string
   commit_sha: string
   started_at: string | null
