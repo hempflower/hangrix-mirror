@@ -36,6 +36,8 @@ type stepWire struct {
 	Run string            `yaml:"run"`
 	Env map[string]string `yaml:"env"`
 	Dir string            `yaml:"dir"`
+	// Script is the inline script body for type=script steps.
+	Script string `yaml:"script"`
 	// With carries parameters for built-in typed steps (e.g. release),
 	// mirroring GitHub Actions' `with:`. Interpreted per step type, so
 	// the shared step schema never grows when a new type is added.
@@ -346,13 +348,24 @@ func decodeJobs(node *yaml.Node) ([]JobDefinition, []string) {
 				if sw.Run == "" {
 					errs = append(errs, fmt.Sprintf("%s.run: required for type run", sp))
 				}
+				if sw.Script != "" {
+					errs = append(errs, fmt.Sprintf("%s.script: not allowed for type run (use type script)", sp))
+				}
 			case StepTypeRelease:
 				if asString(sw.With["tag"]) == "" {
 					errs = append(errs, fmt.Sprintf("%s.with.tag: required for type release", sp))
 				}
+			case StepTypeScript:
+				if sw.Script == "" {
+					errs = append(errs, fmt.Sprintf("%s.script: required for type script", sp))
+				}
+				if sw.Run != "" {
+					errs = append(errs, fmt.Sprintf("%s.run: not allowed for type script (use type run for shell commands)", sp))
+				}
 			default:
-				errs = append(errs, fmt.Sprintf("%s.type: unknown step type %q (must be run or release)", sp, stepType))
+				errs = append(errs, fmt.Sprintf("%s.type: unknown step type %q (must be run, release, or script)", sp, stepType))
 			}
+
 
 			if sw.Name != "" && len(sw.Name) > 200 {
 				errs = append(errs, fmt.Sprintf("%s.name: max 200 characters", sp))
@@ -390,13 +403,14 @@ func liftSteps(wires []stepWire) []StepDefinition {
 		}
 
 		steps[i] = StepDefinition{
-			Id:   sw.Id,
-			Name: sw.Name,
-			Type: stepType,
-			Run:  sw.Run,
-			Env:  sw.Env,
-			Dir:  sw.Dir,
-			With: sw.With,
+			Id:     sw.Id,
+			Name:   sw.Name,
+			Type:   stepType,
+			Run:    sw.Run,
+			Script: sw.Script,
+			Env:    sw.Env,
+			Dir:    sw.Dir,
+			With:   sw.With,
 		}
 	}
 	return steps

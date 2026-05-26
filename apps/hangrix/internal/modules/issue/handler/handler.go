@@ -42,6 +42,7 @@ import (
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	repoinfra "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/infra"
 	userdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/user/domain"
+	workflowdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
 	workflowservice "github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/service"
 )
 
@@ -74,6 +75,10 @@ type Handler struct {
 	// without the repo module) the handler skips guard checks.
 	guards      []repodomain.BranchWriteGuard
 	workflowSvc *workflowservice.Service
+	// wfTokenValidator is the cross-module workflow token validator.
+	// When non-nil, issue endpoints accept Bearer hangrix_wf_* tokens
+	// in addition to cookie-based session auth.
+	wfTokenValidator workflowdomain.WorkflowTokenValidator
 }
 
 type HandlerDeps struct {
@@ -112,6 +117,10 @@ type HandlerDeps struct {
 	// workflows on issue merge. Nil-safe — the handler skips dispatch
 	// when absent (tests).
 	WorkflowSvc *workflowservice.Service
+	// WfTokenValidator is the workflow token validator for dual auth.
+	// When non-nil, issue endpoints accept Bearer hangrix_wf_* tokens
+	// in addition to cookie-based session auth. Nil-safe (tests).
+	WfTokenValidator workflowdomain.WorkflowTokenValidator
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
@@ -134,6 +143,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		commentAttachments: deps.CommentAttachments,
 		guards:             deps.Guards,
 		workflowSvc:        deps.WorkflowSvc,
+		wfTokenValidator:   deps.WfTokenValidator,
 	}
 }
 
@@ -144,7 +154,7 @@ var (
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Route("/api/repos/{owner}/{name}/issues", func(r chi.Router) {
-		r.Use(h.middleware.RequireAuth)
+		r.Use(h.authGate)
 		r.Get("/", h.list)
 		r.Post("/", h.create)
 		r.Get("/{number}", h.get)
@@ -188,6 +198,46 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 	// dropdown filterable client-side without a roundtrip per keystroke.
 	r.With(h.middleware.RequireAuth).
 		Get("/api/repos/{owner}/{name}/mention-suggestions", h.mentionSuggestions)
+}
+
+// authGate is a middleware that tries workflow token auth first, then falls
+// back to cookie-based session auth. This allows workflow containers to
+// read issue data (comments, timeline, todos) and create comments via a
+// Bearer token without needing a session cookie.
+func (h *Handler) authGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 1. Try workflow token (Bearer hangrix_wf_...).
+		if h.wfTokenValidator != nil {
+			tok, err := bearerTokenFromHeader(r)
+			if err == nil && strings.HasPrefix(tok, "hangrix_wf_") {
+				_, wfActor, err := h.wfTokenValidator.ValidateWorkflowTokenWithActor(r.Context(), tok)
+				if err == nil {
+					r = actor.WithWorkflowActor(r, wfActor)
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+		}
+		// 2. Fall back to cookie auth.
+		h.middleware.RequireAuth(next).ServeHTTP(w, r)
+	})
+}
+
+// bearerTokenFromHeader extracts the Bearer token from the Authorization header.
+func bearerTokenFromHeader(r *http.Request) (string, error) {
+	hdr := r.Header.Get("Authorization")
+	if hdr == "" {
+		return "", errors.New("missing authorization header")
+	}
+	const pfx = "Bearer "
+	if !strings.HasPrefix(hdr, pfx) {
+		return "", errors.New("authorization must be Bearer")
+	}
+	tok := strings.TrimSpace(hdr[len(pfx):])
+	if tok == "" {
+		return "", errors.New("empty bearer token")
+	}
+	return tok, nil
 }
 
 // --- DTOs ---
@@ -343,16 +393,21 @@ func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request) (*repoCtx,
 		httpx.WriteError(w, http.StatusNotFound, "repo not found")
 		return nil, false
 	}
-	caller, _ := authdomain.UserFromRequest(r)
-	if repo.Visibility == repodomain.VisibilityPrivate {
-		ok, err := h.canRead(r, caller, repo)
-		if err != nil {
-			httpx.WriteError(w, http.StatusInternalServerError, err.Error())
-			return nil, false
-		}
-		if !ok {
-			httpx.WriteError(w, http.StatusForbidden, "forbidden")
-			return nil, false
+	// Workflow actors (authenticated via hangrix_wf_ token) have
+	// repo-scoped access: the token validation itself already proves
+	// the workflow's right to read the repo.
+	if _, isWF := actor.WorkflowActorFromRequest(r); !isWF {
+		caller, _ := authdomain.UserFromRequest(r)
+		if repo.Visibility == repodomain.VisibilityPrivate {
+			ok, err := h.canRead(r, caller, repo)
+			if err != nil {
+				httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+				return nil, false
+			}
+			if !ok {
+				httpx.WriteError(w, http.StatusForbidden, "forbidden")
+				return nil, false
+			}
 		}
 	}
 	fsPath, err := h.storage.ResolvePath(repo.OwnerName, repo.Name)
@@ -940,8 +995,17 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 	if req.Line < 0 {
 		req.Line = 0
 	}
-	caller, _ := authdomain.UserFromRequest(r)
-	c, err := h.issues.CreateComment(r.Context(), iss.ID, caller.ID, body, strings.TrimSpace(req.FilePath), req.Line)
+	// Determine author: workflow actors write with authorID=0
+	// (attributed via actor ref), human users use their own ID.
+	var authorID int64
+	if wfActor, isWF := actor.WorkflowActorFromRequest(r); isWF {
+		authorID = 0 // workflow-authored
+		_ = wfActor // actor ref set on the comment via CreateComment
+	} else {
+		caller, _ := authdomain.UserFromRequest(r)
+		authorID = caller.ID
+	}
+	c, err := h.issues.CreateComment(r.Context(), iss.ID, authorID, body, strings.TrimSpace(req.FilePath), req.Line)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -991,8 +1055,10 @@ func (h *Handler) fireCommentTriggers(r *http.Request, rc *repoCtx, iss *domain.
 		return
 	}
 	ctx := r.Context()
+	// Workflow-authenticated comments are allowed; no user caller.
+	_, isWF := actor.WorkflowActorFromRequest(r)
 	caller, _ := authdomain.UserFromRequest(r)
-	if caller == nil {
+	if caller == nil && !isWF {
 		// createComment requires auth — this path is defensive.
 		return
 	}
