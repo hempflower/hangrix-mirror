@@ -92,16 +92,6 @@ func (r *PostgresRepo) CreateRun(ctx context.Context, params domain.CreateRunPar
 		trigWfID = pgtype.Int8{Int64: params.TriggerActor.WorkflowRunID, Valid: true}
 	}
 
-	// Translate run actor to sqlc params.
-	var runUserID pgtype.Int8
-	if params.RunActor.UserID > 0 {
-		runUserID = pgtype.Int8{Int64: params.RunActor.UserID, Valid: true}
-	}
-	var runWfID pgtype.Int8
-	if params.RunActor.WorkflowRunID > 0 {
-		runWfID = pgtype.Int8{Int64: params.RunActor.WorkflowRunID, Valid: true}
-	}
-
 	dbRun, err := r.q.CreateWorkflowRun(ctx, workflowdb.CreateWorkflowRunParams{
 		RepoID:                    params.RepoID,
 		WorkflowName:              params.WorkflowName,
@@ -118,17 +108,26 @@ func (r *PostgresRepo) CreateRun(ctx context.Context, params domain.CreateRunPar
 		TriggerActorRoleKey:       params.TriggerActor.RoleKey,
 		TriggerActorWorkflowRunID: trigWfID,
 		TriggerActorDisplayName:   params.TriggerActor.DisplayName,
-		RunActorKind:              string(params.RunActor.Kind),
-		RunActorUserID:            runUserID,
-		RunActorRoleKey:           params.RunActor.RoleKey,
-		RunActorWorkflowRunID:     runWfID,
-		RunActorDisplayName:       params.RunActor.DisplayName,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("create workflow run: %w", err)
 	}
 
+	// Persist the correct RunActor now that the real run ID is known.
+	runActor := actor.WorkflowRef(dbRun.ID, params.WorkflowName)
+	if err := r.q.SetWorkflowRunActor(ctx, workflowdb.SetWorkflowRunActorParams{
+		RunActorKind:          string(runActor.Kind),
+		RunActorUserID:        pgtype.Int8{Int64: 0, Valid: false},
+		RunActorRoleKey:       runActor.RoleKey,
+		RunActorWorkflowRunID: pgtype.Int8{Int64: runActor.WorkflowRunID, Valid: true},
+		RunActorDisplayName:   runActor.DisplayName,
+		ID:                    dbRun.ID,
+	}); err != nil {
+		return nil, nil, fmt.Errorf("set workflow run actor: %w", err)
+	}
+
 	run := rowToRun(&dbRun)
+	run.RunActor = &runActor
 
 	// Create all job rows
 	jobs := make([]*domain.WorkflowJobRun, 0, len(params.JobDefs))
