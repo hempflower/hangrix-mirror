@@ -170,6 +170,12 @@ Runner 在 `GET /api/runner/tasks` 拉到的 task 载荷中，除 `Env`（sessio
         "assets": [
           {"path": "dist/app.tar.gz", "name": "app-linux-amd64.tar.gz"}
         ]
+      },
+      {
+        "id": "notify",
+        "name": "Notify via comment",
+        "type": "script",
+        "script": "const ctx = hangrix.workflow.getContext();\nawait hangrix.issue.comment({\n  number: ctx.repo.owner === 'acme' ? 1 : 2,\n  content: `Build complete: ${ctx.workflow.sha}`\n});"
       }
     ]
   }
@@ -182,10 +188,12 @@ Runner 在 `GET /api/runner/tasks` 拉到的 task 载荷中，除 `Env`（sessio
 |---|---|---|
 | `run`（默认） | `docker exec bash -lc <run>` | `run` |
 | `release` | 内建：调用平台 release API | `tag`, `notes`, `draft`, `assets[]` |
+| `script` | `docker exec node bootstrap.mjs`（Node.js + hangrix SDK） | `script` |
 
 - `type` 省略或为空时等价于 `"run"`。
 - `release` step 的 `assets[]` 中每项包含 `path`（必填）和 `name`（可选，覆盖上传后的文件名）。文件从当前 checkout/workdir 读取。
 - `release` step 执行成功后将 outputs（`release_id`, `tag`, `draft`, `published`, `release_url`）写入 `/step-result` 回调。
+- `script` step 使用容器内 `node` 运行时执行 JavaScript。脚本通过 `bootstrap.mjs` 桥接获得 `hangrix` SDK（`issue` / `attachment` / `release` / `workflow` / `core` 命名空间）。若容器内无 `node`，step 以 `RuntimePrerequisiteError` 失败。脚本失败分为 `ScriptExecutionError`（JS 异常）和 `PlatformApiError`（API 调用非 2xx）。outputs 通过 `hangrix.workflow.setOutput()` 写入 `$HANGRIX_STEP_OUTPUT_FILE`，随后的 step 可通过 `${{ steps.<id>.outputs.<key> }}` 引用。
 
 ### 回调端点
 

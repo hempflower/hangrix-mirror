@@ -272,14 +272,15 @@ type WorkflowContainer struct {
 }
 
 // WorkflowStep is one step in a workflow job. The Type field discriminates
-// between built-in step kinds: "run" (shell command, the default) and
-// "release" (create/publish a platform release).
+// between built-in step kinds: "run" (shell command, the default),
+// "release" (create/publish a platform release), and "script" (execute
+// JavaScript via Node.js with the hangrix SDK injected).
 type WorkflowStep struct {
 	ID   string `json:"id,omitempty"`
 	Name string `json:"name,omitempty"`
 	// Type is the step kind. Empty / "run" means a shell step; other
-	// values name a built-in typed step (e.g. "release"). The runner
-	// dispatches on this field.
+	// values name a built-in typed step (e.g. "release", "script").
+	// The runner dispatches on this field.
 	Type string `json:"type,omitempty"`
 	// ---- run step fields (Type "" / "run") ----
 	// Run is the shell command. Env is merged over the job/container env;
@@ -288,6 +289,10 @@ type WorkflowStep struct {
 	Run string            `json:"run,omitempty"`
 	Env map[string]string `json:"env,omitempty"`
 	Dir string            `json:"dir,omitempty"`
+	// ---- script step fields (Type "script") ----
+	// Script is the JavaScript source to execute via Node.js. Required
+	// when Type == "script".
+	Script string `json:"script,omitempty"`
 	// With carries the parameters for built-in typed steps (e.g. release's
 	// tag/notes/draft/assets), mirroring GitHub Actions' `with:`. The
 	// runner decodes it per step type — see releaseParamsFromWith.
