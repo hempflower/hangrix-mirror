@@ -198,6 +198,10 @@ type CreateRunParams struct {
 	TriggerPayloadJSON []byte
 	// WorkflowToken is the pre-generated hangrix_wf_ token for this run.
 	WorkflowToken string
+	// TriggerActor is the actor who triggered this workflow run (user, agent, etc.).
+	TriggerActor actor.Ref
+	// RunActor is the workflow run itself as an actor for downstream side effects.
+	RunActor actor.Ref
 }
 
 // JobDefInput is the input bag for a single job within a new workflow run.
