@@ -227,10 +227,12 @@ type StepInput struct {
 	Id   *string // optional step id for ${{ steps.<id>.outputs.<key> }} references
 	Name string
 	// Type discriminates between step kinds. "" and "run" are shell steps;
-	// other values name a built-in typed step (e.g. "release").
+	// other values name a built-in typed step (e.g. "release", "script").
 	Type string `json:"type,omitempty"`
 	// Run is the shell command (only for type=run / type omitted).
 	Run string `json:"run,omitempty"`
+	// Script is the inline script body for type=script steps.
+	Script string `json:"script,omitempty"`
 	// Env is a per-step env map merged over the job/container env at
 	// execution time (only for type=run / type omitted).
 	Env map[string]string `json:"env,omitempty"`

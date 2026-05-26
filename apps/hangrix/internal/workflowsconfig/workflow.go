@@ -91,21 +91,27 @@ type JobDefinition struct {
 const (
 	StepTypeRun     = "run"
 	StepTypeRelease = "release"
+	StepTypeScript  = "script"
 )
 
 // StepDefinition is a single step within a job. The Type field
 // discriminates between run (shell) and built-in typed steps (e.g.
-// release). When Type is empty, the step is treated as type "run".
+// release, script). When Type is empty, the step is treated as type "run".
 type StepDefinition struct {
 	Id   string
 	Name string
-	Type string // "run" (default) or a built-in type like "release"
+	Type string // "run" (default) or a built-in type like "release" / "script"
 	// Run / Env / Dir are the shell-step fields (type=run). Env is merged
 	// over the job/container env; Dir overrides the job working directory
 	// for this step (relative paths resolve against the job workdir).
 	Run string
 	Env map[string]string
 	Dir string
+	// Script is the inline script body for type=script steps.
+	// Mutually exclusive with Run: a script step must have Script
+	// and must not have Run; a run step must have Run and must
+	// not have Script.
+	Script string
 	// With carries parameters for built-in typed steps (e.g. release's
 	// tag/notes/draft/assets), mirroring GitHub Actions' `with:`.
 	// Interpreted per step type by the runner.
