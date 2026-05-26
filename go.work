@@ -4,6 +4,7 @@ use (
 	./apps/hangrix
 	./apps/hangrix-agent
 	./apps/hangrix-runner
+	./pkg/actor
 	./pkg/common
 	./pkg/cryptobox
 	./pkg/ioc

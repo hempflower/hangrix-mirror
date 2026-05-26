@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/hangrix/hangrix/pkg/actor"
 )
 
 // State models the lifecycle. Once an issue is merged the branch is gone
@@ -351,6 +353,9 @@ func jsonUnmarshalPayload(data []byte, v any) error {
 // retroactively rebind open issues. ParentID/ParentNumber wire sub-issues:
 // the child's base branch is set to the parent's issue/<n> branch at create
 // time so merging a child fast-forwards into the parent's branch.
+//
+// Actor is the unified actor model. On read, it is populated from the new
+// actor_* columns first, falling back to legacy AuthorID/AgentRole.
 type Issue struct {
 	ID         int64
 	RepoID     int64
@@ -360,6 +365,7 @@ type Issue struct {
 	// AgentRole is set on agent-created issues. Empty for human-created
 	// issues. Mirrors the same field on Comment and Event.
 	AgentRole      string
+	Actor          actor.Ref
 	Title          string
 	Body           string
 	State          State
@@ -387,12 +393,16 @@ type Issue struct {
 //     empty, AgentRole is the host yaml role key (`backend` /
 //     `reviewer` / …). The CHECK constraint on the column enforces
 //     this XOR at the DB level too.
+//
+// Actor is the unified actor model. On read, it is populated from the new
+// actor_* columns first, falling back to legacy AuthorID/AgentRole.
 type Comment struct {
 	ID         int64
 	IssueID    int64
 	AuthorID   int64
 	AuthorName string
 	AgentRole  string
+	Actor      actor.Ref
 	Body       string
 	FilePath   string
 	Line       int
@@ -415,6 +425,9 @@ type Comment struct {
 //     issue_review_vote.
 //   - System (rare): ActorID == 0, both name fields empty. The legacy
 //     fallback used when no actor is known.
+//
+// Actor is the unified actor model. On read, it is populated from the new
+// actor_* columns first, falling back to legacy ActorID/AgentRole.
 type Event struct {
 	ID        int64
 	IssueID   int64
@@ -423,6 +436,7 @@ type Event struct {
 	ActorID   int64
 	ActorName string
 	AgentRole string
+	Actor     actor.Ref
 	CreatedAt time.Time
 }
 
@@ -544,6 +558,7 @@ type Attachment struct {
 	CommentID        int64
 	AuthorID         int64
 	AgentRole        string
+	Actor            actor.Ref
 	StorageKey       string
 	OriginalName     string
 	DisplayName      string
@@ -632,12 +647,15 @@ func (s ContributionStatus) Terminal() bool {
 // Reviews and votes attach to the branch; the server merges approved
 // branches into the issue branch. Diff stats are computed from the real
 // git diff (DiffMergeBase against the issue branch) at push time.
+// Actor is the unified actor model; for contributions this is always
+// an agent actor derived from AgentRole. AgentRole is kept for ref ACL.
 type Contribution struct {
 	ID              int64
 	RepoID          int64
 	IssueID         int64
 	SessionID       int64
 	AgentRole       string
+	Actor           actor.Ref
 	RefName         string // refs/heads/issue-<N>/<role>[/slug]
 	HeadSHA         string
 	BaseSHA         string // issue head this was last diffed against
