@@ -168,17 +168,17 @@ func (r *PostgresRepo) GetRun(ctx context.Context, id int64) (*domain.WorkflowRu
 	return rowToRun(&dbRun), nil
 }
 
-// GetRunByToken returns the repo_id and status for a workflow run identified
-// by its workflow_token.
-func (r *PostgresRepo) GetRunByToken(ctx context.Context, token string) (int64, domain.RunStatus, error) {
+// GetRunByToken returns id, repo_id, workflow_name, and status for a workflow
+// run identified by its workflow_token.
+func (r *PostgresRepo) GetRunByToken(ctx context.Context, token string) (int64, int64, string, domain.RunStatus, error) {
 	row, err := r.q.GetWorkflowRunByToken(ctx, token)
 	if err != nil {
 		if isNoRows(err) {
-			return 0, "", domain.ErrRunNotFound
+			return 0, 0, "", "", domain.ErrRunNotFound
 		}
-		return 0, "", fmt.Errorf("get workflow run by token: %w", err)
+		return 0, 0, "", "", fmt.Errorf("get workflow run by token: %w", err)
 	}
-	return row.RepoID, domain.RunStatus(row.Status), nil
+	return row.RepoID, row.ID, row.WorkflowName, domain.RunStatus(row.Status), nil
 }
 
 // ListRunsByRepo returns workflow runs for a repo, ordered by created_at DESC.

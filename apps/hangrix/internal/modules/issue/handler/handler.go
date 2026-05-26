@@ -28,6 +28,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hangrix/hangrix/pkg/actor"
+
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/kv"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
@@ -198,6 +200,7 @@ type publicIssue struct {
 	AuthorUsername string `json:"author_username"`
 	// AgentRole is set on agent-created issues; empty for human-created.
 	AgentRole      string     `json:"agent_role,omitempty"`
+	Actor          *actor.Ref `json:"actor,omitempty"`
 	Title          string     `json:"title"`
 	Body           string     `json:"body"`
 	State          string     `json:"state"`
@@ -215,6 +218,11 @@ type publicIssue struct {
 }
 
 func toPublic(i *domain.Issue) publicIssue {
+	var a *actor.Ref
+	if !i.Actor.IsZero() {
+		ref := i.Actor
+		a = &ref
+	}
 	return publicIssue{
 		ID:             i.ID,
 		RepoID:         i.RepoID,
@@ -222,6 +230,7 @@ func toPublic(i *domain.Issue) publicIssue {
 		AuthorID:       i.AuthorID,
 		AuthorUsername: i.AuthorName,
 		AgentRole:      i.AgentRole,
+		Actor:          a,
 		Title:          i.Title,
 		Body:           i.Body,
 		State:          string(i.State),
@@ -237,27 +246,34 @@ func toPublic(i *domain.Issue) publicIssue {
 }
 
 type publicComment struct {
-	ID             int64  `json:"id"`
-	IssueID        int64  `json:"issue_id"`
-	AuthorID       int64  `json:"author_id"`
-	AuthorUsername string `json:"author_username"`
+	ID             int64      `json:"id"`
+	IssueID        int64      `json:"issue_id"`
+	AuthorID       int64      `json:"author_id"`
+	AuthorUsername string     `json:"author_username"`
 	// AgentRole is set on agent-authored comments. Empty for human
 	// comments. The frontend uses it to render a role chip / avatar.
-	AgentRole string    `json:"agent_role,omitempty"`
-	Body      string    `json:"body"`
-	FilePath  string    `json:"file_path"`
-	Line      int       `json:"line"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	AgentRole string     `json:"agent_role,omitempty"`
+	Actor     *actor.Ref `json:"actor,omitempty"`
+	Body      string     `json:"body"`
+	FilePath  string     `json:"file_path"`
+	Line      int        `json:"line"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 func toPublicComment(c *domain.Comment) publicComment {
+	var a *actor.Ref
+	if !c.Actor.IsZero() {
+		ref := c.Actor
+		a = &ref
+	}
 	return publicComment{
 		ID:             c.ID,
 		IssueID:        c.IssueID,
 		AuthorID:       c.AuthorID,
 		AuthorUsername: c.AuthorName,
 		AgentRole:      c.AgentRole,
+		Actor:          a,
 		Body:           c.Body,
 		FilePath:       c.FilePath,
 		Line:           c.Line,
@@ -275,14 +291,20 @@ type publicEvent struct {
 	ActorUsername string          `json:"actor_username"`
 	// AgentRole is set on agent-authored events (review_vote, agent
 	// merges, etc.). Empty for human / system events.
-	AgentRole string    `json:"agent_role,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	AgentRole string     `json:"agent_role,omitempty"`
+	Actor     *actor.Ref `json:"actor,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
 }
 
 func toPublicEvent(e *domain.Event) publicEvent {
 	pl := json.RawMessage(e.Payload)
 	if len(pl) == 0 {
 		pl = json.RawMessage(`{}`)
+	}
+	var a *actor.Ref
+	if !e.Actor.IsZero() {
+		ref := e.Actor
+		a = &ref
 	}
 	return publicEvent{
 		ID:            e.ID,
@@ -292,6 +314,7 @@ func toPublicEvent(e *domain.Event) publicEvent {
 		ActorID:       e.ActorID,
 		ActorUsername: e.ActorName,
 		AgentRole:     e.AgentRole,
+		Actor:         a,
 		CreatedAt:     e.CreatedAt,
 	}
 }
@@ -1392,6 +1415,7 @@ type publicContribution struct {
 	IssueID         int64      `json:"issue_id"`
 	SessionID       int64      `json:"session_id"`
 	AgentRole       string     `json:"agent_role"`
+	Actor           *actor.Ref `json:"actor,omitempty"`
 	RefName         string     `json:"ref_name"`
 	HeadSHA         string     `json:"head_sha"`
 	BaseSHA         string     `json:"base_sha"`
@@ -1411,11 +1435,17 @@ type publicContribution struct {
 }
 
 func toPublicContribution(c *domain.Contribution) publicContribution {
+	var a *actor.Ref
+	if !c.Actor.IsZero() {
+		ref := c.Actor
+		a = &ref
+	}
 	return publicContribution{
 		ID:              c.ID,
 		IssueID:         c.IssueID,
 		SessionID:       c.SessionID,
 		AgentRole:       c.AgentRole,
+		Actor:           a,
 		RefName:         c.RefName,
 		HeadSHA:         c.HeadSHA,
 		BaseSHA:         c.BaseSHA,

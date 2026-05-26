@@ -14,9 +14,12 @@ import (
 	"path/filepath"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
+	"github.com/hangrix/hangrix/pkg/actor"
+
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/infra/releasedb"
@@ -50,14 +53,27 @@ func NewPostgresStore(deps *PostgresStoreDeps) *PostgresStore {
 	return &PostgresStore{q: releasedb.New(deps.Pool)}
 }
 
-func (s *PostgresStore) Create(ctx context.Context, repoID int64, tagName, targetCommitSHA, title, notes string) (*domain.Release, error) {
+func (s *PostgresStore) Create(ctx context.Context, repoID int64, tagName, targetCommitSHA, title, notes string, createdActor actor.Ref) (*domain.Release, error) {
+	var createdUserID pgtype.Int8
+	if createdActor.UserID > 0 {
+		createdUserID = pgtype.Int8{Int64: createdActor.UserID, Valid: true}
+	}
+	var createdWfID pgtype.Int8
+	if createdActor.WorkflowRunID > 0 {
+		createdWfID = pgtype.Int8{Int64: createdActor.WorkflowRunID, Valid: true}
+	}
 	row, err := s.q.CreateRelease(ctx, releasedb.CreateReleaseParams{
-		RepoID:          repoID,
-		TagName:         tagName,
-		TargetCommitSha: targetCommitSHA,
-		Title:           title,
-		Notes:           notes,
-		IsDraft:         true,
+		RepoID:                      repoID,
+		TagName:                     tagName,
+		TargetCommitSha:             targetCommitSHA,
+		Title:                       title,
+		Notes:                       notes,
+		IsDraft:                     true,
+		CreatedActorKind:            string(createdActor.Kind),
+		CreatedActorUserID:          createdUserID,
+		CreatedActorRoleKey:         createdActor.RoleKey,
+		CreatedActorWorkflowRunID:   createdWfID,
+		CreatedActorDisplayName:     createdActor.DisplayName,
 	})
 	if err != nil {
 		if database.IsUniqueViolation(err) {
@@ -157,8 +173,23 @@ func (s *PostgresStore) Update(ctx context.Context, id int64, tagName, targetCom
 	return rowToRelease(row), nil
 }
 
-func (s *PostgresStore) Publish(ctx context.Context, id int64) (*domain.Release, error) {
-	row, err := s.q.PublishRelease(ctx, id)
+func (s *PostgresStore) Publish(ctx context.Context, id int64, publishedActor actor.Ref) (*domain.Release, error) {
+	var pubUserID pgtype.Int8
+	if publishedActor.UserID > 0 {
+		pubUserID = pgtype.Int8{Int64: publishedActor.UserID, Valid: true}
+	}
+	var pubWfID pgtype.Int8
+	if publishedActor.WorkflowRunID > 0 {
+		pubWfID = pgtype.Int8{Int64: publishedActor.WorkflowRunID, Valid: true}
+	}
+	row, err := s.q.PublishRelease(ctx, releasedb.PublishReleaseParams{
+		ID:                            id,
+		PublishedActorKind:            string(publishedActor.Kind),
+		PublishedActorUserID:          pubUserID,
+		PublishedActorRoleKey:         publishedActor.RoleKey,
+		PublishedActorWorkflowRunID:   pubWfID,
+		PublishedActorDisplayName:     publishedActor.DisplayName,
+	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrReleaseNotDraft
@@ -192,13 +223,26 @@ func NewPostgresAssetStore(deps *PostgresAssetStoreDeps) *PostgresAssetStore {
 	return &PostgresAssetStore{q: releasedb.New(deps.Pool)}
 }
 
-func (s *PostgresAssetStore) Create(ctx context.Context, releaseID int64, name, contentType string, sizeBytes int64, storageKey string) (*domain.Asset, error) {
+func (s *PostgresAssetStore) Create(ctx context.Context, releaseID int64, name, contentType string, sizeBytes int64, storageKey string, uploadedActor actor.Ref) (*domain.Asset, error) {
+	var upUserID pgtype.Int8
+	if uploadedActor.UserID > 0 {
+		upUserID = pgtype.Int8{Int64: uploadedActor.UserID, Valid: true}
+	}
+	var upWfID pgtype.Int8
+	if uploadedActor.WorkflowRunID > 0 {
+		upWfID = pgtype.Int8{Int64: uploadedActor.WorkflowRunID, Valid: true}
+	}
 	row, err := s.q.CreateAsset(ctx, releasedb.CreateAssetParams{
-		ReleaseID:   releaseID,
-		Name:        name,
-		ContentType: contentType,
-		SizeBytes:   sizeBytes,
-		StorageKey:  storageKey,
+		ReleaseID:                    releaseID,
+		Name:                         name,
+		ContentType:                  contentType,
+		SizeBytes:                    sizeBytes,
+		StorageKey:                   storageKey,
+		UploadedActorKind:            string(uploadedActor.Kind),
+		UploadedActorUserID:          upUserID,
+		UploadedActorRoleKey:         uploadedActor.RoleKey,
+		UploadedActorWorkflowRunID:   upWfID,
+		UploadedActorDisplayName:     uploadedActor.DisplayName,
 	})
 	if err != nil {
 		if database.IsUniqueViolation(err) {
@@ -308,8 +352,22 @@ func rowToRelease(r releasedb.Release) *domain.Release {
 		Title:           r.Title,
 		Notes:           r.Notes,
 		IsDraft:         r.IsDraft,
-		CreatedAt:       r.CreatedAt.Time,
-		UpdatedAt:       r.UpdatedAt.Time,
+		CreatedActor: actor.Ref{
+			Kind:          actor.Kind(r.CreatedActorKind),
+			DisplayName:   r.CreatedActorDisplayName,
+			UserID:        r.CreatedActorUserID.Int64,
+			RoleKey:       r.CreatedActorRoleKey,
+			WorkflowRunID: r.CreatedActorWorkflowRunID.Int64,
+		},
+		PublishedActor: actor.Ref{
+			Kind:          actor.Kind(r.PublishedActorKind),
+			DisplayName:   r.PublishedActorDisplayName,
+			UserID:        r.PublishedActorUserID.Int64,
+			RoleKey:       r.PublishedActorRoleKey,
+			WorkflowRunID: r.PublishedActorWorkflowRunID.Int64,
+		},
+		CreatedAt: r.CreatedAt.Time,
+		UpdatedAt: r.UpdatedAt.Time,
 	}
 	if r.PublishedAt.Valid {
 		out.PublishedAt = r.PublishedAt.Time
@@ -326,6 +384,13 @@ func rowToAsset(r releasedb.ReleaseAsset) *domain.Asset {
 		ContentType: r.ContentType,
 		SizeBytes:   r.SizeBytes,
 		StorageKey:  r.StorageKey,
-		CreatedAt:   r.CreatedAt.Time,
+		UploadedActor: actor.Ref{
+			Kind:          actor.Kind(r.UploadedActorKind),
+			DisplayName:   r.UploadedActorDisplayName,
+			UserID:        r.UploadedActorUserID.Int64,
+			RoleKey:       r.UploadedActorRoleKey,
+			WorkflowRunID: r.UploadedActorWorkflowRunID.Int64,
+		},
+		CreatedAt: r.CreatedAt.Time,
 	}
 }

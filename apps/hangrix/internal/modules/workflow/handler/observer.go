@@ -79,6 +79,8 @@ func (o *PushObserver) PostReceive(ctx context.Context, repo *repodomain.Repo, f
 				"branch":        branch,
 				"commit_sha":    u.NewSHA,
 				"changed_paths": changedPaths,
+				"pusher_user_id": pusher.UserID,
+				"pusher_agent_role": pusher.AgentRole,
 			})
 
 			o.svc.DispatchRepoPush(ctx,

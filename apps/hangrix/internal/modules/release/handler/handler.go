@@ -16,6 +16,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hangrix/hangrix/pkg/actor"
+
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
@@ -84,13 +86,18 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 // authGate is a middleware that tries workflow token auth first, then falls
 // back to cookie-based session auth. This allows workflow containers to call
 // the release API with a Bearer token without needing a session cookie.
+// When a workflow token is validated the workflow actor is stored in the
+// request context so that downstream write paths (e.g. create / publish)
+// attribute side effects to the correct workflow actor.
 func (h *Handler) authGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 1. Try workflow token (Bearer hangrix_wf_...).
 		if h.wfTokenValidator != nil {
 			tok, err := bearerTokenFromHeader(r)
 			if err == nil && strings.HasPrefix(tok, "hangrix_wf_") {
-				if _, err := h.wfTokenValidator.ValidateWorkflowToken(r.Context(), tok); err == nil {
+				_, wfActor, err := h.wfTokenValidator.ValidateWorkflowTokenWithActor(r.Context(), tok)
+				if err == nil {
+					r = actor.WithWorkflowActor(r, wfActor)
 					next.ServeHTTP(w, r)
 					return
 				}
@@ -111,6 +118,8 @@ type publicRelease struct {
 	Title           string          `json:"title"`
 	Notes           string          `json:"notes"`
 	IsDraft         bool            `json:"is_draft"`
+	CreatedActor    actor.Ref       `json:"created_actor"`
+	PublishedActor  *actor.Ref      `json:"published_actor,omitempty"`
 	PublishedAt     *time.Time      `json:"published_at"`
 	CreatedAt       time.Time       `json:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at"`
@@ -147,12 +156,17 @@ func toPublicRelease(repo *repodomain.Repo, rel *releasedomain.Release, assets [
 		Title:           rel.Title,
 		Notes:           rel.Notes,
 		IsDraft:         rel.IsDraft,
+		CreatedActor:    rel.CreatedActor,
 		CreatedAt:       rel.CreatedAt,
 		UpdatedAt:       rel.UpdatedAt,
 		SourceArchives: []sourceArchive{
 			{Format: "zip", URL: fmt.Sprintf("/api/repos/%s/%s/archive/%s.zip", repo.OwnerName, repo.Name, rel.TagName)},
 			{Format: "tar.gz", URL: fmt.Sprintf("/api/repos/%s/%s/archive/%s.tar.gz", repo.OwnerName, repo.Name, rel.TagName)},
 		},
+	}
+	if !rel.PublishedActor.IsZero() {
+		a := rel.PublishedActor
+		pr.PublishedActor = &a
 	}
 	if !rel.PublishedAt.IsZero() {
 		t := rel.PublishedAt
@@ -257,7 +271,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rel, err := h.store.Create(r.Context(), repo.ID, req.TagName, sha, req.Title, req.Notes)
+	rel, err := h.store.Create(r.Context(), repo.ID, req.TagName, sha, req.Title, req.Notes, requestActor(r))
 	if err != nil {
 		if errors.Is(err, releasedomain.ErrReleaseConflict) {
 			httpx.WriteError(w, http.StatusConflict, "a release for this tag already exists")
@@ -442,7 +456,7 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	published, err := h.store.Publish(r.Context(), id)
+	published, err := h.store.Publish(r.Context(), id, requestActor(r))
 	if err != nil {
 		if errors.Is(err, releasedomain.ErrReleaseNotDraft) {
 			httpx.WriteError(w, http.StatusBadRequest, "release is already published")
@@ -508,7 +522,7 @@ func (h *Handler) uploadAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.assets.Create(r.Context(), rel.ID, name, contentType, sizeBytes, storageKey)
+	_, err = h.assets.Create(r.Context(), rel.ID, name, contentType, sizeBytes, storageKey, requestActor(r))
 	if err != nil {
 		if errors.Is(err, releasedomain.ErrAssetConflict) {
 			_ = h.storage.Remove(storageKey)
@@ -795,4 +809,17 @@ func canWriteRepo(ctx context.Context, orgResolver orgdomain.Resolver, caller *u
 		return role == orgdomain.RoleOwner, nil
 	}
 	return false, nil
+}
+
+// requestActor derives an actor.Ref from the request, preferring workflow
+// actor (set by authGate for hangrix_wf_ tokens) over authenticated user,
+// falling back to system actor when neither is present.
+func requestActor(r *http.Request) actor.Ref {
+	if wf, ok := actor.WorkflowActorFromRequest(r); ok {
+		return wf
+	}
+	if u, ok := authdomain.UserFromRequest(r); ok {
+		return actor.UserRef(u.ID, u.Username)
+	}
+	return actor.SystemRef()
 }

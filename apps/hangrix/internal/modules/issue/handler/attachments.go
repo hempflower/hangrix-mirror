@@ -9,6 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hangrix/hangrix/pkg/actor"
+
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
@@ -228,6 +230,7 @@ type publicAttachment struct {
 	CommentID        int64      `json:"comment_id"`
 	AuthorID         int64      `json:"author_id"`
 	AgentRole        string     `json:"agent_role,omitempty"`
+	Actor            *actor.Ref `json:"actor,omitempty"`
 	OriginalName     string     `json:"original_name"`
 	DisplayName      string     `json:"display_name"`
 	SizeBytes        int64      `json:"size_bytes"`
@@ -254,6 +257,11 @@ func toPublicAttachment(owner, repoName string, issueNumber int64, a *domain.Att
 	default:
 		markdownSnippet = fmt.Sprintf("[attachment:%d]", a.ID)
 	}
+	var act *actor.Ref
+	if !a.Actor.IsZero() {
+		ref := a.Actor
+		act = &ref
+	}
 	out := publicAttachment{
 		ID:               a.ID,
 		RepoID:           a.RepoID,
@@ -261,6 +269,7 @@ func toPublicAttachment(owner, repoName string, issueNumber int64, a *domain.Att
 		CommentID:        a.CommentID,
 		AuthorID:         a.AuthorID,
 		AgentRole:        a.AgentRole,
+		Actor:            act,
 		OriginalName:     a.OriginalName,
 		DisplayName:      a.DisplayName,
 		SizeBytes:        a.SizeBytes,
