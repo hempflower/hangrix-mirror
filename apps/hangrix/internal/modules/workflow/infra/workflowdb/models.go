@@ -188,19 +188,29 @@ type WorkflowJobRun struct {
 }
 
 type WorkflowRun struct {
-	ID                    int64
-	RepoID                int64
-	WorkflowName          string
-	SourceFile            string
-	Status                string
-	EventName             string
-	CauseID               pgtype.Int8
-	Ref                   string
-	CommitSha             string
-	ContainerSnapshotJson []byte
-	TriggerPayloadJson    []byte
-	StartedAt             pgtype.Timestamptz
-	FinishedAt            pgtype.Timestamptz
-	CreatedAt             pgtype.Timestamptz
-	WorkflowToken         string
+	ID                        int64
+	RepoID                    int64
+	WorkflowName              string
+	SourceFile                string
+	Status                    string
+	EventName                 string
+	CauseID                   pgtype.Int8
+	Ref                       string
+	CommitSha                 string
+	ContainerSnapshotJson     []byte
+	TriggerPayloadJson        []byte
+	StartedAt                 pgtype.Timestamptz
+	FinishedAt                pgtype.Timestamptz
+	CreatedAt                 pgtype.Timestamptz
+	WorkflowToken             string
+	TriggerActorKind          string
+	TriggerActorUserID        pgtype.Int8
+	TriggerActorRoleKey       string
+	TriggerActorWorkflowRunID pgtype.Int8
+	TriggerActorDisplayName   string
+	RunActorKind              string
+	RunActorUserID            pgtype.Int8
+	RunActorRoleKey           string
+	RunActorWorkflowRunID     pgtype.Int8
+	RunActorDisplayName       string
 }

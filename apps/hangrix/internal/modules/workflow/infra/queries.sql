@@ -7,13 +7,21 @@
 INSERT INTO workflow_runs (
     repo_id, workflow_name, source_file, status, event_name,
     cause_id, ref, commit_sha, container_snapshot_json, trigger_payload_json,
-    workflow_token
+    workflow_token,
+    trigger_actor_kind, trigger_actor_user_id, trigger_actor_role_key,
+    trigger_actor_workflow_run_id, trigger_actor_display_name,
+    run_actor_kind, run_actor_user_id, run_actor_role_key,
+    run_actor_workflow_run_id, run_actor_display_name
 ) VALUES (
     sqlc.arg('repo_id'), sqlc.arg('workflow_name'), sqlc.arg('source_file'),
     'pending', sqlc.arg('event_name'),
     sqlc.narg('cause_id'), sqlc.arg('ref'), sqlc.arg('commit_sha'),
     sqlc.narg('container_snapshot_json'), sqlc.narg('trigger_payload_json'),
-    sqlc.arg('workflow_token')
+    sqlc.arg('workflow_token'),
+    sqlc.arg('trigger_actor_kind'), sqlc.narg('trigger_actor_user_id'), sqlc.arg('trigger_actor_role_key'),
+    sqlc.narg('trigger_actor_workflow_run_id'), sqlc.arg('trigger_actor_display_name'),
+    sqlc.arg('run_actor_kind'), sqlc.narg('run_actor_user_id'), sqlc.arg('run_actor_role_key'),
+    sqlc.narg('run_actor_workflow_run_id'), sqlc.arg('run_actor_display_name')
 ) RETURNING *;
 
 -- name: GetWorkflowRunByToken :one

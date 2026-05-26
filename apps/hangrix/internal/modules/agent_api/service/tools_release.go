@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hangrix/hangrix/pkg/actor"
+
 	agentapidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_api/domain"
 	releasedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
@@ -67,7 +69,7 @@ func (r *Registry) releaseCreateTool() *agentapidomain.Tool {
 				return errorResult("tag not found: " + tagName), nil
 			}
 
-			rel, err := r.deps.Releases.Create(ctx, scope.repo.ID, tagName, sha, title, req.Notes)
+			rel, err := r.deps.Releases.Create(ctx, scope.repo.ID, tagName, sha, title, req.Notes, actor.AgentRef(sess.RoleKey))
 			if err != nil {
 				return errorResult("create release: " + err.Error()), nil
 			}
@@ -166,7 +168,7 @@ func (r *Registry) releaseUploadAssetTool() *agentapidomain.Tool {
 				return errorResult("store asset: " + err.Error()), nil
 			}
 
-			_, err = r.deps.ReleaseAssets.Create(ctx, req.ReleaseID, req.Name, req.ContentType, sizeBytes, storageKey)
+			_, err = r.deps.ReleaseAssets.Create(ctx, req.ReleaseID, req.Name, req.ContentType, sizeBytes, storageKey, actor.AgentRef(sess.RoleKey))
 			if err != nil {
 				_ = r.deps.AssetStorage.Remove(storageKey)
 				if errors.Is(err, releasedomain.ErrAssetConflict) {
@@ -227,7 +229,7 @@ func (r *Registry) releasePublishTool() *agentapidomain.Tool {
 				return errorResult("release not in this repo"), nil
 			}
 
-			pub, err := r.deps.Releases.Publish(ctx, req.ReleaseID)
+			pub, err := r.deps.Releases.Publish(ctx, req.ReleaseID, actor.AgentRef(sess.RoleKey))
 			if err != nil {
 				return errorResult("publish: " + err.Error()), nil
 			}

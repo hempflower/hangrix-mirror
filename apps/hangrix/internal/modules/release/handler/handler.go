@@ -16,6 +16,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hangrix/hangrix/pkg/actor"
+
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
@@ -257,7 +259,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rel, err := h.store.Create(r.Context(), repo.ID, req.TagName, sha, req.Title, req.Notes)
+	rel, err := h.store.Create(r.Context(), repo.ID, req.TagName, sha, req.Title, req.Notes, requestActor(r))
 	if err != nil {
 		if errors.Is(err, releasedomain.ErrReleaseConflict) {
 			httpx.WriteError(w, http.StatusConflict, "a release for this tag already exists")
@@ -442,7 +444,7 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	published, err := h.store.Publish(r.Context(), id)
+	published, err := h.store.Publish(r.Context(), id, requestActor(r))
 	if err != nil {
 		if errors.Is(err, releasedomain.ErrReleaseNotDraft) {
 			httpx.WriteError(w, http.StatusBadRequest, "release is already published")
@@ -508,7 +510,7 @@ func (h *Handler) uploadAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.assets.Create(r.Context(), rel.ID, name, contentType, sizeBytes, storageKey)
+	_, err = h.assets.Create(r.Context(), rel.ID, name, contentType, sizeBytes, storageKey, requestActor(r))
 	if err != nil {
 		if errors.Is(err, releasedomain.ErrAssetConflict) {
 			_ = h.storage.Remove(storageKey)
@@ -795,4 +797,13 @@ func canWriteRepo(ctx context.Context, orgResolver orgdomain.Resolver, caller *u
 		return role == orgdomain.RoleOwner, nil
 	}
 	return false, nil
+}
+
+// requestActor derives an actor.Ref from the authenticated user in the request.
+// Falls back to system actor when no user is found (e.g. workflow token auth).
+func requestActor(r *http.Request) actor.Ref {
+	if u, ok := authdomain.UserFromRequest(r); ok {
+		return actor.UserRef(u.ID, u.Username)
+	}
+	return actor.SystemRef()
 }

@@ -6,6 +6,7 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-git/go-git/v5 v5.19.0
+	github.com/hangrix/hangrix/pkg/actor v0.0.0
 	github.com/hangrix/hangrix/pkg/common v0.0.0
 	github.com/hangrix/hangrix/pkg/cryptobox v0.0.0
 	github.com/hangrix/hangrix/pkg/ioc v0.0.0
@@ -77,6 +78,7 @@ require (
 )
 
 replace (
+	github.com/hangrix/hangrix/pkg/actor => ../../pkg/actor
 	github.com/hangrix/hangrix/pkg/common => ../../pkg/common
 	github.com/hangrix/hangrix/pkg/cryptobox => ../../pkg/cryptobox
 	github.com/hangrix/hangrix/pkg/ioc => ../../pkg/ioc

@@ -7,4 +7,5 @@ use (
 	./pkg/common
 	./pkg/cryptobox
 	./pkg/ioc
+	./pkg/actor
 )

@@ -151,27 +151,45 @@ const createWorkflowRun = `-- name: CreateWorkflowRun :one
 INSERT INTO workflow_runs (
     repo_id, workflow_name, source_file, status, event_name,
     cause_id, ref, commit_sha, container_snapshot_json, trigger_payload_json,
-    workflow_token
+    workflow_token,
+    trigger_actor_kind, trigger_actor_user_id, trigger_actor_role_key,
+    trigger_actor_workflow_run_id, trigger_actor_display_name,
+    run_actor_kind, run_actor_user_id, run_actor_role_key,
+    run_actor_workflow_run_id, run_actor_display_name
 ) VALUES (
     $1, $2, $3,
     'pending', $4,
     $5, $6, $7,
     $8, $9,
-    $10
-) RETURNING id, repo_id, workflow_name, source_file, status, event_name, cause_id, ref, commit_sha, container_snapshot_json, trigger_payload_json, started_at, finished_at, created_at, workflow_token
+    $10,
+    $11, $12, $13,
+    $14, $15,
+    $16, $17, $18,
+    $19, $20
+) RETURNING id, repo_id, workflow_name, source_file, status, event_name, cause_id, ref, commit_sha, container_snapshot_json, trigger_payload_json, started_at, finished_at, created_at, workflow_token, trigger_actor_kind, trigger_actor_user_id, trigger_actor_role_key, trigger_actor_workflow_run_id, trigger_actor_display_name, run_actor_kind, run_actor_user_id, run_actor_role_key, run_actor_workflow_run_id, run_actor_display_name
 `
 
 type CreateWorkflowRunParams struct {
-	RepoID                int64
-	WorkflowName          string
-	SourceFile            string
-	EventName             string
-	CauseID               pgtype.Int8
-	Ref                   string
-	CommitSha             string
-	ContainerSnapshotJson []byte
-	TriggerPayloadJson    []byte
-	WorkflowToken         string
+	RepoID                    int64
+	WorkflowName              string
+	SourceFile                string
+	EventName                 string
+	CauseID                   pgtype.Int8
+	Ref                       string
+	CommitSha                 string
+	ContainerSnapshotJson     []byte
+	TriggerPayloadJson        []byte
+	WorkflowToken             string
+	TriggerActorKind          string
+	TriggerActorUserID        pgtype.Int8
+	TriggerActorRoleKey       string
+	TriggerActorWorkflowRunID pgtype.Int8
+	TriggerActorDisplayName   string
+	RunActorKind              string
+	RunActorUserID            pgtype.Int8
+	RunActorRoleKey           string
+	RunActorWorkflowRunID     pgtype.Int8
+	RunActorDisplayName       string
 }
 
 // Workflow module queries.
@@ -189,6 +207,16 @@ func (q *Queries) CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunPa
 		arg.ContainerSnapshotJson,
 		arg.TriggerPayloadJson,
 		arg.WorkflowToken,
+		arg.TriggerActorKind,
+		arg.TriggerActorUserID,
+		arg.TriggerActorRoleKey,
+		arg.TriggerActorWorkflowRunID,
+		arg.TriggerActorDisplayName,
+		arg.RunActorKind,
+		arg.RunActorUserID,
+		arg.RunActorRoleKey,
+		arg.RunActorWorkflowRunID,
+		arg.RunActorDisplayName,
 	)
 	var i WorkflowRun
 	err := row.Scan(
@@ -207,6 +235,16 @@ func (q *Queries) CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunPa
 		&i.FinishedAt,
 		&i.CreatedAt,
 		&i.WorkflowToken,
+		&i.TriggerActorKind,
+		&i.TriggerActorUserID,
+		&i.TriggerActorRoleKey,
+		&i.TriggerActorWorkflowRunID,
+		&i.TriggerActorDisplayName,
+		&i.RunActorKind,
+		&i.RunActorUserID,
+		&i.RunActorRoleKey,
+		&i.RunActorWorkflowRunID,
+		&i.RunActorDisplayName,
 	)
 	return i, err
 }
@@ -244,7 +282,7 @@ func (q *Queries) GetWorkflowJobRun(ctx context.Context, id int64) (WorkflowJobR
 }
 
 const getWorkflowRun = `-- name: GetWorkflowRun :one
-SELECT id, repo_id, workflow_name, source_file, status, event_name, cause_id, ref, commit_sha, container_snapshot_json, trigger_payload_json, started_at, finished_at, created_at, workflow_token FROM workflow_runs WHERE id = $1
+SELECT id, repo_id, workflow_name, source_file, status, event_name, cause_id, ref, commit_sha, container_snapshot_json, trigger_payload_json, started_at, finished_at, created_at, workflow_token, trigger_actor_kind, trigger_actor_user_id, trigger_actor_role_key, trigger_actor_workflow_run_id, trigger_actor_display_name, run_actor_kind, run_actor_user_id, run_actor_role_key, run_actor_workflow_run_id, run_actor_display_name FROM workflow_runs WHERE id = $1
 `
 
 func (q *Queries) GetWorkflowRun(ctx context.Context, id int64) (WorkflowRun, error) {
@@ -266,6 +304,16 @@ func (q *Queries) GetWorkflowRun(ctx context.Context, id int64) (WorkflowRun, er
 		&i.FinishedAt,
 		&i.CreatedAt,
 		&i.WorkflowToken,
+		&i.TriggerActorKind,
+		&i.TriggerActorUserID,
+		&i.TriggerActorRoleKey,
+		&i.TriggerActorWorkflowRunID,
+		&i.TriggerActorDisplayName,
+		&i.RunActorKind,
+		&i.RunActorUserID,
+		&i.RunActorRoleKey,
+		&i.RunActorWorkflowRunID,
+		&i.RunActorDisplayName,
 	)
 	return i, err
 }
@@ -385,7 +433,7 @@ func (q *Queries) ListWorkflowJobRunsByRun(ctx context.Context, workflowRunID in
 }
 
 const listWorkflowRunsByRepo = `-- name: ListWorkflowRunsByRepo :many
-SELECT id, repo_id, workflow_name, source_file, status, event_name, cause_id, ref, commit_sha, container_snapshot_json, trigger_payload_json, started_at, finished_at, created_at, workflow_token, COUNT(*) OVER() AS total_count
+SELECT id, repo_id, workflow_name, source_file, status, event_name, cause_id, ref, commit_sha, container_snapshot_json, trigger_payload_json, started_at, finished_at, created_at, workflow_token, trigger_actor_kind, trigger_actor_user_id, trigger_actor_role_key, trigger_actor_workflow_run_id, trigger_actor_display_name, run_actor_kind, run_actor_user_id, run_actor_role_key, run_actor_workflow_run_id, run_actor_display_name, COUNT(*) OVER() AS total_count
 FROM workflow_runs
 WHERE repo_id = $1
   AND ($2 = '' OR workflow_name = $2)
@@ -401,22 +449,32 @@ type ListWorkflowRunsByRepoParams struct {
 }
 
 type ListWorkflowRunsByRepoRow struct {
-	ID                    int64
-	RepoID                int64
-	WorkflowName          string
-	SourceFile            string
-	Status                string
-	EventName             string
-	CauseID               pgtype.Int8
-	Ref                   string
-	CommitSha             string
-	ContainerSnapshotJson []byte
-	TriggerPayloadJson    []byte
-	StartedAt             pgtype.Timestamptz
-	FinishedAt            pgtype.Timestamptz
-	CreatedAt             pgtype.Timestamptz
-	WorkflowToken         string
-	TotalCount            int64
+	ID                        int64
+	RepoID                    int64
+	WorkflowName              string
+	SourceFile                string
+	Status                    string
+	EventName                 string
+	CauseID                   pgtype.Int8
+	Ref                       string
+	CommitSha                 string
+	ContainerSnapshotJson     []byte
+	TriggerPayloadJson        []byte
+	StartedAt                 pgtype.Timestamptz
+	FinishedAt                pgtype.Timestamptz
+	CreatedAt                 pgtype.Timestamptz
+	WorkflowToken             string
+	TriggerActorKind          string
+	TriggerActorUserID        pgtype.Int8
+	TriggerActorRoleKey       string
+	TriggerActorWorkflowRunID pgtype.Int8
+	TriggerActorDisplayName   string
+	RunActorKind              string
+	RunActorUserID            pgtype.Int8
+	RunActorRoleKey           string
+	RunActorWorkflowRunID     pgtype.Int8
+	RunActorDisplayName       string
+	TotalCount                int64
 }
 
 func (q *Queries) ListWorkflowRunsByRepo(ctx context.Context, arg ListWorkflowRunsByRepoParams) ([]ListWorkflowRunsByRepoRow, error) {
@@ -449,6 +507,16 @@ func (q *Queries) ListWorkflowRunsByRepo(ctx context.Context, arg ListWorkflowRu
 			&i.FinishedAt,
 			&i.CreatedAt,
 			&i.WorkflowToken,
+			&i.TriggerActorKind,
+			&i.TriggerActorUserID,
+			&i.TriggerActorRoleKey,
+			&i.TriggerActorWorkflowRunID,
+			&i.TriggerActorDisplayName,
+			&i.RunActorKind,
+			&i.RunActorUserID,
+			&i.RunActorRoleKey,
+			&i.RunActorWorkflowRunID,
+			&i.RunActorDisplayName,
 			&i.TotalCount,
 		); err != nil {
 			return nil, err

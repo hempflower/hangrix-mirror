@@ -15,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/hangrix/hangrix/pkg/actor"
+
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/infra/issuedb"
@@ -77,6 +79,9 @@ func (s *PostgresStore) Create(ctx context.Context, repoID, authorID int64, titl
 		authorArg = pgtype.Int8{Int64: authorID, Valid: true}
 	}
 
+	// Compute unified actor for dual-write.
+	issueActor := issueActorRef(authorID, agentRole)
+
 	var parentArg pgtype.Int8
 	if parentID > 0 {
 		parentArg = pgtype.Int8{Int64: parentID, Valid: true}
@@ -92,6 +97,12 @@ func (s *PostgresStore) Create(ctx context.Context, repoID, authorID int64, titl
 		BaseBranch:   baseBranch,
 		ParentID:     parentArg,
 		ParentNumber: parentNumber,
+		// Dual-write actor columns.
+		ActorKind:          string(issueActor.Kind),
+		ActorUserID:        int8FromInt64(issueActor.UserID),
+		ActorRoleKey:       issueActor.RoleKey,
+		ActorWorkflowRunID: int8FromInt64(issueActor.WorkflowRunID),
+		ActorDisplayName:   issueActor.DisplayName,
 	}); err != nil {
 		return nil, fmt.Errorf("issue: insert: %w", err)
 	}
@@ -211,6 +222,7 @@ func (s *PostgresStore) ListOpenIssueNumbers(ctx context.Context, repoID int64) 
 // FKs into users; agent_role is implicitly the empty string. The CHECK
 // constraint enforces this XOR at the DB level too.
 func (s *PostgresStore) CreateComment(ctx context.Context, issueID, authorID int64, body, filePath string, line int) (*domain.Comment, error) {
+	commentActor := commentActorRef(authorID, "")
 	row, err := s.q.CreateComment(ctx, issuedb.CreateCommentParams{
 		IssueID:   issueID,
 		AuthorID:  pgtype.Int8{Int64: authorID, Valid: true},
@@ -218,6 +230,12 @@ func (s *PostgresStore) CreateComment(ctx context.Context, issueID, authorID int
 		Body:      body,
 		FilePath:  filePath,
 		Line:      int32(line),
+		// Dual-write actor columns.
+		ActorKind:          string(commentActor.Kind),
+		ActorUserID:        int8FromInt64(commentActor.UserID),
+		ActorRoleKey:       commentActor.RoleKey,
+		ActorWorkflowRunID: int8FromInt64(commentActor.WorkflowRunID),
+		ActorDisplayName:   commentActor.DisplayName,
 	})
 	if err != nil {
 		return nil, err
@@ -229,6 +247,7 @@ func (s *PostgresStore) CreateComment(ctx context.Context, issueID, authorID int
 // in the DB; agent_role carries the host yaml role key. Role-key
 // validation belongs in the calling service.
 func (s *PostgresStore) CreateAgentComment(ctx context.Context, issueID int64, agentRole, body, filePath string, line int) (*domain.Comment, error) {
+	commentActor := commentActorRef(0, agentRole)
 	row, err := s.q.CreateComment(ctx, issuedb.CreateCommentParams{
 		IssueID:   issueID,
 		AuthorID:  pgtype.Int8{}, // NULL — caller is an agent
@@ -236,6 +255,12 @@ func (s *PostgresStore) CreateAgentComment(ctx context.Context, issueID int64, a
 		Body:      body,
 		FilePath:  filePath,
 		Line:      int32(line),
+		// Dual-write actor columns.
+		ActorKind:          string(commentActor.Kind),
+		ActorUserID:        int8FromInt64(commentActor.UserID),
+		ActorRoleKey:       commentActor.RoleKey,
+		ActorWorkflowRunID: int8FromInt64(commentActor.WorkflowRunID),
+		ActorDisplayName:   commentActor.DisplayName,
 	})
 	if err != nil {
 		return nil, err
@@ -264,6 +289,7 @@ func (s *PostgresStore) ListComments(ctx context.Context, issueID int64) ([]*dom
 			AuthorID:   r.AuthorID,
 			AuthorName: r.AuthorName,
 			AgentRole:  r.AgentRole,
+			Actor:      resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.AgentRole),
 			Body:       r.Body,
 			FilePath:   r.FilePath,
 			Line:       int(r.Line),
@@ -274,17 +300,24 @@ func (s *PostgresStore) ListComments(ctx context.Context, issueID int64) ([]*dom
 	return out, nil
 }
 
-func (s *PostgresStore) CreateEvent(ctx context.Context, issueID int64, kind domain.EventKind, payload []byte, actorID int64) (*domain.Event, error) {
+func (s *PostgresStore) CreateEvent(ctx context.Context, issueID int64, kind domain.EventKind, payload []byte, actorUserID int64) (*domain.Event, error) {
 	var actorArg pgtype.Int8
-	if actorID > 0 {
-		actorArg = pgtype.Int8{Int64: actorID, Valid: true}
+	if actorUserID > 0 {
+		actorArg = pgtype.Int8{Int64: actorUserID, Valid: true}
 	}
+	eventActor := eventActorRef(actorUserID, "")
 	row, err := s.q.CreateEvent(ctx, issuedb.CreateEventParams{
 		IssueID:   issueID,
 		Kind:      string(kind),
 		Payload:   payload,
 		ActorID:   actorArg,
 		AgentRole: "",
+		// Dual-write actor columns.
+		ActorKind:          string(eventActor.Kind),
+		ActorUserID:        int8FromInt64(eventActor.UserID),
+		ActorRoleKey:       eventActor.RoleKey,
+		ActorWorkflowRunID: int8FromInt64(eventActor.WorkflowRunID),
+		ActorDisplayName:   eventActor.DisplayName,
 	})
 	if err != nil {
 		return nil, err
@@ -293,12 +326,19 @@ func (s *PostgresStore) CreateEvent(ctx context.Context, issueID int64, kind dom
 }
 
 func (s *PostgresStore) CreateAgentEvent(ctx context.Context, issueID int64, kind domain.EventKind, payload []byte, agentRole string) (*domain.Event, error) {
+	eventActor := eventActorRef(0, agentRole)
 	row, err := s.q.CreateEvent(ctx, issuedb.CreateEventParams{
 		IssueID:   issueID,
 		Kind:      string(kind),
 		Payload:   payload,
 		ActorID:   pgtype.Int8{}, // NULL — agent path
 		AgentRole: agentRole,
+		// Dual-write actor columns.
+		ActorKind:          string(eventActor.Kind),
+		ActorUserID:        int8FromInt64(eventActor.UserID),
+		ActorRoleKey:       eventActor.RoleKey,
+		ActorWorkflowRunID: int8FromInt64(eventActor.WorkflowRunID),
+		ActorDisplayName:   eventActor.DisplayName,
 	})
 	if err != nil {
 		return nil, err
@@ -329,6 +369,7 @@ func (s *PostgresStore) ListEvents(ctx context.Context, issueID int64) ([]*domai
 			ActorID:   r.ActorID,
 			ActorName: r.ActorName,
 			AgentRole: r.AgentRole,
+			Actor:     resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.ActorID, r.AgentRole),
 			CreatedAt: r.CreatedAt.Time,
 		})
 	}
@@ -345,6 +386,7 @@ func issueFromGet(r issuedb.GetIssueByNumberRow) *domain.Issue {
 		AuthorID:       r.AuthorID,
 		AuthorName:     r.AuthorName,
 		AgentRole:      r.AgentRole,
+		Actor:          resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.AgentRole),
 		Title:          r.Title,
 		Body:           r.Body,
 		State:          domain.State(r.State),
@@ -372,6 +414,7 @@ func issueFromList(r issuedb.ListIssuesRow) *domain.Issue {
 		AuthorID:       r.AuthorID,
 		AuthorName:     r.AuthorName,
 		AgentRole:      r.AgentRole,
+		Actor:          resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.AgentRole),
 		Title:          r.Title,
 		Body:           r.Body,
 		State:          domain.State(r.State),
@@ -399,6 +442,7 @@ func issueFromChildren(r issuedb.ListIssueChildrenRow) *domain.Issue {
 		AuthorID:       r.AuthorID,
 		AuthorName:     r.AuthorName,
 		AgentRole:      r.AgentRole,
+		Actor:          resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.AgentRole),
 		Title:          r.Title,
 		Body:           r.Body,
 		State:          domain.State(r.State),
@@ -425,6 +469,7 @@ func commentFromRow(r issuedb.GetCommentByIDRow) *domain.Comment {
 		AuthorID:   r.AuthorID,
 		AuthorName: r.AuthorName,
 		AgentRole:  r.AgentRole,
+		Actor:      resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.AgentRole),
 		Body:       r.Body,
 		FilePath:   r.FilePath,
 		Line:       int(r.Line),
@@ -442,6 +487,7 @@ func eventFromGet(r issuedb.GetEventByIDRow) *domain.Event {
 		ActorID:   r.ActorID,
 		ActorName: r.ActorName,
 		AgentRole: r.AgentRole,
+		Actor:     resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.ActorID, r.AgentRole),
 		CreatedAt: r.CreatedAt.Time,
 	}
 }
@@ -453,6 +499,7 @@ func (s *PostgresStore) CreateAttachment(ctx context.Context, repoID, issueID, a
 	if authorID > 0 {
 		authorArg = pgtype.Int8{Int64: authorID, Valid: true}
 	}
+	attActor := attachmentActorRef(authorID, agentRole)
 	row, err := s.q.CreateAttachment(ctx, issuedb.CreateAttachmentParams{
 		RepoID:           repoID,
 		IssueID:          issueID,
@@ -468,6 +515,12 @@ func (s *PostgresStore) CreateAttachment(ctx context.Context, repoID, issueID, a
 		Kind:             string(kind),
 		Inline:           inline,
 		Status:           string(domain.AttachmentStatusUploaded),
+		// Dual-write actor columns.
+		ActorKind:          string(attActor.Kind),
+		ActorUserID:        int8FromInt64(attActor.UserID),
+		ActorRoleKey:       attActor.RoleKey,
+		ActorWorkflowRunID: int8FromInt64(attActor.WorkflowRunID),
+		ActorDisplayName:   attActor.DisplayName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create attachment: %w", err)
@@ -524,6 +577,7 @@ func attachmentFromRow(r issuedb.GetAttachmentRow) *domain.Attachment {
 		CommentID:        r.CommentID,
 		AuthorID:         r.AuthorID,
 		AgentRole:        r.AgentRole,
+		Actor:            resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.AgentRole),
 		StorageKey:       r.StorageKey,
 		OriginalName:     r.OriginalName,
 		DisplayName:      r.DisplayName,
@@ -551,6 +605,7 @@ func attachmentFromList(r issuedb.ListAttachmentsRow) *domain.Attachment {
 		CommentID:        r.CommentID,
 		AuthorID:         r.AuthorID,
 		AgentRole:        r.AgentRole,
+		Actor:            resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.AgentRole),
 		StorageKey:       r.StorageKey,
 		OriginalName:     r.OriginalName,
 		DisplayName:      r.DisplayName,
@@ -583,6 +638,7 @@ func (s *PostgresStore) UpsertContributionOnPush(ctx context.Context, p domain.C
 	if changedPaths == nil {
 		changedPaths = []string{}
 	}
+	contActor := agentActorRef(p.AgentRole)
 	id, err := s.q.UpsertContributionOnPush(ctx, issuedb.UpsertContributionOnPushParams{
 		RepoID:       p.RepoID,
 		IssueID:      p.IssueID,
@@ -595,6 +651,10 @@ func (s *PostgresStore) UpsertContributionOnPush(ctx context.Context, p domain.C
 		Files:        p.Files,
 		Additions:    p.Additions,
 		Deletions:    p.Deletions,
+		// Dual-write actor columns.
+		ActorKind:        string(contActor.Kind),
+		ActorRoleKey:     contActor.RoleKey,
+		ActorDisplayName: contActor.DisplayName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("upsert contribution: %w", err)
@@ -610,7 +670,7 @@ func (s *PostgresStore) GetContribution(ctx context.Context, id int64) (*domain.
 		}
 		return nil, err
 	}
-	return contributionFromRow(row), nil
+	return contributionFromGet(row), nil
 }
 
 func (s *PostgresStore) GetContributionByRef(ctx context.Context, issueID int64, refName string) (*domain.Contribution, error) {
@@ -621,7 +681,7 @@ func (s *PostgresStore) GetContributionByRef(ctx context.Context, issueID int64,
 		}
 		return nil, err
 	}
-	return contributionFromRow(row), nil
+	return contributionFromGetByRef(row), nil
 }
 
 func (s *PostgresStore) ListContributions(ctx context.Context, issueID int64, includeClosed, includeMerged bool) ([]*domain.Contribution, error) {
@@ -635,7 +695,7 @@ func (s *PostgresStore) ListContributions(ctx context.Context, issueID int64, in
 	}
 	out := make([]*domain.Contribution, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, contributionFromRow(r))
+		out = append(out, contributionFromList(r))
 	}
 	return out, nil
 }
@@ -674,31 +734,68 @@ func (s *PostgresStore) MarkContributionMerged(ctx context.Context, id int64, me
 	return s.GetContribution(ctx, id)
 }
 
-func contributionFromRow(r issuedb.Contribution) *domain.Contribution {
+
+func contributionFromGet(r issuedb.GetContributionRow) *domain.Contribution {
+	return buildContribution(
+		r.ID, r.RepoID, r.IssueID, r.SessionID, r.AgentRole, r.RefName,
+		r.HeadSha, r.BaseSha, r.Title, r.Description, r.Status,
+		r.Mergeable, r.MergeMode, r.ChangedPaths, r.Files, r.Additions, r.Deletions,
+		r.MergedCommitSha, r.MergedAt, r.CreatedAt, r.UpdatedAt,
+		r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName,
+	)
+}
+
+func contributionFromGetByRef(r issuedb.GetContributionByRefRow) *domain.Contribution {
+	return buildContribution(
+		r.ID, r.RepoID, r.IssueID, r.SessionID, r.AgentRole, r.RefName,
+		r.HeadSha, r.BaseSha, r.Title, r.Description, r.Status,
+		r.Mergeable, r.MergeMode, r.ChangedPaths, r.Files, r.Additions, r.Deletions,
+		r.MergedCommitSha, r.MergedAt, r.CreatedAt, r.UpdatedAt,
+		r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName,
+	)
+}
+
+func contributionFromList(r issuedb.ListContributionsRow) *domain.Contribution {
+	return buildContribution(
+		r.ID, r.RepoID, r.IssueID, r.SessionID, r.AgentRole, r.RefName,
+		r.HeadSha, r.BaseSha, r.Title, r.Description, r.Status,
+		r.Mergeable, r.MergeMode, r.ChangedPaths, r.Files, r.Additions, r.Deletions,
+		r.MergedCommitSha, r.MergedAt, r.CreatedAt, r.UpdatedAt,
+		r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName,
+	)
+}
+
+func buildContribution(
+	id, repoID, issueID, sessionID int64, agentRole, refName, headSha, baseSha, title, description, status string,
+	mergeable bool, mergeMode string, changedPaths []string, files, additions, deletions int32,
+	mergedCommitSha string, mergedAt, createdAt, updatedAt pgtype.Timestamptz,
+	actorKind string, actorUserID int64, actorRoleKey string, actorWorkflowRunID int64, actorDisplayName string,
+) *domain.Contribution {
 	c := &domain.Contribution{
-		ID:              r.ID,
-		RepoID:          r.RepoID,
-		IssueID:         r.IssueID,
-		SessionID:       r.SessionID,
-		AgentRole:       r.AgentRole,
-		RefName:         r.RefName,
-		HeadSHA:         r.HeadSha,
-		BaseSHA:         r.BaseSha,
-		Title:           r.Title,
-		Description:     r.Description,
-		Status:          domain.ContributionStatus(r.Status),
-		Mergeable:       r.Mergeable,
-		MergeMode:       r.MergeMode,
-		ChangedPaths:    r.ChangedPaths,
-		Files:           r.Files,
-		Additions:       r.Additions,
-		Deletions:       r.Deletions,
-		MergedCommitSHA: r.MergedCommitSha,
-		CreatedAt:       r.CreatedAt.Time,
-		UpdatedAt:       r.UpdatedAt.Time,
+		ID:              id,
+		RepoID:          repoID,
+		IssueID:         issueID,
+		SessionID:       sessionID,
+		AgentRole:       agentRole,
+		Actor:           resolveActor(actorKind, actorUserID, actorRoleKey, actorWorkflowRunID, actorDisplayName, 0, agentRole),
+		RefName:         refName,
+		HeadSHA:         headSha,
+		BaseSHA:         baseSha,
+		Title:           title,
+		Description:     description,
+		Status:          domain.ContributionStatus(status),
+		Mergeable:       mergeable,
+		MergeMode:       mergeMode,
+		ChangedPaths:    changedPaths,
+		Files:           files,
+		Additions:       additions,
+		Deletions:       deletions,
+		MergedCommitSHA: mergedCommitSha,
+		CreatedAt:       createdAt.Time,
+		UpdatedAt:       updatedAt.Time,
 	}
-	if r.MergedAt.Valid {
-		t := r.MergedAt.Time
+	if mergedAt.Valid {
+		t := mergedAt.Time
 		c.MergedAt = &t
 	}
 	return c
@@ -812,6 +909,72 @@ func todoFromRow(r issuedb.Todo) *domain.Todo {
 		CreatedAt: r.CreatedAt.Time,
 		UpdatedAt: r.UpdatedAt.Time,
 	}
+}
+
+// --- actor helpers ---
+
+// resolveActor reads new actor_* columns first; falls back to legacy fields.
+func resolveActor(actorKind string, actorUserID int64, actorRoleKey string, actorWorkflowRunID int64, actorDisplayName string, legacyAuthorID int64, legacyAgentRole string) actor.Ref {
+	if actorKind != "" {
+		return actor.Ref{
+			Kind:           actor.Kind(actorKind),
+			ID:             actorID(actorKind, actorUserID, actorRoleKey, actorWorkflowRunID),
+			DisplayName:    actorDisplayName,
+			UserID:         actorUserID,
+			RoleKey:        actorRoleKey,
+			WorkflowRunID:  actorWorkflowRunID,
+		}
+	}
+	return actor.FromLegacy(legacyAuthorID, "", legacyAgentRole)
+}
+
+func actorID(kind string, userID int64, roleKey string, workflowRunID int64) string {
+	switch actor.Kind(kind) {
+	case actor.KindUser:
+		return fmt.Sprintf("user:%d", userID)
+	case actor.KindAgent:
+		return fmt.Sprintf("agent:%s", roleKey)
+	case actor.KindWorkflow:
+		return fmt.Sprintf("workflow:run:%d", workflowRunID)
+	default:
+		return "system:server"
+	}
+}
+
+func int8FromInt64(v int64) pgtype.Int8 {
+	if v > 0 {
+		return pgtype.Int8{Int64: v, Valid: true}
+	}
+	return pgtype.Int8{}
+}
+
+func issueActorRef(authorID int64, agentRole string) actor.Ref {
+	if authorID > 0 {
+		return actor.UserRef(authorID, "")
+	}
+	if agentRole != "" {
+		return actor.AgentRef(agentRole)
+	}
+	return actor.SystemRef()
+}
+
+func commentActorRef(authorID int64, agentRole string) actor.Ref {
+	return issueActorRef(authorID, agentRole)
+}
+
+func eventActorRef(actorUserID int64, agentRole string) actor.Ref {
+	return issueActorRef(actorUserID, agentRole)
+}
+
+func attachmentActorRef(authorID int64, agentRole string) actor.Ref {
+	return issueActorRef(authorID, agentRole)
+}
+
+func agentActorRef(agentRole string) actor.Ref {
+	if agentRole != "" {
+		return actor.AgentRef(agentRole)
+	}
+	return actor.SystemRef()
 }
 
 // Ensure PostgresStore implements domain.TodoStore.
