@@ -12,39 +12,46 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/hangrix/hangrix/pkg/actor"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/service"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
+	workflowdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
 )
 
 // Handler is the HTTP handler for platform-level attachments.
 type Handler struct {
-	svc        *service.Service
-	middleware authdomain.Middleware
+	svc              *service.Service
+	middleware       authdomain.Middleware
+	wfTokenValidator workflowdomain.WorkflowTokenValidator
 }
 
 // HandlerDeps is the ioc-shaped constructor input.
 type HandlerDeps struct {
-	Service    *service.Service
-	Middleware authdomain.Middleware
+	Service          *service.Service
+	Middleware       authdomain.Middleware
+	WfTokenValidator workflowdomain.WorkflowTokenValidator
 }
 
 // NewHandler creates the handler.
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
-		svc:        deps.Service,
-		middleware: deps.Middleware,
+		svc:              deps.Service,
+		middleware:       deps.Middleware,
+		wfTokenValidator: deps.WfTokenValidator,
 	}
 }
 
 // RegisterRoutes mounts the platform-level attachment routes on the chi router.
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Route("/api/attachments", func(r chi.Router) {
-		r.Use(h.middleware.RequireAuth)
+		r.Use(h.authGate)
 		r.Post("/", h.create)
 		r.Get("/{id}/download", h.download)
 		r.Delete("/{id}", h.delete)
@@ -54,8 +61,10 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 // create handles multipart file upload.
 // POST /api/attachments
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
+	// Workflow-authenticated callers are allowed (authorID=0, agentRole="workflow").
+	_, isWF := actor.WorkflowActorFromRequest(r)
 	caller, _ := authdomain.UserFromRequest(r)
-	if caller == nil {
+	if caller == nil && !isWF {
 		httpx.WriteError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -81,7 +90,16 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	displayName := r.FormValue("display_name")
 	inline := r.FormValue("inline") == "true"
 
-	attachment, err := h.svc.UploadMultipart(r.Context(), caller.ID, "", displayName, inline, file, header)
+	// Workflow-authenticated uploads use authorID=0, agentRole="workflow"
+	// to satisfy the XOR constraint (author_id IS NULL, agent_role <> '').
+	authorID := int64(0)
+	agentRole := ""
+	if isWF {
+		agentRole = "workflow"
+	} else if caller != nil {
+		authorID = caller.ID
+	}
+	attachment, err := h.svc.UploadMultipart(r.Context(), authorID, agentRole, displayName, inline, file, header)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrAttachmentTooLarge):
@@ -225,4 +243,43 @@ func toPublicAttachment(a *domain.Attachment) publicAttachment {
 		out.DeletedAt = &s
 	}
 	return out
+}
+
+// authGate is a middleware that tries workflow token auth first, then falls
+// back to cookie-based session auth. This allows workflow containers to
+// upload and download attachments via a Bearer token.
+func (h *Handler) authGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 1. Try workflow token (Bearer hangrix_wf_...).
+		if h.wfTokenValidator != nil {
+			tok, err := bearerTokenFromHeader(r)
+			if err == nil && strings.HasPrefix(tok, "hangrix_wf_") {
+				_, wfActor, err := h.wfTokenValidator.ValidateWorkflowTokenWithActor(r.Context(), tok)
+				if err == nil {
+					r = actor.WithWorkflowActor(r, wfActor)
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+		}
+		// 2. Fall back to cookie auth.
+		h.middleware.RequireAuth(next).ServeHTTP(w, r)
+	})
+}
+
+// bearerTokenFromHeader extracts the Bearer token from the Authorization header.
+func bearerTokenFromHeader(r *http.Request) (string, error) {
+	hdr := r.Header.Get("Authorization")
+	if hdr == "" {
+		return "", errors.New("missing authorization header")
+	}
+	const pfx = "Bearer "
+	if !strings.HasPrefix(hdr, pfx) {
+		return "", errors.New("authorization must be Bearer")
+	}
+	tok := strings.TrimSpace(hdr[len(pfx):])
+	if tok == "" {
+		return "", errors.New("empty bearer token")
+	}
+	return tok, nil
 }
