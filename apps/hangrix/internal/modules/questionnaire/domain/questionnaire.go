@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// MaxQuestionTextLen is the maximum allowed length for a question's text field.
+// kept in sync with apps/hangrix-agent/internal/tools/platform/platform.go:askQuestionSchema() and baseline.md "Asking the user" guidance
+const MaxQuestionTextLen = 300
+
 // ---- Status / Qtype ---- //
 
 // Status is the lifecycle state of a questionnaire.
@@ -220,8 +224,8 @@ func (p *CreateParams) Validate() []FieldError {
 
 		if len(strings.TrimSpace(q.Text)) == 0 {
 			errs = append(errs, FieldError{Field: prefix + ".text", Code: "missing"})
-		} else if len(q.Text) > 500 {
-			errs = append(errs, FieldError{Field: prefix + ".text", Code: "too_long", Message: "max 500 characters"})
+		} else if len(q.Text) > MaxQuestionTextLen {
+			errs = append(errs, FieldError{Field: prefix + ".text", Code: "too_long", Message: "max 300 characters"})
 		}
 
 		if !q.Type.Valid() {
