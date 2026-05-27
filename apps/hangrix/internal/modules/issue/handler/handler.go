@@ -732,6 +732,25 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 				httpx.WriteError(w, http.StatusConflict, "merged issues cannot change state")
 				return
 			}
+			// Sub-issue gate: every open descendant must be merged or closed before closing.
+			if want == domain.StateClosed {
+				if block, openDesc := h.subIssueBlock(r.Context(), iss.ID); block != "" {
+					subs := make([]map[string]any, 0, len(openDesc))
+					for _, d := range openDesc {
+						subs = append(subs, map[string]any{
+							"id": d.ID, "number": d.Number, "title": d.Title,
+							"state": string(d.State), "depth": d.Depth,
+						})
+					}
+					httpx.WriteJSON(w, http.StatusConflict, map[string]any{
+						"error":        "close blocked",
+						"code":         "incomplete_sub_issues",
+						"block_reason": block,
+						"sub_issues":   subs,
+					})
+					return
+				}
+			}
 			next, err := h.issues.UpdateState(r.Context(), iss.ID, want, "")
 			if err != nil {
 				httpx.WriteError(w, http.StatusInternalServerError, err.Error())
@@ -1168,6 +1187,23 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteJSON(w, http.StatusConflict, map[string]any{
 			"error":        "merge blocked",
 			"block_reason": block,
+		})
+		return
+	}
+	// Sub-issue gate: every open descendant must be merged or closed first.
+	if block, openDesc := h.subIssueBlock(r.Context(), iss.ID); block != "" {
+		subs := make([]map[string]any, 0, len(openDesc))
+		for _, d := range openDesc {
+			subs = append(subs, map[string]any{
+				"id": d.ID, "number": d.Number, "title": d.Title,
+				"state": string(d.State), "depth": d.Depth,
+			})
+		}
+		httpx.WriteJSON(w, http.StatusConflict, map[string]any{
+			"error":        "merge blocked",
+			"code":         "incomplete_sub_issues",
+			"block_reason": block,
+			"sub_issues":   subs,
 		})
 		return
 	}

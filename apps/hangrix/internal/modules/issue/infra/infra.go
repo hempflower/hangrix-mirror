@@ -177,6 +177,24 @@ func (s *PostgresStore) ListChildren(ctx context.Context, parentID int64) ([]*do
 	return out, nil
 }
 
+func (s *PostgresStore) ListOpenDescendants(ctx context.Context, rootID int64) ([]*domain.OpenDescendant, error) {
+	rows, err := s.q.ListOpenDescendantIssues(ctx, pgtype.Int8{Int64: rootID, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*domain.OpenDescendant, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, &domain.OpenDescendant{
+			ID:     r.ID,
+			Number: r.Number,
+			Title:  r.Title,
+			State:  domain.State(r.State),
+			Depth:  int(r.Depth),
+		})
+	}
+	return out, nil
+}
+
 func (s *PostgresStore) UpdateTitleBody(ctx context.Context, id int64, title, body string) (*domain.Issue, error) {
 	row, err := s.q.UpdateIssueTitleBody(ctx, issuedb.UpdateIssueTitleBodyParams{
 		Title: title,

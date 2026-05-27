@@ -35,8 +35,8 @@ A conflicting contribution — or `issue_mergeable` reporting `conflicted` — i
 
 ## Todos
 - Track pending work with `issue_todo_list` (read) and `issue_todo_update` (create/update) — parameters live in the tool schemas.
-- Every todo must be `done` before `issue_merge` or `issue_close`; the server enforces this on the agent path.
-- `issue_mergeable` reports `incomplete_todos` when open todos block the merge.
+- Every todo must be `done` and every sub-issue must be merged or closed before `issue_merge` or `issue_close`; the server enforces both on the agent path.
+- `issue_mergeable` reports `incomplete_todos` and/or `incomplete_sub_issues` when either blocks the merge — inspect both arrays.
 
 ## Rules
 - Use platform tools (`issue_*`, `contribution_*`), not raw HTTP; `webfetch` for external docs.

@@ -517,6 +517,12 @@ type Store interface {
 	GetByNumber(ctx context.Context, repoID, number int64) (*Issue, error)
 	List(ctx context.Context, repoID int64, f ListFilter) ([]*Issue, int64, error)
 	ListChildren(ctx context.Context, parentID int64) ([]*Issue, error)
+	// ListOpenDescendants returns every transitive descendant of rootID
+	// whose state='open', ordered (depth ASC, number ASC). Used by the
+	// merge/close gate. Cycle-safe via a UNION recursion that stops on
+	// repeated ids — the data model is a tree but the query defends
+	// against a future bad write.
+	ListOpenDescendants(ctx context.Context, rootID int64) ([]*OpenDescendant, error)
 	UpdateTitleBody(ctx context.Context, id int64, title, body string) (*Issue, error)
 	UpdateState(ctx context.Context, id int64, state State, mergeSHA string) (*Issue, error)
 	UpdateHeadSHA(ctx context.Context, id int64, headSHA string) error
@@ -728,6 +734,60 @@ type ContributionStore interface {
 var (
 	ErrContributionNotFound = errors.New("contribution not found")
 )
+
+
+
+// OpenDescendant is one row of the open-sub-issue blocker list returned by
+// ListOpenDescendants. Depth=1 means a direct child; >1 is a deeper descendant.
+// Title is included so the agent error and UI tooltip can render
+// "#42 Fix login bug" without an extra fetch per row.
+type OpenDescendant struct {
+	ID     int64  `json:"id"`
+	Number int64  `json:"number"`
+	Title  string `json:"title"`
+	State  State  `json:"state"`
+	Depth  int    `json:"depth"`
+}
+
+// BlockError is a structured precondition failure produced by the merge/close
+// gate helpers. The platform_api tool layer recognises it and serialises the
+// payload (code + sub_issues list) into the tool result so the LLM can decide
+// what to do next without re-parsing free text.
+type BlockError struct {
+	Code      string            `json:"code"`                // e.g. "incomplete_sub_issues"
+	Message   string            `json:"message"`
+	SubIssues []*OpenDescendant `json:"sub_issues,omitempty"`
+}
+
+func (e *BlockError) Error() string { return e.Message }
+
+// SubIssueBlock returns a non-empty reason when any open descendant
+// blocks merging or closing rootIssue. Empty means clear.
+// Callers (issue_merge, issue_close, issue_mergeable) share this one
+// implementation so the error text and the structured signal stay in
+// lockstep on every path.
+func SubIssueBlock(open []*OpenDescendant) (reason string, blockers []*OpenDescendant) {
+	if len(open) == 0 {
+		return "", nil
+	}
+	direct, indirect := 0, 0
+	for _, d := range open {
+		if d.Depth == 1 {
+			direct++
+		} else {
+			indirect++
+		}
+	}
+	parts := make([]string, 0, len(open))
+	for _, d := range open {
+		parts = append(parts, fmt.Sprintf("#%d", d.Number))
+	}
+	reason = fmt.Sprintf("%d open sub-issue(s) block merge/close: %s", len(open), strings.Join(parts, ", "))
+	if indirect > 0 {
+		reason += fmt.Sprintf(" (and %d indirect descendant(s))", indirect)
+	}
+	return reason, open
+}
 
 var (
 	ErrAttachmentNotFound = errors.New("attachment not found")
