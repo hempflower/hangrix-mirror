@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -703,6 +704,18 @@ func (h *Handler) getRefs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Sort param only applies to tags; branches ignore it.
+		sortParam := strings.TrimSpace(r.URL.Query().Get("sort"))
+		if refType == "tags" {
+			if sortParam == "" {
+				sortParam = "desc"
+			}
+			if sortParam != "desc" && sortParam != "asc" {
+				httpx.WriteError(w, http.StatusBadRequest, "invalid sort: must be 'desc' or 'asc'")
+				return
+			}
+		}
+
 		// Try cache first; on miss fall through to git.
 		cacheKey := kv.RefKey(repo.ID)
 		var all gitdomain.Refs
@@ -726,6 +739,7 @@ func (h *Handler) getRefs(w http.ResponseWriter, r *http.Request) {
 		slice := all.Branches
 		if refType == "tags" {
 			slice = all.Tags
+			sortTagsByCreatedAt(slice, sortParam == "desc")
 		}
 		total := int32(len(slice))
 
@@ -1388,6 +1402,26 @@ func parseOffsetLimit(r *http.Request) (offset, limit int32) {
 		}
 	}
 	return
+}
+
+// sortTagsByCreatedAt sorts tags in place by CreatedAt. Tags with zero
+// CreatedAt are placed last regardless of direction. When descending,
+// newest tags come first.
+func sortTagsByCreatedAt(tags []*gitdomain.Ref, descending bool) {
+	sort.Slice(tags, func(i, j int) bool {
+		ti, tj := tags[i].CreatedAt, tags[j].CreatedAt
+		// Zero times (unset) go to the end in both directions.
+		if ti.IsZero() != tj.IsZero() {
+			return !ti.IsZero() // non-zero before zero
+		}
+		if ti.IsZero() {
+			return false // both zero: stable order
+		}
+		if descending {
+			return ti.After(tj)
+		}
+		return ti.Before(tj)
+	})
 }
 
 // ---- Branch / tag writes ----
