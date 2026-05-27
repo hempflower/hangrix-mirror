@@ -1214,5 +1214,12 @@
       "commitPushed": "push · {sha}",
       "reviewVote": "review vote #{id}"
     }
+  },
+  "actor": {
+    "notFound": "Actor not found",
+    "loadFailed": "Failed to load actor",
+    "displayName": "Display name",
+    "recentIssues": "Recent issues",
+    "recentContributions": "Recent contributions"
   }
 }
