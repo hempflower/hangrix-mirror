@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/hangrix/hangrix/pkg/actor"
 
+	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
@@ -324,6 +326,32 @@ func (s *APIService) CreateIssue(ctx context.Context, p *apidomain.Actor, title,
 	if err != nil {
 		return nil, fmt.Errorf("create issue: %w", err)
 	}
+
+	// Create the branch ref in the bare repo so it appears in branch
+	// listings immediately — before anyone pushes. The new branch points
+	// at the base branch's tip, so a subsequent push is a normal
+	// fast-forward. Mirrors the issue handler's create().
+	if err := s.r.deps.Git.CreateBranch(scope.fsPath, iss.BranchName, baseBranch); err != nil {
+		return nil, fmt.Errorf("create branch ref: %w", err)
+	}
+
+	// Fire issue.opened so any role whose triggers include issue.opened
+	// wakes on its own. Failures don't block issue creation — the
+	// operator repairs the host yaml then nudges the issue. Mirrors the
+	// issue handler's fireIssueOpened().
+	if s.r.deps.Spawner != nil {
+		if _, err := s.r.deps.Spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
+			Trigger:     agentsconfig.TriggerIssueOpened,
+			CauseKind:   agentsessiondomain.CauseKindIssueOpened,
+			CauseID:     "",
+			RepoID:      scope.repo.ID,
+			IssueNumber: int32(iss.Number),
+			ActorID:     0, // agent-created issues have no user actor
+		}); err != nil {
+			log.Printf("platform_api: fire issue.opened repo=%d issue=%d: %v", scope.repo.ID, iss.Number, err)
+		}
+	}
+
 	return map[string]any{
 		"number":      iss.Number,
 		"title":       iss.Title,
