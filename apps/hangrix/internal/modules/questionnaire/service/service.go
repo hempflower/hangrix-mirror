@@ -1,0 +1,270 @@
+// Package service implements the questionnaire business logic:
+// option ID generation, answer validation, and result aggregation.
+// It wraps the domain.Store + domain.AnswerStore and adds BuildResult.
+package service
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base32"
+	"fmt"
+	"strings"
+
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire/domain"
+)
+
+// Service implements domain.Service.
+type Service struct {
+	store       domain.Store
+	answerStore domain.AnswerStore
+	publisher   domain.EventPublisher // optional — nil-safe call site
+}
+
+type ServiceDeps struct {
+	Store         domain.Store
+	AnswerStore   domain.AnswerStore
+	EventPublisher domain.EventPublisher // optional
+}
+
+func NewService(deps *ServiceDeps) *Service {
+	return &Service{
+		store:       deps.Store,
+		answerStore: deps.AnswerStore,
+		publisher:   deps.EventPublisher,
+	}
+}
+
+// ---- Store delegation ---- //
+
+func (s *Service) Create(ctx context.Context, p domain.CreateParams) (*domain.Questionnaire, error) {
+	// Validate input.
+	if errs := p.Validate(); len(errs) > 0 {
+		return nil, &ValidationError{Errors: errs}
+	}
+
+	// Assign server-generated option IDs.
+	for i := range p.Questions {
+		q := &p.Questions[i]
+		if q.Type == domain.QtypeSingleChoice || q.Type == domain.QtypeMultiChoice {
+			for j := range q.Options {
+				q.Options[j].ID = generateOptionID()
+			}
+		}
+	}
+
+	return s.store.Create(ctx, p)
+}
+
+func (s *Service) Get(ctx context.Context, id int64) (*domain.Questionnaire, error) {
+	return s.store.Get(ctx, id)
+}
+
+func (s *Service) GetByIssue(ctx context.Context, issueID int64) ([]*domain.Questionnaire, error) {
+	return s.store.GetByIssue(ctx, issueID)
+}
+
+func (s *Service) Close(ctx context.Context, id int64, reason string) (*domain.Questionnaire, error) {
+	qn, err := s.store.Close(ctx, id, reason)
+	if err != nil {
+		return nil, err
+	}
+
+	// Best-effort publish closed event.
+	if s.publisher != nil {
+		_ = s.publisher.Publish(ctx, domain.SessionFilter{
+			IssueID:        qn.IssueID,
+			CreatedByAgent: qn.CreatedByAgent,
+		}, "questionnaire.closed", map[string]any{
+			"questionnaire_id": qn.ID,
+			"submissions":      0, // caller can re-fetch
+			"closed_reason":    reason,
+		})
+	}
+
+	return qn, nil
+}
+
+// ---- AnswerStore delegation ---- //
+
+func (s *Service) UpsertAnswer(ctx context.Context, qID, userID int64, perQ map[int64]domain.AnswerValue) (*domain.Answer, error) {
+	// Load questionnaire to validate answers.
+	qn, err := s.store.Get(ctx, qID)
+	if err != nil {
+		return nil, fmt.Errorf("load questionnaire for validation: %w", err)
+	}
+
+	if qn.Status != domain.StatusOpen {
+		return nil, &ValidationError{
+			Errors: []domain.FieldError{{Field: "answers", Code: "questionnaire_closed"}},
+		}
+	}
+
+	if errs := domain.ValidateAnswer(qn.Questions, perQ); len(errs) > 0 {
+		return nil, &ValidationError{Errors: errs}
+	}
+
+	answer, err := s.answerStore.UpsertAnswer(ctx, qID, userID, perQ)
+	if err != nil {
+		// ON CONFLICT DO NOTHING returns no row → already submitted
+		if strings.Contains(err.Error(), "no rows") {
+			return nil, &ValidationError{
+				Errors: []domain.FieldError{{Field: "answers", Code: "already_submitted", Message: "you have already submitted this questionnaire"}},
+			}
+		}
+		return nil, err
+	}
+
+	// Best-effort publish answered event.
+	if s.publisher != nil {
+		_ = s.publisher.Publish(ctx, domain.SessionFilter{
+			IssueID:        qn.IssueID,
+			CreatedByAgent: qn.CreatedByAgent,
+		}, "questionnaire.answered", map[string]any{
+			"questionnaire_id": qID,
+			"answer_count":     1, // approximate; agent should re-fetch
+		})
+	}
+
+	return answer, nil
+}
+
+func (s *Service) GetUserAnswer(ctx context.Context, qID, userID int64) (*domain.Answer, error) {
+	return s.answerStore.GetUserAnswer(ctx, qID, userID)
+}
+
+func (s *Service) ListAnswers(ctx context.Context, qID int64) ([]*domain.Answer, error) {
+	return s.answerStore.ListAnswers(ctx, qID)
+}
+
+func (s *Service) CountAnswers(ctx context.Context, qID int64) (int64, error) {
+	return s.answerStore.CountAnswers(ctx, qID)
+}
+
+// ---- BuildResult ---- //
+
+func (s *Service) BuildResult(ctx context.Context, qID int64) (*domain.Result, error) {
+	qn, err := s.store.Get(ctx, qID)
+	if err != nil {
+		return nil, err
+	}
+
+	answers, err := s.answerStore.ListAnswers(ctx, qID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &domain.Result{
+		Questionnaire: qn,
+		Submissions:   len(answers),
+		ByQuestion:    make(map[int64]domain.QuestionResult),
+	}
+
+	// Build question result per question.
+	for _, q := range qn.Questions {
+		qr := domain.QuestionResult{Type: q.Type}
+
+		switch q.Type {
+		case domain.QtypeSingleChoice, domain.QtypeMultiChoice:
+			tallies := buildChoiceTallies(q, answers)
+			qr.Tallies = tallies
+
+		case domain.QtypeTextInput:
+			qr.Responses = buildTextResponses(q, answers)
+		}
+
+		result.ByQuestion[q.ID] = qr
+	}
+
+	// Build submitters list.
+	for _, a := range answers {
+		sd := domain.SubmitterDetail{
+			UserID:      a.UserID,
+			SubmittedAt: a.SubmittedAt,
+		}
+		for _, q := range qn.Questions {
+			av, ok := a.PerQuestion[q.ID]
+			if !ok {
+				continue
+			}
+			sd.Answers = append(sd.Answers, domain.SubmitterAnswer{
+				QuestionID: q.ID,
+				OptionIDs:  av.OptionIDs,
+				Text:       av.Text,
+			})
+		}
+		result.Submitters = append(result.Submitters, sd)
+	}
+
+	return result, nil
+}
+
+func buildChoiceTallies(q domain.Question, answers []*domain.Answer) []domain.ChoiceTally {
+	// Count per option.
+	counts := make(map[string]int)
+	for _, a := range answers {
+		av, ok := a.PerQuestion[q.ID]
+		if !ok {
+			continue
+		}
+		for _, oid := range av.OptionIDs {
+			counts[oid]++
+		}
+	}
+
+	total := len(answers)
+	var tallies []domain.ChoiceTally
+	for _, o := range q.Options {
+		c := counts[o.ID]
+		pct := 0.0
+		if total > 0 {
+			pct = float64(c) / float64(total) * 100
+		}
+		tallies = append(tallies, domain.ChoiceTally{
+			OptionID: o.ID,
+			Label:    o.Label,
+			Count:    c,
+			Percent:  pct,
+		})
+	}
+	return tallies
+}
+
+func buildTextResponses(q domain.Question, answers []*domain.Answer) []domain.TextResponse {
+	var responses []domain.TextResponse
+	for _, a := range answers {
+		av, ok := a.PerQuestion[q.ID]
+		if !ok || av.Text == "" {
+			continue
+		}
+		responses = append(responses, domain.TextResponse{
+			UserID:      a.UserID,
+			Text:        av.Text,
+			SubmittedAt: a.SubmittedAt,
+		})
+	}
+	return responses
+}
+
+// ---- Option ID generation ---- //
+
+var optionIDEncoding = base32.NewEncoding("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567").WithPadding(base32.NoPadding)
+
+func generateOptionID() string {
+	b := make([]byte, 5) // 5 bytes → 8 base32 chars
+	_, _ = rand.Read(b)
+	return strings.ToLower(optionIDEncoding.EncodeToString(b))
+}
+
+// ---- Error types ---- //
+
+// ValidationError wraps domain-level field errors for service callers.
+type ValidationError struct {
+	Errors []domain.FieldError
+}
+
+func (e *ValidationError) Error() string {
+	if len(e.Errors) == 0 {
+		return "validation failed"
+	}
+	return fmt.Sprintf("validation failed: %s", e.Errors[0])
+}
