@@ -908,7 +908,8 @@
       },
       "error": {
         "banner": "Failed to load plan — showing last snapshot",
-        "retry": "Retry"
+        "retry": "Retry",
+        "fallback": "Failed to load plan"
       },
       "engine": {
         "auto": "Auto: {used}/{budget}",

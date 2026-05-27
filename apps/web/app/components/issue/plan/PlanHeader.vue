@@ -104,8 +104,8 @@ const readyNodes = computed(() => {
     <div class="flex flex-wrap items-center justify-between gap-2">
       <label class="flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground">
         <Checkbox
-          :checked="hideDone"
-          @update:checked="(v: boolean) => emit('update:hideDone', v)"
+          :model-value="hideDone"
+          @update:model-value="(v) => emit('update:hideDone', v === true)"
         />
         {{ t('issue.plan.hideDone') }}
       </label>

@@ -51,7 +51,7 @@ const isLeaf = computed(() => !hasChildren.value)
 const reviewBadge = computed(() => {
   const rs = props.node.review_status
   if (!rs) return null
-  if (rs.verdict === 'pending' && rs.votes.length > 0) {
+  if (rs.verdict === 'pending' && rs.votes.length > 0 && rs.required_reviewers.length > 0) {
     return { text: `${rs.votes.filter(v => v.value === 'approve').length}/${rs.required_reviewers.length}✓`, class: 'bg-amber-500/15 text-amber-700 dark:text-amber-300' }
   }
   return null

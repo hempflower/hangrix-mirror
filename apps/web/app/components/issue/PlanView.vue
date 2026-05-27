@@ -149,7 +149,7 @@ function flattenTree(root: PlanNodeType): FlatNode[] {
               <!-- Depth indicator: left color bar -->
               <div
                 class="h-10 w-1 shrink-0 rounded-full"
-                :style="{ opacity: 1 - (node as any).depth * 0.15 }"
+                :style="{ opacity: 1 - (node as FlatNode).depth * 0.15 }"
                 :class="{
                   'bg-violet-400': node.state === 'merged',
                   'bg-slate-400': node.state === 'closed',

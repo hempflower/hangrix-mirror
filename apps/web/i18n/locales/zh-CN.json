@@ -908,7 +908,8 @@
       },
       "error": {
         "banner": "加载失败，展示上次快照",
-        "retry": "重试"
+        "retry": "重试",
+        "fallback": "加载计划失败"
       },
       "engine": {
         "auto": "自动推进：{used}/{budget}",

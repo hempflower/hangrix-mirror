@@ -34,7 +34,8 @@ export function usePlan(
       data.value = res
       error.value = null
     } catch (e: any) {
-      error.value = e?.data?.error ?? 'Failed to load plan'
+      const { t } = useI18n()
+      error.value = e?.data?.error ?? t('issue.plan.error.fallback')
       // Keep old data — do not clear
     } finally {
       isLoading.value = false
