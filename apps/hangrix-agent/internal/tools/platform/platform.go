@@ -798,9 +798,9 @@ func All(client *Client, async local.AsyncLifecycle, readOnly bool) []local.Tool
 			schema: objectSchema(map[string]any{
 				"body": stringPropMax(
 					"The comment body. Markdown allowed; mentions follow @agent-<role-key> grammar. "+
-						"Maximum 4000 Unicode characters (runes). If your content exceeds the limit, "+
+						"Maximum 7800 Unicode characters (runes). If your content exceeds the limit, "+
 						"split it across multiple issue_comment calls and prefix each with `[1/N]`, `[2/N]`, …",
-					4000,
+					7800,
 				),
 				"file_path": stringProp("Optional path to anchor the comment to a file (inline review). Omit for top-level."),
 				"line":      intProp("Optional line number to anchor inline. Requires file_path."),
