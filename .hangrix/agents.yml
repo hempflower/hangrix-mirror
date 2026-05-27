@@ -41,11 +41,11 @@ llm:
 reviewers:
   rules:
     - paths: ["apps/hangrix/**", "pkg/**", "go.work", "go.work.sum"]
-      reviewers: [server-reviewer, tester]
+      reviewers: [tester, maintainer]
     - paths: ["apps/hangrix-agent/**", "apps/hangrix-runner/**"]
-      reviewers: [runtime-reviewer, tester]
+      reviewers: [tester, maintainer]
     - paths: ["apps/web/**"]
-      reviewers: [web-reviewer, tester]
+      reviewers: [tester, maintainer]
   fallback: [maintainer]
 
 # Reusable tool rules: named whitelists of platform tool-name globs (`*`
