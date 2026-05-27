@@ -124,7 +124,9 @@ type Bundle struct {
 //
 // Order matches the spec table in ROADMAP.md so the registry-emitted
 // catalogue is deterministic and the tool-allowlist filter behaves
-// predictably.
+// predictably. The `research` tool was previously appended by
+// BuildWithResearch / AllWithResearch in research.go; those helpers
+// and the tool itself have been removed.
 func Build() Bundle {
 	tracker := NewReadTracker()
 	bash := newBashTool()
@@ -156,9 +158,8 @@ func Build() Bundle {
 }
 
 // All returns just the Tool slice from Build. Retained for callers
-// that don't need the AsyncLifecycle handle (notably: tests, and the
-// `research` sub-agent's whitelisted child catalogue, neither of which
-// wants to manage background jobs).
+// that don't need the AsyncLifecycle handle (notably: tests, which
+// don't want to manage background jobs).
 func All() []Tool {
 	return Build().Tools
 }

@@ -428,7 +428,7 @@ func TestRegistryBashForegroundSmallOutputUnchanged(t *testing.T) {
 // the full Call → makeResult → guardResult pipeline.
 func localBuild(t *testing.T) *Registry {
 	t.Helper()
-	lb := local.Build() // standard local bundle (without research, no LLM client)
+	lb := local.Build() // standard local bundle
 	return Build(lb.Tools, nil, nil, []string{"*"})
 }
 

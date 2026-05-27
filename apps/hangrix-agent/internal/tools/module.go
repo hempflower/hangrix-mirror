@@ -28,7 +28,7 @@ type LocalBundle struct {
 }
 
 func NewLocalBundle(deps *Deps) *LocalBundle {
-	b := local.BuildWithResearch(deps.LLMClient, deps.Cfg.Model)
+	b := local.Build()
 	return &LocalBundle{Tools: b.Tools, Async: b.Async}
 }
 
@@ -73,7 +73,7 @@ func NewAsyncLifecycle(deps *AsyncLifecycleDeps) local.AsyncLifecycle { return d
 // tools the LLM sees. Local and MCP tools bypass the whitelist entirely.
 //
 // The local set comes from NewLocalBundle (which calls
-// local.BuildWithResearch). NewRegistry consumes the same bundle so
+// local.Build). NewRegistry consumes the same bundle so
 // that the tool instances the registry serves and the lifecycle
 // handle the runtime drains are guaranteed to be one-and-the-same.
 func NewRegistry(deps *RegistryDeps) *Registry {

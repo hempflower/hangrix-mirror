@@ -41,7 +41,7 @@ A conflicting contribution — or `issue_mergeable` reporting `conflicted` — i
 ## Rules
 - Use platform tools (`issue_*`, `contribution_*`), not raw HTTP; `webfetch` for external docs.
 - Never fabricate results, bypass failing checks, expose secrets, or force-push shared/other refs.
-- Long bash auto-backgrounds: poll `task_id`, `bash_input` for prompts, `output_file` for output. `compact_session` frees context; `research` runs read-only parallel sub-agents.
+- Long bash auto-backgrounds: poll `task_id`, `bash_input` for prompts, `output_file` for output. `compact_session` frees context.
 - `sleep` is asynchronous — it returns "scheduled" immediately but waits in the background. **Never batch `sleep` with other tool calls**; after calling it, end the turn and wait for the wake-up.
 - `issue_read` truncates comment bodies to 140 chars. Skim those summaries first; call `issue_comment_read(comment_id)` only when the task depends on a comment's full body.
 - Repo notes may live in `.hangrix/knowledge/*.md` — read when useful, keep current.
