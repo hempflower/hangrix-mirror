@@ -562,6 +562,73 @@ func TestAnthropicRoundTripsToolUse(t *testing.T) {
 	}
 }
 
+// TestAnthropicNullInputNormalised verifies that a null `input` field
+// in an upstream tool_use block (or a null ToolArgs string on an inbound
+// function_call item) is normalised to {} rather than leaking the string
+// "null" into the pipeline.  Without this, the downstream agent receives
+// unparseable tool arguments whenever the upstream (or client) emits a
+// null value instead of the expected JSON object.
+func TestAnthropicNullInputNormalised(t *testing.T) {
+	// ---- Response side: upstream returns "input": null ----
+	body := `{"id":"msg_n","model":"m","content":[{"type":"tool_use","id":"t1","name":"f","input":null}],"usage":{"input_tokens":1,"output_tokens":2}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+
+	resp, err := upstream.NewAnthropic().Respond(context.Background(), &upstream.Request{
+		Model: "m", APIKey: "k", BaseURL: srv.URL, Client: srv.Client(),
+		Input: []upstream.InputItem{{Kind: upstream.KindMessage, Role: "user", Text: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("respond: %v", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].Arguments != "{}" {
+		t.Errorf("Arguments = %q, want %q — null should be normalised to {}", resp.ToolCalls[0].Arguments, "{}")
+	}
+
+	// ---- Request side: client sends ToolArgs = "null" ----
+	var seen map[string]any
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &seen)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "msg_n2", "model": "m",
+			"content": []map[string]any{{"type": "text", "text": "ok"}},
+			"usage":   map[string]any{"input_tokens": 1, "output_tokens": 1},
+		})
+	}))
+	t.Cleanup(srv2.Close)
+
+	_, err = upstream.NewAnthropic().Respond(context.Background(), &upstream.Request{
+		Model: "m", APIKey: "k", BaseURL: srv2.URL, Client: srv2.Client(),
+		Input: []upstream.InputItem{
+			{Kind: upstream.KindMessage, Role: "user", Text: "hi"},
+			{Kind: upstream.KindToolCall, ToolCallID: "tc1", ToolName: "f", ToolArgs: "null"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("respond: %v", err)
+	}
+	msgs, _ := seen["messages"].([]any)
+	assistant, _ := msgs[len(msgs)-1].(map[string]any)
+	blocks, _ := assistant["content"].([]any)
+	for _, b := range blocks {
+		block, _ := b.(map[string]any)
+		if block["type"] == "tool_use" {
+			input, ok := block["input"].(map[string]any)
+			if !ok {
+				t.Errorf("tool_use.input must be an object, got %T: %v", block["input"], block["input"])
+			}
+			_ = input
+		}
+	}
+}
+
 // ---- wire converters ----
 
 // TestParseAndMarshalRoundTrip verifies the public wire shape

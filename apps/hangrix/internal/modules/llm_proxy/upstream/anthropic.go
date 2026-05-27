@@ -310,10 +310,12 @@ func inputItemsToAnthropicMessages(items []InputItem) []anthropicMessage {
 			flushU()
 			pendingA.active = true
 			input := json.RawMessage(strings.TrimSpace(it.ToolArgs))
-			if len(input) == 0 {
+			if len(input) == 0 || string(input) == "null" {
 				// Anthropic requires input to be a JSON object even
 				// when the tool takes no arguments. Empty-string from
-				// the agent maps to `{}`.
+				// the agent maps to `{}`; a literal "null" argument
+				// string is also normalised so the upstream never sees
+				// a non-object input on a tool_use block.
 				input = json.RawMessage("{}")
 			}
 			pendingA.toolUses = append(pendingA.toolUses, anthropicContentBlock{
@@ -384,7 +386,7 @@ func parseAnthropicBody(raw []byte, statusCode int) (*Response, error) {
 			}
 		case "tool_use":
 			args := strings.TrimSpace(string(b.Input))
-			if args == "" {
+			if args == "" || args == "null" {
 				args = "{}"
 			}
 			out.ToolCalls = append(out.ToolCalls, ToolCall{
