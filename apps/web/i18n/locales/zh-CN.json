@@ -340,7 +340,41 @@
         "repoSha": "Repo SHA",
         "created": "创建时间",
         "duration": "时长",
-        "error": "错误"
+        "container": "容器",
+        "containerActivity": "容器最后活动",
+        "error": "错误",
+        "actions": "操作"
+      }
+    },
+    "lifecycle": {
+      "title": "容器生命周期",
+      "subtitle": "配置空闲容器的自动停止和已归档会话容器的自动移除策略。",
+      "idleStop": "空闲容器停止等待",
+      "idleStopHint": "容器空闲超过此时长后自动停止。",
+      "archiveRemove": "归档后容器移除等待",
+      "archiveRemoveHint": "会话归档超过此时长后，容器将被永久移除。",
+      "periodicCheck": "定期检查间隔",
+      "periodicCheckHint": "平台扫描需要停止或移除的容器的间隔时间。",
+      "unitSeconds": "秒",
+      "loadFailed": "加载生命周期设置失败",
+      "patchFailed": "保存失败",
+      "saved": "已保存",
+      "saving": "保存中…",
+      "asyncHint": "设置在下一次定期扫描时生效 — 已运行的容器不受影响。",
+      "containerState": {
+        "running": "运行中",
+        "stopped": "已停止",
+        "pendingStop": "停止中…",
+        "pendingRemoval": "移除中…",
+        "none": "—"
+      },
+      "actions": {
+        "stopContainer": "停止容器",
+        "removeContainer": "移除容器",
+        "stopConfirm": "确认停止会话 #{id} 的容器？",
+        "removeConfirm": "确认移除会话 #{id} 的容器？此操作不可撤销。",
+        "stopFailed": "停止容器失败",
+        "removeFailed": "移除容器失败"
       }
     },
     "dashboard": {
