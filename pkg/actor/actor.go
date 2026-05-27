@@ -24,22 +24,29 @@ import (
 type Kind string
 
 const (
-	KindUser     Kind = "user"
-	KindAgent    Kind = "agent"
-	KindWorkflow Kind = "workflow"
-	KindSystem   Kind = "system"
+	KindUser          Kind = "user"
+	KindAgent         Kind = "agent"
+	KindAgentSession  Kind = "agent_session"
+	KindBot           Kind = "bot"
+	KindWorkflow      Kind = "workflow"
+	KindSystem        Kind = "system"
 )
 
 // Ref is the unified actor reference carried by every domain object.
 // It is both the stable business key (Kind + identifiers) and the
-// display-facing snapshot (DisplayName).
+// display-facing snapshot (DisplayName). The ActorID field is the
+// normalised actors table primary key; it is populated when the Ref
+// was resolved through the actor module's Store and zero otherwise.
 type Ref struct {
-	Kind           Kind   `json:"kind"`
-	ID             string `json:"id"`         // stable key, e.g. "user:12", "agent:maintainer", "workflow:run:45", "system:server"
-	DisplayName    string `json:"display_name"`
-	UserID         int64  `json:"user_id,omitempty"`
-	RoleKey        string `json:"role_key,omitempty"`
-	WorkflowRunID  int64  `json:"workflow_run_id,omitempty"`
+	Kind            Kind   `json:"kind"`
+	ID              string `json:"id"`           // stable key, e.g. "user:12", "agent:maintainer", "bot:dependabot", "session:42", "workflow:run:45", "system:server"
+	DisplayName     string `json:"display_name"`
+	ActorID         int64  `json:"actor_id,omitempty"`
+	UserID          int64  `json:"user_id,omitempty"`
+	RoleKey         string `json:"role_key,omitempty"`
+	WorkflowRunID   int64  `json:"workflow_run_id,omitempty"`
+	AgentSessionID  int64  `json:"agent_session_id,omitempty"`
+	BotID           string `json:"bot_id,omitempty"`
 }
 
 // UserRef builds an actor from a platform user row.
@@ -84,9 +91,55 @@ func SystemRef() Ref {
 	}
 }
 
+// AgentSessionRef builds an actor from an agent session. The sessionID is
+// the agent_sessions.id primary key; roleKey provides context for the
+// display name (e.g. "@agent-maintainer (session #42)").
+func AgentSessionRef(sessionID int64, roleKey string) Ref {
+	return Ref{
+		Kind:           KindAgentSession,
+		ID:             fmt.Sprintf("session:%d", sessionID),
+		DisplayName:    fmt.Sprintf("@agent-%s (session #%d)", roleKey, sessionID),
+		AgentSessionID: sessionID,
+		RoleKey:        roleKey,
+	}
+}
+
+// BotRef builds an actor from a bot identifier (e.g. "dependabot",
+// "renovate"). The botID is a stable string key; displayName is the
+// human-facing label.
+func BotRef(botID, displayName string) Ref {
+	return Ref{
+		Kind:        KindBot,
+		ID:          fmt.Sprintf("bot:%s", botID),
+		DisplayName: displayName,
+		BotID:       botID,
+	}
+}
+
+// ---- Format helpers for stable ID strings ----
+
+// FormatUserID returns the stable ID string for a user actor.
+func FormatUserID(userID int64) string { return fmt.Sprintf("user:%d", userID) }
+
+// FormatAgentID returns the stable ID string for an agent actor.
+func FormatAgentID(roleKey string) string { return fmt.Sprintf("agent:%s", roleKey) }
+
+// FormatAgentSessionID returns the stable ID string for an agent-session actor.
+func FormatAgentSessionID(sessionID int64) string { return fmt.Sprintf("session:%d", sessionID) }
+
+// FormatBotID returns the stable ID string for a bot actor.
+func FormatBotID(botID string) string { return fmt.Sprintf("bot:%s", botID) }
+
+// FormatWorkflowRunID returns the stable ID string for a workflow-run actor.
+func FormatWorkflowRunID(runID int64) string { return fmt.Sprintf("workflow:run:%d", runID) }
+
 // FromLegacy constructs a Ref from the pre-actor author_id/agent_role
-// columns. Used in the read fallback path for rows that haven't been
-// dual-written yet.
+// columns.
+//
+// Deprecated: use the actor module's Store (EnsureUser / EnsureAgentRole)
+// to resolve actors through the normalised actors table instead. The
+// sole remaining caller is issue/infra/infra.go::resolveActor, which
+// will be migrated in Phase 3d.
 func FromLegacy(authorID int64, authorName, agentRole string) Ref {
 	if authorID > 0 {
 		return UserRef(authorID, authorName)
@@ -105,21 +158,35 @@ func RefFromColumns(kind Kind, userID int64, roleKey string, workflowRunID int64
 	case KindUser:
 		return Ref{
 			Kind:        KindUser,
-			ID:          fmt.Sprintf("user:%d", userID),
+			ID:          FormatUserID(userID),
 			DisplayName: displayName,
 			UserID:      userID,
 		}
 	case KindAgent:
 		return Ref{
 			Kind:        KindAgent,
-			ID:          fmt.Sprintf("agent:%s", roleKey),
+			ID:          FormatAgentID(roleKey),
 			DisplayName: displayName,
 			RoleKey:     roleKey,
+		}
+	case KindAgentSession:
+		return Ref{
+			Kind:        KindAgentSession,
+			ID:          fmt.Sprintf("session:%d", workflowRunID),
+			DisplayName: displayName,
+			RoleKey:     roleKey,
+		}
+	case KindBot:
+		return Ref{
+			Kind:        KindBot,
+			ID:          fmt.Sprintf("bot:%s", roleKey),
+			DisplayName: displayName,
+			BotID:       roleKey,
 		}
 	case KindWorkflow:
 		return Ref{
 			Kind:          KindWorkflow,
-			ID:            fmt.Sprintf("workflow:run:%d", workflowRunID),
+			ID:            FormatWorkflowRunID(workflowRunID),
 			DisplayName:   displayName,
 			WorkflowRunID: workflowRunID,
 		}

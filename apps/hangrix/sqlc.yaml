@@ -283,3 +283,28 @@ sql:
         emit_exact_table_names: false
         emit_empty_slices: true
 
+  - engine: postgresql
+    queries: internal/modules/actor/infra/queries.sql
+    # Actor migrations FK users(id), workflow_runs(id), and
+    # agent_sessions(id) (the last lives in runner). Union user + org +
+    # repo + runner + workflow schemas so sqlc can resolve every FK at
+    # generate time. At runtime each module applies only its own
+    # migrations via goose_actor.
+    schema:
+      - internal/modules/user/infra/migrations
+      - internal/modules/org/infra/migrations
+      - internal/modules/repo/infra/migrations
+      - internal/modules/runner/infra/migrations
+      - internal/modules/workflow/infra/migrations
+      - internal/modules/actor/infra/migrations
+    gen:
+      go:
+        package: actordb
+        out: internal/modules/actor/infra/actordb
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_empty_slices: true
+

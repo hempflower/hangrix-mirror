@@ -10,6 +10,7 @@ import (
 	platformapi "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire"
 	agentsession "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth"
 	automation "github.com/hangrix/hangrix/apps/hangrix/internal/modules/automation"
@@ -62,6 +63,7 @@ func main() {
 		platformapi.Module(),
 		automation.Module(),
 		workflow.Module(),
+		actor.Module(),
 		web.Module(),
 	)
 
