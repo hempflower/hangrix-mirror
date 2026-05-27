@@ -319,7 +319,7 @@ func (s *PostgresStore) ListComments(ctx context.Context, issueID int64) ([]*dom
 			AuthorID:   r.AuthorID,
 			AuthorName: r.AuthorName,
 			AgentRole:  r.AgentRole,
-			Actor:      resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.AuthorName, r.AgentRole),
+			Actor:      actor.RefFromColumns(actor.Kind(r.ActorKind), r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName),
 			Body:       r.Body,
 			FilePath:   r.FilePath,
 			Line:       int(r.Line),
@@ -399,7 +399,7 @@ func (s *PostgresStore) ListEvents(ctx context.Context, issueID int64) ([]*domai
 			ActorID:   r.ActorID,
 			ActorName: r.ActorName,
 			AgentRole: r.AgentRole,
-			Actor:     resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.ActorID, r.ActorName, r.AgentRole),
+			Actor:     actor.RefFromColumns(actor.Kind(r.ActorKind), r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName),
 			CreatedAt: r.CreatedAt.Time,
 		})
 	}
@@ -416,7 +416,7 @@ func issueFromGet(r issuedb.GetIssueByNumberRow) *domain.Issue {
 		AuthorID:       r.AuthorID,
 		AuthorName:     r.AuthorName,
 		AgentRole:      r.AgentRole,
-		Actor:          resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.AuthorName, r.AgentRole),
+		Actor:          actor.RefFromColumns(actor.Kind(r.ActorKind), r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName),
 		Title:          r.Title,
 		Body:           r.Body,
 		State:          domain.State(r.State),
@@ -444,7 +444,7 @@ func issueFromGetByID(r issuedb.GetIssueByIDRow) *domain.Issue {
 		AuthorID:       r.AuthorID,
 		AuthorName:     r.AuthorName,
 		AgentRole:      r.AgentRole,
-		Actor:          resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.AuthorName, r.AgentRole),
+		Actor:          actor.RefFromColumns(actor.Kind(r.ActorKind), r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName),
 		Title:          r.Title,
 		Body:           r.Body,
 		State:          domain.State(r.State),
@@ -472,7 +472,7 @@ func issueFromList(r issuedb.ListIssuesRow) *domain.Issue {
 		AuthorID:       r.AuthorID,
 		AuthorName:     r.AuthorName,
 		AgentRole:      r.AgentRole,
-		Actor:          resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.AuthorName, r.AgentRole),
+		Actor:          actor.RefFromColumns(actor.Kind(r.ActorKind), r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName),
 		Title:          r.Title,
 		Body:           r.Body,
 		State:          domain.State(r.State),
@@ -500,7 +500,7 @@ func issueFromChildren(r issuedb.ListIssueChildrenRow) *domain.Issue {
 		AuthorID:       r.AuthorID,
 		AuthorName:     r.AuthorName,
 		AgentRole:      r.AgentRole,
-		Actor:          resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.AuthorName, r.AgentRole),
+		Actor:          actor.RefFromColumns(actor.Kind(r.ActorKind), r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName),
 		Title:          r.Title,
 		Body:           r.Body,
 		State:          domain.State(r.State),
@@ -527,7 +527,7 @@ func commentFromRow(r issuedb.GetCommentByIDRow) *domain.Comment {
 		AuthorID:   r.AuthorID,
 		AuthorName: r.AuthorName,
 		AgentRole:  r.AgentRole,
-		Actor:      resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.AuthorName, r.AgentRole),
+		Actor:      actor.RefFromColumns(actor.Kind(r.ActorKind), r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName),
 		Body:       r.Body,
 		FilePath:   r.FilePath,
 		Line:       int(r.Line),
@@ -545,7 +545,7 @@ func eventFromGet(r issuedb.GetEventByIDRow) *domain.Event {
 		ActorID:   r.ActorID,
 		ActorName: r.ActorName,
 		AgentRole: r.AgentRole,
-		Actor:     resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.ActorID, r.ActorName, r.AgentRole),
+		Actor:     actor.RefFromColumns(actor.Kind(r.ActorKind), r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName),
 		CreatedAt: r.CreatedAt.Time,
 	}
 }
@@ -635,7 +635,7 @@ func attachmentFromRow(r issuedb.GetAttachmentRow) *domain.Attachment {
 		CommentID:        r.CommentID,
 		AuthorID:         r.AuthorID,
 		AgentRole:        r.AgentRole,
-		Actor:            resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.ActorDisplayName, r.AgentRole),
+		Actor:            actor.RefFromColumns(actor.Kind(r.ActorKind), r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName),
 		StorageKey:       r.StorageKey,
 		OriginalName:     r.OriginalName,
 		DisplayName:      r.DisplayName,
@@ -663,7 +663,7 @@ func attachmentFromList(r issuedb.ListAttachmentsRow) *domain.Attachment {
 		CommentID:        r.CommentID,
 		AuthorID:         r.AuthorID,
 		AgentRole:        r.AgentRole,
-		Actor:            resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.ActorDisplayName, r.AgentRole),
+		Actor:            actor.RefFromColumns(actor.Kind(r.ActorKind), r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName),
 		StorageKey:       r.StorageKey,
 		OriginalName:     r.OriginalName,
 		DisplayName:      r.DisplayName,
@@ -835,7 +835,7 @@ func buildContribution(
 		IssueID:         issueID,
 		SessionID:       sessionID,
 		AgentRole:       agentRole,
-		Actor:           resolveActor(actorKind, actorUserID, actorRoleKey, actorWorkflowRunID, actorDisplayName, 0, actorDisplayName, agentRole),
+		Actor:           actor.RefFromColumns(actor.Kind(actorKind), actorUserID, actorRoleKey, actorWorkflowRunID, actorDisplayName),
 		RefName:         refName,
 		HeadSHA:         headSha,
 		BaseSHA:         baseSha,
@@ -969,35 +969,6 @@ func todoFromRow(r issuedb.Todo) *domain.Todo {
 	}
 }
 
-// --- actor helpers ---
-
-// resolveActor reads new actor_* columns first; falls back to legacy fields.
-func resolveActor(actorKind string, actorUserID int64, actorRoleKey string, actorWorkflowRunID int64, actorDisplayName string, legacyAuthorID int64, legacyAuthorName, legacyAgentRole string) actor.Ref {
-	if actorKind != "" {
-		return actor.Ref{
-			Kind:           actor.Kind(actorKind),
-			ID:             actorID(actorKind, actorUserID, actorRoleKey, actorWorkflowRunID),
-			DisplayName:    actorDisplayName,
-			UserID:         actorUserID,
-			RoleKey:        actorRoleKey,
-			WorkflowRunID:  actorWorkflowRunID,
-		}
-	}
-	return actor.FromLegacy(legacyAuthorID, legacyAuthorName, legacyAgentRole)
-}
-
-func actorID(kind string, userID int64, roleKey string, workflowRunID int64) string {
-	switch actor.Kind(kind) {
-	case actor.KindUser:
-		return fmt.Sprintf("user:%d", userID)
-	case actor.KindAgent:
-		return fmt.Sprintf("agent:%s", roleKey)
-	case actor.KindWorkflow:
-		return fmt.Sprintf("workflow:run:%d", workflowRunID)
-	default:
-		return "system:server"
-	}
-}
 
 func int8FromInt64(v int64) pgtype.Int8 {
 	if v > 0 {

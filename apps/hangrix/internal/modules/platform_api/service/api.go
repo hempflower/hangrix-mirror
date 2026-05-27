@@ -357,9 +357,7 @@ func (s *APIService) CreateIssue(ctx context.Context, p *apidomain.Actor, title,
 	// operator repairs the host yaml then nudges the issue. Mirrors the
 	// issue handler's fireIssueOpened().
 	//
-	// Resolve the actor for the trigger. The new path uses the actor
-	// module's Resolver; the legacy fallback (p.Session.CreatedBy) is
-	// kept for backward compatibility when ActorResolver is nil.
+	// Resolve the actor for the trigger via the actor module's Resolver.
 	if s.r.deps.Spawner != nil {
 		triggerActor := s.resolvePlatformActor(ctx, p)
 		if spawned, err := s.r.deps.Spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
@@ -369,7 +367,6 @@ func (s *APIService) CreateIssue(ctx context.Context, p *apidomain.Actor, title,
 			RepoID:      scope.repo.ID,
 			IssueNumber: int32(iss.Number),
 			Actor:       triggerActor,
-			ActorID:     p.Session.CreatedBy, // legacy fallback
 		}); err != nil {
 			log.Printf("platform_api: fire issue.opened repo=%d issue=%d: %v", scope.repo.ID, iss.Number, err)
 		} else {
