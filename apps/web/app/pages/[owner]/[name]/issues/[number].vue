@@ -38,7 +38,7 @@ import type { Issue, IssueState, IssueTimeline, IssueMergeResp, ReviewStatus, Re
 import type { ActorRef } from '~/types/actor'
 import type { Commit, FileDiff } from '~/types/repo'
 import { useQuestionnaire } from '@/composables/useQuestionnaire'
-import { useWindowScroll } from '@vueuse/core'
+import { useWindowScroll, useWindowSize } from '@vueuse/core'
 import { relativeTime } from '~/utils/time'
 
 definePageMeta({ layout: 'repo' })
@@ -61,8 +61,23 @@ const headerRef = ref<HTMLElement | null>(null)
 const headerHeight = ref(128) // default 8rem fallback (Tailwind top-32)
 let _headerObserver: ResizeObserver | null = null
 
+// Dynamic sidebar height tracking for sticky-bottom anchoring.
+// When the sidebar is taller than the viewport we pin its bottom
+// edge instead of its top, so Merge/Close are always reachable.
+const asideRef = ref<HTMLElement | null>(null)
+const asideHeight = ref(0)
+let _asideObserver: ResizeObserver | null = null
+
+// Pin the sidebar's top edge: classic sticky-top when it fits
+// below the header; negative offset (sticky-bottom) when taller
+// than the viewport. Math.min picks the binding constraint.
+const stickyTop = computed(() =>
+  Math.min(headerHeight.value, viewportHeight.value - asideHeight.value),
+)
+
 // Scroll-to-top button
 const { y: scrollY } = useWindowScroll()
+const { height: viewportHeight } = useWindowSize()
 const showScrollTop = computed(() => scrollY.value > 480)
 function scrollToTop() {
   window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -676,6 +691,15 @@ nextTick(() => {
     })
     _headerObserver.observe(headerRef.value)
   }
+
+  // Observe the sidebar so sticky-bottom kicks in when cards
+  // push the sidebar taller than the viewport.
+  if (asideRef.value) {
+    _asideObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) asideHeight.value = entry.contentRect.height
+    })
+    _asideObserver.observe(asideRef.value)
+  }
 })
 
 })
@@ -683,6 +707,8 @@ nextTick(() => {
 onUnmounted(() => {
   stopRefreshTimer()
   _headerObserver?.disconnect()
+  _asideObserver?.disconnect()
+  _asideObserver = null
 })
 </script>
 
@@ -958,11 +984,9 @@ onUnmounted(() => {
   </div>
 
   <aside
-  class="sticky self-start space-y-4 overflow-y-auto pb-6"
-  :style="{
-    top: `${headerHeight}px`,
-    maxHeight: `calc(100vh - ${headerHeight}px)`,
-  }"
+  ref="asideRef"
+  class="sticky self-start space-y-4 pb-6"
+  :style="{ top: `${stickyTop}px` }"
   >
           <Card class="gap-0 py-0">
             <CardContent class="space-y-3 p-4 text-sm">
