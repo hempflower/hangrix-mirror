@@ -385,6 +385,56 @@ func (s *APIService) CreateComment(ctx context.Context, p *apidomain.Actor, body
 	}, nil
 }
 
+// CreateCrossIssueComment posts an agent-authored comment on a different
+// issue within the same repo. The target must be a direct parent or child
+// of the caller's current issue; same-repo membership is enforced via the
+// issue lookup path.
+func (s *APIService) CreateCrossIssueComment(ctx context.Context, p *apidomain.Actor, targetIssueNumber int64, body, filePath string, line int) (any, error) {
+	scope, err := s.mustLoadScope(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return nil, errors.New("body is required")
+	}
+
+	// Cannot target the caller's own current issue — use the
+	// current-issue comment endpoint for that.
+	if targetIssueNumber == int64(*p.IssueNumber) {
+		return nil, errors.New("cannot target your own issue with a cross-issue comment; use the current-issue endpoint")
+	}
+
+	// Look up the target issue. Must live in the same repo.
+	target, err := s.r.deps.Issues.GetByNumber(ctx, scope.repo.ID, targetIssueNumber)
+	if err != nil {
+		if errors.Is(err, issuedomain.ErrIssueNotFound) {
+			return nil, errors.New("target issue not found; it may not exist or belong to a different repo")
+		}
+		return nil, fmt.Errorf("load target issue: %w", err)
+	}
+
+	// Verify a direct parent↔child relationship exists.
+	isParent := scope.issue.ParentID == target.ID
+	isChild := target.ParentID == scope.issue.ID
+	if !isParent && !isChild {
+		return nil, errors.New("cross-issue comments are only allowed between directly related parent and child issues")
+	}
+
+	c, err := s.r.deps.Issues.CreateAgentComment(ctx, target.ID, p.RoleKey, body, strings.TrimSpace(filePath), line)
+	if err != nil {
+		return nil, fmt.Errorf("create comment: %w", err)
+	}
+	// Fan mentions on the target issue, recording the source issue number
+	// so downstream agent tools can distinguish cross-issue @-mentions.
+	s.r.fanCommentMentionsForIssue(ctx, p.Session, scope.repo.ID, int32(targetIssueNumber), *p.IssueNumber, c)
+	return map[string]any{
+		"id":         c.ID,
+		"agent_role": c.AgentRole,
+		"created_at": stableTime(c.CreatedAt),
+	}, nil
+}
+
 // GetComment reads a single comment by id.
 func (s *APIService) GetComment(ctx context.Context, p *apidomain.Actor, commentID int64) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)

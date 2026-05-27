@@ -26,6 +26,7 @@ type AgentAPI interface {
 
 	// Comments
 	CreateComment(ctx context.Context, p *apidomain.Actor, body, filePath string, line int) (any, error)
+	CreateCrossIssueComment(ctx context.Context, p *apidomain.Actor, targetIssueNumber int64, body, filePath string, line int) (any, error)
 	GetComment(ctx context.Context, p *apidomain.Actor, commentID int64) (any, error)
 
 	// Children / Checks
