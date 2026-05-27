@@ -975,6 +975,28 @@
         "contributionRejected": "{name} 拒绝了贡献 {ref} —— {reason}",
         "contributionClosed": "{name} 关闭了贡献 {ref}"
       }
+    },
+    "questionnaire": {
+      "title": "问卷",
+      "empty": "暂无问卷。",
+      "submit": "提交",
+      "submitting": "提交中…",
+      "submitted": "已提交 — 不能再次修改",
+      "closed": "已关闭",
+      "results": "结果",
+      "summary": "汇总",
+      "details": "明细",
+      "submissions": "{n} 份答卷",
+      "noResponses": "暂无回答。",
+      "textResponses": "{n} 条文本回答",
+      "closedNoResults": "该问卷已关闭，暂无结果。",
+      "placeholderRequired": "必填",
+      "placeholderOptional": "可选",
+      "loginToSubmit": "登录后提交答案。",
+      "error": {
+        "loadFailed": "加载问卷失败",
+        "submitFailed": "提交答案失败"
+      }
     }
   },
   "release": {

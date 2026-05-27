@@ -17,6 +17,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/llm"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools"
 	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/local"
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/platform"
 )
 
 const atMentionReminder = "<system_reminder>Your last assistant message contains an `@`. If you meant to mention another role (e.g. `@agent-<role-key>`) or post to the issue thread, call the `issue_comment` tool and put the text in its `body` argument — plain assistant text is recorded on the session timeline but does NOT wake other roles or post a comment. If the `@` was incidental (an email address, a code snippet), ignore this reminder and continue.</system_reminder>"
@@ -300,6 +301,12 @@ func (l *Loop) handleEvent(
 	inbox <-chan inboxItem,
 	pendingFrames *[]*ipc.Inbound,
 ) error {
+	// Cancel any questionnaire timeout schedule when an answer or close
+	// event arrives — the agent is already being woken by this event.
+	if frame.Event == "questionnaire.answered" || frame.Event == "questionnaire.closed" {
+		l.cancelQuestionnaireSchedule(frame.Payload)
+	}
+
 	turnID := newTurnID()
 	eventMsg, err := renderEventMessage(frame.Event, frame.Payload)
 	if err != nil {
@@ -515,28 +522,30 @@ func (l *Loop) driveOneTurnWithID(
 			return nil
 		}
 
-		// Sleep-gate: sleep is an async tool that returns immediately with
-		// "scheduled" — the LLM must NOT batch it with other calls because
-		// executing those calls alongside it would effectively bypass the
-		// wait. If sleep is present in this batch, only execute sleep
-		// (and any other sleep calls) and reject the rest with an error
-		// telling the LLM to re-issue after the wake-up notification.
-		if hasSleepCall(resp.ToolCalls) {
+		// Async-tool batch gate: sleep and ask_question are async tools
+		// that return immediately with "scheduled" — the LLM must NOT
+		// batch them with other calls because executing those calls
+		// alongside them would effectively bypass the wait. If either is
+		// present in this batch, only execute the async tool(s) and
+		// reject the rest with an error telling the LLM to re-issue after
+		// the wake-up notification.
+		if hasSleepCall(resp.ToolCalls) || hasAskQuestionCall(resp.ToolCalls) {
+			asyncName := asyncToolNameInBatch(resp.ToolCalls)
 			for _, call := range resp.ToolCalls {
 				_ = l.out.Status("tool")
 				args := json.RawMessage(call.Arguments)
 				var result tools.CallResult
-				if call.Name == local.SleepToolName {
+				if call.Name == local.SleepToolName || call.Name == platform.AskQuestionToolName {
 					result = l.registry.Call(ctx, call.Name, args)
 				} else {
 					errBody, _ := json.Marshal(map[string]any{
-						"error": "This tool call was batched with sleep in the same response. Sleep must be the only call in its batch — re-issue this call in a subsequent turn after the sleep notification wakes you.",
+						"error": fmt.Sprintf("This tool call was batched with %s in the same response. %s must be the only call in its batch — re-issue this call in a subsequent turn after the wake-up notification.", asyncName, asyncName),
 					})
 					result = tools.CallResult{
 						Source:     tools.SourceLocal,
 						ResultJSON: errBody,
 						IsError:    true,
-						ErrMsg:     "batched with sleep; re-issue after wake-up",
+						ErrMsg:     fmt.Sprintf("batched with %s; re-issue after wake-up", asyncName),
 					}
 				}
 				toolContent := toolPayload(result)
@@ -632,6 +641,13 @@ func (l *Loop) applyInboxItem(cctx *Context, item inboxItem, pendingFrames *[]*i
 		*pendingFrames = append(*pendingFrames, &ipc.Inbound{Kind: "__reader_err__"})
 	case item.Frame != nil:
 		if item.Frame.Kind == "event" {
+			// Cancel any questionnaire timeout schedule when an answer
+			// or close event arrives mid-turn — the agent is already
+			// being woken by this event.
+			if item.Frame.Event == "questionnaire.answered" || item.Frame.Event == "questionnaire.closed" {
+				l.cancelQuestionnaireSchedule(item.Frame.Payload)
+			}
+
 			msg, err := renderEventMessage(item.Frame.Event, item.Frame.Payload)
 			if err != nil {
 				// Malformed payload from the runner; log and drop. We
@@ -851,6 +867,45 @@ func hasSleepCall(calls []llm.ToolCall) bool {
 		}
 	}
 	return false
+}
+
+// hasAskQuestionCall reports whether any tool call in the slice is an
+// ask_question call. Used by the async-tool batch gate (same pattern as
+// hasSleepCall).
+func hasAskQuestionCall(calls []llm.ToolCall) bool {
+	for _, c := range calls {
+		if c.Name == platform.AskQuestionToolName {
+			return true
+		}
+	}
+	return false
+}
+
+// asyncToolNameInBatch returns the name of the async tool (sleep or
+// ask_question) that triggered the batch gate. Used to build a
+// correct error message for the rejected tool calls.
+func asyncToolNameInBatch(calls []llm.ToolCall) string {
+	if hasSleepCall(calls) {
+		return local.SleepToolName
+	}
+	return platform.AskQuestionToolName
+}
+
+// cancelQuestionnaireSchedule parses a questionnaire event payload and
+// cancels the pending timeout schedule if one exists. Safe to call on a
+// nil async or a non-existent schedule (no-op). The schedule ID follows
+// the convention "questionnaire-{id}".
+func (l *Loop) cancelQuestionnaireSchedule(payload json.RawMessage) {
+	if l.async == nil || len(payload) == 0 {
+		return
+	}
+	var evt struct {
+		QuestionnaireID *int64 `json:"questionnaire_id"`
+	}
+	if err := json.Unmarshal(payload, &evt); err != nil || evt.QuestionnaireID == nil {
+		return
+	}
+	l.async.CancelSchedule(fmt.Sprintf("questionnaire-%d", *evt.QuestionnaireID))
 }
 
 func newTurnID() string {

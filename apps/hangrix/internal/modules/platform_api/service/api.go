@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
+	questionnairedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
 
@@ -1212,4 +1214,228 @@ func contributionSummaryToAPI(c *issuedomain.Contribution) apiContribItem {
 		item.MergedAt = stableTime(*c.MergedAt)
 	}
 	return item
+}
+
+
+// ---- Questionnaires ---- //
+
+// CreateQuestionnaire creates a new questionnaire on the current issue.
+func (s *APIService) CreateQuestionnaire(ctx context.Context, p *apidomain.Actor, input apidomain.CreateQuestionnaireInput) (any, error) {
+	scope, err := s.mustLoadScope(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if s.r.deps.Questionnaires == nil {
+		return nil, errors.New("questionnaire service not available")
+	}
+
+	params := questionnairedomain.CreateParams{
+		IssueID:        scope.issue.ID,
+		Title:          input.Title,
+		Description:    input.Description,
+		CreatedByAgent: p.RoleKey,
+	}
+	for i, q := range input.Questions {
+		cq := questionnairedomain.CreateQuestion{
+			Position: i,
+			Text:     q.Text,
+			Type:     questionnairedomain.Qtype(q.Type),
+			Required: q.Required,
+		}
+		for _, o := range q.Options {
+			cq.Options = append(cq.Options, questionnairedomain.Option{Label: o.Label})
+		}
+		params.Questions = append(params.Questions, cq)
+	}
+
+	qn, err := s.r.deps.Questionnaires.Create(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+
+	return toAPIQuestionnaire(qn), nil
+}
+
+// GetQuestionnaire returns a single questionnaire by ID.
+func (s *APIService) GetQuestionnaire(ctx context.Context, p *apidomain.Actor, id int64) (any, error) {
+	scope, err := s.mustLoadScope(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if s.r.deps.Questionnaires == nil {
+		return nil, errors.New("questionnaire service not available")
+	}
+	qn, err := s.r.deps.Questionnaires.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if qn.IssueID != scope.issue.ID {
+		return nil, errors.New("questionnaire does not belong to the current issue")
+	}
+	return toAPIQuestionnaire(qn), nil
+}
+
+// GetQuestionnaireResult returns aggregated results for a questionnaire.
+func (s *APIService) GetQuestionnaireResult(ctx context.Context, p *apidomain.Actor, id int64) (any, error) {
+	scope, err := s.mustLoadScope(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if s.r.deps.Questionnaires == nil {
+		return nil, errors.New("questionnaire service not available")
+	}
+	result, err := s.r.deps.Questionnaires.BuildResult(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if result.Questionnaire.IssueID != scope.issue.ID {
+		return nil, errors.New("questionnaire does not belong to the current issue")
+	}
+	return toAPIResult(result), nil
+}
+
+// ListQuestionnaires returns all questionnaires for the current issue.
+func (s *APIService) ListQuestionnaires(ctx context.Context, p *apidomain.Actor) (any, error) {
+	scope, err := s.mustLoadScope(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if s.r.deps.Questionnaires == nil {
+		return nil, errors.New("questionnaire service not available")
+	}
+	qns, err := s.r.deps.Questionnaires.GetByIssue(ctx, scope.issue.ID)
+	if err != nil {
+		return nil, err
+	}
+	var items []any
+	for _, qn := range qns {
+		items = append(items, toAPIQuestionnaire(qn))
+	}
+	if items == nil {
+		items = []any{}
+	}
+	return items, nil
+}
+
+// CloseQuestionnaire closes a questionnaire.
+func (s *APIService) CloseQuestionnaire(ctx context.Context, p *apidomain.Actor, id int64, reason string) (any, error) {
+	scope, err := s.mustLoadScope(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if s.r.deps.Questionnaires == nil {
+		return nil, errors.New("questionnaire service not available")
+	}
+	qn, err := s.r.deps.Questionnaires.Close(ctx, id, reason)
+	if err != nil {
+		return nil, err
+	}
+	if qn.IssueID != scope.issue.ID {
+		return nil, errors.New("questionnaire does not belong to the current issue")
+	}
+	return toAPIQuestionnaire(qn), nil
+}
+
+// ---- DTO helpers ---- //
+
+func toAPIQuestionnaire(qn *questionnairedomain.Questionnaire) map[string]any {
+	result := map[string]any{
+		"id":               qn.ID,
+		"issue_id":         qn.IssueID,
+		"title":            qn.Title,
+		"description":      qn.Description,
+		"status":           string(qn.Status),
+		"created_by_agent": qn.CreatedByAgent,
+		"created_at":       stableTime(qn.CreatedAt),
+	}
+	if qn.ClosedAt != nil {
+		result["closed_at"] = stableTime(*qn.ClosedAt)
+	}
+	if qn.ClosedReason != "" {
+		result["closed_reason"] = qn.ClosedReason
+	}
+	var questions []map[string]any
+	for _, q := range qn.Questions {
+		qi := map[string]any{
+			"id":       q.ID,
+			"position": q.Position,
+			"type":     string(q.Type),
+			"text":     q.Text,
+			"required": q.Required,
+		}
+		if q.Options != nil {
+			var opts []map[string]any
+			for _, o := range q.Options {
+				opts = append(opts, map[string]any{"id": o.ID, "label": o.Label})
+			}
+			qi["options"] = opts
+		}
+		questions = append(questions, qi)
+	}
+	if questions == nil {
+		questions = []map[string]any{}
+	}
+	result["questions"] = questions
+	return result
+}
+
+func toAPIResult(r *questionnairedomain.Result) map[string]any {
+	result := map[string]any{
+		"submissions": r.Submissions,
+	}
+	if r.Questionnaire != nil {
+		result["questionnaire"] = toAPIQuestionnaire(r.Questionnaire)
+	}
+	byQ := make(map[string]any)
+	for qid, qr := range r.ByQuestion {
+		qi := map[string]any{"type": string(qr.Type)}
+		if qr.Tallies != nil {
+			var tallies []map[string]any
+			for _, t := range qr.Tallies {
+				tallies = append(tallies, map[string]any{
+					"option_id": t.OptionID, "label": t.Label,
+					"count": t.Count, "percent": t.Percent,
+				})
+			}
+			qi["tallies"] = tallies
+		}
+		if qr.Responses != nil {
+			var responses []map[string]any
+			for _, tr := range qr.Responses {
+				responses = append(responses, map[string]any{
+					"user_id":      tr.UserID,
+					"user_display": tr.DisplayName,
+					"text":         tr.Text,
+					"submitted_at": stableTime(tr.SubmittedAt),
+				})
+			}
+			qi["responses"] = responses
+		}
+		byQ[strconv.FormatInt(qid, 10)] = qi
+	}
+	result["by_question"] = byQ
+
+	var submitters []map[string]any
+	for _, sd := range r.Submitters {
+		sm := map[string]any{
+			"user_id":      sd.UserID,
+			"user_display": sd.DisplayName,
+			"submitted_at": stableTime(sd.SubmittedAt),
+		}
+		var answers []map[string]any
+		for _, a := range sd.Answers {
+			am := map[string]any{"question_id": a.QuestionID}
+			if len(a.OptionIDs) > 0 {
+				am["option_ids"] = a.OptionIDs
+			}
+			if a.Text != "" {
+				am["text"] = a.Text
+			}
+			answers = append(answers, am)
+		}
+		sm["answers"] = answers
+		submitters = append(submitters, sm)
+	}
+	result["submitters"] = submitters
+	return result
 }

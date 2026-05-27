@@ -975,6 +975,28 @@
         "contributionRejected": "{name} rejected contribution {ref} — {reason}",
         "contributionClosed": "{name} closed contribution {ref}"
       }
+    },
+    "questionnaire": {
+      "title": "Questionnaire",
+      "empty": "No questionnaires yet.",
+      "submit": "Submit",
+      "submitting": "Submitting…",
+      "submitted": "Submitted — you cannot modify your answers.",
+      "closed": "Closed",
+      "results": "Results",
+      "summary": "Summary",
+      "details": "Details",
+      "submissions": "{n} submissions",
+      "noResponses": "No responses yet.",
+      "textResponses": "{n} text response(s)",
+      "closedNoResults": "This questionnaire is closed. Results are not yet available.",
+      "placeholderRequired": "Required",
+      "placeholderOptional": "Optional",
+      "loginToSubmit": "Sign in to submit your answers.",
+      "error": {
+        "loadFailed": "Failed to load questionnaire",
+        "submitFailed": "Failed to submit answers"
+      }
     }
   },
   "release": {

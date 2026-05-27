@@ -8,6 +8,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/kv"
 	platformapi "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire"
 	agentsession "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth"
@@ -50,6 +51,7 @@ func main() {
 		repo.Module(),
 		release.Module(),
 		issue.Module(),
+		questionnaire.Module(),
 		llmprovider.Module(),
 		llmproxy.Module(),
 		runner.Module(),

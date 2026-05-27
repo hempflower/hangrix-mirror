@@ -145,7 +145,7 @@ func TestLoopSmoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, platform.All(platformClient, false), nil, []string{"*"})
+	registry := tools.Build(bundle.Tools, platform.All(platformClient, nil, false), nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -891,6 +891,152 @@ func TestLoopSleepGate(t *testing.T) {
 	}
 	if !sawDone {
 		t.Error("expected a done frame after sleep-gate")
+	}
+}
+
+// TestLoopAskQuestionGate verifies the ask_question batching guard: when
+// the LLM returns ask_question alongside other tool calls in the same
+// response, the loop must only execute ask_question and reject the rest
+// with errors. The turn must end immediately (done frame).
+func TestLoopAskQuestionGate(t *testing.T) {
+	t.Parallel()
+
+	var llmCallCount atomic.Int32
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		callN := llmCallCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch callN {
+		case 1:
+			// First turn: LLM returns both ask_question AND another tool
+			// call (glob). The async-gate must reject the glob.
+			resp := map[string]any{
+				"id": "resp_1",
+				"output": []map[string]any{
+					{
+						"type":      "function_call",
+						"call_id":   "tc_aq",
+						"name":      "ask_question",
+						"arguments": `{"title":"test","questions":[{"type":"text_input","text":"q?"}]}`,
+					},
+					{
+						"type":      "function_call",
+						"call_id":   "tc_other",
+						"name":      "glob",
+						"arguments": `{"pattern":"*.go"}`,
+					},
+				},
+				"usage": map[string]any{"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			http.Error(w, "unexpected extra LLM call", http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(llmServer.Close)
+
+	// Mock platform server — ask_question POSTs to it.
+	platformServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/issues/current/questionnaires" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"id":    7,
+					"title": "test",
+				},
+			})
+			return
+		}
+		http.Error(w, "unexpected", http.StatusNotFound)
+	}))
+	t.Cleanup(platformServer.Close)
+
+	llmClient := llm.New(llmServer.URL, "test-token")
+	platformClient := platform.NewClient(platformServer.URL, "test-token")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bundle := local.Build()
+	registry := tools.Build(bundle.Tools, platform.All(platformClient, bundle.Async, false), nil, []string{"*"})
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdoutR.Close()
+
+	loop := runtime.NewLoop(
+		ipc.NewReader(stdinR),
+		ipc.NewWriter(stdoutW),
+		llmClient,
+		"gpt-4o-mini",
+		registry,
+		"system prompt for test",
+		bundle.Async,
+		0, 0, 0,
+	)
+
+	loopErr := make(chan error, 1)
+	go func() {
+		loopErr <- loop.Run(ctx)
+		stdoutW.Close()
+	}()
+
+	go func() {
+		_, _ = stdinW.Write([]byte(`{"kind":"history","messages":[]}` + "\n"))
+		_, _ = stdinW.Write([]byte(`{"kind":"event","event":"issue.comment.mentioned","payload":{"body":"@bot do something"}}` + "\n"))
+		time.Sleep(500 * time.Millisecond)
+		_, _ = stdinW.Write([]byte(`{"kind":"control","op":"shutdown"}` + "\n"))
+		stdinW.Close()
+	}()
+
+	frames, err := drainFrames(stdoutR)
+	if err != nil {
+		t.Fatalf("drain frames: %v", err)
+	}
+	if err := <-loopErr; err != nil {
+		t.Fatalf("loop returned error: %v", err)
+	}
+	if got := llmCallCount.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 LLM call (async-gate prevents second round), got %d", got)
+	}
+
+	var (
+		sawAQCall   bool
+		sawOtherCall bool
+		sawDone     bool
+		otherResult string
+	)
+	for _, f := range frames {
+		switch f.Kind {
+		case "tool_call":
+			if f.Name == "ask_question" {
+				sawAQCall = true
+				if !strings.Contains(string(f.Result), "scheduled") {
+					t.Errorf("ask_question result missing 'scheduled': %s", f.Result)
+				}
+			}
+			if f.Name == "glob" {
+				sawOtherCall = true
+				otherResult = string(f.Result)
+			}
+		case "done":
+			sawDone = true
+		}
+	}
+	if !sawAQCall {
+		t.Error("expected a tool_call for ask_question")
+	}
+	if !sawOtherCall {
+		t.Error("expected a tool_call for the rejected call (glob)")
+	}
+	if !strings.Contains(otherResult, "batched with ask_question") {
+		t.Errorf("rejected call result should explain batching violation, got: %s", otherResult)
+	}
+	if !sawDone {
+		t.Error("expected a done frame after async-gate")
 	}
 }
 

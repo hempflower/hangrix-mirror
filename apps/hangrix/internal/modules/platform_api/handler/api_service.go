@@ -65,4 +65,11 @@ type AgentAPI interface {
 	DeleteRelease(ctx context.Context, p *apidomain.Actor, id int64) error
 	PublishRelease(ctx context.Context, p *apidomain.Actor, id int64) (any, error)
 	UploadReleaseAsset(ctx context.Context, p *apidomain.Actor, releaseID int64, name, contentB64, contentType string) (any, error)
+
+	// Questionnaires
+	CreateQuestionnaire(ctx context.Context, p *apidomain.Actor, input apidomain.CreateQuestionnaireInput) (any, error)
+	GetQuestionnaire(ctx context.Context, p *apidomain.Actor, id int64) (any, error)
+	GetQuestionnaireResult(ctx context.Context, p *apidomain.Actor, id int64) (any, error)
+	ListQuestionnaires(ctx context.Context, p *apidomain.Actor) (any, error)
+	CloseQuestionnaire(ctx context.Context, p *apidomain.Actor, id int64, reason string) (any, error)
 }
