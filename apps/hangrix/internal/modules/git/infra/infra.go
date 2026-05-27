@@ -271,8 +271,9 @@ func (g *GoGit) ListRefs(path string) (*domain.Refs, error) {
 				return nil // skip unresolvable tags
 			}
 			out.Tags = append(out.Tags, &domain.Ref{
-				Name: name.Short(),
-				SHA:  peeled.String(),
+				Name:      name.Short(),
+				SHA:       peeled.String(),
+				CreatedAt: tagCreatedAt(repo, ref.Hash()),
 			})
 		}
 		return nil
@@ -1317,6 +1318,36 @@ func peelHashToCommit(repo *git.Repository, hash plumbing.Hash) (plumbing.Hash, 
 		return commit.Hash, nil
 	default:
 		return plumbing.ZeroHash, domain.ErrRefNotFound
+	}
+
+}
+
+// tagCreatedAt returns the creation timestamp for a tag ref. For annotated
+// tags it prefers the tagger time; if that is zero it falls back to the
+// target commit's committer time. For lightweight tags it returns the
+// target commit's committer time. Returns the zero time when the tag
+// object or its target commit cannot be read.
+func tagCreatedAt(repo *git.Repository, refHash plumbing.Hash) time.Time {
+	obj, err := repo.Object(plumbing.AnyObject, refHash)
+	if err != nil {
+		return time.Time{}
+	}
+	switch v := obj.(type) {
+	case *object.Tag:
+		// IsZero catches the Go zero time (year 1); epoch 0
+		// (1970-01-01) passes IsZero but is still a sentinel.
+		if !v.Tagger.When.IsZero() && v.Tagger.When.After(time.Unix(0, 0)) {
+			return v.Tagger.When
+		}
+		commit, err := v.Commit()
+		if err != nil {
+			return time.Time{}
+		}
+		return commit.Committer.When
+	case *object.Commit:
+		return v.Committer.When
+	default:
+		return time.Time{}
 	}
 }
 

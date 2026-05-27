@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"time"
 	"github.com/go-chi/chi/v5"
 
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
@@ -17,6 +18,8 @@ import (
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 	tokendomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/token/domain"
 	userdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/user/domain"
+	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/infra"
 )
 
 // ------- stubs -------
@@ -957,5 +960,299 @@ func TestContributionRefPushRules(t *testing.T) {
 		if got := allowed(tc.ref, tc.oldSHA); got != tc.want {
 			t.Errorf("%s: allowed(%q, old=%q) = %v, want %v", tc.name, tc.ref, tc.oldSHA, got, tc.want)
 		}
+	}
+}
+
+
+// ------- getRefs sort tests -------
+
+// stubGit implements gitdomain.Git. Only ListRefs is wired; every other
+// method is a no-op / nil-return stub — getRefs only calls ListRefs.
+type stubGit struct {
+	listRefsFn func(path string) (*gitdomain.Refs, error)
+}
+
+func (s *stubGit) Init(path string, defaultBranch string) error                            { return nil }
+func (s *stubGit) SeedInitialCommit(path, defaultBranch string, files map[string][]byte, authorName, authorEmail string) error {
+	return nil
+}
+func (s *stubGit) ListRefs(path string) (*gitdomain.Refs, error)             { return s.listRefsFn(path) }
+func (s *stubGit) ListCommits(path, ref string, offset, limit int) ([]*gitdomain.Commit, error) {
+	return nil, nil
+}
+func (s *stubGit) CommitByID(path, sha string) (*gitdomain.CommitWithDiff, error) { return nil, nil }
+func (s *stubGit) Tree(path, refOrSha, treePath string) ([]*gitdomain.TreeEntry, error) {
+	return nil, nil
+}
+func (s *stubGit) TreeView(path, refOrSha, treePath string) (*gitdomain.TreeView, error) {
+	return nil, nil
+}
+func (s *stubGit) Blob(path, refOrSha, filePath string) ([]byte, bool, error) { return nil, false, nil }
+func (s *stubGit) DiffRefs(path, from, to string) ([]*gitdomain.FileDiff, error) { return nil, nil }
+func (s *stubGit) DiffMergeBase(path, base, topic string) ([]*gitdomain.FileDiff, error) {
+	return nil, nil
+}
+func (s *stubGit) CreateBranch(path, branchName, startRef string) error           { return nil }
+func (s *stubGit) CreateBranchAt(path, branchName, commitSHA string) error         { return nil }
+func (s *stubGit) DeleteBranch(path, branchName string) error                      { return nil }
+func (s *stubGit) SetHEAD(path, branchName string) error                           { return nil }
+func (s *stubGit) CreateLightweightTag(path, tagName, refOrSha string) error       { return nil }
+func (s *stubGit) CreateAnnotatedTag(path, tagName, refOrSha, message string, tagger gitdomain.Signature) error {
+	return nil
+}
+func (s *stubGit) DeleteTag(path, tagName string) error                           { return nil }
+func (s *stubGit) ContainsCommit(path, sha string) (*gitdomain.ContainingRefs, error) { return nil, nil }
+func (s *stubGit) IsAncestor(path, ancestor, descendant string) (bool, error)       { return false, nil }
+func (s *stubGit) CheckFastForward(path, baseRef, headRef string) (bool, string, error) {
+	return false, "", nil
+}
+func (s *stubGit) ResolveCommit(path, ref string) (string, error) { return "", nil }
+func (s *stubGit) MergeBranch(path, intoBranch, fromRef, message string, author gitdomain.Signature) (string, string, error) {
+	return "", "", nil
+}
+func (s *stubGit) CheckAutoMerge(path, baseRef, headRef string) (bool, string, string, error) {
+	return false, "", "", nil
+}
+func (s *stubGit) ApplyPatch(path, branch, patchText, message string, author, committer gitdomain.Signature) (string, error) {
+	return "", nil
+}
+func (s *stubGit) EditAndCommit(path, branch, baseCommitSHA, filePath string, newContent []byte, message string, author, committer gitdomain.Signature) (string, error) {
+	return "", nil
+}
+
+// newTestHandlerForRefs builds a Handler with git and storage wired so
+// getRefs can run. The caller provides a *stubGit; storage uses a temp
+// repos path so resolveFsPath passes validation.
+func newTestHandlerForRefs(caller *userdomain.User, git *stubGit, resolv *stubResolver) *Handler {
+	return &Handler{
+		store: &stubStore{
+			byOwnerAndName: func(ownerKind domain.OwnerKind, ownerID int64, name string) (*domain.Repo, error) {
+				if ownerKind == domain.OwnerKindUser && ownerID == 1 && name == "testrepo" {
+					return testRepo, nil
+				}
+				return nil, domain.ErrRepoNotFound
+			},
+		},
+		members:    &stubMemberStore{},
+		users:      &stubUserRepo{},
+		resolver:   resolv,
+		storage:    &infra.Storage{},
+		git:        git,
+		middleware: authMiddleware{user: caller},
+	}
+}
+
+
+// makeTags returns a slice of tags with known CreatedAt values so sort
+// order is deterministic across test runs.
+func makeTags() []*gitdomain.Ref {
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	return []*gitdomain.Ref{
+		{Name: "v1.0", SHA: "aaa", CreatedAt: base},
+		{Name: "v2.0", SHA: "bbb", CreatedAt: base.Add(30 * 24 * time.Hour)},
+		{Name: "v0.1", SHA: "ccc", CreatedAt: base.Add(-30 * 24 * time.Hour)},
+		{Name: "v1.1", SHA: "ddd", CreatedAt: base.Add(7 * 24 * time.Hour)},
+	}
+}
+
+func TestGetRefs_SortDesc(t *testing.T) {
+	git := &stubGit{
+		listRefsFn: func(path string) (*gitdomain.Refs, error) {
+			return &gitdomain.Refs{
+				Branches: []*gitdomain.Ref{},
+				Tags:     makeTags(),
+			}, nil
+		},
+	}
+	resolver := &stubResolver{
+		resolveOwner: func(name string) (*orgdomain.Owner, error) {
+			return &orgdomain.Owner{Kind: orgdomain.OwnerKindUser, ID: 1, Name: name}, nil
+		},
+	}
+	h := newTestHandlerForRefs(testOwner, git, resolver)
+	srv := httptest.NewServer(newRouter(h))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/repos/testuser/testrepo/refs?type=tags&sort=desc")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body refListResp
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Items) != 4 {
+		t.Fatalf("items len = %d, want 4", len(body.Items))
+	}
+	// Expected desc order: v2.0 (newest), v1.1, v1.0, v0.1 (oldest)
+	wantOrder := []string{"v2.0", "v1.1", "v1.0", "v0.1"}
+	for i, name := range wantOrder {
+		if body.Items[i].Name != name {
+			t.Errorf("items[%d].Name = %q, want %q", i, body.Items[i].Name, name)
+		}
+	}
+}
+
+func TestGetRefs_SortAsc(t *testing.T) {
+	git := &stubGit{
+		listRefsFn: func(path string) (*gitdomain.Refs, error) {
+			return &gitdomain.Refs{
+				Branches: []*gitdomain.Ref{},
+				Tags:     makeTags(),
+			}, nil
+		},
+	}
+	resolver := &stubResolver{
+		resolveOwner: func(name string) (*orgdomain.Owner, error) {
+			return &orgdomain.Owner{Kind: orgdomain.OwnerKindUser, ID: 1, Name: name}, nil
+		},
+	}
+	h := newTestHandlerForRefs(testOwner, git, resolver)
+	srv := httptest.NewServer(newRouter(h))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/repos/testuser/testrepo/refs?type=tags&sort=asc")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body refListResp
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Items) != 4 {
+		t.Fatalf("items len = %d, want 4", len(body.Items))
+	}
+	// Expected asc order: v0.1 (oldest), v1.0, v1.1, v2.0 (newest)
+	wantOrder := []string{"v0.1", "v1.0", "v1.1", "v2.0"}
+	for i, name := range wantOrder {
+		if body.Items[i].Name != name {
+			t.Errorf("items[%d].Name = %q, want %q", i, body.Items[i].Name, name)
+		}
+	}
+}
+
+func TestGetRefs_SortDefault(t *testing.T) {
+	git := &stubGit{
+		listRefsFn: func(path string) (*gitdomain.Refs, error) {
+			return &gitdomain.Refs{
+				Branches: []*gitdomain.Ref{},
+				Tags:     makeTags(),
+			}, nil
+		},
+	}
+	resolver := &stubResolver{
+		resolveOwner: func(name string) (*orgdomain.Owner, error) {
+			return &orgdomain.Owner{Kind: orgdomain.OwnerKindUser, ID: 1, Name: name}, nil
+		},
+	}
+	h := newTestHandlerForRefs(testOwner, git, resolver)
+	srv := httptest.NewServer(newRouter(h))
+	defer srv.Close()
+
+	// No sort param → defaults to desc.
+	resp, err := http.Get(srv.URL + "/api/repos/testuser/testrepo/refs?type=tags")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body refListResp
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Items) != 4 {
+		t.Fatalf("items len = %d, want 4", len(body.Items))
+	}
+	// Default desc: newest first.
+	wantOrder := []string{"v2.0", "v1.1", "v1.0", "v0.1"}
+	for i, name := range wantOrder {
+		if body.Items[i].Name != name {
+			t.Errorf("items[%d].Name = %q, want %q", i, body.Items[i].Name, name)
+		}
+	}
+}
+
+func TestGetRefs_SortInvalid(t *testing.T) {
+	git := &stubGit{
+		listRefsFn: func(path string) (*gitdomain.Refs, error) {
+			return &gitdomain.Refs{
+				Branches: []*gitdomain.Ref{},
+				Tags:     makeTags(),
+			}, nil
+		},
+	}
+	resolver := &stubResolver{
+		resolveOwner: func(name string) (*orgdomain.Owner, error) {
+			return &orgdomain.Owner{Kind: orgdomain.OwnerKindUser, ID: 1, Name: name}, nil
+		},
+	}
+	h := newTestHandlerForRefs(testOwner, git, resolver)
+	srv := httptest.NewServer(newRouter(h))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/repos/testuser/testrepo/refs?type=tags&sort=invalid")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestGetRefs_SortBranchesIgnored(t *testing.T) {
+	git := &stubGit{
+		listRefsFn: func(path string) (*gitdomain.Refs, error) {
+			return &gitdomain.Refs{
+				Branches: []*gitdomain.Ref{
+					{Name: "feature-a", SHA: "aaa"},
+					{Name: "feature-b", SHA: "bbb"},
+					{Name: "main", SHA: "ccc"},
+				},
+			}, nil
+		},
+	}
+	resolver := &stubResolver{
+		resolveOwner: func(name string) (*orgdomain.Owner, error) {
+			return &orgdomain.Owner{Kind: orgdomain.OwnerKindUser, ID: 1, Name: name}, nil
+		},
+	}
+	h := newTestHandlerForRefs(testOwner, git, resolver)
+	srv := httptest.NewServer(newRouter(h))
+	defer srv.Close()
+
+	// sort param with branches should be ignored; branches stay name-sorted.
+	resp, err := http.Get(srv.URL + "/api/repos/testuser/testrepo/refs?type=branches&sort=asc")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body refListResp
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Items) != 3 {
+		t.Fatalf("items len = %d, want 3", len(body.Items))
+	}
+	// sort=asc ignored for branches; they should remain name-sorted (alphabetical).
+	if body.Items[0].Name != "feature-a" || body.Items[1].Name != "feature-b" || body.Items[2].Name != "main" {
+		t.Errorf("branches not in expected alphabetical order: %v", body.Items)
 	}
 }

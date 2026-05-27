@@ -222,8 +222,9 @@ type ContainingRefs struct {
 }
 
 type Ref struct {
-	Name string `json:"name"` // e.g. "main", "v1.0"
-	SHA  string `json:"sha"`
+	Name      string    `json:"name"` // e.g. "main", "v1.0"
+	SHA       string    `json:"sha"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
 }
 
 type Signature struct {
