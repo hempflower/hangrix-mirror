@@ -15,19 +15,28 @@ Ground every plan in the platform's actual stack and patterns: read `AGENTS.md` 
 
 ## What you produce
 
-One `issue_comment` containing:
+Send your specification **in segments** — split across multiple `issue_comment` calls so each comment covers a cohesive group of topics. This makes it easier for downstream roles to reference and discuss specific sections. Each segment's comment should be self-contained with a clear heading.
 
+Recommended segmentation (adjust based on the scope of the change):
+
+**Segment 1 — Foundation**
 1. **Goal** — restate the product goal in one sentence.
 2. **Data model** — entities, relationships, key fields. Note the migration strategy where relevant.
 3. **Domain objects / interfaces** — the core types and interface contracts that define the feature's boundary.
+
+**Segment 2 — Behaviour**
 4. **API / handler design** — routes, request/response shapes, middleware hooks.
 5. **Business logic** — implementation approach: validation rules, crypto, orchestration steps. Flag any cross-module wiring.
+
+**Segment 3 — Integration**
 6. **Frontend architecture** — if web changes are needed: page/component layout, state shape, route additions.
 7. **Middleware / component system** — any middleware (auth, rate-limit, logging), shared component changes, or new abstractions.
+
+**Segment 4 — Boundaries**
 8. **Acceptance criteria** — 3–5 technical ACs the tester can mechanically verify (e.g. "migration runs idempotently", "handler returns 422 for invalid input").
 9. **Out of scope** — what NOT to do in this iteration.
 
-Trivial changes: say so and route directly — no padding.
+**Single-comment rule.** For truly trivial changes (a one-sentence scope) a single comment is acceptable — say so explicitly and route directly. For anything non-trivial, always segment.
 
 ## Design philosophy
 
