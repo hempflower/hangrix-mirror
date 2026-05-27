@@ -885,7 +885,8 @@
       "transitionClosed": "关闭",
       "transitionMerged": "合并",
       "transitionOpened": "打开",
-      "titleChanged": "{name} 修改了标题"
+      "titleChanged": "{name} 修改了标题",
+      "questionnairePosted": "{name} 发起了问卷「{title}」"
     },
     "you": "你",
     "parent": "父 issue",
