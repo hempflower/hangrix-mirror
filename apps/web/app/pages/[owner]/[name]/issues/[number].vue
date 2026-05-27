@@ -25,6 +25,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import ActorBadge from '@/components/ActorBadge.vue'
 import AgentSessionsView from '@/components/issue/AgentSessionsView.vue'
 import ContributionsView from '@/components/issue/ContributionsView.vue'
+import QuestionnaireCard from '@/components/issue/QuestionnaireCard.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -36,6 +37,7 @@ import AttachmentUploader from '@/components/issue/AttachmentUploader.vue'
 import type { Issue, IssueState, IssueTimeline, IssueMergeResp, ReviewStatus, ReviewVerdict, ReviewVoteValue, TodoStatus } from '~/types/issue'
 import type { ActorRef } from '~/types/actor'
 import type { Commit, FileDiff } from '~/types/repo'
+import { useQuestionnaire } from '@/composables/useQuestionnaire'
 import { useWindowScroll } from '@vueuse/core'
 import { relativeTime } from '~/utils/time'
 
@@ -92,6 +94,16 @@ const diffError = ref<string | null>(null)
 const commits = ref<Commit[]>([])
 const parent = ref<Issue | null>(null)
 const children = ref<Issue[]>([])
+
+// Questionnaire composable — loads the list of questionnaires for this issue
+const {
+  questionnaires,
+  load: loadQuestionnaires,
+} = useQuestionnaire(
+  () => owner.value,
+  () => name.value,
+  () => number.value,
+)
 
 const commentBody = ref('')
 const commentBusy = ref(false)
@@ -620,7 +632,7 @@ async function refreshLive() {
     stopRefreshTimer()
     return
   }
-  await Promise.all([loadIssue(), loadTimeline(), loadDiff(), loadCommits(), loadChildren(), loadMentionAgents()])
+  await Promise.all([loadIssue(), loadTimeline(), loadDiff(), loadCommits(), loadChildren(), loadMentionAgents(), loadQuestionnaires()])
 }
 
 function startRefreshTimer() {
@@ -648,7 +660,8 @@ onMounted(async () => {
       loadCommits(),
       loadParent(),
       loadChildren(),
-  loadMentionAgents(),
+      loadMentionAgents(),
+      loadQuestionnaires(),
     ])
   }
   startRefreshTimer()
@@ -1133,6 +1146,19 @@ onUnmounted(() => {
               </template>
             </CardContent>
           </Card>
+
+          <!-- Questionnaires: agent-created surveys displayed as sidebar cards.
+               Same pattern as Todos — server-driven list with polling refresh. -->
+          <QuestionnaireCard
+            v-for="q in questionnaires"
+            :key="q.id"
+            :questionnaire="q"
+            :owner="owner"
+            :name="name"
+            :issue-number="Number(number)"
+            @submitted="refreshLive()"
+            @closed="refreshLive()"
+          />
 
           <Card class="gap-0 py-0">
             <CardContent class="space-y-3 p-4">
