@@ -30,7 +30,6 @@ import {
   Search,
   Sparkles,
   Square,
-  Telescope,
   Terminal,
   Trash2,
   XCircle,
@@ -323,7 +322,6 @@ function toolIcon(name: string | undefined) {
     case 'grep': return Search
     case 'glob': return FolderSearch
     case 'webfetch': return Globe
-    case 'research': return Telescope
     default: return Hammer
   }
 }
@@ -392,10 +390,6 @@ function toolSummary(m: AgentMessage): string {
       const n = asNumber(r.count) ?? 0
       return `${truncate(p, 40)} · ${n} file${n === 1 ? '' : 's'}`
     }
-    case 'research': {
-      const tasks = Array.isArray(a.tasks) ? (a.tasks as unknown[]).length : 0
-      return `${tasks} task${tasks === 1 ? '' : 's'}`
-    }
     default:
       return ''
   }
@@ -430,15 +424,6 @@ function toolBadge(m: AgentMessage): ToolBadge | null {
           : 'bg-muted text-muted-foreground'
       return { text: String(s), cls }
     }
-    case 'research': {
-      const results = Array.isArray(r.results) ? r.results as AnyRecord[] : []
-      if (results.length === 0) return null
-      const ok = results.filter((x) => x.outcome === 'ok').length
-      const cls = ok === results.length
-        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-        : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-      return { text: `${ok}/${results.length}`, cls }
-    }
     case 'edit': {
       const occ = asNumber(payloadResult(m).occurrences)
       if (occ == null || occ <= 1) return null
@@ -450,8 +435,8 @@ function toolBadge(m: AgentMessage): ToolBadge | null {
 }
 
 // isToolCallFailed checks whether a tool call produced an error result.
-// It combines tool-specific signals (bash non-zero exit, webfetch >= 400,
-// research partial failures) with generic error indicators (error / isError /
+// It combines tool-specific signals (bash non-zero exit, webfetch >= 400)
+// with generic error indicators (error / isError /
 // ok === false fields in the result) so that any failing tool call gets
 // highlighted without needing a per-tool case.
 function isToolCallFailed(m: AgentMessage): boolean {
@@ -471,11 +456,6 @@ function isToolCallFailed(m: AgentMessage): boolean {
     case 'webfetch': {
       const s = asNumber(r.status)
       return s != null && s >= 400
-    }
-    case 'research': {
-      const results = Array.isArray(r.results) ? r.results as AnyRecord[] : []
-      if (results.length === 0) return false
-      return results.some((x) => x.outcome !== 'ok')
     }
     case 'edit': {
       // The edit tool may signal failure with error in result.
@@ -590,26 +570,6 @@ function globPaths(m: AgentMessage): string[] {
   return []
 }
 
-interface ResearchEntry { prompt: string; outcome: string; summary: string; steps: number | null; error: string }
-
-function researchEntries(m: AgentMessage): ResearchEntry[] {
-  const a = payloadArgs(m)
-  const r = payloadResult(m)
-  const tasks = Array.isArray(a.tasks) ? a.tasks as AnyRecord[] : []
-  const results = Array.isArray(r.results) ? r.results as AnyRecord[] : []
-  const n = Math.max(tasks.length, results.length)
-  const out: ResearchEntry[] = []
-  for (let i = 0; i < n; i++) {
-    out.push({
-      prompt: asString(tasks[i]?.prompt),
-      outcome: asString(results[i]?.outcome) || '—',
-      summary: asString(results[i]?.summary),
-      steps: asNumber(results[i]?.steps_used),
-      error: asString(results[i]?.error),
-    })
-  }
-  return out
-}
 
 function messageIcon(kind: string) {
   switch (kind) {
@@ -1105,29 +1065,6 @@ async function deleteSession(s: AgentSession) {
                       <template v-else-if="m.tool_name === 'glob'">
                         <div class="px-2 py-2">
                           <pre class="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 font-mono text-[11px]">{{ globPaths(m).join('\n') || '(no paths)' }}</pre>
-                        </div>
-                      </template>
-
-                      <!-- research: per-task prompt → outcome/summary -->
-                      <template v-else-if="m.tool_name === 'research'">
-                        <div class="space-y-2 px-2 py-2">
-                          <div v-for="(e, i) in researchEntries(m)" :key="i" class="rounded border bg-muted/20 p-2">
-                            <div class="mb-1 flex items-center gap-2 text-[10px] font-mono text-muted-foreground">
-                              <span>#{{ i + 1 }}</span>
-                              <span
-                                class="rounded px-1.5 py-0.5"
-                                :class="e.outcome === 'ok'
-                                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                                  : e.outcome === 'step_limit'
-                                    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                                    : 'bg-destructive/15 text-destructive'"
-                              >{{ e.outcome }}</span>
-                              <span v-if="e.steps != null">{{ e.steps }} steps</span>
-                            </div>
-                            <p v-if="e.prompt" class="mb-1 text-[11px] italic text-muted-foreground whitespace-pre-wrap wrap-break-word">{{ e.prompt }}</p>
-                            <p v-if="e.summary" class="text-[11px] whitespace-pre-wrap wrap-break-word">{{ e.summary }}</p>
-                            <p v-if="e.error" class="text-[11px] text-destructive whitespace-pre-wrap wrap-break-word">{{ e.error }}</p>
-                          </div>
                         </div>
                       </template>
 
