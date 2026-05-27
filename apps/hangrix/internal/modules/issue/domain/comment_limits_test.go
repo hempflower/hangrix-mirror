@@ -13,7 +13,7 @@ func TestValidateCommentBody_WithinLimit(t *testing.T) {
 	}
 }
 
-func TestValidateCommentBody_Exactly4000Runes(t *testing.T) {
+func TestValidateCommentBody_Exactly8000Runes(t *testing.T) {
 	// Exactly at limit.
 	body := strings.Repeat("a", MaxCommentBodyRunes)
 	if err := ValidateCommentBody(body); err != nil {
