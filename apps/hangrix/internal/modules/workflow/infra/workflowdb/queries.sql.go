@@ -536,6 +536,63 @@ func (q *Queries) ListWorkflowRunsByRepo(ctx context.Context, arg ListWorkflowRu
 	return items, nil
 }
 
+const listWorkflowRunsByRepoAndCommitSHA = `-- name: ListWorkflowRunsByRepoAndCommitSHA :many
+SELECT id, repo_id, workflow_name, source_file, status, event_name, cause_id, ref, commit_sha, container_snapshot_json, trigger_payload_json, started_at, finished_at, created_at, workflow_token, trigger_actor_kind, trigger_actor_user_id, trigger_actor_role_key, trigger_actor_workflow_run_id, trigger_actor_display_name, run_actor_kind, run_actor_user_id, run_actor_role_key, run_actor_workflow_run_id, run_actor_display_name FROM workflow_runs
+WHERE repo_id = $1 AND commit_sha = $2
+ORDER BY created_at DESC
+`
+
+type ListWorkflowRunsByRepoAndCommitSHAParams struct {
+	RepoID    int64
+	CommitSha string
+}
+
+func (q *Queries) ListWorkflowRunsByRepoAndCommitSHA(ctx context.Context, arg ListWorkflowRunsByRepoAndCommitSHAParams) ([]WorkflowRun, error) {
+	rows, err := q.db.Query(ctx, listWorkflowRunsByRepoAndCommitSHA, arg.RepoID, arg.CommitSha)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WorkflowRun{}
+	for rows.Next() {
+		var i WorkflowRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepoID,
+			&i.WorkflowName,
+			&i.SourceFile,
+			&i.Status,
+			&i.EventName,
+			&i.CauseID,
+			&i.Ref,
+			&i.CommitSha,
+			&i.ContainerSnapshotJson,
+			&i.TriggerPayloadJson,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.CreatedAt,
+			&i.WorkflowToken,
+			&i.TriggerActorKind,
+			&i.TriggerActorUserID,
+			&i.TriggerActorRoleKey,
+			&i.TriggerActorWorkflowRunID,
+			&i.TriggerActorDisplayName,
+			&i.RunActorKind,
+			&i.RunActorUserID,
+			&i.RunActorRoleKey,
+			&i.RunActorWorkflowRunID,
+			&i.RunActorDisplayName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markWorkflowJobRunning = `-- name: MarkWorkflowJobRunning :exec
 UPDATE workflow_job_runs
 SET status = 'running', runner_id = $1, started_at = NOW()

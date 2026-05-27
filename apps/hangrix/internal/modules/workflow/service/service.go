@@ -23,23 +23,26 @@ import (
 )
 
 // Service is the stateless business-logic core for workflows. It satisfies
-// domain.Dispatcher for cross-module runner integration.
+// domain.Dispatcher and domain.CheckReader for cross-module integration.
 type Service struct {
-	store   domain.Store
-	pathRes repodomain.PathResolver
+	store     domain.Store
+	pathRes   repodomain.PathResolver
+	observers []domain.RunStatusObserver
 }
 
 // Deps wires the service's dependencies through ioc.
 type Deps struct {
-	Store   domain.Store
-	PathRes repodomain.PathResolver
+	Store     domain.Store
+	PathRes   repodomain.PathResolver
+	Observers []domain.RunStatusObserver
 }
 
 // New creates a ready-to-use workflow Service.
 func New(deps *Deps) *Service {
 	return &Service{
-		store:   deps.Store,
-		pathRes: deps.PathRes,
+		store:     deps.Store,
+		pathRes:   deps.PathRes,
+		observers: deps.Observers,
 	}
 }
 
@@ -336,12 +339,20 @@ func (s *Service) AdvanceRun(ctx context.Context, runID int64) error {
 		if err := s.store.SkipRemainingJobs(ctx, runID, failedJobSeq); err != nil {
 			return fmt.Errorf("advance run: skip remaining: %w", err)
 		}
-		return s.store.MarkRunTerminal(ctx, runID, domain.RunStatusFailed)
+		if err := s.store.MarkRunTerminal(ctx, runID, domain.RunStatusFailed); err != nil {
+			return fmt.Errorf("advance run: mark terminal: %w", err)
+		}
+		s.notifyStatusChanged(ctx, domain.RunStatusRunning, runID)
+		return nil
 	}
 
 	if allDone {
 		// All jobs succeeded
-		return s.store.MarkRunTerminal(ctx, runID, domain.RunStatusSuccess)
+		if err := s.store.MarkRunTerminal(ctx, runID, domain.RunStatusSuccess); err != nil {
+			return fmt.Errorf("advance run: mark terminal: %w", err)
+		}
+		s.notifyStatusChanged(ctx, domain.RunStatusRunning, runID)
+		return nil
 	}
 
 	// Otherwise, the next pending job will be picked up by a runner
@@ -366,6 +377,8 @@ func (s *Service) ClaimNextJob(ctx context.Context, runnerID int64) (*domain.Wor
 		if err := s.store.MarkRunStarted(ctx, parentRun.ID); err != nil {
 			// Non-fatal: the run will be marked running on the next job claim
 			log.Printf("workflow: mark run %d started: %v", parentRun.ID, err)
+		} else {
+			s.notifyStatusChanged(ctx, domain.RunStatusPending, parentRun.ID)
 		}
 	}
 
@@ -852,6 +865,57 @@ func (s *Service) MarkJobTerminal(ctx context.Context, jobID int64, status domai
 }
 
 // AppendLog appends a log line to a job run.
+
+// ---- observer notification ----
+
+// notifyStatusChanged fetches the current run state and calls every
+// registered RunStatusObserver with the old→new transition.
+// Errors from observers are logged but never propagated — status-change
+// notification is a best-effort side effect.
+func (s *Service) notifyStatusChanged(ctx context.Context, oldStatus domain.RunStatus, runID int64) {
+	if len(s.observers) == 0 {
+		return
+	}
+	run, err := s.store.GetRun(ctx, runID)
+	if err != nil {
+		log.Printf("workflow: notifyStatusChanged get run %d: %v", runID, err)
+		return
+	}
+	for _, obs := range s.observers {
+		if err := obs.OnRunStatusChanged(ctx, oldStatus, run); err != nil {
+			log.Printf("workflow: observer %T: %v", obs, err)
+		}
+	}
+}
+
+// ---- CheckReader (domain.CheckReader) ----
+
+// ListChecksByCommit returns CI check items for the given repo and commit SHA.
+func (s *Service) ListChecksByCommit(ctx context.Context, repoID int64, commitSHA string) ([]domain.CheckItem, error) {
+	runs, err := s.store.ListRunsByRepoAndCommitSHA(ctx, repoID, commitSHA)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]domain.CheckItem, 0, len(runs))
+	for _, run := range runs {
+		item := domain.CheckItem{
+			Name:   run.WorkflowName,
+			Status: string(run.Status),
+			RunID:  run.ID,
+		}
+		// Map conclusion from terminal statuses
+		switch run.Status {
+		case domain.RunStatusSuccess:
+			item.Conclusion = "success"
+		case domain.RunStatusFailed:
+			item.Conclusion = "failure"
+		case domain.RunStatusCancelled:
+			item.Conclusion = "cancelled"
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
 func (s *Service) AppendLog(ctx context.Context, jobRunID int64, stream domain.LogStream, line string) error {
 	return s.store.AppendLog(ctx, jobRunID, stream, line)
 }

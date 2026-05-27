@@ -20,6 +20,7 @@ import (
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	questionnairedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
+	workflowdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
 )
 
 // APIService wraps Registry to expose typed REST-friendly methods that
@@ -405,9 +406,26 @@ func (s *APIService) ListChildren(ctx context.Context, p *apidomain.Actor) (any,
 	return items, nil
 }
 
-// ListChecks returns CI check state (empty list for now).
+// ListChecks returns CI check statuses for the current issue's head commit.
 func (s *APIService) ListChecks(ctx context.Context, p *apidomain.Actor) (any, error) {
-	return []any{}, nil
+	sc, err := s.mustLoadScope(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if sc.issue.HeadSHA == "" {
+		return []any{}, nil
+	}
+	if s.r.deps.CheckReader == nil {
+		return []any{}, nil
+	}
+	items, err := s.r.deps.CheckReader.ListChecksByCommit(ctx, sc.repo.ID, sc.issue.HeadSHA)
+	if err != nil {
+		return nil, fmt.Errorf("list checks: %w", err)
+	}
+	if items == nil {
+		items = []workflowdomain.CheckItem{}
+	}
+	return items, nil
 }
 
 // ---- Todos ----

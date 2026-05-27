@@ -24,6 +24,7 @@ import (
 	releaseinfra "github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/infra"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
+	workflowdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
 )
 
 // Registry is the platform business-logic core backing the v1 REST API.
@@ -53,6 +54,7 @@ type RegistryDeps struct {
 	Attachments   attachmentdomain.Uploader
 	Todos         issuedomain.TodoStore
 	Questionnaires questionnairedomain.Service
+	CheckReader   workflowdomain.CheckReader
 }
 
 // NewRegistry constructs the business-logic core, capturing the shared
