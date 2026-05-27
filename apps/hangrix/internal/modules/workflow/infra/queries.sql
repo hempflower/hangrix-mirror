@@ -39,6 +39,11 @@ WHERE repo_id = sqlc.arg('repo_id')
 ORDER BY created_at DESC
 LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
 
+-- name: ListWorkflowRunsByRepoAndCommitSHA :many
+SELECT * FROM workflow_runs
+WHERE repo_id = sqlc.arg('repo_id') AND commit_sha = sqlc.arg('commit_sha')
+ORDER BY created_at DESC;
+
 -- name: MarkWorkflowRunStarted :exec
 UPDATE workflow_runs
 SET status = 'running', started_at = NOW()

@@ -895,6 +895,9 @@
     "noSubIssues": "No sub-issues yet.",
     "subIssueBlock": "{n} open sub-issue(s) must be merged or closed first:",
     "subIssueBlockDeep": "… and {n} deeper descendant(s)",
+    "checks": {
+      "title": "CI Checks"
+    },
       "review": {
       "title": "Reviews",
       "empty": "No reviews yet.",
@@ -971,7 +974,13 @@
         "comments": "Comments",
         "checks": "Checks"
       },
-      "checksPlaceholder": "CI checks coming soon",
+      "checksLoading": "Loading checks…",
+      "checksLoadFailed": "Failed to load checks",
+      "checksEmpty": "No CI checks for this issue yet.",
+      "checksAllPassed": "All checks passed",
+      "checksSomeFailed": "Some checks failed",
+      "checksRunning": "Checks in progress",
+      "checksPending": "Checks pending",
       "commentsEmpty": "No comments yet.",
       "basedOn": "Based on {sha}",
       "headSha": "Head {sha}",

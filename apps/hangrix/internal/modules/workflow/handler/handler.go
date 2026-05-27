@@ -14,6 +14,7 @@ import (
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
+	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
@@ -29,6 +30,7 @@ type Handler struct {
 	agentValidator runnerdomain.AgentValidator
 	repoStore      repodomain.Store
 	orgResolver    orgdomain.Resolver
+	issueStore     issuedomain.Store
 }
 
 // HandlerDeps wires the handler's dependencies through ioc.
@@ -38,6 +40,7 @@ type HandlerDeps struct {
 	AgentValidator runnerdomain.AgentValidator
 	RepoStore      repodomain.Store
 	OrgResolver    orgdomain.Resolver
+	IssueStore     issuedomain.Store
 }
 
 // NewHandler creates a ready-to-use workflow Handler.
@@ -48,6 +51,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		agentValidator: deps.AgentValidator,
 		repoStore:      deps.RepoStore,
 		orgResolver:    deps.OrgResolver,
+		issueStore:     deps.IssueStore,
 	}
 }
 
@@ -63,6 +67,12 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Get("/{runID}", h.getRun)
 		r.Post("/", h.dispatch)
 		r.Get("/{runID}/jobs/{jobID}/logs", h.getLogs)
+	})
+
+	// Issue-level CI checks endpoint.
+	r.Route("/api/repos/{owner}/{name}/issues/{issueNumber}/checks", func(r chi.Router) {
+		r.Use(h.middleware.RequireAuth)
+		r.Get("/", h.listIssueChecks)
 	})
 
 	// Runner callback API: bearer hgxr_ token
@@ -447,6 +457,53 @@ func (h *Handler) getLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpx.WriteJSON(w, http.StatusOK, logsResp{Lines: dto, Total: total})
+}
+
+// ---- issue-level checks endpoint ----
+
+type issueChecksResp struct {
+	Items []domain.CheckItem `json:"items"`
+}
+
+// GET /api/repos/{owner}/{name}/issues/{issueNumber}/checks
+func (h *Handler) listIssueChecks(w http.ResponseWriter, r *http.Request) {
+	issueNumberStr := chi.URLParam(r, "issueNumber")
+	issueNumber, err := strconv.ParseInt(issueNumberStr, 10, 64)
+	if err != nil || issueNumber <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid issue number")
+		return
+	}
+
+	repo, ok := h.resolveRepo(w, r)
+	if !ok {
+		return
+	}
+
+	issue, err := h.issueStore.GetByNumber(r.Context(), repo.ID, issueNumber)
+	if err != nil {
+		if errors.Is(err, issuedomain.ErrIssueNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "issue not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if issue.HeadSHA == "" {
+		httpx.WriteJSON(w, http.StatusOK, issueChecksResp{Items: []domain.CheckItem{}})
+		return
+	}
+
+	items, err := h.svc.ListChecksByCommit(r.Context(), repo.ID, issue.HeadSHA)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if items == nil {
+		items = []domain.CheckItem{}
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, issueChecksResp{Items: items})
 }
 
 // ---- runner callback endpoints ----

@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/hangrix/hangrix/pkg/actor"
 
+	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
@@ -20,6 +22,7 @@ import (
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	questionnairedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
+	workflowdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/workflow/domain"
 )
 
 // APIService wraps Registry to expose typed REST-friendly methods that
@@ -324,6 +327,32 @@ func (s *APIService) CreateIssue(ctx context.Context, p *apidomain.Actor, title,
 	if err != nil {
 		return nil, fmt.Errorf("create issue: %w", err)
 	}
+
+	// Create the branch ref in the bare repo so it appears in branch
+	// listings immediately — before anyone pushes. The new branch points
+	// at the base branch's tip, so a subsequent push is a normal
+	// fast-forward. Mirrors the issue handler's create().
+	if err := s.r.deps.Git.CreateBranch(scope.fsPath, iss.BranchName, baseBranch); err != nil {
+		return nil, fmt.Errorf("create branch ref: %w", err)
+	}
+
+	// Fire issue.opened so any role whose triggers include issue.opened
+	// wakes on its own. Failures don't block issue creation — the
+	// operator repairs the host yaml then nudges the issue. Mirrors the
+	// issue handler's fireIssueOpened().
+	if s.r.deps.Spawner != nil {
+		if _, err := s.r.deps.Spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
+			Trigger:     agentsconfig.TriggerIssueOpened,
+			CauseKind:   agentsessiondomain.CauseKindIssueOpened,
+			CauseID:     "",
+			RepoID:      scope.repo.ID,
+			IssueNumber: int32(iss.Number),
+			ActorID:     0, // agent-created issues have no user actor
+		}); err != nil {
+			log.Printf("platform_api: fire issue.opened repo=%d issue=%d: %v", scope.repo.ID, iss.Number, err)
+		}
+	}
+
 	return map[string]any{
 		"number":      iss.Number,
 		"title":       iss.Title,
@@ -405,9 +434,26 @@ func (s *APIService) ListChildren(ctx context.Context, p *apidomain.Actor) (any,
 	return items, nil
 }
 
-// ListChecks returns CI check state (empty list for now).
+// ListChecks returns CI check statuses for the current issue's head commit.
 func (s *APIService) ListChecks(ctx context.Context, p *apidomain.Actor) (any, error) {
-	return []any{}, nil
+	sc, err := s.mustLoadScope(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if sc.issue.HeadSHA == "" {
+		return []any{}, nil
+	}
+	if s.r.deps.CheckReader == nil {
+		return []any{}, nil
+	}
+	items, err := s.r.deps.CheckReader.ListChecksByCommit(ctx, sc.repo.ID, sc.issue.HeadSHA)
+	if err != nil {
+		return nil, fmt.Errorf("list checks: %w", err)
+	}
+	if items == nil {
+		items = []workflowdomain.CheckItem{}
+	}
+	return items, nil
 }
 
 // ---- Todos ----
