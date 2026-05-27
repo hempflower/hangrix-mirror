@@ -93,3 +93,25 @@ type RootResponse struct {
 	CurrentUser any    `json:"current_user_url,omitempty"`
 	Links       Links  `json:"_links"`
 }
+
+// ---- Questionnaires ----
+
+// CreateQuestionnaireInput carries the payload for creating a questionnaire.
+type CreateQuestionnaireInput struct {
+	Title       string                `json:"title"`
+	Description string                `json:"description"`
+	Questions   []CreateQuestionInput `json:"questions"`
+}
+
+// CreateQuestionInput is one question in the creation input.
+type CreateQuestionInput struct {
+	Type     string        `json:"type"`
+	Text     string        `json:"text"`
+	Required bool          `json:"required"`
+	Options  []OptionInput `json:"options,omitempty"`
+}
+
+// OptionInput is one option label (server assigns the ID).
+type OptionInput struct {
+	Label string `json:"label"`
+}

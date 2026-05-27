@@ -19,6 +19,7 @@ import (
 	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
+	questionnairedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire/domain"
 	releasedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/domain"
 	releaseinfra "github.com/hangrix/hangrix/apps/hangrix/internal/modules/release/infra"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
@@ -51,6 +52,7 @@ type RegistryDeps struct {
 	AssetStorage  *releaseinfra.AssetStorage
 	Attachments   attachmentdomain.Uploader
 	Todos         issuedomain.TodoStore
+	Questionnaires questionnairedomain.Service
 }
 
 // NewRegistry constructs the business-logic core, capturing the shared

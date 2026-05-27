@@ -43,6 +43,13 @@ func RegisterV1Routes(r chi.Router, api AgentAPI) {
 			r.Get("/sessions", v1ListSessions(api))
 			r.Post("/sessions/{sessionID}/recover", v1RecoverSession(api))
 			r.Post("/attachments", v1UploadAttachment(api))
+
+			// Questionnaires
+			r.Post("/questionnaires", v1CreateQuestionnaire(api))
+			r.Get("/questionnaires", v1ListQuestionnaires(api))
+			r.Get("/questionnaires/{id}", v1GetQuestionnaire(api))
+			r.Get("/questionnaires/{id}/results", v1GetQuestionnaireResult(api))
+			r.Post("/questionnaires/{id}/close", v1CloseQuestionnaire(api))
 		})
 
 		// Explicit issue-by-number form

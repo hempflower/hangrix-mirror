@@ -238,4 +238,27 @@ sql:
         emit_exact_table_names: false
         emit_empty_slices: true
 
+  - engine: postgresql
+    queries: internal/modules/questionnaire/infra/queries.sql
+    # questionnaire tables FK issues(id) and users(id); union user + org +
+    # repo + issue + questionnaire schemas so sqlc can resolve both
+    # references at generate time. Runtime still applies only its own
+    # migrations via goose_questionnaire.
+    schema:
+      - internal/modules/user/infra/migrations
+      - internal/modules/org/infra/migrations
+      - internal/modules/repo/infra/migrations
+      - internal/modules/issue/infra/migrations
+      - internal/modules/questionnaire/infra/migrations
+    gen:
+      go:
+        package: questionnairedb
+        out: internal/modules/questionnaire/infra/questionnairedb
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_empty_slices: true
+
 
