@@ -521,7 +521,7 @@ const timelineItems = computed<TimelineItem[]>(() => {
     out.push({ key: `e-${e.id}`, at: e.created_at, kind: 'event', data: e })
   }
   for (const q of questionnaires.value ?? []) {
-    out.push({ key: `q-${q.id}`, at: q.created_at, kind: 'questionnaire', data: q })
+    out.push({ key: `q-${q.id}`, at: q.my_submission?.submitted_at ?? q.created_at, kind: 'questionnaire', data: q })
   }
   out.sort((a, b) => {
     const ta = Date.parse(a.at)
@@ -884,8 +884,8 @@ onUnmounted(() => {
                 <!-- Questionnaires: agent-created surveys rendered as
                      first-class timeline cards with the same card chrome
                      as comments (ActorBadge header strip). The card
-                     handles its own three states (open unanswered,
-                     open answered, closed with results). -->
+                     handles its own two states (unanswered placeholder,
+                     answered with per-question results). -->
                 <QuestionnaireTimelineCard
                   v-else-if="it.kind === 'questionnaire'"
                   :key="it.key"

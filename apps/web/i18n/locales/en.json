@@ -1022,6 +1022,8 @@
     "questionnaire": {
       "title": "Questionnaire",
       "asked": "asked",
+      "answered": "answered the questionnaire",
+      "awaitingResponse": "Awaiting response…",
       "empty": "No questionnaires yet.",
       "submit": "Submit",
       "submitting": "Submitting…",

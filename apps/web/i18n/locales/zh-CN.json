@@ -1022,6 +1022,8 @@
     "questionnaire": {
       "title": "问卷",
       "asked": "发起了",
+      "answered": "回答了问卷",
+      "awaitingResponse": "等待填写…",
       "empty": "暂无问卷。",
       "submit": "提交",
       "submitting": "提交中…",
