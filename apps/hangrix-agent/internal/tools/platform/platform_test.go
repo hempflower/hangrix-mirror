@@ -213,8 +213,8 @@ func TestIssueCommentSchemaBodyMaxLengthAndSplitHint(t *testing.T) {
 	if !ok {
 		t.Fatal("issue_comment body schema is missing maxLength")
 	}
-	if ml, ok := maxLength.(int); !ok || ml != 4000 {
-		t.Fatalf("issue_comment body maxLength = %v (%T), want 4000", maxLength, maxLength)
+	if ml, ok := maxLength.(int); !ok || ml != 7800 {
+		t.Fatalf("issue_comment body maxLength = %v (%T), want 7800", maxLength, maxLength)
 	}
 
 	desc, ok := bodySchema["description"].(string)

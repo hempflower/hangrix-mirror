@@ -132,8 +132,8 @@ func withActor(r *http.Request, a *apidomain.Actor) *http.Request {
 // --- v1CreateComment tests ---
 
 func TestV1CreateComment_BodyTooLong_Returns422(t *testing.T) {
-	// 4001 ASCII characters → should fail before calling API.
-	body := strings.Repeat("x", 4001)
+	// 8001 ASCII characters → should fail before calling API.
+	body := strings.Repeat("x", 8001)
 	reqBody, _ := json.Marshal(map[string]any{"body": body})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/repos/1/issues/42/comments", bytes.NewReader(reqBody))
@@ -152,7 +152,7 @@ func TestV1CreateComment_BodyTooLong_Returns422(t *testing.T) {
 		t.Fatalf("unmarshal response: %v", err)
 	}
 
-	if resp["message"] != "comment body too long: 4001 runes (limit 4000)" {
+	if resp["message"] != "comment body too long: 8001 runes (limit 8000)" {
 		t.Errorf("message = %q", resp["message"])
 	}
 
@@ -171,13 +171,13 @@ func TestV1CreateComment_BodyTooLong_Returns422(t *testing.T) {
 		t.Errorf("errors[0].resource = %q, want comment", fe["resource"])
 	}
 	msg, ok := fe["message"].(string)
-	if !ok || !strings.Contains(msg, "Split") || !strings.Contains(msg, "4001") || !strings.Contains(msg, "4000") {
-		t.Errorf("errors[0].message = %q, want Split + 4001 + 4000", msg)
+	if !ok || !strings.Contains(msg, "Split") || !strings.Contains(msg, "8001") || !strings.Contains(msg, "8000") {
+		t.Errorf("errors[0].message = %q, want Split + 8001 + 8000", msg)
 	}
 }
 
-func TestV1CreateComment_Exactly4000Runes_Succeeds(t *testing.T) {
-	body := strings.Repeat("x", 4000)
+func TestV1CreateComment_Exactly8000Runes_Succeeds(t *testing.T) {
+	body := strings.Repeat("x", 8000)
 	reqBody, _ := json.Marshal(map[string]any{"body": body})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/repos/1/issues/42/comments", bytes.NewReader(reqBody))
@@ -203,8 +203,8 @@ func TestV1CreateComment_Exactly4000Runes_Succeeds(t *testing.T) {
 }
 
 func TestV1CreateComment_ChineseRunes_UnderLimit_Succeeds(t *testing.T) {
-	// 4000 Chinese characters (12000 bytes) → should succeed.
-	body := strings.Repeat("中", 4000)
+	// 8000 Chinese characters (24000 bytes) → should succeed.
+	body := strings.Repeat("中", 8000)
 	reqBody, _ := json.Marshal(map[string]any{"body": body})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/repos/1/issues/42/comments", bytes.NewReader(reqBody))
@@ -222,7 +222,7 @@ func TestV1CreateComment_ChineseRunes_UnderLimit_Succeeds(t *testing.T) {
 	handler.ServeHTTP(rr, req)
 
 	if !called {
-		t.Fatal("CreateComment was not called for 4000 Chinese characters")
+		t.Fatal("CreateComment was not called for 8000 Chinese characters")
 	}
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201", rr.Code)
