@@ -59,6 +59,24 @@ FROM issues i
 LEFT JOIN users u ON u.id = i.author_id
 WHERE i.repo_id = sqlc.arg('repo_id') AND i.number = sqlc.arg('number');
 
+-- name: GetIssueByID :one
+SELECT i.id, i.repo_id, i.number,
+       COALESCE(i.author_id, 0)::BIGINT AS author_id,
+       COALESCE(u.username, '')         AS author_name,
+       i.agent_role, i.title, i.body, i.state,
+       i.branch_name, i.base_branch,
+       i.head_sha, i.merge_commit_sha, i.merged_at,
+       COALESCE(i.parent_id, 0)::BIGINT AS parent_id, i.parent_number,
+       i.created_at, i.updated_at,
+       i.actor_kind,
+       COALESCE(i.actor_user_id, 0)::BIGINT AS actor_user_id,
+       i.actor_role_key,
+       COALESCE(i.actor_workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
+       i.actor_display_name
+FROM issues i
+LEFT JOIN users u ON u.id = i.author_id
+WHERE i.id = sqlc.arg('id');
+
 -- name: ListIssues :many
 -- State arg is optional (NULL = "any state").
 SELECT i.id, i.repo_id, i.number,

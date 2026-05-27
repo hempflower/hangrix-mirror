@@ -176,28 +176,51 @@ func (h *Handler) removeDependency(w http.ResponseWriter, r *http.Request) {
 
 // getPlanState returns the plan_state for an epic issue.
 func (h *Handler) getPlanState(w http.ResponseWriter, r *http.Request) {
-	// This is a v0 placeholder. plan_state is managed by the plan_engine
-	// module, which the handler does not directly import.
+	rc, ok := h.resolveRepo(w, r)
+	if !ok {
+		return
+	}
+	iss, ok := h.loadIssue(w, r, rc.repo.ID)
+	if !ok {
+		return
+	}
+
+	if h.planState == nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "plan state store not available")
+		return
+	}
+
+	ps, err := h.planState.GetOrCreate(r.Context(), iss.ID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"status":           "active",
-		"max_concurrency":  1,
-		"auto_step_budget": 10,
-		"auto_steps_used":  0,
+		"status":           string(ps.Status),
+		"max_concurrency":  ps.MaxConcurrency,
+		"auto_step_budget": ps.AutoStepBudget,
+		"auto_steps_used":  ps.AutoStepsUsed,
 	})
 }
 
-// lookupIssueNumbers resolves issue IDs to a list of {number, title} dicts.
+// lookupIssueNumbers resolves issue IDs (from dependency edges) to actual
+// issue numbers plus title and state for frontend / agent display.
 func lookupIssueNumbers(ctx context.Context, store domain.Store, deps []*domain.Dependency) []map[string]any {
 	if len(deps) == 0 {
 		return []map[string]any{}
 	}
-	// We need to look up each dependency's target issue.
-	// For now return simple IDs; full resolution requires repo context.
 	result := make([]map[string]any, 0, len(deps))
 	for _, d := range deps {
+		iss, err := store.GetByID(ctx, d.DependsOnID)
+		if err != nil {
+			// Issue deleted / inaccessible — omit but don't fail the whole list.
+			continue
+		}
 		result = append(result, map[string]any{
-			"id":           d.DependsOnID,
-			"dependency_id": d.ID,
+			"number": iss.Number,
+			"title":  iss.Title,
+			"state":  string(iss.State),
 		})
 	}
 	return result

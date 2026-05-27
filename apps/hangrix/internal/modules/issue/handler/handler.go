@@ -85,6 +85,10 @@ type Handler struct {
 	// planEngine is the optional plan progression engine.
 	// When nil (tests), the merge hook skips engine notification.
 	planEngine planenginedomain.Engine
+	// planState is the plan_state persistence store. Used to serve
+	// GET .../plan/state with real data rather than a hardcoded stub.
+	// Nil-safe (tests).
+	planState planenginedomain.PlanStateStore
 }
 
 type HandlerDeps struct {
@@ -132,6 +136,9 @@ type HandlerDeps struct {
 	// PlanEngine is the optional plan progression engine.
 	// When nil (tests), the merge hook skips engine notification.
 	PlanEngine planenginedomain.Engine
+	// PlanState is the plan_state persistence store.
+	// Nil-safe (tests).
+	PlanState planenginedomain.PlanStateStore
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
@@ -157,6 +164,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		wfTokenValidator:   deps.WfTokenValidator,
 		deps:               deps.Deps,
 		planEngine:         deps.PlanEngine,
+		planState:          deps.PlanState,
 	}
 }
 

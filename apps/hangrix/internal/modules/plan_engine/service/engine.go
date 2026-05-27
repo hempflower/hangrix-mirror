@@ -119,11 +119,11 @@ func (e *Engine) processEpic(ctx context.Context, repoID int64, epic *issuedomai
 // processEpicByID is like processEpic but looks up the epic by ID.
 // Used by Tick which only has epic_issue_id from plan_state.
 func (e *Engine) processEpicByID(ctx context.Context, epicID int64) error {
-	// Tick only sees epic_issue_id. We need repoID to call Plan.
-	// Store the repoID mapping when we first see the epic, or do a lookup.
-	// For now, skip Tick for epics we haven't seen through OnChildClosed.
-	log.Printf("plan_engine: tick: epic ID %d skipped (no repo context)", epicID)
-	return nil
+	epic, err := e.issues.GetByID(ctx, epicID)
+	if err != nil {
+		return fmt.Errorf("plan_engine: lookup epic %d: %w", epicID, err)
+	}
+	return e.processEpic(ctx, epic.RepoID, epic)
 }
 
 // dispatchReady checks safety gates and fires issue.ready for a single

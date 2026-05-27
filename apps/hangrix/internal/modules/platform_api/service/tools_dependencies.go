@@ -67,18 +67,34 @@ func (r *Registry) DepsRead(ctx context.Context, scope *sessionScope) (string, e
 		return "", err
 	}
 
-	depNumbers := make([]int64, 0, len(dependsOn))
+	depResult := make([]map[string]any, 0, len(dependsOn))
 	for _, d := range dependsOn {
-		depNumbers = append(depNumbers, d.DependsOnID)
+		iss, err := r.deps.Issues.GetByID(ctx, d.DependsOnID)
+		if err != nil {
+			continue
+		}
+		depResult = append(depResult, map[string]any{
+			"number": iss.Number,
+			"title":  iss.Title,
+			"state":  string(iss.State),
+		})
 	}
-	blockNumbers := make([]int64, 0, len(blocks))
+	blockResult := make([]map[string]any, 0, len(blocks))
 	for _, b := range blocks {
-		blockNumbers = append(blockNumbers, b.IssueID)
+		iss, err := r.deps.Issues.GetByID(ctx, b.IssueID)
+		if err != nil {
+			continue
+		}
+		blockResult = append(blockResult, map[string]any{
+			"number": iss.Number,
+			"title":  iss.Title,
+			"state":  string(iss.State),
+		})
 	}
 
 	result := map[string]any{
-		"depends_on": depNumbers,
-		"blocks":     blockNumbers,
+		"depends_on": depResult,
+		"blocks":     blockResult,
 	}
 	b, _ := json.Marshal(result)
 	return string(b), nil

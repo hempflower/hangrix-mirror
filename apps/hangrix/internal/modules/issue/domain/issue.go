@@ -515,6 +515,10 @@ type ListFilter struct {
 type Store interface {
 	Create(ctx context.Context, repoID, authorID int64, authorName, title, body, baseBranch string, agentRole string, parentID, parentNumber int64) (*Issue, error)
 	GetByNumber(ctx context.Context, repoID, number int64) (*Issue, error)
+	// GetByID returns an issue by its internal ID. Used for resolving
+	// dependency edges (which reference the issue row id, not the number)
+	// into the human-visible issue number for handlers and tools.
+	GetByID(ctx context.Context, id int64) (*Issue, error)
 	List(ctx context.Context, repoID int64, f ListFilter) ([]*Issue, int64, error)
 	ListChildren(ctx context.Context, parentID int64) ([]*Issue, error)
 	// ListOpenDescendants returns every transitive descendant of rootID
