@@ -624,8 +624,7 @@ const canApply = computed(() => {
               v-if="detail"
               :owner="owner"
               :name="name"
-              :branch-ref="detail.contribution.ref_name"
-              :head-sha="detail.contribution.head_sha"
+              :issue-number="issueNumber"
             />
           </TabsContent>
         </Tabs>

@@ -972,10 +972,9 @@
         "comments": "评论",
         "checks": "检查"
       },
-      "checksPlaceholder": "CI 检查即将上线",
       "checksLoading": "加载检查中…",
       "checksLoadFailed": "加载检查失败",
-      "checksEmpty": "暂无 CI 检查 — 与此贡献匹配的工作流运行将显示在这里。",
+      "checksEmpty": "此问题暂无 CI 检查。",
       "checksAllPassed": "所有检查通过",
       "checksSomeFailed": "部分检查失败",
       "checksRunning": "检查进行中",
