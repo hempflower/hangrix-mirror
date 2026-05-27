@@ -3,6 +3,8 @@ package loop
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -91,10 +94,20 @@ func (d *WorkflowJobDriver) Run(ctx context.Context, job *client.WorkflowJob) er
 		}
 	}
 
-	// 4. Resolve the container image (pull or build).
+	// 4. Resolve the container image (pull or build).  The server
+	// is expected to resolve the tag from the build config (repo id +
+	// Dockerfile path + build args → deterministic tag) and pass it as
+	// Image.  When that hasn't happened yet (server-side bug or missing
+	// feature), we compute a fallback tag here so the job can still
+	// proceed.  The tag is deterministic — same spec → same tag → the
+	// docker-build cache in ensureImage short-circuits on reuse.
 	image := job.Container.Image
 	if image == "" {
-		return d.fail(ctx, job, fmt.Errorf("container image is required"))
+		if job.Container.Build != nil {
+			image = resolveImageTag(job.RepoID, job.Container.Build)
+		} else {
+			return d.fail(ctx, job, fmt.Errorf("container image is required"))
+		}
 	}
 	var buildSpec *orchestrator.BuildSpec
 	if job.Container.Build != nil {
@@ -1049,4 +1062,39 @@ func maskSecretValues(outputs, secrets map[string]string) []string {
 		}
 	}
 	return masked
+}
+
+// resolveImageTag computes a deterministic Docker image tag from the
+// container build spec, mirroring the server-side spawner logic.  The
+// tag is derived from repo id + Dockerfile path + build context +
+// build args (sorted for stability) so the same spec always produces
+// the same tag.  This enables the docker-build cache in ensureImage to
+// short-circuit on reuse.
+//
+// The function is a defensive fallback: the server is expected to
+// resolve the tag before sending the job payload.  When it hasn't (the
+// Image field is empty), the runner fills it in here so jobs don't
+// fail with "container image is required" even though a Dockerfile is
+// configured.
+func resolveImageTag(repoID int64, build *client.BuildSpec) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "repo:%d\n", repoID)
+	fmt.Fprintf(h, "dockerfile:%s\n", build.Dockerfile)
+	if build.Context != "" {
+		fmt.Fprintf(h, "context:%s\n", build.Context)
+	}
+	// Sort arg keys for deterministic output (map iteration order is random).
+	keys := make([]string, 0, len(build.Args))
+	for k := range build.Args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(h, "arg:%s=%s\n", k, build.Args[k])
+	}
+	sum := hex.EncodeToString(h.Sum(nil))
+	// Use a runner-specific prefix so the tag never collides with the
+	// server-computed tag (hangrix-agent-r6:…) once the server-side fix
+	// lands and the server starts passing Image directly.
+	return "hangrix-wf:" + sum[:16]
 }
