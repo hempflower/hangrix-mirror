@@ -518,7 +518,14 @@ const timelineItems = computed<TimelineItem[]>(() => {
   for (const q of questionnaires.value ?? []) {
     out.push({ key: `q-${q.id}`, at: q.created_at, kind: 'questionnaire', data: q })
   }
-  out.sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+  out.sort((a, b) => {
+    const ta = Date.parse(a.at)
+    const tb = Date.parse(b.at)
+    if (Number.isNaN(ta) && Number.isNaN(tb)) return 0
+    if (Number.isNaN(ta)) return 1
+    if (Number.isNaN(tb)) return -1
+    return ta - tb
+  })
   return out
 })
 

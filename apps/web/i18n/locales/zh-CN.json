@@ -996,6 +996,7 @@
     },
     "questionnaire": {
       "title": "问卷",
+      "asked": "发起了",
       "empty": "暂无问卷。",
       "submit": "提交",
       "submitting": "提交中…",
