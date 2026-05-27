@@ -290,6 +290,16 @@ export interface PlatformAttachment {
 }
 
 
+/** OpenDescendant mirrors the server's domain.OpenDescendant returned in
+ *  sub_issues arrays on blocked merge/close 409 responses. */
+export interface OpenDescendant {
+  id: number
+  number: number
+  title: string
+  state: IssueState
+  depth: number
+}
+
 export type TodoStatus = 'todo' | 'in_progress' | 'done'
 
 export interface TodoItem {

@@ -1385,6 +1385,63 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]ListI
 	return items, nil
 }
 
+const listOpenDescendantIssues = `-- name: ListOpenDescendantIssues :many
+WITH RECURSIVE descendants AS (
+    SELECT i.id, i.number, i.title, i.state, 1 AS depth,
+           ARRAY[i.id] AS visited
+    FROM issues i
+    WHERE i.parent_id = $1
+  UNION ALL
+    SELECT i.id, i.number, i.title, i.state, d.depth + 1,
+           d.visited || i.id
+    FROM issues i
+    JOIN descendants d ON i.parent_id = d.id
+    WHERE i.id <> ALL(d.visited)
+      AND d.depth < 32                     -- hard ceiling
+)
+SELECT id, number, title, state, depth::INT AS depth
+FROM descendants
+WHERE state = 'open'
+ORDER BY depth ASC, number ASC
+`
+
+type ListOpenDescendantIssuesRow struct {
+	ID     int64
+	Number int64
+	Title  string
+	State  string
+	Depth  int32
+}
+
+// Recursive walk over issues.parent_id starting at $1. Emits open rows.
+// Depth=1 for direct children, >1 deeper. Visited-set guard defends
+// against accidental cycles in case a future write violates the tree.
+func (q *Queries) ListOpenDescendantIssues(ctx context.Context, rootID pgtype.Int8) ([]ListOpenDescendantIssuesRow, error) {
+	rows, err := q.db.Query(ctx, listOpenDescendantIssues, rootID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOpenDescendantIssuesRow{}
+	for rows.Next() {
+		var i ListOpenDescendantIssuesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Number,
+			&i.Title,
+			&i.State,
+			&i.Depth,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOpenIssueNumbers = `-- name: ListOpenIssueNumbers :many
 SELECT number FROM issues
 WHERE repo_id = $1 AND state = 'open'

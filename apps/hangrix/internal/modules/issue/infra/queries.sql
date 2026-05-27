@@ -105,6 +105,28 @@ LEFT JOIN users u ON u.id = i.author_id
 WHERE i.parent_id = sqlc.arg('parent_id')
 ORDER BY i.number ASC;
 
+-- name: ListOpenDescendantIssues :many
+-- Recursive walk over issues.parent_id starting at $1. Emits open rows.
+-- Depth=1 for direct children, >1 deeper. Visited-set guard defends
+-- against accidental cycles in case a future write violates the tree.
+WITH RECURSIVE descendants AS (
+    SELECT i.id, i.number, i.title, i.state, 1 AS depth,
+           ARRAY[i.id] AS visited
+    FROM issues i
+    WHERE i.parent_id = sqlc.arg('root_id')
+  UNION ALL
+    SELECT i.id, i.number, i.title, i.state, d.depth + 1,
+           d.visited || i.id
+    FROM issues i
+    JOIN descendants d ON i.parent_id = d.id
+    WHERE i.id <> ALL(d.visited)
+      AND d.depth < 32                     -- hard ceiling
+)
+SELECT id, number, title, state, depth::INT AS depth
+FROM descendants
+WHERE state = 'open'
+ORDER BY depth ASC, number ASC;
+
 -- name: UpdateIssueTitleBody :one
 UPDATE issues
 SET title = sqlc.arg('title'),

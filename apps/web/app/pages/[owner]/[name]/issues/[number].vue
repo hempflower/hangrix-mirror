@@ -36,7 +36,7 @@ import FileDiffList from '@/components/repo/FileDiffList.vue'
 import FoldableBody from '@/components/issue/FoldableBody.vue'
 import MentionTextarea from '@/components/issue/MentionTextarea.vue'
 import AttachmentUploader from '@/components/issue/AttachmentUploader.vue'
-import type { Issue, IssueState, IssueTimeline, IssueMergeResp, ReviewStatus, ReviewVerdict, ReviewVoteValue, TodoStatus } from '~/types/issue'
+import type { Issue, IssueState, IssueTimeline, IssueMergeResp, OpenDescendant, ReviewStatus, ReviewVerdict, ReviewVoteValue, TodoStatus } from '~/types/issue'
 import type { ActorRef } from '~/types/actor'
 import type { Commit, FileDiff } from '~/types/repo'
 import { useQuestionnaire } from '@/composables/useQuestionnaire'
@@ -161,6 +161,7 @@ const stateBusy = ref(false)
 const mergeBusy = ref(false)
 const actionError = ref<string | null>(null)
 const actionInfo = ref<string | null>(null)
+const actionSubIssues = ref<OpenDescendant[]>([])
 
 type IssueTab = 'conversation' | 'commits' | 'diff' | 'contributions' | 'agents'
 
@@ -215,6 +216,17 @@ const mergeBlockReason = computed(() => {
   }
   return t('issue.review.blocked')
 })
+
+// Sub-issue gate: when any direct child is open, disable Merge/Close as a
+// client-side hint. The server is the authoritative gate — it also catches
+// deep descendants that the client-side check can't see.
+const openSubIssues = computed(() => children.value.filter(c => c.state === 'open'))
+const subIssueBlocked = computed(() => openSubIssues.value.length > 0)
+const subIssueBlockMessage = computed(() => {
+  if (openSubIssues.value.length === 0) return ''
+  return t('issue.subIssueBlock', { n: openSubIssues.value.length })
+})
+
 
 // Aggregate +/- across every file in the issue diff. Parses each unified
 // patch once and counts `+`/`-` lines (not the file-header `+++`/`---`).
@@ -346,6 +358,7 @@ async function toggleState() {
   if (!issue.value) return
   stateBusy.value = true
   actionError.value = null
+  actionSubIssues.value = []
   try {
     const next: IssueState = issue.value.state === 'open' ? 'closed' : 'open'
     issue.value = await $fetch<Issue>(
@@ -359,6 +372,7 @@ async function toggleState() {
     await loadTimeline()
   } catch (e: any) {
     actionError.value = e?.data?.error ?? t('issue.stateChangeFailed')
+    actionSubIssues.value = e?.data?.sub_issues ?? []
   } finally {
     stateBusy.value = false
   }
@@ -370,6 +384,7 @@ async function merge() {
   mergeBusy.value = true
   actionError.value = null
   actionInfo.value = null
+  actionSubIssues.value = []
   try {
     const res = await $fetch<IssueMergeResp>(
       `/api/repos/${owner.value}/${name.value}/issues/${number.value}/merge`,
@@ -380,6 +395,7 @@ async function merge() {
     await Promise.all([loadTimeline(), loadDiff(), loadMentionAgents()])
   } catch (e: any) {
     actionError.value = e?.data?.error ?? t('issue.mergeFailed')
+    actionSubIssues.value = e?.data?.sub_issues ?? []
   } finally {
     mergeBusy.value = false
   }
@@ -1249,14 +1265,27 @@ onUnmounted(() => {
             </CardContent>
           </Card>
 
-  <div v-if="actionError" class="text-sm text-destructive">{{ actionError }}</div>
+  <div v-if="actionError" class="space-y-1">
+    <p class="text-sm text-destructive">{{ actionError }}</p>
+    <ul v-if="actionSubIssues.length > 0" class="space-y-0.5">
+      <li v-for="si in actionSubIssues" :key="si.id" class="text-sm text-destructive">
+        <NuxtLink :to="`/${owner}/${name}/issues/${si.number}`" class="font-mono hover:underline">
+          #{{ si.number }}
+        </NuxtLink>
+        {{ si.title }}
+        <span v-if="si.depth > 1" class="text-muted-foreground text-xs">
+          ({{ t('issue.subIssueBlockDeep', { n: si.depth - 1 }) }})
+        </span>
+      </li>
+    </ul>
+  </div>
   <div v-if="actionInfo" class="text-sm text-emerald-700 dark:text-emerald-400">{{ actionInfo }}</div>
 
   <div class="space-y-2">
   <Button
   v-if="canMerge"
   class="w-full"
-  :disabled="mergeBusy || mergeBlocked"
+  :disabled="mergeBusy || mergeBlocked || subIssueBlocked"
   @click="merge"
   >
   <GitMerge class="size-4" />
@@ -1265,16 +1294,38 @@ onUnmounted(() => {
   <p v-if="canMerge && mergeBlocked" class="text-xs text-destructive">
   {{ mergeBlockReason }}
   </p>
+  <div v-if="canMerge && subIssueBlocked" class="space-y-0.5">
+    <p class="text-xs text-destructive">{{ subIssueBlockMessage }}</p>
+    <ul class="space-y-0.5 text-xs text-destructive">
+      <li v-for="kid in openSubIssues" :key="kid.id">
+        <NuxtLink :to="`/${owner}/${name}/issues/${kid.number}`" class="font-mono hover:underline">
+          #{{ kid.number }}
+        </NuxtLink>
+        {{ kid.title }}
+      </li>
+    </ul>
+  </div>
 
   <Button
   v-if="issue.state !== 'merged' && (issue.author_id === user?.id || issue.actor?.user_id === user?.id || canManage)"
               variant="outline"
               class="w-full"
-              :disabled="stateBusy"
+              :disabled="stateBusy || (issue.state === 'open' && subIssueBlocked)"
               @click="toggleState"
             >
               {{ issue.state === 'open' ? t('issue.close') : t('issue.reopen') }}
             </Button>
+  <div v-if="issue.state === 'open' && subIssueBlocked" class="space-y-0.5">
+    <p class="text-xs text-destructive">{{ subIssueBlockMessage }}</p>
+    <ul class="space-y-0.5 text-xs text-destructive">
+      <li v-for="kid in openSubIssues" :key="kid.id">
+        <NuxtLink :to="`/${owner}/${name}/issues/${kid.number}`" class="font-mono hover:underline">
+          #{{ kid.number }}
+        </NuxtLink>
+        {{ kid.title }}
+      </li>
+    </ul>
+  </div>
           </div>
     </aside>
     </div>

@@ -794,6 +794,23 @@ func (s *APIService) GetMergeability(ctx context.Context, p *apidomain.Actor) (a
 			}
 		}
 	}
+	var incompleteSubIssues []map[string]any
+	if mergeable {
+		block, openDesc := s.r.subIssueBlock(ctx, scope)
+		if block != "" {
+			mergeable = false
+			mode = "blocked"
+			hint = block
+			for _, d := range openDesc {
+				incompleteSubIssues = append(incompleteSubIssues, map[string]any{
+					"id":     d.ID,
+					"number": d.Number,
+					"title":  d.Title,
+					"depth":  d.Depth,
+				})
+			}
+		}
+	}
 	result := map[string]any{
 		"mergeable":   mergeable,
 		"mode":        mode,
@@ -804,6 +821,9 @@ func (s *APIService) GetMergeability(ctx context.Context, p *apidomain.Actor) (a
 	}
 	if len(incompleteTodos) > 0 {
 		result["incomplete_todos"] = incompleteTodos
+	}
+	if len(incompleteSubIssues) > 0 {
+		result["incomplete_sub_issues"] = incompleteSubIssues
 	}
 	return result, nil
 }
@@ -822,6 +842,13 @@ func (s *APIService) MergeIssue(ctx context.Context, p *apidomain.Actor, message
 	}
 	if block, _ := s.r.todosCompletionBlock(ctx, scope); block != "" {
 		return nil, fmt.Errorf("merge blocked: %s", block)
+	}
+	if block, openDesc := s.r.subIssueBlock(ctx, scope); block != "" {
+		return nil, &issuedomain.BlockError{
+			Code:      "incomplete_sub_issues",
+			Message:   "merge blocked: " + block,
+			SubIssues: openDesc,
+		}
 	}
 	headSHA, err := s.r.deps.Git.ResolveCommit(scope.fsPath, scope.issue.BranchName)
 	if err != nil || headSHA == "" {
@@ -867,6 +894,13 @@ func (s *APIService) CloseIssue(ctx context.Context, p *apidomain.Actor, reason 
 	}
 	if block, _ := s.r.todosCompletionBlock(ctx, scope); block != "" {
 		return nil, fmt.Errorf("close blocked: %s", block)
+	}
+	if block, openDesc := s.r.subIssueBlock(ctx, scope); block != "" {
+		return nil, &issuedomain.BlockError{
+			Code:      "incomplete_sub_issues",
+			Message:   "close blocked: " + block,
+			SubIssues: openDesc,
+		}
 	}
 	next, err := s.r.deps.Issues.UpdateState(ctx, scope.issue.ID, issuedomain.StateClosed, "")
 	if err != nil {

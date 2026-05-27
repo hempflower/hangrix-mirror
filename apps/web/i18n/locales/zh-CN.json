@@ -893,6 +893,8 @@
     "subIssues": "子 issue",
     "newSubIssue": "新建子 issue",
     "noSubIssues": "暂无子 issue。",
+    "subIssueBlock": "{n} 个进行中的子 issue 需要先合并或关闭：",
+    "subIssueBlockDeep": "… 及 {n} 个更深层的子 issue",
     "checks": {
       "title": "CI 检查"
     },

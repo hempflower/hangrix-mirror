@@ -251,6 +251,20 @@ func requirePermission(w http.ResponseWriter, p *apidomain.Actor, resource, acti
 
 // writeServiceError maps common service-layer errors to HTTP status codes.
 func writeServiceError(w http.ResponseWriter, err error) {
+	// BlockError carries structured precondition-failure data (code,
+	// sub_issues) that the agent tool layer needs in the response so the
+	// LLM can decide what to do next — emit a 409 matching the chi-handler
+	// shape instead of falling through to the default 500.
+	var be *domain.BlockError
+	if errors.As(err, &be) {
+		WriteJSON(w, http.StatusConflict, map[string]any{
+			"error":        be.Message,
+			"code":         be.Code,
+			"block_reason": be.Message,
+			"sub_issues":   be.SubIssues,
+		})
+		return
+	}
 	msg := err.Error()
 	switch {
 	case containsAny(msg, "not found", "out of scope", "does not belong"):
