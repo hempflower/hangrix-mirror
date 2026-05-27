@@ -1,8 +1,6 @@
 // Package questionnaire wires the questionnaire feature module into the ioc
 // container. It follows the modular-monolith pattern: handler → service →
-// infra (PostgresStore). The domain.EventPublisher is an optional cross-module
-// seam; when nil (tests / no agent_session module loaded), service callsites
-// are nil-safe.
+// infra (PostgresStore).
 package questionnaire
 
 import (

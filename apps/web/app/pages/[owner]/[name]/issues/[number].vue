@@ -25,7 +25,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import ActorBadge from '@/components/ActorBadge.vue'
 import AgentSessionsView from '@/components/issue/AgentSessionsView.vue'
 import ContributionsView from '@/components/issue/ContributionsView.vue'
-import QuestionnaireCard from '@/components/issue/QuestionnaireCard.vue'
+import QuestionnaireTimelineCard from '@/components/issue/QuestionnaireTimelineCard.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -486,7 +486,7 @@ function stateBadgeIcon(s: IssueState) {
 interface TimelineItem {
   key: string
   at: string
-  kind: 'comment' | 'event'
+  kind: 'comment' | 'event' | 'questionnaire'
   data: any
 }
 const timelineItems = computed<TimelineItem[]>(() => {
@@ -496,6 +496,9 @@ const timelineItems = computed<TimelineItem[]>(() => {
   }
   for (const e of timeline.value?.events ?? []) {
     out.push({ key: `e-${e.id}`, at: e.created_at, kind: 'event', data: e })
+  }
+  for (const q of questionnaires.value ?? []) {
+    out.push({ key: `q-${q.id}`, at: q.created_at, kind: 'questionnaire', data: q })
   }
   out.sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
   return out
@@ -838,6 +841,22 @@ onUnmounted(() => {
                   </CardContent>
                 </Card>
 
+                <!-- Questionnaires: agent-created surveys rendered as
+                     first-class timeline cards with the same card chrome
+                     as comments (ActorBadge header strip). The card
+                     handles its own three states (open unanswered,
+                     open answered, closed with results). -->
+                <QuestionnaireTimelineCard
+                  v-else-if="it.kind === 'questionnaire'"
+                  :key="it.key"
+                  :questionnaire="it.data"
+                  :owner="owner"
+                  :name="name"
+                  :issue-number="Number(number)"
+                  @submitted="refreshLive()"
+                  @closed="refreshLive()"
+                />
+
                 <!-- System events render as a thin inline strip between
                      comments — they're context, not threads of their own,
                      so they shouldn't get the heavy card chrome. -->
@@ -1171,18 +1190,6 @@ onUnmounted(() => {
             </CardContent>
           </Card>
 
-          <!-- Questionnaires: agent-created surveys displayed as sidebar cards.
-               Same pattern as Todos — server-driven list with polling refresh. -->
-          <QuestionnaireCard
-            v-for="q in questionnaires"
-            :key="q.id"
-            :questionnaire="q"
-            :owner="owner"
-            :name="name"
-            :issue-number="Number(number)"
-            @submitted="refreshLive()"
-            @closed="refreshLive()"
-          />
 
           <Card class="gap-0 py-0">
             <CardContent class="space-y-3 p-4">

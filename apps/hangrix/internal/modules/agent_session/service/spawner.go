@@ -172,7 +172,11 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 			continue
 		}
 		role := hostCfg.Roles[roleKey]
-		if !triggerMatches(role.Triggers, in.Trigger, roleKey, in) {
+		// Direct-invoke callers (e.g. questionnaire submission) target
+		// exactly one role semantically — bypass the per-role trigger
+		// map so the role wakes even without an explicit trigger entry
+		// in agents.yml.
+		if !s.isDirectInvoke(in) && !triggerMatches(role.Triggers, in.Trigger, roleKey, in) {
 			continue
 		}
 		// Idempotency: exact (role, cause_kind, cause_id) was already
@@ -676,6 +680,17 @@ func triggerMatches(triggers map[agentsconfig.Trigger]*agentsconfig.TriggerSpec,
 		return evalPushFilter(spec.Push, in.ChangedPaths)
 	}
 	return true
+}
+
+// isDirectInvoke reports whether the caller pinpointed exactly one role
+// with a CauseKind that carries its own semantic targeting (e.g. a
+// questionnaire submission → questionnaire author). When true the
+// per-role triggers-map filter is bypassed — the role wakes regardless
+// of its agents.yml trigger config. Each new CauseKind that should skip
+// triggerMatches is added here, keeping a single gate for the direct-
+// invoke path.
+func (s *Spawner) isDirectInvoke(in domain.TriggerInput) bool {
+	return in.RoleKey != "" && in.CauseKind == domain.CauseKindQuestionnaireAnswered
 }
 
 // evalCommentFilter returns true when the comment context satisfies

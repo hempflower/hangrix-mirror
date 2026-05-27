@@ -69,6 +69,12 @@ const (
 	// EventContributionClosed fires when the owning role abandons a
 	// contribution branch.
 	EventContributionClosed EventKind = "contribution_closed"
+
+	// EventQuestionnairePosted fires when an agent creates a
+	// questionnaire via ask_question. The payload carries enough info
+	// for the frontend timeline to render a questionnaire card inline
+	// without an extra N+1 query.
+	EventQuestionnairePosted EventKind = "questionnaire_posted"
 )
 
 // ReviewVoteValue enumerates the three vote outcomes a reviewer (agent or
@@ -479,6 +485,16 @@ type StateChangedPayload struct {
 type TitleChangedPayload struct {
 	From string `json:"from"`
 	To   string `json:"to"`
+}
+
+// QuestionnairePostedPayload is the JSON shape stored in Event.Payload for
+// EventQuestionnairePosted. QuestionnaireID is the primary key into the
+// questionnaires table; Title and QuestionCount are denormalised so the
+// frontend timeline can render a questionnaire card without an extra fetch.
+type QuestionnairePostedPayload struct {
+	QuestionnaireID int64  `json:"questionnaire_id"`
+	Title           string `json:"title"`
+	QuestionCount   int    `json:"question_count"`
 }
 
 // ErrIssueNotFound is mapped to 404 in handlers.
