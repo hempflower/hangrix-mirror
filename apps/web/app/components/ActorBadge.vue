@@ -27,7 +27,7 @@ function initialOf(s: string): string {
           {{ initialOf(actor.display_name) }}
         </AvatarFallback>
       </Avatar>
-      <span class="font-medium text-foreground">{{ actor.display_name }}</span>
+      <span class="font-medium text-foreground">{{ actor.display_name || '—' }}</span>
     </template>
 
     <!-- agent → bot icon + @agent-role -->

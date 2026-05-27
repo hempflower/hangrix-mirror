@@ -376,7 +376,21 @@ function normalizeActor(
   actor: ActorRef | undefined | null,
   legacy: { author_id?: number | null; author_username?: string | null; agent_role?: string | null },
 ): ActorRef | null {
-  if (actor) return actor
+  if (actor) {
+    // If the server sent an actor with an empty display_name (can happen
+    // when the DB actor columns haven't been backfilled yet, or when the
+    // backend's legacy fallback omits the author name), patch it from the
+    // legacy fields so the ActorBadge has something to render.
+    if (!actor.display_name) {
+      if (legacy.agent_role) {
+        return { ...actor, display_name: `@agent-${legacy.agent_role}`, role_key: legacy.agent_role }
+      }
+      if (legacy.author_username) {
+        return { ...actor, display_name: legacy.author_username }
+      }
+    }
+    return actor
+  }
   // Fallback: reconstruct from legacy fields
   if (legacy.agent_role) {
     return {
