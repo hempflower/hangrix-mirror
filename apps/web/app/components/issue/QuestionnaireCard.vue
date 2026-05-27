@@ -146,14 +146,8 @@ function optionLabel(qid: number, oid: string): string {
 
       <!-- --- STATUS BRANCHING --- -->
 
-      <!-- Loading skeleton -->
-      <template v-if="!questionnaire.questions">
-        <Skeleton class="h-4 w-full" />
-        <Skeleton class="h-4 w-3/4" />
-      </template>
-
       <!-- Open: fill form -->
-      <template v-else-if="isOpen && !hasSubmitted">
+      <template v-if="isOpen && !hasSubmitted">
         <div class="space-y-3">
           <QuestionnaireQuestion
             v-for="q in questionnaire.questions"

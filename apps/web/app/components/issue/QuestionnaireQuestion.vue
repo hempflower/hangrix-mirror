@@ -5,6 +5,8 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 
+const { t } = useI18n()
+
 const props = defineProps<{
   question: Question
   modelValue: AnswerEntry
@@ -89,8 +91,8 @@ const textValue = computed({
         >
           <Checkbox
             :id="`q${question.id}-${opt.id}`"
-            :checked="selectedOptionIds.has(opt.id)"
-            @update:checked="() => toggleOption(opt.id)"
+            :model-value="selectedOptionIds.has(opt.id)"
+            @update:model-value="() => toggleOption(opt.id)"
           />
           <Label :for="`q${question.id}-${opt.id}`" class="text-sm font-normal cursor-pointer">
             {{ opt.label }}
@@ -103,7 +105,7 @@ const textValue = computed({
     <template v-else>
       <Textarea
         v-model="textValue"
-        :placeholder="question.required ? 'Required' : 'Optional'"
+        :placeholder="question.required ? t('issue.questionnaire.placeholderRequired') : t('issue.questionnaire.placeholderOptional')"
         class="min-h-20 resize-y text-sm"
         rows="3"
       />

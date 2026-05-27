@@ -990,6 +990,8 @@
       "noResponses": "No responses yet.",
       "textResponses": "{n} text response(s)",
       "closedNoResults": "This questionnaire is closed. Results are not yet available.",
+      "placeholderRequired": "Required",
+      "placeholderOptional": "Optional",
       "loginToSubmit": "Sign in to submit your answers.",
       "error": {
         "loadFailed": "Failed to load questionnaire",
