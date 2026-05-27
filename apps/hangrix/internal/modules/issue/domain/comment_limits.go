@@ -12,7 +12,7 @@ import (
 // When adjusting this value, also update the agent-side schema hint in
 // apps/hangrix-agent/internal/tools/platform/platform.go (stringPropMax
 // for the issue_comment tool).
-const MaxCommentBodyRunes = 4000
+const MaxCommentBodyRunes = 8000
 
 // ErrCommentBodyTooLong is returned by ValidateCommentBody when the
 // supplied body exceeds MaxCommentBodyRunes. Carrying the actual rune
