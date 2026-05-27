@@ -622,15 +622,15 @@ function todoStatusIcon(s: TodoStatus) {
 function todoStatusClass(s: TodoStatus) {
   switch (s) {
     case 'todo': return 'text-slate-500'
-    case 'in_progress': return 'text-amber-500'
-    case 'done': return 'text-emerald-500'
+    case 'in_progress': return 'text-green-500'
+    case 'done': return 'text-violet-500'
   }
 }
 function todoBadgeClass(s: TodoStatus) {
   switch (s) {
     case 'todo': return 'bg-slate-500/15 text-slate-700 dark:text-slate-300'
-    case 'in_progress': return 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-    case 'done': return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+    case 'in_progress': return 'bg-green-500/15 text-green-700 dark:text-green-300'
+    case 'done': return 'bg-violet-500/15 text-violet-700 dark:text-violet-300'
   }
 }
 
@@ -1168,7 +1168,7 @@ onUnmounted(() => {
                 </p>
                 <Badge
                   v-if="todos.length > 0"
-                  :class="todoSummary?.all_done ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' : 'bg-slate-500/15 text-slate-700 dark:text-slate-300'"
+                  :class="todoSummary?.all_done ? 'bg-violet-500/15 text-violet-700 dark:text-violet-300' : 'bg-slate-500/15 text-slate-700 dark:text-slate-300'"
                   variant="secondary"
                 >
                   {{ todoSummary?.done ?? 0 }} / {{ todoSummary?.total ?? 0 }} {{ t('issue.todos.completed') }}
@@ -1186,10 +1186,10 @@ onUnmounted(() => {
                   <Badge variant="secondary" class="bg-slate-500/15 text-slate-700 dark:text-slate-300">
                     {{ t('issue.todos.status.todo') }} {{ todoSummary.todo }}
                   </Badge>
-                  <Badge variant="secondary" class="bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                  <Badge variant="secondary" class="bg-green-500/15 text-green-700 dark:text-green-300">
                     {{ t('issue.todos.status.in_progress') }} {{ todoSummary.in_progress }}
                   </Badge>
-                  <Badge variant="secondary" class="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                  <Badge variant="secondary" class="bg-violet-500/15 text-violet-700 dark:text-violet-300">
                     {{ t('issue.todos.status.done') }} {{ todoSummary.done }}
                   </Badge>
                 </div>
