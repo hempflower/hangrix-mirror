@@ -1,14 +1,10 @@
-package service
+package agentsconfig
 
-import (
-	"testing"
-
-	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
-)
+import "testing"
 
 func TestResolveImageTag_Image(t *testing.T) {
 	t.Parallel()
-	got, err := resolveImageTag(7, agentsconfig.Container{Image: "ghcr.io/acme/dev:1.0"})
+	got, err := ResolveImageTag(7, Container{Image: "ghcr.io/acme/dev:1.0"})
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -19,18 +15,18 @@ func TestResolveImageTag_Image(t *testing.T) {
 
 func TestResolveImageTag_BuildDeterministic(t *testing.T) {
 	t.Parallel()
-	build := &agentsconfig.Build{
+	build := &Build{
 		Dockerfile: ".hangrix/agent.Dockerfile",
 		Context:    ".",
 		Args:       map[string]string{"GO_VERSION": "1.26", "NODE_MAJOR": "20"},
 	}
-	c := agentsconfig.Container{Build: build}
+	c := Container{Build: build}
 
-	first, err := resolveImageTag(7, c)
+	first, err := ResolveImageTag(7, c)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	second, _ := resolveImageTag(7, c)
+	second, _ := ResolveImageTag(7, c)
 	if first != second {
 		t.Fatalf("not deterministic: %q vs %q", first, second)
 	}
@@ -38,18 +34,18 @@ func TestResolveImageTag_BuildDeterministic(t *testing.T) {
 		t.Fatalf("empty tag")
 	}
 	// Different repo id → different tag.
-	other, _ := resolveImageTag(8, c)
+	other, _ := ResolveImageTag(8, c)
 	if other == first {
 		t.Fatalf("repo id should namespace: %q == %q", other, first)
 	}
 	// Different arg → different tag.
 	c2 := c
-	c2.Build = &agentsconfig.Build{
+	c2.Build = &Build{
 		Dockerfile: build.Dockerfile,
 		Context:    build.Context,
 		Args:       map[string]string{"GO_VERSION": "1.27", "NODE_MAJOR": "20"},
 	}
-	mutated, _ := resolveImageTag(7, c2)
+	mutated, _ := ResolveImageTag(7, c2)
 	if mutated == first {
 		t.Fatalf("build arg change should yield new tag: %q == %q", mutated, first)
 	}
@@ -57,7 +53,7 @@ func TestResolveImageTag_BuildDeterministic(t *testing.T) {
 
 func TestResolveImageTag_NeitherSet(t *testing.T) {
 	t.Parallel()
-	_, err := resolveImageTag(7, agentsconfig.Container{})
+	_, err := ResolveImageTag(7, Container{})
 	if err == nil {
 		t.Fatalf("expected error when neither image nor build set")
 	}

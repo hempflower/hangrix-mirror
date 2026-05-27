@@ -243,7 +243,6 @@ func (s *Service) CreateRun(ctx context.Context, params CreateRunParams) (*domai
 	var snapEntrypoint []string
 	var snapVolumes []domain.VolumeSnapshot
 	if params.Container != nil {
-		snapImage = params.Container.Image
 		snapEntrypoint = params.Container.Entrypoint
 		if params.Container.Build != nil {
 			snapBuild = &domain.BuildSpec{
@@ -251,6 +250,14 @@ func (s *Service) CreateRun(ctx context.Context, params CreateRunParams) (*domai
 				Context:    params.Container.Build.Context,
 				Args:       params.Container.Build.Args,
 			}
+		}
+		// Resolve the docker image tag — either the pre-built image
+		// (pulled by the runner) or the deterministic build tag the
+		// runner will use for `docker build -t <tag>`.
+		var err error
+		snapImage, err = agentsconfig.ResolveImageTag(params.Repo.ID, *params.Container)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve container image: %w", err)
 		}
 		for _, vol := range params.Container.Volumes {
 			snapVolumes = append(snapVolumes, domain.VolumeSnapshot{
