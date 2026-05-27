@@ -607,6 +607,124 @@ func (t *createIssueTool) Call(ctx context.Context, args json.RawMessage) (any, 
 	return resp.Data, nil
 }
 
+// questionnaireTool handles ask_question: creates a questionnaire via
+// POST /api/v1/issues/current/questionnaires and — when
+// wait_for_first_answer is true — schedules a timeout notification via
+// async.ScheduleWithID. It returns immediately with status="scheduled",
+// exactly like the sleep tool. The runtime loop's batch gate prevents
+// the LLM from chaining other tool calls in the same batch.
+//
+// check_questionnaire and close_questionnaire are plain synchronous
+// platform tools and use the standard Tool / toolDef path.
+type questionnaireTool struct {
+	name        string
+	description string
+	schema      map[string]any
+	client      *Client
+	async       local.AsyncLifecycle
+}
+
+func (t *questionnaireTool) Name() string           { return t.name }
+func (t *questionnaireTool) Description() string    { return t.description }
+func (t *questionnaireTool) Schema() map[string]any { return t.schema }
+
+func (t *questionnaireTool) Call(ctx context.Context, args json.RawMessage) (any, error) {
+	if len(args) == 0 || strings.TrimSpace(string(args)) == "" {
+		args = json.RawMessage(`{}`)
+	}
+
+	// Decode args. We accept a superset of the server's CreateQuestionnaire
+	// input plus the client-side scheduling knobs.
+	var req struct {
+		Title               string `json:"title"`
+		Description         string `json:"description"`
+		Questions           []any  `json:"questions"`
+		WaitForFirstAnswer  *bool  `json:"wait_for_first_answer"`
+		TimeoutSeconds      *int   `json:"timeout_seconds"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, fmt.Errorf("ask_question: parse arguments: %w", err)
+	}
+
+	// Defaults for client-side knobs.
+	wait := true
+	if req.WaitForFirstAnswer != nil {
+		wait = *req.WaitForFirstAnswer
+	}
+	timeoutSec := 86400 // 24h default
+	if req.TimeoutSeconds != nil {
+		timeoutSec = *req.TimeoutSeconds
+		// Enforce min/max on the client side as a safety net.
+		if timeoutSec < 30 {
+			timeoutSec = 30
+		}
+		if timeoutSec > 86400 {
+			timeoutSec = 86400
+		}
+	}
+
+	// POST to create the questionnaire. We send only the server-side
+	// fields (title, description, questions). wait/timeout are
+	// agent-local knobs.
+	createBody, err := json.Marshal(map[string]any{
+		"title":       req.Title,
+		"description": req.Description,
+		"questions":   req.Questions,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ask_question: marshal create body: %w", err)
+	}
+
+	var resp v1Singleton
+	if err := t.client.doV1(ctx, http.MethodPost, "/issues/current/questionnaires", "", createBody, false, &resp); err != nil {
+		msg := err.Error()
+		if strings.HasPrefix(msg, "{") {
+			var parsed any
+			if json.Unmarshal([]byte(msg), &parsed) == nil {
+				return parsed, nil
+			}
+		}
+		return nil, err
+	}
+
+	// Extract the questionnaire_id from the response. The server returns
+	// the full questionnaire object in data, which includes an "id" field.
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(resp.Data, &created); err != nil {
+		return nil, fmt.Errorf("ask_question: decode create response: %w", err)
+	}
+	qID := created.ID
+
+	// Schedule timeout notification when wait_for_first_answer is true.
+	if wait && t.async != nil {
+		d := time.Duration(timeoutSec) * time.Second
+		timeoutMsg := fmt.Sprintf(
+			`<hangrix-event kind="notification.questionnaire.timeout" questionnaire_id="%d">`+
+				`<timeout seconds="%d"/></hangrix-event>`,
+			qID, timeoutSec,
+		)
+		t.async.ScheduleWithID(fmt.Sprintf("questionnaire-%d", qID), d, timeoutMsg)
+	}
+
+	// Decode the response data for the "questions" field to include in
+	// the result. We parse it loosely so even if the shape evolves the
+	// tool still returns useful data.
+	var createdFull any
+	json.Unmarshal(resp.Data, &createdFull)
+
+	result := map[string]any{
+		"status":           "scheduled",
+		"questionnaire_id": qID,
+		"note":             "Returned immediately. End the current turn — a notification will wake you when the first answer arrives or the timeout fires. Use check_questionnaire to poll results and close_questionnaire to close it.",
+	}
+	if createdFull != nil {
+		result["questionnaire"] = createdFull
+	}
+	return result, nil
+}
+
 func truncate(b []byte, n int) string {
 	if len(b) <= n {
 		return string(b)
@@ -616,15 +734,25 @@ func truncate(b []byte, n int) string {
 
 // ---- Tool catalogue ----
 
+// AskQuestionToolName is the name of the ask_question platform tool,
+// referenced by the runtime loop's batch gate so it can enforce
+// "no other tool calls in the same batch as ask_question" (same pattern
+// as sleep).
+const AskQuestionToolName = "ask_question"
+
 // All returns every platform tool the agent ships with, bound to the
-// supplied HTTP client. Order matters for catalogue stability — keep
-// read-only tools first then mutating ones.
+// supplied HTTP client and async lifecycle. Order matters for catalogue
+// stability — keep read-only tools first then mutating ones.
 //
 // When readOnly is true (HANGRIX_REPO_PERMISSION == "read"), every tool
 // whose def is marked write:true is skipped entirely — it never appears
 // in the returned slice or the LLM's tool schema. Read tools are always
 // included.
-func All(client *Client, readOnly bool) []local.Tool {
+//
+// async is the AsyncLifecycle handle (the bashTool instance) used by
+// ask_question to schedule timeout notifications. It may be nil in test
+// contexts where background scheduling is not needed.
+func All(client *Client, async local.AsyncLifecycle, readOnly bool) []local.Tool {
 	if client == nil {
 		return nil
 	}
@@ -795,6 +923,23 @@ func All(client *Client, readOnly bool) []local.Tool {
 			kind: "delete", path: "/releases/{release_id}", pathParams: []string{"release_id"}, expect204: true, write: true,
 			schema: objectSchema(map[string]any{"release_id": intProp("The release ID to delete (required).")}, []string{"release_id"}),
 		},
+
+		// ---- questionnaire tools ----
+		{name: "ask_question", description: "Create a questionnaire in the current issue and wait for users to answer asynchronously. Returns immediately with status='scheduled'; you will be woken with a notification once an answer arrives. End your turn after calling — do not chain other tool calls in the same batch. Use check_questionnaire to poll results, close_questionnaire to close.",
+			kind: "questionnaire", write: true,
+			schema: askQuestionSchema(),
+		},
+		{name: "check_questionnaire", description: "Check the current status and results of a questionnaire by its ID. Returns aggregated tallies for choice questions and text responses for text-input questions. Use this to poll results after being woken by a questionnaire.answered notification, or when wait_for_first_answer was set to false.",
+			kind: "get", path: "/issues/current/questionnaires/{id}/results", pathParams: []string{"id"}, write: true,
+			schema: objectSchema(map[string]any{"id": intProp("The questionnaire id to check results for (required).")}, []string{"id"}),
+		},
+		{name: "close_questionnaire", description: "Close a questionnaire by its ID. A closed questionnaire no longer accepts answers. Optionally provide a reason. The response includes the final aggregated results.",
+			kind: "questionnaire_close", path: "/issues/current/questionnaires/{id}/close", pathParams: []string{"id"}, write: true,
+			schema: objectSchema(map[string]any{
+				"id":     intProp("The questionnaire id to close (required)."),
+				"reason": stringProp("Optional reason for closing the questionnaire."),
+			}, []string{"id"}),
+		},
 	}
 
 	out := make([]local.Tool, 0, len(defs))
@@ -832,6 +977,28 @@ func All(client *Client, readOnly bool) []local.Tool {
 				schema:      schema,
 				client:      client,
 			})
+		case "questionnaire":
+			out = append(out, &questionnaireTool{
+				name:        d.name,
+				description: d.description,
+				schema:      schema,
+				client:      client,
+				async:       async,
+			})
+		case "questionnaire_close":
+			// close_questionnaire sends the reason in the JSON body
+			// while the questionnaire id is in the path. The standard
+			// Tool's Call() sends raw args as the body, so we use a
+			// standard Tool with a POST method.
+			t := &Tool{
+				name:        d.name,
+				description: d.description,
+				schema:      schema,
+				client:      client,
+				method:      http.MethodPost,
+				buildPath:   paramPath(d.path, d.pathParams...),
+			}
+			out = append(out, t)
 		default:
 			method := http.MethodPost
 			switch d.kind {
@@ -905,6 +1072,82 @@ func issueEditSchema() map[string]any {
 			"body": map[string]any{
 				"type":        "string",
 				"description": "New body (markdown) for the current issue. Omit to leave unchanged.",
+			},
+		},
+	}
+}
+
+func askQuestionSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"required": []string{"title", "questions"},
+		"properties": map[string]any{
+			"title": map[string]any{
+				"type":        "string",
+				"description": "Questionnaire title. 1-200 characters.",
+				"minLength":   1,
+				"maxLength":   200,
+			},
+			"description": map[string]any{
+				"type":        "string",
+				"description": "Optional longer description for the questionnaire (markdown). Up to 2000 characters.",
+				"maxLength":   2000,
+			},
+			"questions": map[string]any{
+				"type":        "array",
+				"description": "Questions to include. 1-20 items.",
+				"minItems":    1,
+				"maxItems":    20,
+				"items": map[string]any{
+					"type": "object",
+					"required": []string{"type", "text"},
+					"properties": map[string]any{
+						"type": map[string]any{
+							"type": "string",
+							"enum": []string{"single_choice", "multi_choice", "text_input"},
+						},
+						"text": map[string]any{
+							"type":        "string",
+							"description": "Question text. 1-500 characters.",
+							"minLength":   1,
+							"maxLength":   500,
+						},
+						"required": map[string]any{
+							"type":        "boolean",
+							"description": "Whether an answer is required. Default true.",
+							"default":     true,
+						},
+						"options": map[string]any{
+							"type":        "array",
+							"description": "Answer options for choice types (single_choice, multi_choice). 2-10 items. Not used for text_input.",
+							"minItems":    2,
+							"maxItems":    10,
+							"items": map[string]any{
+								"type": "object",
+								"required": []string{"label"},
+								"properties": map[string]any{
+									"label": map[string]any{
+										"type":        "string",
+										"description": "Option label shown to the user. 1-100 characters.",
+										"minLength":   1,
+										"maxLength":   100,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			"wait_for_first_answer": map[string]any{
+				"type":        "boolean",
+				"description": "When true, the agent is woken by a notification on the first submission; when false, returns scheduled and the agent must poll with check_questionnaire. Default true.",
+				"default":     true,
+			},
+			"timeout_seconds": map[string]any{
+				"type":        "integer",
+				"description": "Optional timeout in seconds. If no answer arrives in this window, a 'timeout' notification fires. Default 86400 (24h).",
+				"minimum":     30,
+				"maximum":     86400,
 			},
 		},
 	}

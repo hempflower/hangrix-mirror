@@ -145,7 +145,7 @@ func TestLoopSmoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	bundle := local.Build()
-	registry := tools.Build(bundle.Tools, platform.All(platformClient, false), nil, []string{"*"})
+	registry := tools.Build(bundle.Tools, platform.All(platformClient, nil, false), nil, []string{"*"})
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
