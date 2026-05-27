@@ -513,6 +513,9 @@ const timelineItems = computed<TimelineItem[]>(() => {
     out.push({ key: `c-${c.id}`, at: c.created_at, kind: 'comment', data: c })
   }
   for (const e of timeline.value?.events ?? []) {
+    // questionnaire_posted events are rendered from the questionnaire API
+    // (QuestionnaireTimelineCard) — skip them here to avoid duplication.
+    if (e.kind === 'questionnaire_posted') continue
     out.push({ key: `e-${e.id}`, at: e.created_at, kind: 'event', data: e })
   }
   for (const q of questionnaires.value ?? []) {
@@ -574,6 +577,11 @@ function eventLabel(e: any): string {
       return t('issue.contributions.timeline.contributionClosed', {
         name,
         ref: e.payload?.ref_name ?? '',
+      })
+    case 'questionnaire_posted':
+      return t('issue.timeline.questionnairePosted', {
+        name,
+        title: e.payload?.title ?? '',
       })
     default:
       return e.kind

@@ -885,7 +885,8 @@
       "transitionClosed": "closed",
       "transitionMerged": "merged",
       "transitionOpened": "opened",
-      "titleChanged": "{name} changed the title"
+      "titleChanged": "{name} changed the title",
+      "questionnairePosted": "{name} posted questionnaire \"{title}\""
     },
     "you": "you",
     "parent": "Parent",

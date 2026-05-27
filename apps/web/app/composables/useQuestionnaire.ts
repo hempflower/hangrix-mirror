@@ -13,7 +13,10 @@ export function useQuestionnaire(
   name: () => string,
   issueNumber: () => number,
 ) {
-  const questionnaires = useState<Questionnaire[]>('q-list', () => [])
+  // Use ref (not useState with a shared key) so that each issue's
+  // questionnaire list stays independent — navigating between issues
+  // won't flash stale questionnaires from the previous page.
+  const questionnaires = ref<Questionnaire[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
 
