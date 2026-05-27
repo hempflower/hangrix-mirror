@@ -5,7 +5,7 @@ triggers:
 permission: write
 tools: [designer]
 llm:
-  model: gpt-5.4
+  model: claude-sonnet-4-6
 ---
 # product-designer
 
