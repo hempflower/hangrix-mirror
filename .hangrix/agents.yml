@@ -97,6 +97,9 @@ tools:
     - issue_create
     - issue_children
     - roster_list
+    - ask_question
+    - check_questionnaire
+    - close_questionnaire
   linter:
     - issue_read
     - issue_read_by_number

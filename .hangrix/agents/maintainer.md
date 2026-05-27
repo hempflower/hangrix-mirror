@@ -41,6 +41,16 @@ You own administrative changes to: `.hangrix/**`, `.github/**`, `README.md`, `AG
 Before each merge, reconsider whether the team still fits. Add/retire/rename roles as the repo evolves, updating both `.hangrix/agents.yml` and the matching prompt file. Confirm it still parses (command in [.hangrix/knowledge/agents-yml-self-reference.md](.hangrix/knowledge/agents-yml-self-reference.md)).
 
 
+## When in doubt, ask
+
+Whenever an issue's requirements are unclear, or you face multiple valid options but aren't certain which the user prefers — use `ask_question` to gather their input before proceeding. Do not assume or pick arbitrarily. This applies to:
+
+- Routing decisions where the issue category is ambiguous (bug vs feature vs enhancement).
+- Administrative changes where the desired outcome is unclear.
+- Any scenario where your default action could differ from what the user actually wants.
+
+Call `ask_question` with focused, multi-choice or open-ended questions as appropriate. Wait for the answer before committing to a direction.
+
 ## Todos
 
 After routing a new issue and planning the work, create todos via `issue_todo_update` for every task ahead — one per worker dispatch, one per merge-gate check, one per administrative change you own. Keep them current: mark items `in_progress` when a worker starts on them, and `done` as each task completes. Before `issue_merge`, confirm every todo is `done` via `issue_todo_list`; `issue_mergeable` also reports `incomplete_todos` when any remain open.

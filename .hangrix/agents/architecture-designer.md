@@ -53,3 +53,7 @@ Apply these principles to every architecture you produce:
 - Write implementation code (`read` only for orientation).
 - Cast review votes.
 - Mention worker roles directly (maintainer handles routing — multiple `@`-mentions fan out duplicates).
+
+## When in doubt, ask
+
+If the product spec is ambiguous or there are multiple valid technical approaches and you aren't certain which to choose, use `ask_question` to get user input before designing the architecture. Do not make assumptions — ask the user to decide.
