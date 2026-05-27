@@ -893,6 +893,9 @@
     "subIssues": "Sub-issues",
     "newSubIssue": "New sub-issue",
     "noSubIssues": "No sub-issues yet.",
+    "checks": {
+      "title": "CI Checks"
+    },
       "review": {
       "title": "Reviews",
       "empty": "No reviews yet.",
@@ -970,6 +973,13 @@
         "checks": "Checks"
       },
       "checksPlaceholder": "CI checks coming soon",
+      "checksLoading": "Loading checks…",
+      "checksLoadFailed": "Failed to load checks",
+      "checksEmpty": "No CI checks yet — workflow runs matching this contribution will appear here.",
+      "checksAllPassed": "All checks passed",
+      "checksSomeFailed": "Some checks failed",
+      "checksRunning": "Checks in progress",
+      "checksPending": "Checks pending",
       "commentsEmpty": "No comments yet.",
       "basedOn": "Based on {sha}",
       "headSha": "Head {sha}",

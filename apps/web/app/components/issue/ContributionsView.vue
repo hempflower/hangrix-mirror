@@ -7,7 +7,6 @@ import {
   CircleDot,
   GitMerge,
   Lock,
-  MessageSquare,
   MinusCircle,
   ThumbsDown,
   ThumbsUp,
@@ -21,6 +20,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import FileDiffList from '@/components/repo/FileDiffList.vue'
+import CheckRunPanel from '@/components/issue/CheckRunPanel.vue'
 import type { ActorRef } from '~/types/actor'
 import type {
   Contribution,
@@ -618,14 +618,15 @@ const canApply = computed(() => {
             </Card>
           </TabsContent>
 
-          <!-- Checks (stub, M8) -->
+          <!-- Checks: CI check runs for this contribution -->
           <TabsContent value="checks" class="mt-3">
-            <Card class="gap-0 py-0">
-              <CardContent class="flex items-center gap-2 p-4 text-sm text-muted-foreground">
-                <MessageSquare class="size-4" />
-                {{ t('issue.contributions.checksPlaceholder') }}
-              </CardContent>
-            </Card>
+            <CheckRunPanel
+              v-if="detail"
+              :owner="owner"
+              :name="name"
+              :branch-ref="detail.contribution.ref_name"
+              :head-sha="detail.contribution.head_sha"
+            />
           </TabsContent>
         </Tabs>
       </template>

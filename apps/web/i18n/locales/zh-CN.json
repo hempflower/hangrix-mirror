@@ -893,6 +893,9 @@
     "subIssues": "子 issue",
     "newSubIssue": "新建子 issue",
     "noSubIssues": "暂无子 issue。",
+    "checks": {
+      "title": "CI 检查"
+    },
       "review": {
       "title": "评审",
       "empty": "暂无评审意见。",
@@ -970,6 +973,13 @@
         "checks": "检查"
       },
       "checksPlaceholder": "CI 检查即将上线",
+      "checksLoading": "加载检查中…",
+      "checksLoadFailed": "加载检查失败",
+      "checksEmpty": "暂无 CI 检查 — 与此贡献匹配的工作流运行将显示在这里。",
+      "checksAllPassed": "所有检查通过",
+      "checksSomeFailed": "部分检查失败",
+      "checksRunning": "检查进行中",
+      "checksPending": "检查等待中",
       "commentsEmpty": "暂无评论。",
       "basedOn": "基于 {sha}",
       "headSha": "Head {sha}",
