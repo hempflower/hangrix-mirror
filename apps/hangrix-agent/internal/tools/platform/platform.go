@@ -265,11 +265,15 @@ func decodeV1Error(status int, path string, body []byte) error {
 		ve = v1Error{Message: msg}
 	}
 	// Serialise back so the caller gets a JSON string it can parse.
-	out, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"is_error": true,
 		"status":   status,
 		"error":    ve.Message,
-	})
+	}
+	if len(ve.Errors) > 0 {
+		payload["details"] = ve.Errors
+	}
+	out, _ := json.Marshal(payload)
 	return fmt.Errorf("%s", out)
 }
 
@@ -792,7 +796,12 @@ func All(client *Client, async local.AsyncLifecycle, readOnly bool) []local.Tool
 		{name: "issue_comment", description: "Post a comment on the current issue. `body` is markdown; @agent-<role-key> mentions wake other roles.",
 			kind: "post", path: "/issues/current/comments", write: true,
 			schema: objectSchema(map[string]any{
-				"body":      stringProp("The comment body. Markdown allowed; mentions follow @agent-<role-key> grammar."),
+				"body": stringPropMax(
+					"The comment body. Markdown allowed; mentions follow @agent-<role-key> grammar. "+
+						"Maximum 4000 Unicode characters (runes). If your content exceeds the limit, "+
+						"split it across multiple issue_comment calls and prefix each with `[1/N]`, `[2/N]`, …",
+					4000,
+				),
 				"file_path": stringProp("Optional path to anchor the comment to a file (inline review). Omit for top-level."),
 				"line":      intProp("Optional line number to anchor inline. Requires file_path."),
 			}, []string{"body"}),
@@ -1016,6 +1025,16 @@ func objectSchema(props map[string]any, required []string) map[string]any {
 
 func stringProp(desc string) map[string]any {
 	return map[string]any{"type": "string", "description": desc}
+}
+
+// stringPropMax is stringProp + a maxLength hint. The server is still
+// the source of truth; this only helps the LLM avoid the round-trip.
+func stringPropMax(desc string, maxLen int) map[string]any {
+	return map[string]any{
+		"type":        "string",
+		"description": desc,
+		"maxLength":   maxLen,
+	}
 }
 
 func intProp(desc string) map[string]any {

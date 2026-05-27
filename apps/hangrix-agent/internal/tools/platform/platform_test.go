@@ -1,8 +1,12 @@
 package platform
 
 import (
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/hangrix/hangrix/apps/hangrix-agent/internal/tools/local"
 )
 
 func TestIssueEditSchemaIsUpstreamCompatible(t *testing.T) {
@@ -93,5 +97,134 @@ func assertSchemaShape(t *testing.T, toolName string, schema map[string]any) {
 
 	if !reflect.DeepEqual(required, schema["required"].([]string)) {
 		t.Fatalf("%s schema required slice changed unexpectedly", toolName)
+	}
+}
+
+func TestDecodeV1ErrorWithDetails(t *testing.T) {
+	// Simulate a server 422 response with FieldError details — the
+	// "body too long" case from issue #202.
+	body := []byte(`{
+		"message": "comment body too long: 4517 runes (limit 4000)",
+		"errors": [
+			{
+				"resource": "comment",
+				"field": "body",
+				"code": "too_long",
+				"message": "body has 4517 Unicode characters; the maximum is 4000. Split the content into multiple ` + "`" + `issue_comment` + "`" + ` calls, each ≤4000 characters. Prefix each segment with ` + "`" + `[1/N]` + "`" + `, ` + "`" + `[2/N]` + "`" + `, … so readers can follow the sequence."
+			}
+		]
+	}`)
+
+	err := decodeV1Error(422, "/issues/current/comments", body)
+	if err == nil {
+		t.Fatal("decodeV1Error returned nil, expected error")
+	}
+
+	raw := err.Error()
+	if !strings.HasPrefix(raw, "{") {
+		t.Fatalf("decodeV1Error output does not look like JSON: %s", raw)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		t.Fatalf("decodeV1Error output is not valid JSON: %v\nraw: %s", err, raw)
+	}
+
+	if got, ok := parsed["is_error"]; !ok || got != true {
+		t.Fatalf("is_error = %v, want true", got)
+	}
+	if got := parsed["status"]; got != float64(422) {
+		t.Fatalf("status = %v, want 422", got)
+	}
+	if got := parsed["error"]; got == nil || got == "" {
+		t.Fatal("error field is missing or empty")
+	}
+
+	details, ok := parsed["details"]
+	if !ok {
+		t.Fatal("expected 'details' key when errors[] is present, but it's missing")
+	}
+	detailsArr, ok := details.([]interface{})
+	if !ok {
+		t.Fatalf("details is not an array: %T", details)
+	}
+	if len(detailsArr) != 1 {
+		t.Fatalf("details array has %d elements, want 1", len(detailsArr))
+	}
+	first, ok := detailsArr[0].(map[string]any)
+	if !ok {
+		t.Fatalf("details[0] has unexpected type %T", detailsArr[0])
+	}
+	if got := first["code"]; got != "too_long" {
+		t.Fatalf("details[0].code = %v, want %q", got, "too_long")
+	}
+	if msg, ok := first["message"].(string); !ok || !strings.Contains(msg, "Split") {
+		t.Fatalf("details[0].message should contain 'Split', got %q", first["message"])
+	}
+}
+
+func TestDecodeV1ErrorWithoutDetails(t *testing.T) {
+	// Simulate a server 422 response without errors[] — the "body is
+	// required" case (missing field).
+	body := []byte(`{"message": "body is required"}`)
+
+	err := decodeV1Error(422, "/issues/current/comments", body)
+	if err == nil {
+		t.Fatal("decodeV1Error returned nil, expected error")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(err.Error()), &parsed); err != nil {
+		t.Fatalf("decodeV1Error output is not valid JSON: %v", err)
+	}
+
+	if _, ok := parsed["details"]; ok {
+		t.Fatal("expected no 'details' key when errors[] is absent, but it's present")
+	}
+}
+
+func TestIssueCommentSchemaBodyMaxLengthAndSplitHint(t *testing.T) {
+	client := NewClient("https://example.invalid", "token")
+	tools := All(client, nil, false)
+
+	var issueComment local.Tool
+	for _, tool := range tools {
+		if tool.Name() == "issue_comment" {
+			issueComment = tool
+			break
+		}
+	}
+	if issueComment == nil {
+		t.Fatal("issue_comment tool not found in All()")
+	}
+
+	schema := issueComment.Schema()
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("issue_comment schema properties not found or wrong type: %T", schema["properties"])
+	}
+
+	bodySchema, ok := props["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("issue_comment schema body property not found or wrong type: %T", props["body"])
+	}
+
+	maxLength, ok := bodySchema["maxLength"]
+	if !ok {
+		t.Fatal("issue_comment body schema is missing maxLength")
+	}
+	if ml, ok := maxLength.(int); !ok || ml != 4000 {
+		t.Fatalf("issue_comment body maxLength = %v (%T), want 4000", maxLength, maxLength)
+	}
+
+	desc, ok := bodySchema["description"].(string)
+	if !ok {
+		t.Fatalf("issue_comment body description not found or wrong type: %T", bodySchema["description"])
+	}
+	if !strings.Contains(desc, "split") {
+		t.Fatalf("issue_comment body description missing 'split': %s", desc)
+	}
+	if !strings.Contains(desc, "[1/N]") {
+		t.Fatalf("issue_comment body description missing '[1/N]': %s", desc)
 	}
 }
