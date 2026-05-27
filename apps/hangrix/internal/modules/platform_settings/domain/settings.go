@@ -6,8 +6,13 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrSettingNotFound is returned when a requested key has no row
+// in platform_settings. Callers should use errors.Is to detect it.
+var ErrSettingNotFound = errors.New("platform setting not found")
 
 // Setting is one key-value pair persisted in platform_settings.
 type Setting struct {

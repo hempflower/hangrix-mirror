@@ -22,8 +22,6 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-var errNotFound = errors.New("platform setting not found")
-
 // PostgresRepo implements the narrow `repo` interface the service layer
 // consumes — just Get, Upsert, List.
 type PostgresRepo struct {
@@ -52,7 +50,7 @@ func (r *PostgresRepo) GetSetting(ctx context.Context, key string) (domain.Setti
 	row, err := r.q.GetSetting(ctx, key)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
-			return domain.Setting{}, errNotFound
+			return domain.Setting{}, domain.ErrSettingNotFound
 		}
 		return domain.Setting{}, err
 	}

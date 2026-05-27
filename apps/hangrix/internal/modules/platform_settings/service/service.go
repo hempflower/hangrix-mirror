@@ -18,11 +18,6 @@ import (
 // a reaper tick (hourly) never generates a DB round-trip per sweep.
 const cacheTTL = 30 * time.Second
 
-// errNotFound is the sentinel the infra layer returns when a key has
-// no row. We compare against it rather than importing infra for a
-// package-level sentinel.
-var errNotFound = errors.New("platform setting not found")
-
 // Service implements domain.Store with a short-TTL cache.
 type Service struct {
 	repo     repo
@@ -65,7 +60,7 @@ func (s *Service) Get(ctx context.Context, key string) (string, bool, error) {
 	}
 	setting, err := s.repo.GetSetting(ctx, key)
 	if err != nil {
-		if err == errNotFound {
+		if errors.Is(err, domain.ErrSettingNotFound) {
 			s.cacheSet(key, "", false)
 			return "", false, nil
 		}
