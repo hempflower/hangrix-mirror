@@ -530,6 +530,7 @@ func (l *Loop) driveOneTurnWithID(
 		// reject the rest with an error telling the LLM to re-issue after
 		// the wake-up notification.
 		if hasSleepCall(resp.ToolCalls) || hasAskQuestionCall(resp.ToolCalls) {
+			asyncName := asyncToolNameInBatch(resp.ToolCalls)
 			for _, call := range resp.ToolCalls {
 				_ = l.out.Status("tool")
 				args := json.RawMessage(call.Arguments)
@@ -537,18 +538,14 @@ func (l *Loop) driveOneTurnWithID(
 				if call.Name == local.SleepToolName || call.Name == platform.AskQuestionToolName {
 					result = l.registry.Call(ctx, call.Name, args)
 				} else {
-					rejectedTool := call.Name
-					if hasSleepCall(resp.ToolCalls) {
-						rejectedTool = "sleep"
-					}
 					errBody, _ := json.Marshal(map[string]any{
-						"error": fmt.Sprintf("This tool call was batched with %s in the same response. %s must be the only call in its batch — re-issue this call in a subsequent turn after the wake-up notification.", rejectedTool, rejectedTool),
+						"error": fmt.Sprintf("This tool call was batched with %s in the same response. %s must be the only call in its batch — re-issue this call in a subsequent turn after the wake-up notification.", asyncName, asyncName),
 					})
 					result = tools.CallResult{
 						Source:     tools.SourceLocal,
 						ResultJSON: errBody,
 						IsError:    true,
-						ErrMsg:     fmt.Sprintf("batched with %s; re-issue after wake-up", rejectedTool),
+						ErrMsg:     fmt.Sprintf("batched with %s; re-issue after wake-up", asyncName),
 					}
 				}
 				toolContent := toolPayload(result)
@@ -882,6 +879,16 @@ func hasAskQuestionCall(calls []llm.ToolCall) bool {
 		}
 	}
 	return false
+}
+
+// asyncToolNameInBatch returns the name of the async tool (sleep or
+// ask_question) that triggered the batch gate. Used to build a
+// correct error message for the rejected tool calls.
+func asyncToolNameInBatch(calls []llm.ToolCall) string {
+	if hasSleepCall(calls) {
+		return local.SleepToolName
+	}
+	return platform.AskQuestionToolName
 }
 
 // cancelQuestionnaireSchedule parses a questionnaire event payload and

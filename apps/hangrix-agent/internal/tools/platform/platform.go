@@ -633,39 +633,16 @@ func (t *questionnaireTool) Call(ctx context.Context, args json.RawMessage) (any
 		args = json.RawMessage(`{}`)
 	}
 
-	// Decode args. We accept a superset of the server's CreateQuestionnaire
-	// input plus the client-side scheduling knobs.
 	var req struct {
-		Title               string `json:"title"`
-		Description         string `json:"description"`
-		Questions           []any  `json:"questions"`
-		WaitForFirstAnswer  *bool  `json:"wait_for_first_answer"`
-		TimeoutSeconds      *int   `json:"timeout_seconds"`
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		Questions   []any  `json:"questions"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, fmt.Errorf("ask_question: parse arguments: %w", err)
 	}
 
-	// Defaults for client-side knobs.
-	wait := true
-	if req.WaitForFirstAnswer != nil {
-		wait = *req.WaitForFirstAnswer
-	}
-	timeoutSec := 86400 // 24h default
-	if req.TimeoutSeconds != nil {
-		timeoutSec = *req.TimeoutSeconds
-		// Enforce min/max on the client side as a safety net.
-		if timeoutSec < 30 {
-			timeoutSec = 30
-		}
-		if timeoutSec > 86400 {
-			timeoutSec = 86400
-		}
-	}
-
-	// POST to create the questionnaire. We send only the server-side
-	// fields (title, description, questions). wait/timeout are
-	// agent-local knobs.
+	// POST to create the questionnaire.
 	createBody, err := json.Marshal(map[string]any{
 		"title":       req.Title,
 		"description": req.Description,
@@ -697,27 +674,22 @@ func (t *questionnaireTool) Call(ctx context.Context, args json.RawMessage) (any
 	}
 	qID := created.ID
 
-	// Schedule timeout notification when wait_for_first_answer is true.
-	if wait && t.async != nil {
-		d := time.Duration(timeoutSec) * time.Second
-		timeoutMsg := fmt.Sprintf(
-			`<hangrix-event kind="notification.questionnaire.timeout" questionnaire_id="%d">`+
-				`<timeout seconds="%d"/></hangrix-event>`,
-			qID, timeoutSec,
-		)
-		t.async.ScheduleWithID(fmt.Sprintf("questionnaire-%d", qID), d, timeoutMsg)
+	// Always schedule an infinite wait — the agent parks until woken by a
+	// questionnaire.answered / questionnaire.closed event. The duration
+	// is effectively infinite (math.MaxInt64 ≈ 292 years); CancelSchedule
+	// cleans it up when a relevant event arrives.
+	if t.async != nil {
+		t.async.ScheduleWithID(fmt.Sprintf("questionnaire-%d", qID), time.Duration(math.MaxInt64), "")
 	}
 
-	// Decode the response data for the "questions" field to include in
-	// the result. We parse it loosely so even if the shape evolves the
-	// tool still returns useful data.
+	// Decode the response data to include in the result.
 	var createdFull any
 	json.Unmarshal(resp.Data, &createdFull)
 
 	result := map[string]any{
 		"status":           "scheduled",
 		"questionnaire_id": qID,
-		"note":             "Returned immediately. End the current turn — a notification will wake you when the first answer arrives or the timeout fires. Use check_questionnaire to poll results and close_questionnaire to close it.",
+		"note":             "Returned immediately. End the current turn — a notification will wake you when an answer arrives. Use check_questionnaire to poll results and close_questionnaire to close it.",
 	}
 	if createdFull != nil {
 		result["questionnaire"] = createdFull
@@ -929,7 +901,7 @@ func All(client *Client, async local.AsyncLifecycle, readOnly bool) []local.Tool
 			kind: "questionnaire", write: true,
 			schema: askQuestionSchema(),
 		},
-		{name: "check_questionnaire", description: "Check the current status and results of a questionnaire by its ID. Returns aggregated tallies for choice questions and text responses for text-input questions. Use this to poll results after being woken by a questionnaire.answered notification, or when wait_for_first_answer was set to false.",
+		{name: "check_questionnaire", description: "Check the current status and results of a questionnaire by its ID. Returns aggregated tallies for choice questions and text responses for text-input questions. Use this to poll results after being woken by a questionnaire.answered notification.",
 			kind: "get", path: "/issues/current/questionnaires/{id}/results", pathParams: []string{"id"}, write: true,
 			schema: objectSchema(map[string]any{"id": intProp("The questionnaire id to check results for (required).")}, []string{"id"}),
 		},
@@ -1137,17 +1109,6 @@ func askQuestionSchema() map[string]any {
 						},
 					},
 				},
-			},
-			"wait_for_first_answer": map[string]any{
-				"type":        "boolean",
-				"description": "When true, the agent is woken by a notification on the first submission; when false, returns scheduled and the agent must poll with check_questionnaire. Default true.",
-				"default":     true,
-			},
-			"timeout_seconds": map[string]any{
-				"type":        "integer",
-				"description": "Optional timeout in seconds. If no answer arrives in this window, a 'timeout' notification fires. Default 86400 (24h).",
-				"minimum":     30,
-				"maximum":     86400,
 			},
 		},
 	}
