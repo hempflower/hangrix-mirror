@@ -7,6 +7,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,21 +18,25 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
+	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
 
 type AdminHandler struct {
 	auditor    domain.Auditor
+	controller domain.Controller
 	middleware authdomain.Middleware
 }
 
 type AdminHandlerDeps struct {
 	Auditor    domain.Auditor
+	Controller domain.Controller
 	Middleware authdomain.Middleware
 }
 
 func NewAdminHandler(deps *AdminHandlerDeps) *AdminHandler {
 	return &AdminHandler{
 		auditor:    deps.Auditor,
+		controller: deps.Controller,
 		middleware: deps.Middleware,
 	}
 }
@@ -42,6 +47,8 @@ func (h *AdminHandler) RegisterRoutes(r chi.Router) {
 		r.Use(h.middleware.RequireAdmin)
 		r.Get("/", h.listRecent)
 		r.Get("/by-issue/{repo_id}/{issue_number}", h.listByIssue)
+		r.Post("/{id}/stop-container", h.stopContainer)
+		r.Post("/{id}/remove-container", h.removeContainer)
 	})
 }
 
@@ -120,24 +127,32 @@ type publicAuditSession struct {
 	ErrorMessage string          `json:"error_message,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
 	EndedAt      *time.Time      `json:"ended_at,omitempty"`
+
+	// Container lifecycle fields (migration 00005).
+	ContainerState      string     `json:"container_state"`
+	ContainerLastUsedAt *time.Time `json:"container_last_used_at,omitempty"`
+	ContainerStoppedAt  *time.Time `json:"container_stopped_at,omitempty"`
 }
 
 func toPublicAuditSession(r domain.AuditSession) publicAuditSession {
 	return publicAuditSession{
-		SessionID:    r.SessionID,
-		RunnerID:     r.RunnerID,
-		RepoID:       r.RepoID,
-		Issue:        r.Issue,
-		RoleKey:      r.RoleKey,
-		Status:       r.Status,
-		RepoSHA:      r.RepoSHA,
-		CauseKind:    r.CauseKind,
-		CauseID:      r.CauseID,
-		RoleConfig:   r.RoleConfig,
-		ExitCode:     r.ExitCode,
-		ErrorMessage: r.ErrorMessage,
-		CreatedAt:    r.CreatedAt,
-		EndedAt:      r.EndedAt,
+		SessionID:          r.SessionID,
+		RunnerID:           r.RunnerID,
+		RepoID:             r.RepoID,
+		Issue:              r.Issue,
+		RoleKey:            r.RoleKey,
+		Status:             r.Status,
+		RepoSHA:            r.RepoSHA,
+		CauseKind:          r.CauseKind,
+		CauseID:            r.CauseID,
+		RoleConfig:         r.RoleConfig,
+		ExitCode:           r.ExitCode,
+		ErrorMessage:       r.ErrorMessage,
+		CreatedAt:          r.CreatedAt,
+		EndedAt:            r.EndedAt,
+		ContainerState:     r.ContainerState,
+		ContainerLastUsedAt: r.ContainerLastUsedAt,
+		ContainerStoppedAt:  r.ContainerStoppedAt,
 	}
 }
 
@@ -162,4 +177,38 @@ func (h *AdminHandler) listByIssue(w http.ResponseWriter, r *http.Request) {
 		items = append(items, toPublicAuditSession(r))
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// ---- container lifecycle actions ----
+
+func (h *AdminHandler) stopContainer(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	if err := h.controller.StopContainerNow(r.Context(), id); err != nil {
+		if errors.Is(err, runnerdomain.ErrSessionNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *AdminHandler) removeContainer(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	if err := h.controller.RemoveContainerNow(r.Context(), id); err != nil {
+		if errors.Is(err, runnerdomain.ErrSessionNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }

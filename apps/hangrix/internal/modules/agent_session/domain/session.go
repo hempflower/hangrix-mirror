@@ -298,6 +298,19 @@ type Controller interface {
 	// first so the running container can't keep emitting messages
 	// onto a row that no longer exists.
 	Delete(ctx context.Context, sessionID int64) error
+
+	// StopContainerNow flags the session's live container for immediate
+	// `docker stop` by the runner. Session status stays unchanged (e.g.
+	// still `idle`); the container row's stop-pending flag is what
+	// signals the runner. No-op if the session has no container or is
+	// already pending-stop / pending-removal.
+	StopContainerNow(ctx context.Context, sessionID int64) error
+
+	// RemoveContainerNow flags the session's live container for
+	// immediate `docker rm`. Same idempotency contract as the manual
+	// delete path; the row stays archived/idle, only the container
+	// is reaped.
+	RemoveContainerNow(ctx context.Context, sessionID int64) error
 }
 
 // ErrNotResumable is returned by Controller.Resume when a session row
@@ -331,6 +344,11 @@ type AuditSession struct {
 	ErrorMessage string
 	CreatedAt    time.Time
 	EndedAt      *time.Time
+
+	// Container lifecycle fields added in migration 00005.
+	ContainerState       string     // "none" | "running" | "stopped" | "pending_stop" | "pending_removal"
+	ContainerLastUsedAt  *time.Time
+	ContainerStoppedAt   *time.Time
 }
 
 // SessionMessage is one frame of a session's message log. Agents emit

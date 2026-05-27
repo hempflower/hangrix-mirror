@@ -22,6 +22,7 @@ import (
 	llmproxy "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_proxy"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/org"
 	planengine "github.com/hangrix/hangrix/apps/hangrix/internal/modules/plan_engine"
+	platformsettings "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_settings"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/release"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner"
@@ -57,6 +58,7 @@ func main() {
 		llmprovider.Module(),
 		llmproxy.Module(),
 		runner.Module(),
+		platformsettings.Module(),
 		agentsession.Module(),
 		dashboard.Module(),
 		platformapi.Module(),

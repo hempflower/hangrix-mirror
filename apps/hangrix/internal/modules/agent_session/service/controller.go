@@ -223,4 +223,19 @@ func (c *Controller) Delete(ctx context.Context, sessionID int64) error {
 	return c.runner.DeleteSession(ctx, sessionID)
 }
 
+// StopContainerNow satisfies domain.Controller. Flags the session's
+// container for immediate docker stop by the runner, without changing
+// the session status. No-op if there's no container or it's already
+// pending stop/removal.
+func (c *Controller) StopContainerNow(ctx context.Context, sessionID int64) error {
+	return c.runner.FlagSessionContainerStop(ctx, sessionID)
+}
+
+// RemoveContainerNow satisfies domain.Controller. Flags the session's
+// container for immediate docker rm by the runner. No-op if there's no
+// container or it's already pending cleanup.
+func (c *Controller) RemoveContainerNow(ctx context.Context, sessionID int64) error {
+	return c.runner.FlagSessionContainerCleanup(ctx, sessionID)
+}
+
 var _ domain.Controller = (*Controller)(nil)
