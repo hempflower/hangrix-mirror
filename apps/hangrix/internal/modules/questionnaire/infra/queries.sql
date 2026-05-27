@@ -34,11 +34,17 @@ SET status = 'closed', closed_at = now(), closed_reason = sqlc.arg('closed_reaso
 WHERE id = sqlc.arg('id')
 RETURNING id, issue_id, title, description, status, created_by_agent, created_at, closed_at, closed_reason;
 
--- name: UpsertAnswer :one
+-- name: InsertAnswer :one
 INSERT INTO questionnaire_answers (questionnaire_id, user_id, answers)
 VALUES (sqlc.arg('questionnaire_id'), sqlc.arg('user_id'), sqlc.arg('answers'))
-ON CONFLICT (questionnaire_id, user_id) DO NOTHING
 RETURNING id, questionnaire_id, user_id, answers, submitted_at, updated_at;
+
+-- name: AutoCloseQuestionnaire :one
+UPDATE questionnaires
+SET status = 'closed', closed_at = now(),
+    closed_reason = COALESCE(NULLIF(sqlc.arg('closed_reason'), ''), 'auto:first_submission')
+WHERE id = sqlc.arg('id') AND status = 'open'
+RETURNING id, issue_id, title, description, status, created_by_agent, created_at, closed_at, closed_reason;
 
 -- name: GetUserAnswer :one
 SELECT id, questionnaire_id, user_id, answers, submitted_at, updated_at

@@ -9,6 +9,36 @@ import (
 	"context"
 )
 
+const autoCloseQuestionnaire = `-- name: AutoCloseQuestionnaire :one
+UPDATE questionnaires
+SET status = 'closed', closed_at = now(),
+    closed_reason = COALESCE(NULLIF($1, ''), 'auto:first_submission')
+WHERE id = $2 AND status = 'open'
+RETURNING id, issue_id, title, description, status, created_by_agent, created_at, closed_at, closed_reason
+`
+
+type AutoCloseQuestionnaireParams struct {
+	ClosedReason interface{}
+	ID           int64
+}
+
+func (q *Queries) AutoCloseQuestionnaire(ctx context.Context, arg AutoCloseQuestionnaireParams) (Questionnaire, error) {
+	row := q.db.QueryRow(ctx, autoCloseQuestionnaire, arg.ClosedReason, arg.ID)
+	var i Questionnaire
+	err := row.Scan(
+		&i.ID,
+		&i.IssueID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.CreatedByAgent,
+		&i.CreatedAt,
+		&i.ClosedAt,
+		&i.ClosedReason,
+	)
+	return i, err
+}
+
 const closeQuestionnaire = `-- name: CloseQuestionnaire :one
 UPDATE questionnaires
 SET status = 'closed', closed_at = now(), closed_reason = $1
@@ -260,6 +290,32 @@ func (q *Queries) GetUserAnswer(ctx context.Context, arg GetUserAnswerParams) (Q
 	return i, err
 }
 
+const insertAnswer = `-- name: InsertAnswer :one
+INSERT INTO questionnaire_answers (questionnaire_id, user_id, answers)
+VALUES ($1, $2, $3)
+RETURNING id, questionnaire_id, user_id, answers, submitted_at, updated_at
+`
+
+type InsertAnswerParams struct {
+	QuestionnaireID int64
+	UserID          int64
+	Answers         []byte
+}
+
+func (q *Queries) InsertAnswer(ctx context.Context, arg InsertAnswerParams) (QuestionnaireAnswer, error) {
+	row := q.db.QueryRow(ctx, insertAnswer, arg.QuestionnaireID, arg.UserID, arg.Answers)
+	var i QuestionnaireAnswer
+	err := row.Scan(
+		&i.ID,
+		&i.QuestionnaireID,
+		&i.UserID,
+		&i.Answers,
+		&i.SubmittedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listAnswers = `-- name: ListAnswers :many
 SELECT id, questionnaire_id, user_id, answers, submitted_at, updated_at
 FROM questionnaire_answers
@@ -292,31 +348,4 @@ func (q *Queries) ListAnswers(ctx context.Context, questionnaireID int64) ([]Que
 		return nil, err
 	}
 	return items, nil
-}
-
-const upsertAnswer = `-- name: UpsertAnswer :one
-INSERT INTO questionnaire_answers (questionnaire_id, user_id, answers)
-VALUES ($1, $2, $3)
-ON CONFLICT (questionnaire_id, user_id) DO NOTHING
-RETURNING id, questionnaire_id, user_id, answers, submitted_at, updated_at
-`
-
-type UpsertAnswerParams struct {
-	QuestionnaireID int64
-	UserID          int64
-	Answers         []byte
-}
-
-func (q *Queries) UpsertAnswer(ctx context.Context, arg UpsertAnswerParams) (QuestionnaireAnswer, error) {
-	row := q.db.QueryRow(ctx, upsertAnswer, arg.QuestionnaireID, arg.UserID, arg.Answers)
-	var i QuestionnaireAnswer
-	err := row.Scan(
-		&i.ID,
-		&i.QuestionnaireID,
-		&i.UserID,
-		&i.Answers,
-		&i.SubmittedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
 }

@@ -353,6 +353,15 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 
 	answer, qn, err := h.svc.UpsertAnswer(r.Context(), qid, uid, perQ)
 	if err != nil {
+		if errors.Is(err, questionnairedomain.ErrQuestionnaireLocked) {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": map[string]any{
+					"code":    "questionnaire_locked",
+					"message": "This questionnaire has already been answered and is no longer accepting responses.",
+				},
+			})
+			return
+		}
 		var ve *questionnaireservice.ValidationError
 		if errors.As(err, &ve) {
 			writeValidationError(w, ve)
@@ -387,9 +396,9 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"data": map[string]any{
-			"answer_id":     answer.ID,
-			"submitted_at":  answer.SubmittedAt.Format("2006-01-02T15:04:05Z"),
-			"questionnaire_status": "open",
+			"answer_id":           answer.ID,
+			"submitted_at":        answer.SubmittedAt.Format("2006-01-02T15:04:05Z"),
+			"questionnaire_status": string(qn.Status),
 		},
 	})
 }
