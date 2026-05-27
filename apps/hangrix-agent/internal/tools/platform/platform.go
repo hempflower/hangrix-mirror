@@ -906,7 +906,7 @@ func All(client *Client, async local.AsyncLifecycle, readOnly bool) []local.Tool
 		},
 
 		// ---- questionnaire tools ----
-		{name: "ask_question", description: "Create a questionnaire in the current issue and wait for users to answer asynchronously. Returns immediately with status='scheduled'; you will be woken with a notification once an answer arrives. End your turn after calling — do not chain other tool calls in the same batch. Use check_questionnaire to poll results, close_questionnaire to close.",
+		{name: "ask_question", description: "Create a questionnaire in the current issue and wait for users to answer asynchronously. Returns immediately with status='scheduled'; you will be woken with a notification once an answer arrives. End your turn after calling — do not chain other tool calls in the same batch. Use check_questionnaire to poll results, close_questionnaire to close. The questionnaire is single-fill — the first response locks it. Prefer single_choice / multi_choice question types; reserve text_input for genuinely open answers (URLs, names, free-form descriptions).",
 			kind: "questionnaire", write: true,
 			schema: askQuestionSchema(),
 		},
@@ -1094,8 +1094,9 @@ func askQuestionSchema() map[string]any {
 					"required": []string{"type", "text"},
 					"properties": map[string]any{
 						"type": map[string]any{
-							"type": "string",
-							"enum": []string{"single_choice", "multi_choice", "text_input"},
+							"type":        "string",
+							"enum":        []string{"single_choice", "multi_choice", "text_input"},
+							"description": "Question type. Prefer single_choice or multi_choice for bounded, predictable answer spaces. Use text_input only when the answer cannot reasonably be anticipated.",
 						},
 						"text": map[string]any{
 							"type":        "string",
