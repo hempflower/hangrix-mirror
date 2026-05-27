@@ -49,19 +49,38 @@ const (
 	// application of a patch submission. Wakes the dedicated apply-agent
 	// role so it picks up the submission and applies via `git am`.
 	TriggerPatchApplyRequested Trigger = "patch.apply_requested"
+
+	// TriggerIssueChildClosed fires on the parent issue when a child
+	// issue is merged or closed. Consumed by the plan_engine to
+	// recompute the ready frontier and dispatch the next batch.
+	TriggerIssueChildClosed Trigger = "issue.child_closed"
+
+	// TriggerIssueReady fires when the plan_engine determines an issue
+	// is ready to work on (all dependencies merged, not blocked).
+	// Workers subscribe to this instead of bare issue.opened for
+	// issues that participate in a plan.
+	TriggerIssueReady Trigger = "issue.ready"
+
+	// TriggerPlanReview is a low-frequency signal to the planner role
+	// to re-evaluate the plan structure (priority shifts, scope
+	// changes). v0: reserved slot, not yet fired by any component.
+	TriggerPlanReview Trigger = "plan.review"
 )
 
 // validTriggers is consulted by the parser; map lookup keeps the check
 // O(1) and the constants above remain the single source of truth.
 var validTriggers = map[Trigger]struct{}{
-	TriggerIssueOpened:         {},
-	TriggerIssueClosed:         {},
-	TriggerIssueComment:        {},
-	TriggerCommitPushed:        {},
-	TriggerReviewVotePosted:    {},
-	TriggerCIStatusChanged:     {},
-	TriggerPatchSubmitted:      {},
-	TriggerPatchApplyRequested: {},
+	TriggerIssueOpened:          {},
+	TriggerIssueClosed:          {},
+	TriggerIssueComment:         {},
+	TriggerCommitPushed:         {},
+	TriggerReviewVotePosted:     {},
+	TriggerCIStatusChanged:      {},
+	TriggerPatchSubmitted:       {},
+	TriggerPatchApplyRequested:  {},
+	TriggerIssueChildClosed:     {},
+	TriggerIssueReady:           {},
+	TriggerPlanReview:           {},
 }
 
 // IsValidTrigger reports whether s is a platform-recognised event name.

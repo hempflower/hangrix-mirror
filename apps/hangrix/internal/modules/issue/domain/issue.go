@@ -515,6 +515,10 @@ type ListFilter struct {
 type Store interface {
 	Create(ctx context.Context, repoID, authorID int64, authorName, title, body, baseBranch string, agentRole string, parentID, parentNumber int64) (*Issue, error)
 	GetByNumber(ctx context.Context, repoID, number int64) (*Issue, error)
+	// GetByID returns an issue by its internal ID. Used for resolving
+	// dependency edges (which reference the issue row id, not the number)
+	// into the human-visible issue number for handlers and tools.
+	GetByID(ctx context.Context, id int64) (*Issue, error)
 	List(ctx context.Context, repoID int64, f ListFilter) ([]*Issue, int64, error)
 	ListChildren(ctx context.Context, parentID int64) ([]*Issue, error)
 	// ListOpenDescendants returns every transitive descendant of rootID
@@ -523,6 +527,9 @@ type Store interface {
 	// repeated ids — the data model is a tree but the query defends
 	// against a future bad write.
 	ListOpenDescendants(ctx context.Context, rootID int64) ([]*OpenDescendant, error)
+
+	// Plan returns the full plan tree rooted at the given issue.
+	Plan(ctx context.Context, repoID, rootNumber int64) (*PlanTree, error)
 	UpdateTitleBody(ctx context.Context, id int64, title, body string) (*Issue, error)
 	UpdateState(ctx context.Context, id int64, state State, mergeSHA string) (*Issue, error)
 	UpdateHeadSHA(ctx context.Context, id int64, headSHA string) error
@@ -849,4 +856,116 @@ type TodoStore interface {
 
 var (
 	ErrTodoNotFound = errors.New("todo not found")
+)
+
+// ---- dependencies ----
+
+// Dependency is a directed edge between two issues in the same repo.
+// issue_id depends_on depends_on_id: issue_id is blocked until
+// depends_on_id is merged.
+type Dependency struct {
+	ID          int64
+	RepoID      int64
+	IssueID     int64
+	DependsOnID int64
+	CreatedBy   int64
+	CreatedAt   time.Time
+}
+
+// DependencyStore is the persistence abstraction for issue_dependencies.
+type DependencyStore interface {
+	Add(ctx context.Context, repoID, issueID, dependsOnID, createdBy int64) (*Dependency, error)
+	Remove(ctx context.Context, issueID, dependsOnID int64) error
+	// ListFor returns all edges incident to issueID grouped by direction.
+	ListFor(ctx context.Context, issueID int64) (dependsOn []*Dependency, blocks []*Dependency, err error)
+	// ReachableForward checks whether there is a directed path from
+	// fromIssueID to toIssueID (used for cycle detection before adding
+	// an edge toIssueID → fromIssueID). Returns true if a path exists.
+	ReachableForward(ctx context.Context, fromIssueID, toIssueID int64) (bool, error)
+	// ListForSubtree returns a map from issue ID to its dependency
+	// edges (depends_on direction) for every issue in the subtree
+	// rooted at rootIssueID. Used by the plan endpoint to avoid N+1.
+	ListForSubtree(ctx context.Context, rootIssueID int64) (map[int64][]*Dependency, error)
+}
+
+// ---- plan / ready-state ----
+
+// ReadyState is the server-computed readiness of a single issue.
+type ReadyState struct {
+	Number    int64
+	Ready     bool    // open + not started + all depends_on merged
+	Blocked   bool    // any depends_on is not merged
+	BlockedBy []int64 // unsatisfied predecessor issue numbers
+	DependsOn []int64 // all predecessor issue numbers
+}
+
+// ComputeReadyState is the single-source-of-truth for issue readiness.
+// It is consumed by the plan endpoint, the engine, and platform tools.
+// deps are all outgoing edges (issue → depends_on); depStates maps
+// depends_on_id → current State.
+func ComputeReadyState(iss *Issue, deps []*Dependency, depStates map[int64]State,
+	runningSession bool, todoInProgress int64, hasOpenChildren bool) ReadyState {
+	rs := ReadyState{
+		Number:    iss.Number,
+		BlockedBy: []int64{},
+		DependsOn: []int64{},
+	}
+	for _, d := range deps {
+		rs.DependsOn = append(rs.DependsOn, d.DependsOnID)
+		if st, ok := depStates[d.DependsOnID]; !ok || st != StateMerged {
+			rs.BlockedBy = append(rs.BlockedBy, d.DependsOnID)
+		}
+	}
+	rs.Blocked = len(rs.BlockedBy) > 0
+	rs.Ready = iss.State == StateOpen &&
+		!rs.Blocked &&
+		!runningSession &&
+		todoInProgress == 0 &&
+		!hasOpenChildren
+	return rs
+}
+
+// PlanNode is one node in the plan tree returned by GET .../plan.
+type PlanNode struct {
+	Number       int64          `json:"number"`
+	Title        string         `json:"title"`
+	State        State          `json:"state"`
+	Actor        *Actor         `json:"actor,omitempty"`
+	AgentRole    string         `json:"agent_role,omitempty"`
+	ReviewStatus *ReviewStatus  `json:"review_status,omitempty"`
+	TodoSummary  *TodoSummary   `json:"todo_summary,omitempty"`
+	DependsOn    []int64        `json:"depends_on"`
+	Blocked      bool           `json:"blocked"`
+	Ready        bool           `json:"ready"`
+	Children     []*PlanNode    `json:"children"`
+}
+
+// PlanRollup aggregates progress across the plan subtree.
+type PlanRollup struct {
+	TotalLeaves int `json:"total_leaves"`
+	Merged      int `json:"merged"`
+	InReview    int `json:"in_review"`
+	InProgress  int `json:"in_progress"`
+	Open        int `json:"open"`
+	Closed      int `json:"closed"`
+}
+
+// PlanTree is the full plan response.
+type PlanTree struct {
+	Root   *PlanNode  `json:"root"`
+	Rollup PlanRollup `json:"rollup"`
+	Ready  []int64    `json:"ready"`
+}
+
+// Actor is a lightweight actor reference for PlanNode display.
+type Actor struct {
+	Kind        string `json:"kind"`
+	UserID      int64  `json:"user_id,omitempty"`
+	RoleKey     string `json:"role_key,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+}
+
+var (
+	ErrDependencyCycle = errors.New("dependency would create a cycle")
+	ErrDependencySelf  = errors.New("an issue cannot depend on itself")
 )

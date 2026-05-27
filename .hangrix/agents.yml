@@ -102,6 +102,20 @@ tools:
     - ask_question
     - check_questionnaire
     - close_questionnaire
+  planner:
+    - issue_read
+    - issue_read_by_number
+    - issue_children
+    - issue_create
+    - issue_edit
+    - issue_todo_list
+    - issue_todo_update
+    - issue_attachment_upload
+    - roster_list
+    - contribution_read
+    - ask_question
+    - check_questionnaire
+    - close_questionnaire
   linter:
     - issue_read
     - issue_read_by_number

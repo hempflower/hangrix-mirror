@@ -129,6 +129,18 @@ func (s *PostgresStore) GetByNumber(ctx context.Context, repoID, number int64) (
 	return issueFromGet(row), nil
 }
 
+// GetByID returns the issue by its internal row ID.
+func (s *PostgresStore) GetByID(ctx context.Context, id int64) (*domain.Issue, error) {
+	row, err := s.q.GetIssueByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrIssueNotFound
+		}
+		return nil, err
+	}
+	return issueFromGetByID(row), nil
+}
+
 func (s *PostgresStore) List(ctx context.Context, repoID int64, f domain.ListFilter) ([]*domain.Issue, int64, error) {
 	limit := f.Limit
 	if limit <= 0 {
@@ -397,6 +409,34 @@ func (s *PostgresStore) ListEvents(ctx context.Context, issueID int64) ([]*domai
 // --- row → domain ---
 
 func issueFromGet(r issuedb.GetIssueByNumberRow) *domain.Issue {
+	iss := &domain.Issue{
+		ID:             r.ID,
+		RepoID:         r.RepoID,
+		Number:         r.Number,
+		AuthorID:       r.AuthorID,
+		AuthorName:     r.AuthorName,
+		AgentRole:      r.AgentRole,
+		Actor:          resolveActor(r.ActorKind, r.ActorUserID, r.ActorRoleKey, r.ActorWorkflowRunID, r.ActorDisplayName, r.AuthorID, r.AuthorName, r.AgentRole),
+		Title:          r.Title,
+		Body:           r.Body,
+		State:          domain.State(r.State),
+		BranchName:     r.BranchName,
+		BaseBranch:     r.BaseBranch,
+		HeadSHA:        r.HeadSha,
+		MergeCommitSHA: r.MergeCommitSha,
+		ParentID:       r.ParentID,
+		ParentNumber:   r.ParentNumber,
+		CreatedAt:      r.CreatedAt.Time,
+		UpdatedAt:      r.UpdatedAt.Time,
+	}
+	if r.MergedAt.Valid {
+		t := r.MergedAt.Time
+		iss.MergedAt = &t
+	}
+	return iss
+}
+
+func issueFromGetByID(r issuedb.GetIssueByIDRow) *domain.Issue {
 	iss := &domain.Issue{
 		ID:             r.ID,
 		RepoID:         r.RepoID,

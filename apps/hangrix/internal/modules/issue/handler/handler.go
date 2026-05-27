@@ -34,6 +34,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/kv"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
+	planenginedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/plan_engine/domain"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
@@ -79,6 +80,15 @@ type Handler struct {
 	// When non-nil, issue endpoints accept Bearer hangrix_wf_* tokens
 	// in addition to cookie-based session auth.
 	wfTokenValidator workflowdomain.WorkflowTokenValidator
+	// deps is the dependency edge store. Nil-safe (tests).
+	deps domain.DependencyStore
+	// planEngine is the optional plan progression engine.
+	// When nil (tests), the merge hook skips engine notification.
+	planEngine planenginedomain.Engine
+	// planState is the plan_state persistence store. Used to serve
+	// GET .../plan/state with real data rather than a hardcoded stub.
+	// Nil-safe (tests).
+	planState planenginedomain.PlanStateStore
 }
 
 type HandlerDeps struct {
@@ -121,6 +131,14 @@ type HandlerDeps struct {
 	// When non-nil, issue endpoints accept Bearer hangrix_wf_* tokens
 	// in addition to cookie-based session auth. Nil-safe (tests).
 	WfTokenValidator workflowdomain.WorkflowTokenValidator
+	// Deps is the dependency edge store. Nil-safe (tests).
+	Deps domain.DependencyStore
+	// PlanEngine is the optional plan progression engine.
+	// When nil (tests), the merge hook skips engine notification.
+	PlanEngine planenginedomain.Engine
+	// PlanState is the plan_state persistence store.
+	// Nil-safe (tests).
+	PlanState planenginedomain.PlanStateStore
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
@@ -144,6 +162,9 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		guards:             deps.Guards,
 		workflowSvc:        deps.WorkflowSvc,
 		wfTokenValidator:   deps.WfTokenValidator,
+		deps:               deps.Deps,
+		planEngine:         deps.PlanEngine,
+		planState:          deps.PlanState,
 	}
 }
 
@@ -163,6 +184,11 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Get("/{number}/diff", h.diff)
 		r.Get("/{number}/commits", h.commits)
 		r.Get("/{number}/children", h.children)
+		r.Get("/{number}/plan", h.plan)
+		r.Get("/{number}/dependencies", h.listDependencies)
+		r.Post("/{number}/dependencies", h.addDependency)
+		r.Delete("/{number}/dependencies/{depends_on}", h.removeDependency)
+		r.Get("/{number}/plan/state", h.getPlanState)
 		r.Post("/{number}/comments", h.createComment)
 		r.Post("/{number}/merge", h.merge)
 		r.Post("/{number}/sync", h.sync)
@@ -1261,6 +1287,11 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventBranchMerged, mergePayload, caller.ID, caller.Username)
 	statePayload, _ := json.Marshal(domain.StateChangedPayload{From: domain.StateOpen, To: domain.StateMerged})
 	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventStateChanged, statePayload, caller.ID, caller.Username)
+
+	// If this issue has a parent, notify the plan engine (best-effort).
+	if iss.ParentID > 0 && h.planEngine != nil {
+		_ = h.planEngine.OnChildClosed(r.Context(), rc.repo.ID, iss.ParentNumber, iss.Number)
+	}
 
 	// Try to delete the issue branch unless the host config disables it.
 	cleanup := h.tryDeleteIssueBranch(r.Context(), rc.repo.ID, rc.fsPath, iss.BranchName)

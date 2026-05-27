@@ -111,6 +111,15 @@ func (s *stubAgentAPI) ListQuestionnaires(ctx context.Context, p *apidomain.Acto
 func (s *stubAgentAPI) CloseQuestionnaire(ctx context.Context, p *apidomain.Actor, id int64, reason string) (any, error) {
 	panic("unexpected")
 }
+func (s *stubAgentAPI) AddDependency(ctx context.Context, p *apidomain.Actor, dependsOnNumber int64) (any, error) {
+	panic("unexpected")
+}
+func (s *stubAgentAPI) RemoveDependency(ctx context.Context, p *apidomain.Actor, dependsOnNumber int64) (any, error) {
+	panic("unexpected")
+}
+func (s *stubAgentAPI) ReadDependencies(ctx context.Context, p *apidomain.Actor) (any, error) {
+	panic("unexpected")
+}
 
 // writeAllowed is a PermissionSet that grants write.
 type writeAllowed struct{}

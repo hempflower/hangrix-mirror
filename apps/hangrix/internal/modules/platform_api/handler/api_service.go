@@ -73,4 +73,9 @@ type AgentAPI interface {
 	GetQuestionnaireResult(ctx context.Context, p *apidomain.Actor, id int64) (any, error)
 	ListQuestionnaires(ctx context.Context, p *apidomain.Actor) (any, error)
 	CloseQuestionnaire(ctx context.Context, p *apidomain.Actor, id int64, reason string) (any, error)
+
+	// Dependencies
+	AddDependency(ctx context.Context, p *apidomain.Actor, dependsOnNumber int64) (any, error)
+	RemoveDependency(ctx context.Context, p *apidomain.Actor, dependsOnNumber int64) (any, error)
+	ReadDependencies(ctx context.Context, p *apidomain.Actor) (any, error)
 }

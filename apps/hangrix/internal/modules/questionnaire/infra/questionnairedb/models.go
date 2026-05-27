@@ -121,6 +121,15 @@ type IssueCounter struct {
 	Next   int64
 }
 
+type IssueDependency struct {
+	ID          int64
+	RepoID      int64
+	IssueID     int64
+	DependsOnID int64
+	CreatedBy   pgtype.Int8
+	CreatedAt   pgtype.Timestamptz
+}
+
 type IssueEvent struct {
 	ID                 int64
 	IssueID            int64

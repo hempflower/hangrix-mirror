@@ -850,7 +850,8 @@
       "commits": "提交",
       "diff": "Diff",
       "contributions": "贡献",
-      "agents": "智能体"
+      "agents": "智能体",
+      "plan": "计划"
     },
     "commitsEmpty": "暂无提交。推送到 {branch} 来引入变更。",
     "commentForm": {
@@ -895,6 +896,29 @@
     "noSubIssues": "暂无子 issue。",
     "subIssueBlock": "{n} 个进行中的子 issue 需要先合并或关闭：",
     "subIssueBlockDeep": "… 及 {n} 个更深层的子 issue",
+    "plan": {
+      "tab": "计划",
+      "progress": "已完成 {merged}/{total}",
+      "ready": "就绪：",
+      "blockedBy": "被阻塞",
+      "hideDone": "隐藏已完成",
+      "empty": {
+        "title": "暂无子任务",
+        "hint": "{'@'}agent-planner 可帮你拆解目标"
+      },
+      "error": {
+        "banner": "加载失败，展示上次快照",
+        "retry": "重试",
+        "fallback": "加载计划失败"
+      },
+      "engine": {
+        "auto": "自动推进：{used}/{budget}",
+        "paused": "已暂停"
+      },
+      "heuristic": "（预估）",
+      "heuristicTip": "依赖边上线后将转为精确计算",
+      "treeLarge": "树较大，建议隐藏已完成任务"
+    },
     "checks": {
       "title": "CI 检查"
     },

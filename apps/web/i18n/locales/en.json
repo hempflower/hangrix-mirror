@@ -850,7 +850,8 @@
       "commits": "Commits",
       "diff": "Diff",
       "contributions": "Contributions",
-      "agents": "Agents"
+      "agents": "Agents",
+      "plan": "Plan"
     },
     "commitsEmpty": "No commits yet. Push to {branch} to introduce changes.",
     "commentForm": {
@@ -895,6 +896,29 @@
     "noSubIssues": "No sub-issues yet.",
     "subIssueBlock": "{n} open sub-issue(s) must be merged or closed first:",
     "subIssueBlockDeep": "… and {n} deeper descendant(s)",
+    "plan": {
+      "tab": "Plan",
+      "progress": "{merged}/{total} merged",
+      "ready": "Ready:",
+      "blockedBy": "Blocked by",
+      "hideDone": "Hide completed",
+      "empty": {
+        "title": "No sub-issues yet",
+        "hint": "Mention {'@'}agent-planner to break down the goal."
+      },
+      "error": {
+        "banner": "Failed to load plan — showing last snapshot",
+        "retry": "Retry",
+        "fallback": "Failed to load plan"
+      },
+      "engine": {
+        "auto": "Auto: {used}/{budget}",
+        "paused": "Paused"
+      },
+      "heuristic": " (estimated)",
+      "heuristicTip": "Dependency edges will make this precise once available.",
+      "treeLarge": "Large tree — consider hiding completed items."
+    },
     "checks": {
       "title": "CI Checks"
     },
