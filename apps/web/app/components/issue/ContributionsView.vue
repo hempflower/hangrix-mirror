@@ -13,7 +13,7 @@ import {
   X,
   XCircle,
 } from 'lucide-vue-next'
-import ActorBadge from '@/components/ActorBadge.vue'
+import ActorAvatar from '@/components/ActorAvatar.vue'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -375,7 +375,7 @@ const canApply = computed(() => {
           </div>
           <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
             <span class="flex items-center gap-1">
-              <ActorBadge :actor="contributionActor(c)" size="sm" />
+              <ActorAvatar :actor="contributionActor(c)" size="sm" />
             </span>
             <Badge :variant="statusVariant(c.status)" class="px-1.5 py-0 text-[10px] leading-none">
               {{ t(`issue.contributions.status.${c.status}`) }}
@@ -443,7 +443,7 @@ const canApply = computed(() => {
 
             <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
               <span class="flex items-center gap-1">
-                <ActorBadge :actor="contributionActor(detail.contribution)" size="sm" />
+                <ActorAvatar :actor="contributionActor(detail.contribution)" size="sm" />
               </span>
               <code class="font-mono">{{ detail.contribution.ref_name }}</code>
               <span class="font-mono">
@@ -605,7 +605,7 @@ const canApply = computed(() => {
             >
               <CardContent class="p-0">
                 <div class="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-3 py-2 text-xs">
-                  <ActorBadge :actor="commentActor(cm)" size="sm" />
+                  <ActorAvatar :actor="commentActor(cm)" size="sm" />
                   <code v-if="cm.file_path" class="font-mono text-muted-foreground">
                     {{ cm.file_path }}<span v-if="cm.line">:{{ cm.line }}</span>
                   </code>

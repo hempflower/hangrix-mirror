@@ -1214,5 +1214,26 @@
       "commitPushed": "push · {sha}",
       "reviewVote": "review vote #{id}"
     }
+  },
+  "actor": {
+    "title": "Actor",
+    "kind": "类型",
+    "displayName": "显示名称",
+    "notFound": "未找到 Actor",
+    "loadFailed": "加载 Actor 失败",
+    "activity": "近期活动",
+    "issuesOpened": "创建的 Issue",
+    "commentsAuthored": "发表的评论",
+    "contributionsPushed": "提交的贡献",
+    "kinds": {
+      "user": "用户",
+      "agent": "Agent",
+      "agent_session": "Agent 会话",
+      "agent_role": "Agent 角色",
+      "workflow": "工作流",
+      "workflow_run": "工作流运行",
+      "system": "系统",
+      "bot": "机器人"
+    }
   }
 }

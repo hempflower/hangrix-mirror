@@ -24,7 +24,7 @@ import {
   ThumbsUp,
 } from 'lucide-vue-next'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import ActorBadge from '@/components/ActorBadge.vue'
+import ActorAvatar from '@/components/ActorAvatar.vue'
 import AgentSessionsView from '@/components/issue/AgentSessionsView.vue'
 import CheckRunPanel from '@/components/issue/CheckRunPanel.vue'
 import ContributionsView from '@/components/issue/ContributionsView.vue'
@@ -818,7 +818,7 @@ onUnmounted(() => {
               <Card class="gap-0 py-0">
                 <CardContent class="p-0">
                   <div class="flex items-center gap-2 border-b bg-muted/40 px-3 py-2 text-xs">
-                    <ActorBadge :actor="issueActor(issue)" size="sm" />
+                    <ActorAvatar :actor="issueActor(issue)" size="sm" />
                     <span class="text-muted-foreground">{{ t('issue.opened') }}</span>
                     <span class="text-muted-foreground" :title="formatDate(issue.created_at)">
                       {{ rel(issue.created_at) }}
@@ -840,7 +840,7 @@ onUnmounted(() => {
                 <Card v-if="it.kind === 'comment'" class="gap-0 py-0">
                   <CardContent class="p-0">
                     <div class="flex items-center gap-2 border-b bg-muted/40 px-3 py-2 text-xs">
-                      <ActorBadge :actor="commentActor(it.data)" size="sm" />
+                      <ActorAvatar :actor="commentActor(it.data)" size="sm" />
                       <span class="text-muted-foreground">{{ t('issue.commented') }}</span>
                       <span class="text-muted-foreground" :title="formatDate(it.data.created_at)">
                         {{ rel(it.data.created_at) }}
@@ -862,7 +862,7 @@ onUnmounted(() => {
                 >
                   <CardContent class="p-0">
                     <div class="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-3 py-2 text-xs">
-                      <ActorBadge :actor="eventActor(it.data)" size="sm" />
+                      <ActorAvatar :actor="eventActor(it.data)" size="sm" />
                       <Badge
                         :class="voteValueClass(it.data.payload?.value)"
                         variant="secondary"

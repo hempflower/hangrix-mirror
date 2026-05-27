@@ -6,7 +6,9 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import Pagination from '@/components/ui/pagination/Pagination.vue'
+import ActorAvatar from '@/components/ActorAvatar.vue'
 import type { Issue, IssueListResp, IssueState } from '~/types/issue'
+import type { ActorRef } from '~/types/actor'
 import { relativeTime } from '~/utils/time'
 
 definePageMeta({ layout: 'repo' })
@@ -111,6 +113,19 @@ function rel(s?: string | null) {
   return relativeTime(s ?? null, t)
 }
 
+function issueActor(iss: Issue): ActorRef | null {
+  if (iss.actor) return iss.actor
+  if (iss.author_username) {
+    return {
+      kind: 'user',
+      id: iss.author_id ? `user:${iss.author_id}` : `user:${iss.author_username}`,
+      display_name: iss.author_username,
+      user_id: iss.author_id ?? undefined,
+    }
+  }
+  return null
+}
+
 function gotoNew() {
   router.push(`/${owner.value}/${name.value}/issues/new`)
 }
@@ -180,7 +195,8 @@ function gotoNew() {
                   </div>
                   <p class="text-xs text-muted-foreground">
                     #{{ iss.number }} ·
-                    {{ t('issue.openedBy', { name: iss.author_username, time: rel(iss.created_at) }) }}
+                    <ActorAvatar :actor="issueActor(iss)" size="sm" />
+                    · {{ rel(iss.created_at) }}
                   </p>
                 </div>
                 <code class="hidden font-mono text-xs text-muted-foreground sm:inline">

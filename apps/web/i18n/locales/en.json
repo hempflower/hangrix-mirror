@@ -1214,5 +1214,27 @@
       "commitPushed": "push · {sha}",
       "reviewVote": "review vote #{id}"
     }
+  },
+  "actor": {
+    "title": "Actor",
+    "kind": "Kind",
+    "displayName": "Display name",
+    "notFound": "Actor not found",
+    "loadFailed": "Failed to load actor",
+    "activity": "Recent activity",
+    "issuesOpened": "Issues opened",
+    "commentsAuthored": "Comments authored",
+    "contributionsPushed": "Contributions pushed",
+    "kinds": {
+      "user": "User",
+      "agent": "Agent",
+      "agent_session": "Agent session",
+      "agent_role": "Agent role",
+      "workflow": "Workflow",
+      "workflow_run": "Workflow run",
+      "system": "System",
+      "bot": "Bot"
+    }
   }
 }
+
