@@ -61,6 +61,12 @@ const (
 
 	// CauseKindManual — admin spawn path (smoke / debug tooling).
 	CauseKindManual CauseKind = "manual"
+
+	// CauseKindQuestionnaireAnswered — a user submitted an answer to a
+	// questionnaire the agent issued via ask_question. The issuing agent
+	// is woken automatically via Spawner.OnTrigger with a targeted
+	// RoleKey — no trigger config needed.
+	CauseKindQuestionnaireAnswered CauseKind = "questionnaire_answered"
 )
 
 // TriggerInput is the payload Spawner.OnTrigger consumes. It carries

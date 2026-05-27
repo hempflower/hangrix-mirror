@@ -1253,6 +1253,17 @@ func (s *APIService) CreateQuestionnaire(ctx context.Context, p *apidomain.Actor
 		return nil, err
 	}
 
+	// Write a timeline event so the frontend's existing comments+events
+	// merge picks up the questionnaire and renders it as an inline card
+	// at its correct chronological position.
+	payload, _ := json.Marshal(issuedomain.QuestionnairePostedPayload{
+		QuestionnaireID: qn.ID,
+		Title:           qn.Title,
+		QuestionCount:   len(qn.Questions),
+	})
+	_, _ = s.r.deps.Issues.CreateAgentEvent(ctx, scope.issue.ID,
+		issuedomain.EventQuestionnairePosted, payload, p.RoleKey)
+
 	return toAPIQuestionnaire(qn), nil
 }
 

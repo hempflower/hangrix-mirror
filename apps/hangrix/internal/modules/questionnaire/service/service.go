@@ -18,13 +18,11 @@ import (
 type Service struct {
 	store       domain.Store
 	answerStore domain.AnswerStore
-	publisher   domain.EventPublisher // optional — nil-safe call site
 }
 
 type ServiceDeps struct {
-	Store         domain.Store
-	AnswerStore   domain.AnswerStore
-
+	Store       domain.Store
+	AnswerStore domain.AnswerStore
 }
 
 func NewService(deps *ServiceDeps) *Service {
@@ -32,13 +30,6 @@ func NewService(deps *ServiceDeps) *Service {
 		store:       deps.Store,
 		answerStore: deps.AnswerStore,
 	}
-}
-
-// WithEventPublisher sets an optional cross-module EventPublisher.
-// When nil the service skips event publishing (nil-safe call sites).
-func (s *Service) WithEventPublisher(pub domain.EventPublisher) *Service {
-	s.publisher = pub
-	return s
 }
 
 // ---- Store delegation ---- //
@@ -71,67 +62,39 @@ func (s *Service) GetByIssue(ctx context.Context, issueID int64) ([]*domain.Ques
 }
 
 func (s *Service) Close(ctx context.Context, id int64, reason string) (*domain.Questionnaire, error) {
-	qn, err := s.store.Close(ctx, id, reason)
-	if err != nil {
-		return nil, err
-	}
-
-	// Best-effort publish closed event.
-	if s.publisher != nil {
-		_ = s.publisher.Publish(ctx, domain.SessionFilter{
-			IssueID:        qn.IssueID,
-			CreatedByAgent: qn.CreatedByAgent,
-		}, "questionnaire.closed", map[string]any{
-			"questionnaire_id": qn.ID,
-			"submissions":      0, // caller can re-fetch
-			"closed_reason":    reason,
-		})
-	}
-
-	return qn, nil
+	return s.store.Close(ctx, id, reason)
 }
 
 // ---- AnswerStore delegation ---- //
 
-func (s *Service) UpsertAnswer(ctx context.Context, qID, userID int64, perQ map[int64]domain.AnswerValue) (*domain.Answer, error) {
+func (s *Service) UpsertAnswer(ctx context.Context, qID, userID int64, perQ map[int64]domain.AnswerValue) (*domain.Answer, *domain.Questionnaire, error) {
 	// Load questionnaire to validate answers.
 	qn, err := s.store.Get(ctx, qID)
 	if err != nil {
-		return nil, fmt.Errorf("load questionnaire for validation: %w", err)
+		return nil, nil, fmt.Errorf("load questionnaire for validation: %w", err)
 	}
 
 	if qn.Status != domain.StatusOpen {
-		return nil, &ValidationError{
+		return nil, nil, &ValidationError{
 			Errors: []domain.FieldError{{Field: "answers", Code: "questionnaire_closed"}},
 		}
 	}
 
 	if errs := domain.ValidateAnswer(qn.Questions, perQ); len(errs) > 0 {
-		return nil, &ValidationError{Errors: errs}
+		return nil, nil, &ValidationError{Errors: errs}
 	}
 
 	answer, err := s.answerStore.UpsertAnswer(ctx, qID, userID, perQ)
 	if err != nil {
 		if errors.Is(err, domain.ErrAlreadyAnswered) {
-			return nil, &ValidationError{
+			return nil, nil, &ValidationError{
 				Errors: []domain.FieldError{{Field: "answers", Code: "already_submitted", Message: "you have already submitted this questionnaire"}},
 			}
 		}
-		return nil, err
+		return nil, nil, err
 	}
 
-	// Best-effort publish answered event.
-	if s.publisher != nil {
-		_ = s.publisher.Publish(ctx, domain.SessionFilter{
-			IssueID:        qn.IssueID,
-			CreatedByAgent: qn.CreatedByAgent,
-		}, "questionnaire.answered", map[string]any{
-			"questionnaire_id": qID,
-			"answer_count":     1, // approximate; agent should re-fetch
-		})
-	}
-
-	return answer, nil
+	return answer, qn, nil
 }
 
 func (s *Service) GetUserAnswer(ctx context.Context, qID, userID int64) (*domain.Answer, error) {

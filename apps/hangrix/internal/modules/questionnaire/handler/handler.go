@@ -14,7 +14,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
+	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
@@ -34,6 +36,7 @@ type Handler struct {
 	resolver   orgdomain.Resolver
 	middleware authdomain.Middleware
 	users      userdomain.Repo
+	spawner    agentsessiondomain.Spawner // optional — nil-safe (e.g. tests)
 }
 
 type HandlerDeps struct {
@@ -44,6 +47,7 @@ type HandlerDeps struct {
 	Resolver   orgdomain.Resolver
 	Middleware authdomain.Middleware
 	Users      userdomain.Repo
+	Spawner    agentsessiondomain.Spawner // optional — nil-safe
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
@@ -55,6 +59,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		resolver:   deps.Resolver,
 		middleware: deps.Middleware,
 		users:      deps.Users,
+		spawner:    deps.Spawner,
 	}
 }
 
@@ -309,7 +314,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/repos/{owner}/{name}/issues/{number}/questionnaires/{qid}/answers
 func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
-	_, ok := h.resolveRepo(w, r)
+	rc, ok := h.resolveRepo(w, r)
 	if !ok {
 		return
 	}
@@ -346,7 +351,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	answer, err := h.svc.UpsertAnswer(r.Context(), qid, uid, perQ)
+	answer, qn, err := h.svc.UpsertAnswer(r.Context(), qid, uid, perQ)
 	if err != nil {
 		var ve *questionnaireservice.ValidationError
 		if errors.As(err, &ve) {
@@ -355,6 +360,29 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		}
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	// Wake the agent that issued this questionnaire. The spawner's
+	// direct-invoke path targets exactly that role and bypasses
+	// per-role trigger config — the agent doesn't need an explicit
+	// questionnaire.answered entry in agents.yml.
+	if h.spawner != nil && qn.CreatedByAgent != "" {
+		payload, _ := json.Marshal(map[string]any{
+			"questionnaire_id": qid,
+			"answer_id":        answer.ID,
+			"respondent_id":    uid,
+		})
+		issueNum, _ := strconv.ParseInt(chi.URLParam(r, "number"), 10, 32)
+		_, _ = h.spawner.OnTrigger(r.Context(), agentsessiondomain.TriggerInput{
+			Trigger:     agentsconfig.TriggerIssueComment,
+			CauseKind:   agentsessiondomain.CauseKindQuestionnaireAnswered,
+			CauseID:     strconv.FormatInt(answer.ID, 10),
+			RepoID:      rc.repo.ID,
+			IssueNumber: int32(issueNum),
+			ActorID:     uid,
+			RoleKey:     qn.CreatedByAgent,
+			Payload:     payload,
+		})
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{

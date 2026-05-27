@@ -156,20 +156,13 @@ type AnswerStore interface {
 // Service is the business-logic layer, composing Store + AnswerStore + result aggregation.
 type Service interface {
 	Store
-	AnswerStore
+	// AnswerStore methods except UpsertAnswer which returns the
+	// questionnaire alongside the answer for cross-module orchestration.
+	GetUserAnswer(ctx context.Context, qID, userID int64) (*Answer, error)
+	ListAnswers(ctx context.Context, qID int64) ([]*Answer, error)
+	CountAnswers(ctx context.Context, qID int64) (int64, error)
+	UpsertAnswer(ctx context.Context, qID, userID int64, perQ map[int64]AnswerValue) (*Answer, *Questionnaire, error)
 	BuildResult(ctx context.Context, qID int64) (*Result, error)
-}
-
-// EventPublisher is the cross-module seam for pushing questionnaire events
-// to agent sessions. It is injected by the agent_session module.
-type EventPublisher interface {
-	Publish(ctx context.Context, filter SessionFilter, kind string, payload any) error
-}
-
-// SessionFilter selects which agent sessions receive an event.
-type SessionFilter struct {
-	IssueID        int64
-	CreatedByAgent string // agent role key
 }
 
 // ---- Create / input types ---- //
