@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -377,11 +378,18 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	// per-role trigger config — the agent doesn't need an explicit
 	// questionnaire.answered entry in agents.yml.
 	if h.spawner != nil && qn.CreatedByAgent != "" {
-		payload, _ := json.Marshal(map[string]any{
+		payloadMap := map[string]any{
 			"questionnaire_id": qid,
 			"answer_id":        answer.ID,
 			"respondent_id":    uid,
-		})
+		}
+		if result, err := h.svc.BuildResult(r.Context(), qid); err != nil {
+			log.Printf("questionnaire: BuildResult(%d) failed: %v", qid, err)
+			payloadMap["result_error"] = "failed to build result: " + err.Error()
+		} else {
+			payloadMap["result"] = toPublicResult(result)
+		}
+		payload, _ := json.Marshal(payloadMap)
 		issueNum, _ := strconv.ParseInt(chi.URLParam(r, "number"), 10, 32)
 		_, _ = h.spawner.OnTrigger(r.Context(), agentsessiondomain.TriggerInput{
 			Trigger:     agentsconfig.TriggerIssueComment,
