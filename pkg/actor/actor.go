@@ -24,10 +24,13 @@ import (
 type Kind string
 
 const (
-	KindUser     Kind = "user"
-	KindAgent    Kind = "agent"
-	KindWorkflow Kind = "workflow"
-	KindSystem   Kind = "system"
+	KindUser         Kind = "user"
+	KindAgent        Kind = "agent"         // DEPRECATED: superseded by KindAgentRole
+	KindAgentSession Kind = "agent_session" // per-session actor identity
+	KindAgentRole    Kind = "agent_role"    // persistent per-(repo,role_key) actor identity
+	KindWorkflow     Kind = "workflow"
+	KindBot          Kind = "bot" // PAT / OAuth app identity (reserved)
+	KindSystem       Kind = "system"
 )
 
 // Ref is the unified actor reference carried by every domain object.
@@ -40,6 +43,7 @@ type Ref struct {
 	UserID         int64  `json:"user_id,omitempty"`
 	RoleKey        string `json:"role_key,omitempty"`
 	WorkflowRunID  int64  `json:"workflow_run_id,omitempty"`
+	ActorID        int64  `json:"actor_id,omitempty"` // actors table PK for FK joins (Phase 3+)
 }
 
 // UserRef builds an actor from a platform user row.
@@ -87,6 +91,12 @@ func SystemRef() Ref {
 // FromLegacy constructs a Ref from the pre-actor author_id/agent_role
 // columns. Used in the read fallback path for rows that haven't been
 // dual-written yet.
+//
+// Deprecated: use the actor module's Store + Resolver which resolves
+// through the actors table. All callers live in
+// apps/hangrix/internal/modules/issue/infra/infra.go and will be
+// replaced in Phase 3c/3d (sub-issues #245 / #246). Do not add new
+// call sites.
 func FromLegacy(authorID int64, authorName, agentRole string) Ref {
 	if authorID > 0 {
 		return UserRef(authorID, authorName)
