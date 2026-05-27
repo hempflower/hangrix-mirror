@@ -1530,3 +1530,44 @@ func toAPIResult(r *questionnairedomain.Result) map[string]any {
 	result["submitters"] = submitters
 	return result
 }
+
+// ---- Dependencies ----
+
+// AddDependency creates a dependency edge from the session's issue to dependsOnNumber.
+func (s *APIService) AddDependency(ctx context.Context, p *apidomain.Actor, dependsOnNumber int64) (any, error) {
+	scope, err := s.mustLoadScope(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	text, err := s.r.DepsAdd(ctx, scope, dependsOnNumber)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"result": text}, nil
+}
+
+// RemoveDependency removes a dependency edge.
+func (s *APIService) RemoveDependency(ctx context.Context, p *apidomain.Actor, dependsOnNumber int64) (any, error) {
+	scope, err := s.mustLoadScope(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	text, err := s.r.DepsRemove(ctx, scope, dependsOnNumber)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"result": text}, nil
+}
+
+// ReadDependencies returns the dependency info for the session's issue.
+func (s *APIService) ReadDependencies(ctx context.Context, p *apidomain.Actor) (any, error) {
+	scope, err := s.mustLoadScope(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	text, err := s.r.DepsRead(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"result": text}, nil
+}

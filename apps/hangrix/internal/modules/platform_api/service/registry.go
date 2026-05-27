@@ -53,6 +53,7 @@ type RegistryDeps struct {
 	AssetStorage  *releaseinfra.AssetStorage
 	Attachments   attachmentdomain.Uploader
 	Todos         issuedomain.TodoStore
+	Deps          issuedomain.DependencyStore
 	Questionnaires questionnairedomain.Service
 	CheckReader   workflowdomain.CheckReader
 }

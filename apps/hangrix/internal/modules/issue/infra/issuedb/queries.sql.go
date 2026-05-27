@@ -11,6 +11,52 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addDependency = `-- name: AddDependency :one
+
+INSERT INTO issue_dependencies (repo_id, issue_id, depends_on_id, created_by)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (issue_id, depends_on_id) DO NOTHING
+RETURNING id, repo_id, issue_id, depends_on_id,
+          COALESCE(created_by, 0)::BIGINT AS created_by,
+          created_at
+`
+
+type AddDependencyParams struct {
+	RepoID      int64
+	IssueID     int64
+	DependsOnID int64
+	CreatedBy   pgtype.Int8
+}
+
+type AddDependencyRow struct {
+	ID          int64
+	RepoID      int64
+	IssueID     int64
+	DependsOnID int64
+	CreatedBy   int64
+	CreatedAt   pgtype.Timestamptz
+}
+
+// ---- issue_dependencies ----
+func (q *Queries) AddDependency(ctx context.Context, arg AddDependencyParams) (AddDependencyRow, error) {
+	row := q.db.QueryRow(ctx, addDependency,
+		arg.RepoID,
+		arg.IssueID,
+		arg.DependsOnID,
+		arg.CreatedBy,
+	)
+	var i AddDependencyRow
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.IssueID,
+		&i.DependsOnID,
+		&i.CreatedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const countIssues = `-- name: CountIssues :one
 SELECT COUNT(*) FROM issues i
 WHERE i.repo_id = $1
@@ -1124,6 +1170,152 @@ func (q *Queries) ListContributions(ctx context.Context, arg ListContributionsPa
 	return items, nil
 }
 
+const listDependenciesBlocking = `-- name: ListDependenciesBlocking :many
+SELECT id, repo_id, issue_id, depends_on_id,
+       COALESCE(created_by, 0)::BIGINT AS created_by,
+       created_at
+FROM issue_dependencies
+WHERE depends_on_id = $1
+ORDER BY created_at
+`
+
+type ListDependenciesBlockingRow struct {
+	ID          int64
+	RepoID      int64
+	IssueID     int64
+	DependsOnID int64
+	CreatedBy   int64
+	CreatedAt   pgtype.Timestamptz
+}
+
+// Returns edges where depends_on_id matches (what this issue blocks).
+func (q *Queries) ListDependenciesBlocking(ctx context.Context, issueID int64) ([]ListDependenciesBlockingRow, error) {
+	rows, err := q.db.Query(ctx, listDependenciesBlocking, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDependenciesBlockingRow{}
+	for rows.Next() {
+		var i ListDependenciesBlockingRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepoID,
+			&i.IssueID,
+			&i.DependsOnID,
+			&i.CreatedBy,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDependenciesFor = `-- name: ListDependenciesFor :many
+SELECT id, repo_id, issue_id, depends_on_id,
+       COALESCE(created_by, 0)::BIGINT AS created_by,
+       created_at
+FROM issue_dependencies
+WHERE issue_id = $1
+ORDER BY created_at
+`
+
+type ListDependenciesForRow struct {
+	ID          int64
+	RepoID      int64
+	IssueID     int64
+	DependsOnID int64
+	CreatedBy   int64
+	CreatedAt   pgtype.Timestamptz
+}
+
+// Returns edges where issue_id matches (what this issue depends on).
+func (q *Queries) ListDependenciesFor(ctx context.Context, issueID int64) ([]ListDependenciesForRow, error) {
+	rows, err := q.db.Query(ctx, listDependenciesFor, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDependenciesForRow{}
+	for rows.Next() {
+		var i ListDependenciesForRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepoID,
+			&i.IssueID,
+			&i.DependsOnID,
+			&i.CreatedBy,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDepsForSubtree = `-- name: ListDepsForSubtree :many
+
+WITH RECURSIVE subtree AS (
+    SELECT i.id AS node_id FROM issues i WHERE i.id = $1
+  UNION
+    SELECT i.id FROM issues i JOIN subtree s ON i.parent_id = s.node_id
+)
+SELECT d.id, d.repo_id, d.issue_id, d.depends_on_id,
+       COALESCE(d.created_by, 0)::BIGINT AS created_by,
+       d.created_at
+FROM issue_dependencies d
+WHERE d.issue_id IN (SELECT node_id FROM subtree)
+`
+
+type ListDepsForSubtreeRow struct {
+	ID          int64
+	RepoID      int64
+	IssueID     int64
+	DependsOnID int64
+	CreatedBy   int64
+	CreatedAt   pgtype.Timestamptz
+}
+
+// ReachableForward is handled via raw pgxpool query in infra.go
+// (the recursive CTE confuses sqlc's parser).
+// Returns every dependency edge where both issue_id and depends_on_id
+// belong to the subtree rooted at root_id.
+func (q *Queries) ListDepsForSubtree(ctx context.Context, rootID int64) ([]ListDepsForSubtreeRow, error) {
+	rows, err := q.db.Query(ctx, listDepsForSubtree, rootID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDepsForSubtreeRow{}
+	for rows.Next() {
+		var i ListDepsForSubtreeRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepoID,
+			&i.IssueID,
+			&i.DependsOnID,
+			&i.CreatedBy,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEvents = `-- name: ListEvents :many
 SELECT e.id, e.issue_id, e.kind, e.payload,
        COALESCE(e.actor_id, 0)::BIGINT AS actor_id,
@@ -1562,6 +1754,104 @@ func (q *Queries) NextIssueNumber(ctx context.Context, repoID int64) (int64, err
 	var number int64
 	err := row.Scan(&number)
 	return number, err
+}
+
+const planSubtree = `-- name: PlanSubtree :many
+
+WITH RECURSIVE plan_tree AS (
+    SELECT i.id, i.number, i.title, i.state, i.agent_role,
+           i.parent_id,
+           i.actor_kind,
+           COALESCE(i.actor_user_id, 0)::BIGINT AS actor_user_id,
+           i.actor_role_key,
+           i.actor_display_name,
+           0::INT AS depth,
+           ARRAY[i.number] AS path
+    FROM issues i
+    WHERE i.id = $1
+  UNION ALL
+    SELECT i.id, i.number, i.title, i.state, i.agent_role,
+           i.parent_id,
+           i.actor_kind,
+           COALESCE(i.actor_user_id, 0)::BIGINT AS actor_user_id,
+           i.actor_role_key,
+           i.actor_display_name,
+           pt.depth + 1,
+           pt.path || i.number
+    FROM issues i
+    JOIN plan_tree pt ON i.parent_id = pt.id
+    WHERE pt.depth < 32
+)
+SELECT id, number, title, state, agent_role,
+       COALESCE(parent_id, 0)::BIGINT AS parent_id,
+       actor_kind, actor_user_id, actor_role_key, actor_display_name,
+       depth::INT
+FROM plan_tree
+ORDER BY path
+`
+
+type PlanSubtreeRow struct {
+	ID               int64
+	Number           int64
+	Title            string
+	State            string
+	AgentRole        string
+	ParentID         int64
+	ActorKind        string
+	ActorUserID      int64
+	ActorRoleKey     string
+	ActorDisplayName string
+	Depth            int32
+}
+
+// ---- plan subtree (recursive CTE for the whole tree) ----
+// Returns every issue in the subtree rooted at root_id, including the root,
+// with depth for tree rendering. Ordered depth-first by number.
+func (q *Queries) PlanSubtree(ctx context.Context, rootID int64) ([]PlanSubtreeRow, error) {
+	rows, err := q.db.Query(ctx, planSubtree, rootID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PlanSubtreeRow{}
+	for rows.Next() {
+		var i PlanSubtreeRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Number,
+			&i.Title,
+			&i.State,
+			&i.AgentRole,
+			&i.ParentID,
+			&i.ActorKind,
+			&i.ActorUserID,
+			&i.ActorRoleKey,
+			&i.ActorDisplayName,
+			&i.Depth,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const removeDependency = `-- name: RemoveDependency :exec
+DELETE FROM issue_dependencies
+WHERE issue_id = $1 AND depends_on_id = $2
+`
+
+type RemoveDependencyParams struct {
+	IssueID     int64
+	DependsOnID int64
+}
+
+func (q *Queries) RemoveDependency(ctx context.Context, arg RemoveDependencyParams) error {
+	_, err := q.db.Exec(ctx, removeDependency, arg.IssueID, arg.DependsOnID)
+	return err
 }
 
 const setContributionMergeable = `-- name: SetContributionMergeable :exec

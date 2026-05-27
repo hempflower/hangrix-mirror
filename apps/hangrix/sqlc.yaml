@@ -262,3 +262,24 @@ sql:
         emit_empty_slices: true
 
 
+  - engine: postgresql
+    queries: internal/modules/plan_engine/infra/queries.sql
+    # plan_state FK issues(id); union issue + its transitive schemas
+    # so sqlc can resolve the FK at generate time.
+    schema:
+      - internal/modules/user/infra/migrations
+      - internal/modules/org/infra/migrations
+      - internal/modules/repo/infra/migrations
+      - internal/modules/issue/infra/migrations
+      - internal/modules/plan_engine/infra/migrations
+    gen:
+      go:
+        package: planenginedb
+        out: internal/modules/plan_engine/infra/planenginedb
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_empty_slices: true
+

@@ -21,6 +21,7 @@ import (
 	llmprovider "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider"
 	llmproxy "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_proxy"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/org"
+	planengine "github.com/hangrix/hangrix/apps/hangrix/internal/modules/plan_engine"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/release"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner"
@@ -51,6 +52,7 @@ func main() {
 		repo.Module(),
 		release.Module(),
 		issue.Module(),
+		planengine.Module(),
 		questionnaire.Module(),
 		llmprovider.Module(),
 		llmproxy.Module(),

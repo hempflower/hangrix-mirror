@@ -2,29 +2,11 @@
 // versions:
 //   sqlc v1.30.0
 
-package attachmentdb
+package planenginedb
 
 import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
-
-type Attachment struct {
-	ID               int64
-	StorageKey       string
-	OriginalName     string
-	DisplayName      string
-	SizeBytes        int64
-	MimeType         string
-	DetectedMimeType string
-	Sha256           string
-	Kind             string
-	Inline           bool
-	Status           string
-	AuthorID         pgtype.Int8
-	AgentRole        string
-	CreatedAt        pgtype.Timestamptz
-	DeletedAt        pgtype.Timestamptz
-}
 
 type BranchProtection struct {
 	ID               int64
@@ -35,11 +17,6 @@ type BranchProtection struct {
 	ForbidDirectPush bool
 	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
-}
-
-type CommentAttachment struct {
-	CommentID    int64
-	AttachmentID int64
 }
 
 type Contribution struct {
@@ -186,6 +163,15 @@ type OrganizationMember struct {
 	Role    string
 	AddedBy int64
 	AddedAt pgtype.Timestamptz
+}
+
+type PlanState struct {
+	EpicIssueID    int64
+	Status         string
+	MaxConcurrency int32
+	AutoStepBudget int32
+	AutoStepsUsed  int32
+	UpdatedAt      pgtype.Timestamptz
 }
 
 type Repo struct {

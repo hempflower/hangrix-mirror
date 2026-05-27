@@ -23,6 +23,7 @@ func Module() *ioc.Module {
 	storeBinder.ToInterface(new(domain.AttachmentStore))
 	storeBinder.ToInterface(new(domain.ContributionStore))
 	storeBinder.ToInterface(new(domain.TodoStore))
+	storeBinder.ToInterface(new(domain.DependencyStore))
 
 	// Attachment service: validation, hashing, on-disk writes.
 	svcBinder := m.Provide(service.NewAttachmentService)

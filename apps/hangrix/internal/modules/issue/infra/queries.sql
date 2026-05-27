@@ -521,3 +521,89 @@ SELECT status, COUNT(*)::BIGINT AS count
 FROM todos
 WHERE issue_id = sqlc.arg('issue_id')
 GROUP BY status;
+
+
+-- ---- issue_dependencies ----
+
+-- name: AddDependency :one
+INSERT INTO issue_dependencies (repo_id, issue_id, depends_on_id, created_by)
+VALUES (sqlc.arg('repo_id'), sqlc.arg('issue_id'), sqlc.arg('depends_on_id'), sqlc.narg('created_by'))
+ON CONFLICT (issue_id, depends_on_id) DO NOTHING
+RETURNING id, repo_id, issue_id, depends_on_id,
+          COALESCE(created_by, 0)::BIGINT AS created_by,
+          created_at;
+
+-- name: RemoveDependency :exec
+DELETE FROM issue_dependencies
+WHERE issue_id = sqlc.arg('issue_id') AND depends_on_id = sqlc.arg('depends_on_id');
+
+-- name: ListDependenciesFor :many
+-- Returns edges where issue_id matches (what this issue depends on).
+SELECT id, repo_id, issue_id, depends_on_id,
+       COALESCE(created_by, 0)::BIGINT AS created_by,
+       created_at
+FROM issue_dependencies
+WHERE issue_id = sqlc.arg('issue_id')
+ORDER BY created_at;
+
+-- name: ListDependenciesBlocking :many
+-- Returns edges where depends_on_id matches (what this issue blocks).
+SELECT id, repo_id, issue_id, depends_on_id,
+       COALESCE(created_by, 0)::BIGINT AS created_by,
+       created_at
+FROM issue_dependencies
+WHERE depends_on_id = sqlc.arg('issue_id')
+ORDER BY created_at;
+
+-- ReachableForward is handled via raw pgxpool query in infra.go
+-- (the recursive CTE confuses sqlc's parser).
+
+-- name: ListDepsForSubtree :many
+-- Returns every dependency edge where both issue_id and depends_on_id
+-- belong to the subtree rooted at root_id.
+WITH RECURSIVE subtree AS (
+    SELECT i.id AS node_id FROM issues i WHERE i.id = sqlc.arg('root_id')
+  UNION
+    SELECT i.id FROM issues i JOIN subtree s ON i.parent_id = s.node_id
+)
+SELECT d.id, d.repo_id, d.issue_id, d.depends_on_id,
+       COALESCE(d.created_by, 0)::BIGINT AS created_by,
+       d.created_at
+FROM issue_dependencies d
+WHERE d.issue_id IN (SELECT node_id FROM subtree);
+
+-- ---- plan subtree (recursive CTE for the whole tree) ----
+
+-- name: PlanSubtree :many
+-- Returns every issue in the subtree rooted at root_id, including the root,
+-- with depth for tree rendering. Ordered depth-first by number.
+WITH RECURSIVE plan_tree AS (
+    SELECT i.id, i.number, i.title, i.state, i.agent_role,
+           i.parent_id,
+           i.actor_kind,
+           COALESCE(i.actor_user_id, 0)::BIGINT AS actor_user_id,
+           i.actor_role_key,
+           i.actor_display_name,
+           0::INT AS depth,
+           ARRAY[i.number] AS path
+    FROM issues i
+    WHERE i.id = sqlc.arg('root_id')
+  UNION ALL
+    SELECT i.id, i.number, i.title, i.state, i.agent_role,
+           i.parent_id,
+           i.actor_kind,
+           COALESCE(i.actor_user_id, 0)::BIGINT AS actor_user_id,
+           i.actor_role_key,
+           i.actor_display_name,
+           pt.depth + 1,
+           pt.path || i.number
+    FROM issues i
+    JOIN plan_tree pt ON i.parent_id = pt.id
+    WHERE pt.depth < 32
+)
+SELECT id, number, title, state, agent_role,
+       COALESCE(parent_id, 0)::BIGINT AS parent_id,
+       actor_kind, actor_user_id, actor_role_key, actor_display_name,
+       depth::INT
+FROM plan_tree
+ORDER BY path;
