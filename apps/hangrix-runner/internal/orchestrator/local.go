@@ -106,6 +106,16 @@ func (o *LocalOrchestrator) RemoveContainer(_ context.Context, id string) error 
 	return nil
 }
 
+// StopContainer is a no-op in local mode — there is no Docker container
+// to stop. Always returns nil so the stop-sweeper can ACK and the
+// platform's stop queue drains.
+func (o *LocalOrchestrator) StopContainer(_ context.Context, id string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.removed = append(o.removed, "stopped:"+id)
+	return nil
+}
+
 // WorkflowContainer returns a synthetic container ID. In local mode there
 // is no Docker sandbox; Exec runs step commands directly on the host.
 //

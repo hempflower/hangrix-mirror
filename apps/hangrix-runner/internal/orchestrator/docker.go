@@ -558,6 +558,29 @@ func (o *DockerOrchestrator) RemoveContainer(ctx context.Context, id string) err
 	return o.run(ctx, "rm", "-f", id)
 }
 
+// StopContainer gracefully stops a container via `docker stop --time=10`.
+// Idempotent: already-stopped returns nil (docker stop exits 0), missing
+// container returns nil (matching RemoveContainer's shape). A 10-second
+// grace period gives the agent's PID 1 time to handle SIGTERM before
+// docker escalates to SIGKILL.
+func (o *DockerOrchestrator) StopContainer(ctx context.Context, id string) error {
+	if id == "" {
+		return nil
+	}
+	if !o.containerExists(ctx, id) {
+		return nil
+	}
+	// docker stop prints the container id on success; discard it.
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, o.bin, "stop", "--time=10", id)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker stop %s: %w (%s)", id, err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
 // absMount turns (host, container) into the `-v` arg form docker
 // expects. Trailing :ro flag added when ro is true. host is converted
 // to an absolute path because docker rejects relative bind-mount

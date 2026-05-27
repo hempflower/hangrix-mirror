@@ -76,6 +76,9 @@ func TestLoopParallelismFansOut(t *testing.T) {
 		case r.URL.Path == "/api/runner/cleanup-tasks":
 			// Cleanup sweeper poll — empty queue for this test.
 			_ = json.NewEncoder(w).Encode(map[string]any{"tasks": []any{}})
+		case r.URL.Path == "/api/runner/stop-tasks":
+			// Stop sweeper poll — empty queue for this test.
+			_ = json.NewEncoder(w).Encode(map[string]any{"tasks": []any{}})
 		case strings.HasSuffix(r.URL.Path, "/container"):
 			// SetContainer ACK from the session driver after Start.
 			w.WriteHeader(http.StatusNoContent)
@@ -173,6 +176,8 @@ func (g *gatingOrch) Start(ctx context.Context, _ orchestrator.Task) (orchestrat
 }
 
 func (g *gatingOrch) RemoveContainer(context.Context, string) error { return nil }
+
+func (g *gatingOrch) StopContainer(context.Context, string) error { return nil }
 
 func (g *gatingOrch) WorkflowContainer(_ context.Context, _ string, _ *orchestrator.BuildSpec, _ []string, _ string, _ map[string]string, _ []orchestrator.Volume) (string, error) {
 	return "", errors.New("workflow container not supported in gatingOrch")
