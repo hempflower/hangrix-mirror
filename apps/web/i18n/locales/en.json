@@ -893,6 +893,8 @@
     "subIssues": "Sub-issues",
     "newSubIssue": "New sub-issue",
     "noSubIssues": "No sub-issues yet.",
+    "subIssueBlock": "{n} open sub-issue(s) must be merged or closed first:",
+    "subIssueBlockDeep": "… and {n} deeper descendant(s)",
       "review": {
       "title": "Reviews",
       "empty": "No reviews yet.",
