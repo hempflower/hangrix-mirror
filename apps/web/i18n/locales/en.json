@@ -335,47 +335,39 @@
         "id": "ID",
         "role": "Role",
         "status": "Status",
+        "container": "Container",
         "cause": "Cause",
         "repoIssue": "Repo / issue",
         "repoSha": "Repo SHA",
         "created": "Created",
         "duration": "Duration",
-        "container": "Container",
-        "containerActivity": "Last container activity",
-        "error": "Error",
-        "actions": "Actions"
-      }
-    },
-    "lifecycle": {
-      "title": "Container lifecycle",
-      "subtitle": "Configure when idle containers are stopped and when archived sessions have their containers removed.",
-      "idleStop": "Stop idle containers after",
-      "idleStopHint": "Seconds of inactivity before the container is automatically stopped.",
-      "archiveRemove": "Remove containers after archive",
-      "archiveRemoveHint": "Seconds after a session is archived before its container is permanently removed.",
-      "periodicCheck": "Periodic check interval",
-      "periodicCheckHint": "How often the platform scans for containers that should be stopped or removed.",
-      "unitSeconds": "seconds",
-      "loadFailed": "Failed to load lifecycle settings",
-      "patchFailed": "Failed to save",
-      "saved": "Saved",
-      "saving": "Saving…",
-      "asyncHint": "Settings take effect on the next periodic scan — containers already running are not affected retroactively.",
-      "containerState": {
+        "error": "Error"
+      },
+      "container": {
         "running": "Running",
         "stopped": "Stopped",
         "pendingStop": "Stopping…",
         "pendingRemoval": "Removing…",
         "none": "—"
       },
+      "lifecycle": {
+        "title": "Container Lifecycle",
+        "subtitle": "Configure when idle agent containers are automatically stopped or removed. Changes take effect on the next reaper sweep.",
+        "idleStop": "Idle stop threshold",
+        "idleStopHint": "Duration after which an idle container is stopped. 0 = never auto-stop.",
+        "idleRemoval": "Idle removal threshold",
+        "idleRemovalHint": "Duration after which an idle/stopped container is permanently removed.",
+        "abandonedCleanup": "Abandoned cleanup threshold",
+        "abandonedCleanupHint": "Duration after which an unacked cleanup flag is force-cleared.",
+        "defaultLabel": "Default: {value}.",
+        "lastUpdated": "Last updated {time} by {by}"
+      },
       "actions": {
         "stopContainer": "Stop container",
-        "removeContainer": "Remove container",
-        "stopConfirm": "Stop the container for session #{id}?",
-        "removeConfirm": "Remove the container for session #{id}? This cannot be undone.",
-        "stopFailed": "Failed to stop container",
-        "removeFailed": "Failed to remove container"
-      }
+        "removeContainer": "Remove container"
+      },
+      "stopFailed": "Stop failed",
+      "removeFailed": "Remove failed"
     },
     "dashboard": {
       "title": "Dashboard",

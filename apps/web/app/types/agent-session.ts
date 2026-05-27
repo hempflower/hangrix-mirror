@@ -1,5 +1,3 @@
-export type ContainerState = 'running' | 'stopped' | 'pending_stop' | 'pending_removal' | 'none'
-
 export interface AdminAgentSession {
   session_id: number
   runner_id?: number
@@ -15,10 +13,12 @@ export interface AdminAgentSession {
   error_message?: string
   created_at: string
   ended_at?: string | null
-  container_state: ContainerState
+  container_state?: ContainerState
   container_last_used_at?: string | null
   container_stopped_at?: string | null
 }
+
+export type ContainerState = 'none' | 'running' | 'stopped' | 'pending_stop' | 'pending_removal'
 
 export interface AdminAgentSessionListResp {
   items: AdminAgentSession[]

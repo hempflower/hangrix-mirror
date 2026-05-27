@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 )
 
@@ -66,6 +67,29 @@ func (f *FakeOrchestrator) RemoveContainer(_ context.Context, id string) error {
 	defer f.mu.Unlock()
 	f.removed = append(f.removed, id)
 	return nil
+}
+
+// StopContainer satisfies the Orchestrator interface. Tracks stopped
+// container ids so tests can assert against StoppedContainers().
+func (f *FakeOrchestrator) StopContainer(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removed = append(f.removed, "stopped:"+id)
+	return nil
+}
+
+// StoppedContainers returns the ids passed through StopContainer in
+// call order. Useful for asserting stop-sweeper behaviour in unit tests.
+func (f *FakeOrchestrator) StoppedContainers() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, entry := range f.removed {
+		if after, found := strings.CutPrefix(entry, "stopped:"); found {
+			out = append(out, after)
+		}
+	}
+	return out
 }
 
 // WorkflowContainer returns a synthetic container ID. Tests that need a

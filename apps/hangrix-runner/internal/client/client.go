@@ -395,6 +395,43 @@ func (c *Client) MarkCleanupDone(ctx context.Context, sessionID int64) error {
 		fmt.Sprintf("/api/runner/cleanup-tasks/%d/done", sessionID), nil, nil, true)
 }
 
+// ---- container stop ---- (idle-stop lifecycle)
+
+// StopTask is one (session, container) pair the platform wants the
+// runner to `docker stop`. Returned by ListStopTasks.
+type StopTask struct {
+	SessionID   int64  `json:"session_id"`
+	ContainerID string `json:"container_id"`
+}
+
+// StopTasksResponse is the JSON shape of GET /api/runner/stop-tasks.
+type StopTasksResponse struct {
+	Tasks []StopTask `json:"tasks"`
+}
+
+// ListStopTasks polls the platform for containers this runner should
+// stop via `docker stop --time=10`. The endpoint is keyed off the agent
+// token so the platform knows which runner is asking; it returns at most
+// ~50 entries per call. The runner's StopSweeper loops until it gets an
+// empty page.
+func (c *Client) ListStopTasks(ctx context.Context) (*StopTasksResponse, error) {
+	var out StopTasksResponse
+	if err := c.do(ctx, http.MethodGet, "/api/runner/stop-tasks", nil, &out, true); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// MarkStopDone reports that `docker stop` of the session's container
+// succeeded (or that the container was already gone — see
+// orchestrator.DockerOrchestrator.StopContainer for the no-op path).
+// The platform sets container_stopped_at and clears
+// container_stop_pending in one UPDATE on receipt.
+func (c *Client) MarkStopDone(ctx context.Context, sessionID int64) error {
+	return c.do(ctx, http.MethodPost,
+		fmt.Sprintf("/api/runner/stop-tasks/%d/done", sessionID), nil, nil, true)
+}
+
 type TerminateRequest struct {
 	Status   string `json:"status"`
 	ExitCode *int32 `json:"exit_code,omitempty"`

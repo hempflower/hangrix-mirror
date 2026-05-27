@@ -98,3 +98,89 @@ func (s *CleanupSweeper) handle(ctx context.Context, t client.CleanupTask) {
 	}
 	log.Printf("cleanup sweeper: removed container %s for session %d", t.ContainerID, t.SessionID)
 }
+
+// StopSweeper polls the platform for containers it should `docker stop`
+// and stops them. The platform's Reaper (hourly) or an admin manual action
+// flips container_stop_pending = TRUE; the sweeper is agnostic to which
+// path produced the flag — it just asks "what containers does the platform
+// want stopped?" and `docker stop --time=10`s them.
+//
+// Separate from CleanupSweeper because stop and cleanup are distinct
+// lifecycle operations: a session can be queued for stop while a cleanup
+// entry is also in flight, and the two sweeps run at the same cadence
+// but with different platform endpoints.
+type StopSweeper struct {
+	Client       *client.Client
+	Orchestrator orchestrator.Orchestrator
+
+	// Interval is the poll cadence. Defaults to 60s in Start when zero.
+	Interval time.Duration
+}
+
+// Start blocks until ctx is cancelled. Runs an immediate sweep then
+// ticks at Interval. Returns nil on clean cancel, otherwise the ctx
+// error — matches the shape CleanupSweeper.Start uses.
+func (s *StopSweeper) Start(ctx context.Context) error {
+	interval := s.Interval
+	if interval <= 0 {
+		interval = 60 * time.Second
+	}
+	s.sweepOnce(ctx)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil
+			}
+			return ctx.Err()
+		case <-t.C:
+			s.sweepOnce(ctx)
+		}
+	}
+}
+
+// sweepOnce drains the platform's stop queue in one pass. We loop
+// until the platform returns an empty list so a backlog (e.g. after a
+// large batch of idle sessions crosses the threshold) clears in a single
+// tick rather than waiting out Interval per batch. The platform caps
+// batch size at 50 — bounded memory + bounded per-iteration work.
+func (s *StopSweeper) sweepOnce(ctx context.Context) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		resp, err := s.Client.ListStopTasks(ctx)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				log.Printf("stop sweeper: list: %v", err)
+			}
+			return
+		}
+		if len(resp.Tasks) == 0 {
+			return
+		}
+		for _, t := range resp.Tasks {
+			s.handle(ctx, t)
+		}
+	}
+}
+
+// handle stops one container and ACKs the stop. StopContainer is
+// idempotent (returns nil for already-gone/already-stopped ids) so we
+// ACK on the happy path even if the container was removed externally
+// between the platform flagging it and our sweep. A stop error skips
+// the ACK so the platform re-issues the task on the next poll —
+// eventual consistency keeps the column from going stuck.
+func (s *StopSweeper) handle(ctx context.Context, t client.StopTask) {
+	if err := s.Orchestrator.StopContainer(ctx, t.ContainerID); err != nil {
+		log.Printf("stop sweeper: session %d: stop %s: %v", t.SessionID, t.ContainerID, err)
+		return
+	}
+	if err := s.Client.MarkStopDone(ctx, t.SessionID); err != nil {
+		log.Printf("stop sweeper: session %d: ack: %v", t.SessionID, err)
+		return
+	}
+	log.Printf("stop sweeper: stopped container %s for session %d", t.ContainerID, t.SessionID)
+}
