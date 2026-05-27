@@ -29,6 +29,7 @@ type LocalOrchestrator struct {
 	mu          sync.Mutex
 	nextLocalID int64
 	removed     []string
+	stopped     []string
 }
 
 // NewLocal creates a LocalOrchestrator ready for use. It has no external
@@ -107,12 +108,12 @@ func (o *LocalOrchestrator) RemoveContainer(_ context.Context, id string) error 
 }
 
 // StopContainer is a no-op in local mode — there is no Docker container
-// to stop. Always returns nil so the stop-sweeper can ACK and the
-// platform's stop queue drains.
+// to stop. Stop acknowledgements still succeed so the platform's
+// stop sweeper doesn't stall.
 func (o *LocalOrchestrator) StopContainer(_ context.Context, id string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.removed = append(o.removed, "stopped:"+id)
+	o.stopped = append(o.stopped, id)
 	return nil
 }
 

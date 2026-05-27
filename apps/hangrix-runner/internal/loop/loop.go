@@ -51,8 +51,7 @@ type Loop struct {
 //     containers to `docker rm` (migration 00004 — archive / delete /
 //     7-day idle).
 //   - one stop-sweeper goroutine that polls the platform for
-//     containers to `docker stop --time=10` (migration 00005 — idle-stop
-//     lifecycle).
+//     containers to `docker stop` (idle timeout).
 //   - N task-worker goroutines, where N = max(Parallelism, 1). Each
 //     worker independently long-polls /tasks; on a hit it claims the
 //     row, drives the session synchronously, then loops back to poll.
@@ -88,14 +87,12 @@ func (l *Loop) Run(ctx context.Context) error {
 	}()
 
 	// Stop-sweeper goroutine. Independent of task workers because
-	// stop is low-frequency and inherently sequential per container.
-	// Runs at the same 60s cadence as the cleanup sweeper but uses a
-	// separate platform endpoint (/api/runner/stop-tasks).
+	// idle-stop is low-frequency and inherently sequential per container.
 	stopDone := make(chan struct{})
 	go func() {
 		defer close(stopDone)
-		ss := &StopSweeper{Client: l.Client, Orchestrator: l.Orchestrator}
-		if err := ss.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		sw := &StopSweeper{Client: l.Client, Orchestrator: l.Orchestrator}
+		if err := sw.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("stop sweeper exited: %v", err)
 		}
 	}()

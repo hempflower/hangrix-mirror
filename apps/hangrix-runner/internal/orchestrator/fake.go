@@ -43,6 +43,7 @@ type FakeOrchestrator struct {
 
 	lastTask Task
 	removed  []string
+	stopped  []string
 }
 
 func NewFake() *FakeOrchestrator {
@@ -90,6 +91,15 @@ func (f *FakeOrchestrator) StoppedContainers() []string {
 		}
 	}
 	return out
+}
+
+// RemovedContainers returns the ids passed through RemoveContainer in
+// call order. Useful for asserting cleanup-sweeper behaviour in unit
+// tests.
+func (f *FakeOrchestrator) RemovedContainers() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.removed...)
 }
 
 // WorkflowContainer returns a synthetic container ID. Tests that need a
@@ -141,14 +151,7 @@ func (h *fakeExecHandle) Wait() (int, error) {
 	return code, nil
 }
 
-// RemovedContainers returns the ids passed through RemoveContainer in
-// call order. Useful for asserting cleanup-sweeper behaviour in unit
-// tests.
-func (f *FakeOrchestrator) RemovedContainers() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.removed...)
-}
+
 
 // AgentStdin is the read-side of the runner→agent pipe. Tests treat it
 // as the "agent's stdin" — read frames the runner ships.
