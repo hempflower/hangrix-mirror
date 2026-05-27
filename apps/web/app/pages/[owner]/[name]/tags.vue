@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { toTypedSchema } from '@vee-validate/zod'
 import * as z from 'zod'
-import { Plus, Tag as TagIcon, Trash2 } from 'lucide-vue-next'
+import { Plus, RefreshCw, Tag as TagIcon, Trash2 } from 'lucide-vue-next'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -36,13 +36,16 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
+import { Skeleton } from '@/components/ui/skeleton'
 import type { PublicRepo, RefListResp, RepoRef, RepoRefs } from '~/types/repo'
 import Pagination from '@/components/ui/pagination/Pagination.vue'
+import { relativeTime } from '~/utils/time'
 
 definePageMeta({ layout: 'repo' })
 
 const { t } = useI18n()
 const route = useRoute()
+const router = useRouter()
 
 setBreadcrumbs(() => {
   const owner = String(route.params.owner ?? '')
@@ -69,6 +72,16 @@ const tagItems = ref<RepoRef[]>([])
 const tagTotal = ref(0)
 const tagOffset = ref(0)
 const tagLimit = 50
+
+// ---- sort (URL query is source of truth) ----
+const sortParam = computed<'desc' | 'asc'>(() => {
+  const v = String(route.query.sort ?? '')
+  return v === 'asc' ? 'asc' : 'desc'
+})
+
+function setSort(v: 'desc' | 'asc') {
+  router.replace({ query: { ...route.query, sort: v === 'asc' ? 'asc' : undefined } })
+}
 
 const createOpen = ref(false)
 const createError = ref<string | null>(null)
@@ -103,7 +116,7 @@ async function loadTags() {
   try {
     const res = await $fetch<RefListResp>(`/api/repos/${owner.value}/${name.value}/refs`, {
       credentials: 'include',
-      query: { type: 'tags', offset: tagOffset.value, limit: tagLimit },
+      query: { type: 'tags', offset: tagOffset.value, limit: tagLimit, sort: sortParam.value },
     })
     tagItems.value = res.items ?? []
     tagTotal.value = res.total
@@ -189,6 +202,13 @@ async function onDelete(tagName: string) {
   }
 }
 
+function relTime(iso?: string) { return relativeTime(iso ?? null, t) }
+
+watch(sortParam, () => {
+  tagOffset.value = 0
+  loadTags()
+})
+
 onMounted(load)
 </script>
 
@@ -218,28 +238,69 @@ onMounted(load)
       </div>
     </header>
 
-    <p v-if="error" class="text-sm text-destructive">
-      {{ error }}
-    </p>
-
     <Card class="gap-0 py-0">
       <CardHeader class="rounded-t-xl border-b bg-muted/40 px-4 py-2">
-        <CardTitle class="text-sm font-medium">
-          {{ t('repo.tags.title') }} · {{ tagTotal }}
-        </CardTitle>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle class="text-sm font-medium">
+            {{ t('repo.tags.title') }} · {{ tagTotal }}
+          </CardTitle>
+          <Select
+            :model-value="sortParam"
+            @update:model-value="(v) => setSort((v as string) === 'asc' ? 'asc' : 'desc')"
+          >
+            <SelectTrigger class="h-7 w-auto gap-1 border-0 bg-transparent px-1 text-xs shadow-none hover:bg-muted">
+              <span class="text-muted-foreground">{{ t('repo.tags.sort.label') }}:</span>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="desc">{{ t('repo.tags.sort.newest') }}</SelectItem>
+              <SelectItem value="asc">{{ t('repo.tags.sort.oldest') }}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </CardHeader>
       <CardContent class="p-0">
-        <p v-if="loading" class="p-3 text-sm text-muted-foreground">
-          {{ t('common.loading') }}
-        </p>
+        <!-- skeleton -->
+        <Table v-if="loading">
+          <TableHeader>
+            <TableRow>
+              <TableHead>{{ t('repo.tags.name') }}</TableHead>
+              <TableHead>SHA</TableHead>
+              <TableHead>{{ t('repo.tags.createdAt') }}</TableHead>
+              <TableHead class="text-right">{{ t('common.actions') }}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow v-for="i in 5" :key="'sk-'+i">
+              <TableCell><Skeleton class="h-4 w-24" /></TableCell>
+              <TableCell><Skeleton class="h-4 w-16" /></TableCell>
+              <TableCell><Skeleton class="h-4 w-20" /></TableCell>
+              <TableCell class="text-right"><Skeleton class="ml-auto h-8 w-16" /></TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+
+        <!-- error -->
+        <div v-else-if="error" class="flex flex-col items-center gap-3 px-4 py-10 text-center">
+          <p class="text-sm text-destructive">{{ error }}</p>
+          <Button size="sm" variant="outline" @click="load()">
+            <RefreshCw class="size-3.5" />
+            {{ t('repo.tags.retry') }}
+          </Button>
+        </div>
+
+        <!-- empty -->
         <p v-else-if="tagItems.length === 0" class="p-6 text-center text-sm text-muted-foreground">
           {{ t('repo.tags.empty') }}
         </p>
+
+        <!-- table -->
         <Table v-else>
           <TableHeader>
             <TableRow>
               <TableHead>{{ t('repo.tags.name') }}</TableHead>
               <TableHead>SHA</TableHead>
+              <TableHead>{{ t('repo.tags.createdAt') }}</TableHead>
               <TableHead class="text-right">{{ t('common.actions') }}</TableHead>
             </TableRow>
           </TableHeader>
@@ -258,6 +319,9 @@ onMounted(load)
               </TableCell>
               <TableCell>
                 <code class="font-mono text-xs text-muted-foreground">{{ shortSha(tg.sha) }}</code>
+              </TableCell>
+              <TableCell class="text-sm text-muted-foreground">
+                {{ relTime(tg.created_at) }}
               </TableCell>
               <TableCell class="text-right">
                 <Button

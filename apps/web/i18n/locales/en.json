@@ -573,7 +573,14 @@
       "delete": "Delete",
       "deleteConfirm": "Delete tag {name}?",
       "deleteFailed": "Delete failed",
-      "empty": "No tags yet"
+      "empty": "No tags yet",
+      "retry": "Retry",
+      "createdAt": "Created",
+      "sort": {
+        "label": "Sort",
+        "newest": "Newest first",
+        "oldest": "Oldest first"
+      }
     },
     "compare": {
       "title": "Compare",

@@ -573,7 +573,14 @@
       "delete": "删除",
       "deleteConfirm": "删除 tag {name}？",
       "deleteFailed": "删除失败",
-      "empty": "暂无 tag"
+      "empty": "暂无 tag",
+      "retry": "重试",
+      "createdAt": "创建时间",
+      "sort": {
+        "label": "排序",
+        "newest": "最新优先",
+        "oldest": "最早优先"
+      }
     },
     "compare": {
       "title": "比较",

@@ -26,6 +26,7 @@ export interface RepoListResp {
 export interface RepoRef {
   name: string
   sha: string
+  created_at?: string
 }
 
 export interface RepoRefs {
