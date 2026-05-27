@@ -341,7 +341,7 @@ func (s *APIService) CreateIssue(ctx context.Context, p *apidomain.Actor, title,
 	// operator repairs the host yaml then nudges the issue. Mirrors the
 	// issue handler's fireIssueOpened().
 	if s.r.deps.Spawner != nil {
-		if _, err := s.r.deps.Spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
+		if spawned, err := s.r.deps.Spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
 			Trigger:     agentsconfig.TriggerIssueOpened,
 			CauseKind:   agentsessiondomain.CauseKindIssueOpened,
 			CauseID:     "",
@@ -350,7 +350,13 @@ func (s *APIService) CreateIssue(ctx context.Context, p *apidomain.Actor, title,
 			ActorID:     0, // agent-created issues have no user actor
 		}); err != nil {
 			log.Printf("platform_api: fire issue.opened repo=%d issue=%d: %v", scope.repo.ID, iss.Number, err)
+		} else {
+			log.Printf("platform_api: issue.opened repo=%d issue=%d → %d sessions spawned",
+				scope.repo.ID, iss.Number, len(spawned))
 		}
+	} else {
+		log.Printf("platform_api: issue.opened repo=%d issue=%d: Spawner is nil — event not fired",
+			scope.repo.ID, iss.Number)
 	}
 
 	return map[string]any{
