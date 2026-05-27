@@ -222,6 +222,7 @@ type AgentSession struct {
 	ExitCode              *int32
 	ErrorMessage          string
 	CreatedBy             int64
+	CreatedByActorID      int64  // FK to actors(id); resolved by spawner
 	CreatedAt             time.Time
 	ClaimedAt             *time.Time
 	StartedAt             *time.Time
@@ -399,6 +400,11 @@ type CreateSessionInput struct {
 	SessionTokenHash   string
 	SessionTokenSealed string
 	CreatedBy          int64
+	// CreatedByActorID is the FK to the actors table for the entity
+	// that triggered this session. Set by the spawner after resolving
+	// the actor via the actor module's Resolver. Zero means not set
+	// (legacy rows or races where EnsureActorRole hasn't run yet).
+	CreatedByActorID int64
 
 	// Snapshot.
 	RepoSHA    string
