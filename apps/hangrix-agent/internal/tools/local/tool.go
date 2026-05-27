@@ -119,7 +119,7 @@ type Bundle struct {
 // read/edit, one bashTool shared between `bash` and `bash_input` (so
 // they see the same background-job map). Callers that need both halves
 // (production wiring via ioc) use Build; callers that only need the
-// Tool slice (tests, the research sub-agent catalogue) use All, which
+// Tool slice (tests) use All, which
 // is a thin wrapper.
 //
 // Order matches the spec table in ROADMAP.md so the registry-emitted
