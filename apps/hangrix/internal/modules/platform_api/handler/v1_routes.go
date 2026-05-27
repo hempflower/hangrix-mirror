@@ -54,6 +54,7 @@ func RegisterV1Routes(r chi.Router, api AgentAPI) {
 
 		// Explicit issue-by-number form
 		r.Get("/{issueNumber}", v1ReadIssueByNumber(api))
+		r.Post("/{issueNumber}/comments", v1CreateCrossIssueComment(api))
 	})
 
 	// Releases

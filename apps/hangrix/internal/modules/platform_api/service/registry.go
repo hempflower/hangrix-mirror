@@ -127,17 +127,28 @@ func stableTime(t time.Time) string {
 // mentioned_only) lives on the host yaml, so we just hand the spawner
 // the full CommentContext and let it route.
 func (r *Registry) fanCommentMentions(ctx context.Context, sess *runnerdomain.AgentSession, scope *sessionScope, c *issuedomain.Comment) {
+	r.fanCommentMentionsForIssue(ctx, sess, scope.repo.ID, *sess.IssueNumber, *sess.IssueNumber, c)
+}
+
+// fanCommentMentionsForIssue is the general form of fanCommentMentions.
+// targetIssueNumber is the issue where the comment was posted;
+// sourceIssueNumber is the caller's originating issue (same for
+// current-issue comments, different for cross-issue parent↔child
+// comments). Both are recorded in the payload so downstream tool
+// handlers can distinguish cross-issue @-mentions from same-issue ones.
+func (r *Registry) fanCommentMentionsForIssue(ctx context.Context, sess *runnerdomain.AgentSession, repoID int64, targetIssueNumber, sourceIssueNumber int32, c *issuedomain.Comment) {
 	if r.deps.Spawner == nil {
 		return
 	}
 	payload, _ := json.Marshal(map[string]any{
-		"comment_id":   c.ID,
-		"comment_body": c.Body,
-		"agent_role":   c.AgentRole,
-		"author_id":    c.AuthorID,
-		"author_name":  c.AuthorName,
-		"file_path":    c.FilePath,
-		"line":         c.Line,
+		"comment_id":          c.ID,
+		"comment_body":        c.Body,
+		"agent_role":          c.AgentRole,
+		"author_id":           c.AuthorID,
+		"author_name":         c.AuthorName,
+		"file_path":           c.FilePath,
+		"line":                c.Line,
+		"source_issue_number": sourceIssueNumber,
 	})
 	commentCtx := &agentsessiondomain.CommentContext{
 		AuthorRoleKey: c.AgentRole,
@@ -150,8 +161,8 @@ func (r *Registry) fanCommentMentions(ctx context.Context, sess *runnerdomain.Ag
 		Trigger:     agentsconfig.TriggerIssueComment,
 		CauseKind:   agentsessiondomain.CauseKindCommentMentioned,
 		CauseID:     strconv.FormatInt(c.ID, 10),
-		RepoID:      scope.repo.ID,
-		IssueNumber: *sess.IssueNumber,
+		RepoID:      repoID,
+		IssueNumber: targetIssueNumber,
 		ActorID:     sess.CreatedBy,
 		Comment:     commentCtx,
 		Payload:     payload,

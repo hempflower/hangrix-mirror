@@ -806,6 +806,20 @@ func All(client *Client, async local.AsyncLifecycle, readOnly bool) []local.Tool
 				"line":      intProp("Optional line number to anchor inline. Requires file_path."),
 			}, []string{"body"}),
 		},
+		{name: "issue_comment_cross", description: "Post a comment on another issue within the same repo. The target must be the caller's parent or child issue (direct lineage). Self-target is rejected. Use for cross-issue communication — @agent-<role-key> mentions only wake agents on the same issue; use this tool to reach a parent or child issue's agents instead.",
+			kind: "post", path: "/issues/{targetIssueNumber}/comments", pathParams: []string{"targetIssueNumber"}, write: true,
+			schema: objectSchema(map[string]any{
+				"targetIssueNumber": intProp("The issue number to post the comment to (required). Must be a parent or child of the current issue."),
+				"body": stringPropMax(
+					"The comment body. Markdown allowed; mentions follow @agent-<role-key> grammar. "+
+						"Maximum 7800 Unicode characters (runes). If your content exceeds the limit, "+
+						"split it across multiple issue_comment_cross calls and prefix each with `[1/N]`, `[2/N]`, …",
+					7800,
+				),
+				"file_path": stringProp("Optional path to anchor the comment to a file (inline review). Omit for top-level."),
+				"line":      intProp("Optional line number to anchor inline. Requires file_path."),
+			}, []string{"targetIssueNumber", "body"}),
+		},
 		{name: "issue_edit", description: "Edit the current issue's title and/or body. At least one of `title` or `body` must be provided. When the title changes a `title_changed` event is written to the timeline; a body-only edit is silent. Title must be non-empty and ≤200 characters.",
 			kind: "patch", path: "/issues/current", write: true,
 			schema: issueEditSchema(),

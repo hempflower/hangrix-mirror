@@ -152,6 +152,66 @@ func v1CreateIssue(api AgentAPI) http.HandlerFunc {
 
 // ---- Comments ----
 
+// v1CreateCrossIssueComment handles POST /api/v1/issues/{issueNumber}/comments.
+// Same request/response schema as v1CreateComment but the target issue is
+// specified via URL path rather than the session's current issue. Only
+// parent↔child issue pairs are allowed.
+func v1CreateCrossIssueComment(api AgentAPI) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p := requireActor(w, r)
+		if p == nil {
+			return
+		}
+		if !requirePermission(w, p, "comments", "create") {
+			return
+		}
+		targetIssueNumber, ok := parseIDParam(w, chi.URLParam(r, "issueNumber"))
+		if !ok {
+			return
+		}
+		var req struct {
+			Body     string `json:"body"`
+			FilePath string `json:"file_path"`
+			Line     int    `json:"line"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+		if req.Body == "" {
+			WriteFieldError(w, http.StatusUnprocessableEntity, "body is required",
+				apidomain.FieldError{Field: "body", Code: "missing"},
+			)
+			return
+		}
+		if err := domain.ValidateCommentBody(req.Body); err != nil {
+			var tooLong *domain.ErrCommentBodyTooLong
+			if errors.As(err, &tooLong) {
+				splitHint := fmt.Sprintf(
+					"body has %d Unicode characters; the maximum is %d. "+
+						"Split the content into multiple `issue_comment_cross` calls, "+
+						"each ≤%d characters. "+
+						"Prefix each segment with `[1/N]`, `[2/N]`, … so readers can follow the sequence.",
+					tooLong.Runes, tooLong.Limit, tooLong.Limit,
+				)
+				WriteFieldError(w, http.StatusUnprocessableEntity,
+					fmt.Sprintf("comment body too long: %d runes (limit %d)", tooLong.Runes, tooLong.Limit),
+					apidomain.FieldError{Resource: "comment", Field: "body", Code: "too_long", Message: splitHint},
+				)
+				return
+			}
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		comment, err := api.CreateCrossIssueComment(r.Context(), p, targetIssueNumber, req.Body, req.FilePath, req.Line)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		WriteCreated(w, comment)
+	}
+}
+
 func v1CreateComment(api AgentAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := requireActor(w, r)
