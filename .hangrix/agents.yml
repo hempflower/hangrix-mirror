@@ -61,6 +61,7 @@ tools:
     - issue_read_by_number
     - issue_comment_read
     - issue_comment
+    - issue_comment_cross
     - issue_create
     - issue_edit
     - issue_mergeable
@@ -94,6 +95,7 @@ tools:
     - issue_read_by_number
     - issue_comment_read
     - issue_comment
+    - issue_comment_cross
     - issue_create
     - issue_children
     - roster_list
