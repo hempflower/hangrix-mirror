@@ -53,7 +53,7 @@ func (e *Executor) Execute(ctx context.Context, repoID int64, defaultBranch stri
 	body = appendMentions(body, task.Roles)
 
 	// 3. Create the issue.
-	issue, err := e.issue.Create(ctx, repoID, authorUserID, task.Issue.Title, body, defaultBranch, "", 0, 0)
+	issue, err := e.issue.Create(ctx, repoID, authorUserID, "", task.Issue.Title, body, defaultBranch, "", 0, 0)
 	if err != nil {
 		// Mark the run as failed.
 		if ferr := e.runs.FailRun(ctx, run.ID, err.Error()); ferr != nil {

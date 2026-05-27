@@ -318,7 +318,7 @@ func (s *APIService) CreateIssue(ctx context.Context, p *apidomain.Actor, title,
 		parentID = scope.issue.ID
 		parentNumber = scope.issue.Number
 	}
-	iss, err := s.r.deps.Issues.Create(ctx, scope.repo.ID, 0, title, body, baseBranch, p.RoleKey, parentID, parentNumber)
+	iss, err := s.r.deps.Issues.Create(ctx, scope.repo.ID, 0, "", title, body, baseBranch, p.RoleKey, parentID, parentNumber)
 	if err != nil {
 		return nil, fmt.Errorf("create issue: %w", err)
 	}

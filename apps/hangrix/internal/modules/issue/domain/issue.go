@@ -497,7 +497,7 @@ type ListFilter struct {
 // Store is the persistence abstraction. The Postgres impl lives under
 // internal/modules/issue/infra.
 type Store interface {
-	Create(ctx context.Context, repoID, authorID int64, title, body, baseBranch string, agentRole string, parentID, parentNumber int64) (*Issue, error)
+	Create(ctx context.Context, repoID, authorID int64, authorName, title, body, baseBranch string, agentRole string, parentID, parentNumber int64) (*Issue, error)
 	GetByNumber(ctx context.Context, repoID, number int64) (*Issue, error)
 	List(ctx context.Context, repoID int64, f ListFilter) ([]*Issue, int64, error)
 	ListChildren(ctx context.Context, parentID int64) ([]*Issue, error)
@@ -506,7 +506,7 @@ type Store interface {
 	UpdateHeadSHA(ctx context.Context, id int64, headSHA string) error
 	ListOpenIssueNumbers(ctx context.Context, repoID int64) ([]int64, error)
 
-	CreateComment(ctx context.Context, issueID, authorID int64, body, filePath string, line int) (*Comment, error)
+	CreateComment(ctx context.Context, issueID, authorID int64, authorName, body, filePath string, line int) (*Comment, error)
 	// CreateAgentComment writes an agent-authored comment row. AuthorID
 	// is implicitly NULL on the DB side (the CHECK constraint enforces
 	// exactly-one-of with agentRole). agentRole must match the role-key
@@ -515,7 +515,7 @@ type Store interface {
 	ListComments(ctx context.Context, issueID int64) ([]*Comment, error)
 	GetCommentByID(ctx context.Context, id int64) (*Comment, error)
 
-	CreateEvent(ctx context.Context, issueID int64, kind EventKind, payload []byte, actorID int64) (*Event, error)
+	CreateEvent(ctx context.Context, issueID int64, kind EventKind, payload []byte, actorID int64, actorName string) (*Event, error)
 	// CreateAgentEvent attributes the event to a host yaml role rather
 	// than a user. ActorID is implicitly 0 (DB NULL); the row's
 	// agent_role column carries the role key.
@@ -575,7 +575,7 @@ type Attachment struct {
 
 // AttachmentStore is the persistence abstraction for issue attachments.
 type AttachmentStore interface {
-	CreateAttachment(ctx context.Context, repoID, issueID, authorID int64, agentRole, storageKey, originalName, displayName string, sizeBytes int64, mimeType, detectedMimeType, sha256 string, kind AttachmentKind, inline bool) (*Attachment, error)
+	CreateAttachment(ctx context.Context, repoID, issueID, authorID int64, authorName, agentRole, storageKey, originalName, displayName string, sizeBytes int64, mimeType, detectedMimeType, sha256 string, kind AttachmentKind, inline bool) (*Attachment, error)
 	GetAttachment(ctx context.Context, id int64) (*Attachment, error)
 	ListAttachments(ctx context.Context, issueID, commentID int64) ([]*Attachment, error)
 	MarkAttached(ctx context.Context, id int64, commentID int64) error
