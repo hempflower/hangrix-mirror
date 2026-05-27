@@ -15,6 +15,7 @@ import {
   GitMerge,
   ListTodo,
   Lock,
+  Play,
   MessageSquare,
   MinusCircle,
   Plus,
@@ -24,6 +25,7 @@ import {
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import ActorBadge from '@/components/ActorBadge.vue'
 import AgentSessionsView from '@/components/issue/AgentSessionsView.vue'
+import CheckRunPanel from '@/components/issue/CheckRunPanel.vue'
 import ContributionsView from '@/components/issue/ContributionsView.vue'
 import QuestionnaireTimelineCard from '@/components/issue/QuestionnaireTimelineCard.vue'
 import { Badge } from '@/components/ui/badge'
@@ -1190,6 +1192,20 @@ onUnmounted(() => {
             </CardContent>
           </Card>
 
+          <!-- CI Checks: issue-level workflow check status -->
+          <Card class="gap-0 py-0">
+            <CardContent class="space-y-3 p-4">
+              <p class="flex items-center gap-1 text-xs text-muted-foreground">
+                <Play class="size-3" />
+                {{ t('issue.checks.title') }}
+              </p>
+              <CheckRunPanel
+                :owner="owner"
+                :name="name"
+                :issue-number="number"
+              />
+            </CardContent>
+          </Card>
 
           <Card class="gap-0 py-0">
             <CardContent class="space-y-3 p-4">

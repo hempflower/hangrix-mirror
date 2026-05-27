@@ -67,6 +67,10 @@ const (
 	// is woken automatically via Spawner.OnTrigger with a targeted
 	// RoleKey — no trigger config needed.
 	CauseKindQuestionnaireAnswered CauseKind = "questionnaire_answered"
+
+	// CauseKindCIStatusChanged — a CI workflow run's status changed
+	// (e.g. pending → running → success/failure).
+	CauseKindCIStatusChanged CauseKind = "ci_status_changed"
 )
 
 // TriggerInput is the payload Spawner.OnTrigger consumes. It carries

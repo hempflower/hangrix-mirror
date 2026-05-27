@@ -233,6 +233,23 @@ func (r *PostgresRepo) ListRunsByRepo(ctx context.Context, repoID int64, workflo
 	return runs, rows[0].TotalCount, nil
 }
 
+// ListRunsByRepoAndCommitSHA returns workflow runs for a repo matching the
+// given commit SHA.
+func (r *PostgresRepo) ListRunsByRepoAndCommitSHA(ctx context.Context, repoID int64, commitSHA string) ([]*domain.WorkflowRun, error) {
+	rows, err := r.q.ListWorkflowRunsByRepoAndCommitSHA(ctx, workflowdb.ListWorkflowRunsByRepoAndCommitSHAParams{
+		RepoID:    repoID,
+		CommitSha: commitSHA,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list workflow runs by repo and commit sha: %w", err)
+	}
+	runs := make([]*domain.WorkflowRun, len(rows))
+	for i, row := range rows {
+		runs[i] = rowToRun(&row)
+	}
+	return runs, nil
+}
+
 // MarkRunStarted transitions a run from pending to running.
 func (r *PostgresRepo) MarkRunStarted(ctx context.Context, id int64) error {
 	err := r.q.MarkWorkflowRunStarted(ctx, id)

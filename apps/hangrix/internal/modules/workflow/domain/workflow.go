@@ -274,6 +274,10 @@ type Store interface {
 	// workflowName filters to a specific workflow (empty = all).
 	ListRunsByRepo(ctx context.Context, repoID int64, workflowName string, offset, limit int32) ([]*WorkflowRun, int64, error)
 
+	// ListRunsByRepoAndCommitSHA returns workflow runs for a repo matching
+	// the given commit SHA, ordered by created_at DESC.
+	ListRunsByRepoAndCommitSHA(ctx context.Context, repoID int64, commitSHA string) ([]*WorkflowRun, error)
+
 	// MarkRunStarted transitions a run from pending to running.
 	MarkRunStarted(ctx context.Context, id int64) error
 
@@ -355,6 +359,36 @@ type WorkflowTokenValidator interface {
 	// provenance tracking. Callers that record side effects (e.g. release writes)
 	// should use this to attribute the action to the correct workflow actor.
 	ValidateWorkflowTokenWithActor(ctx context.Context, token string) (repoID int64, actor actor.Ref, err error)
+}
+
+
+// RunStatusObserver is the cross-module interface for consumers that
+// need to react to workflow run status transitions (pending → running,
+// running → success/failed/cancelled). Implementations are called
+// synchronously after the transition is persisted; they must not block
+// or error (best-effort side effect only).
+type RunStatusObserver interface {
+	// OnRunStatusChanged is called after a workflow run's status has
+	// changed. oldStatus is the previous status; run carries the
+	// updated state (including the new status).
+	OnRunStatusChanged(ctx context.Context, oldStatus RunStatus, run *WorkflowRun) error
+}
+
+// CheckItem is a single CI check status entry returned to agent-facing tools.
+type CheckItem struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	RunID      int64  `json:"run_id"`
+	URL        string `json:"url,omitempty"`
+}
+
+// CheckReader is the cross-module interface that allows the
+// platform_api module to list CI checks for an issue's commit.
+type CheckReader interface {
+	// ListChecksByCommit returns workflow runs (checks) for the given repo
+	// and commit SHA, ordered by newest first.
+	ListChecksByCommit(ctx context.Context, repoID int64, commitSHA string) ([]CheckItem, error)
 }
 
 var (
