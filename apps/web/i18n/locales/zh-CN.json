@@ -1214,5 +1214,12 @@
       "commitPushed": "push · {sha}",
       "reviewVote": "review vote #{id}"
     }
+  },
+  "actor": {
+    "notFound": "未找到 Actor",
+    "loadFailed": "加载 Actor 失败",
+    "displayName": "显示名称",
+    "recentIssues": "最近议题",
+    "recentContributions": "最近贡献"
   }
 }
