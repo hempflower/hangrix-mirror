@@ -90,6 +90,17 @@ export interface WorkflowJobLogsResp {
   total: number
 }
 
+/** CheckItem is a single CI check status entry, as returned by the
+ *  issue-level checks endpoint (GET /api/repos/{owner}/{name}/issues/{n}/checks).
+ *  Kept in sync with apps/hangrix/internal/modules/workflow/domain/workflow.go. */
+export interface CheckItem {
+  name: string
+  status: string // "pending" | "running" | "completed"
+  conclusion: string // "" | "success" | "failure" | "cancelled"
+  run_id: number
+  url?: string
+}
+
 export interface WorkflowStep {
   id?: string
   name: string

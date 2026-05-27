@@ -1202,8 +1202,7 @@ onUnmounted(() => {
               <CheckRunPanel
                 :owner="owner"
                 :name="name"
-                :branch-ref="issue.branch_name ? `refs/heads/${issue.branch_name}` : null"
-                :head-sha="issue.head_sha || null"
+                :issue-number="number"
               />
             </CardContent>
           </Card>

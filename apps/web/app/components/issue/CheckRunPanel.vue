@@ -9,52 +9,32 @@ import {
 } from 'lucide-vue-next'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
-import type { WorkflowRun, WorkflowRunStatus } from '~/types/workflow'
-import { relativeTime } from '~/utils/time'
+import type { CheckItem } from '~/types/workflow'
 
 const props = defineProps<{
   owner: string
   name: string
-  /** Branch ref to filter workflow runs by (e.g. "refs/heads/issue-5/web/foo") */
-  branchRef?: string | null
-  /** Commit SHA to filter by (preferred when available) */
-  headSha?: string | null
+  issueNumber: number
 }>()
 
 const { t } = useI18n()
 
-const runs = ref<WorkflowRun[]>([])
+const items = ref<CheckItem[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
-
-const shortRef = computed(() => {
-  const r = props.branchRef ?? ''
-  return r.replace(/^refs\/heads\//, '')
-})
 
 async function load() {
   loading.value = true
   error.value = null
   try {
-    const params: Record<string, string> = { limit: '30' }
-    const res = await $fetch<{ items: WorkflowRun[]; total: number }>(
-      `/api/repos/${props.owner}/${props.name}/workflow-runs`,
-      { credentials: 'include', query: params },
+    const res = await $fetch<{ items: CheckItem[] }>(
+      `/api/repos/${props.owner}/${props.name}/issues/${props.issueNumber}/checks`,
+      { credentials: 'include' },
     )
-    let items = res.items ?? []
-
-    // Filter: prefer head_sha, fall back to branch ref name
-    if (props.headSha) {
-      items = items.filter((r) => r.commit_sha === props.headSha)
-    } else if (props.branchRef) {
-      const branch = shortRef.value
-      items = items.filter((r) => r.ref === branch)
-    }
-
-    runs.value = items
+    items.value = res.items ?? []
   } catch (e: any) {
     error.value = e?.data?.error ?? t('issue.contributions.checksLoadFailed')
-    runs.value = []
+    items.value = []
   } finally {
     loading.value = false
   }
@@ -86,38 +66,27 @@ onMounted(() => {
 
 onUnmounted(() => stopPoll())
 
-// Re-load when filter props change
+// Re-load when issueNumber changes
 watch(
-  () => [props.branchRef, props.headSha],
+  () => props.issueNumber,
   () => { load() },
 )
 
 // --- helpers ---
 
-function rel(s?: string | null) {
-  return relativeTime(s ?? null, t)
+/** Derive a combined status from status + conclusion fields. */
+function effectiveStatus(item: CheckItem): 'success' | 'failed' | 'running' | 'pending' | 'cancelled' {
+  if (item.status === 'completed') {
+    if (item.conclusion === 'success') return 'success'
+    if (item.conclusion === 'failure') return 'failed'
+    if (item.conclusion === 'cancelled') return 'cancelled'
+    return 'pending'
+  }
+  if (item.status === 'running') return 'running'
+  return 'pending'
 }
 
-function shortSha(s: string) {
-  return s ? s.slice(0, 7) : ''
-}
-
-function duration(started: string | null, finished: string | null): string {
-  if (!started) return '—'
-  const start = Date.parse(started)
-  if (Number.isNaN(start)) return '—'
-  const end = finished ? Date.parse(finished) : Date.now()
-  if (Number.isNaN(end)) return '—'
-  const diffSec = Math.max(0, Math.round((end - start) / 1000))
-  if (diffSec < 60) return `${diffSec}s`
-  const min = Math.floor(diffSec / 60)
-  const sec = diffSec % 60
-  if (min < 60) return `${min}m ${sec}s`
-  const hr = Math.floor(min / 60)
-  return `${hr}h ${Math.floor(min % 60)}m`
-}
-
-function statusIcon(s: WorkflowRunStatus) {
+function statusIcon(s: ReturnType<typeof effectiveStatus>) {
   switch (s) {
     case 'success': return CheckCircle2
     case 'failed': return XCircle
@@ -127,7 +96,7 @@ function statusIcon(s: WorkflowRunStatus) {
   }
 }
 
-function statusIconClass(s: WorkflowRunStatus): string {
+function statusIconClass(s: ReturnType<typeof effectiveStatus>): string {
   switch (s) {
     case 'success': return 'text-emerald-500'
     case 'failed': return 'text-red-500'
@@ -137,7 +106,7 @@ function statusIconClass(s: WorkflowRunStatus): string {
   }
 }
 
-function statusBgClass(s: WorkflowRunStatus): string {
+function statusBgClass(s: ReturnType<typeof effectiveStatus>): string {
   switch (s) {
     case 'success': return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
     case 'failed': return 'bg-red-500/15 text-red-700 dark:text-red-300'
@@ -154,8 +123,8 @@ const summary = computed(() => {
   let running = 0
   let pending = 0
   let cancelled = 0
-  for (const r of runs.value) {
-    switch (r.status) {
+  for (const item of items.value) {
+    switch (effectiveStatus(item)) {
       case 'success': success++; break
       case 'failed': failed++; break
       case 'running': running++; break
@@ -167,10 +136,10 @@ const summary = computed(() => {
 })
 
 const overallVerdict = computed<'success' | 'failure' | 'running' | 'pending' | 'none'>(() => {
-  if (runs.value.length === 0) return 'none'
+  if (items.value.length === 0) return 'none'
   if (summary.value.failed > 0) return 'failure'
   if (summary.value.running > 0 || summary.value.pending > 0) return 'running'
-  if (summary.value.success === runs.value.length) return 'success'
+  if (summary.value.success === items.value.length) return 'success'
   return 'pending'
 })
 </script>
@@ -193,7 +162,7 @@ const overallVerdict = computed<'success' | 'failure' | 'running' | 'pending' | 
     </Card>
 
     <!-- Empty -->
-    <Card v-else-if="runs.length === 0" class="gap-0 py-0">
+    <Card v-else-if="items.length === 0" class="gap-0 py-0">
       <CardContent class="flex items-center gap-2 p-4 text-sm text-muted-foreground">
         <Circle class="size-4" />
         {{ t('issue.contributions.checksEmpty') }}
@@ -246,43 +215,52 @@ const overallVerdict = computed<'success' | 'failure' | 'running' | 'pending' | 
         </span>
       </div>
 
-      <!-- Run list -->
+      <!-- Check list -->
       <Card class="gap-0 py-0">
         <CardContent class="p-0">
           <ul class="divide-y">
-            <li v-for="run in runs" :key="run.id">
+            <li v-for="item in items" :key="item.run_id">
               <NuxtLink
-                :to="`/${owner}/${name}/workflows/${run.id}`"
+                v-if="item.run_id"
+                :to="`/${owner}/${name}/workflows/${item.run_id}`"
                 class="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/30 transition-colors"
               >
                 <!-- Status icon -->
                 <component
-                  :is="statusIcon(run.status)"
-                  :class="statusIconClass(run.status)"
+                  :is="statusIcon(effectiveStatus(item))"
+                  :class="statusIconClass(effectiveStatus(item))"
                   class="size-4 shrink-0"
                 />
 
                 <!-- Name + meta -->
                 <div class="min-w-0 flex-1 space-y-0.5">
                   <div class="flex flex-wrap items-center gap-2">
-                    <span class="text-sm font-medium truncate">{{ run.workflow_name }}</span>
-                    <Badge :class="statusBgClass(run.status)" variant="secondary" class="text-xs">
-                      {{ t(`repo.workflows.status.${run.status}`) }}
+                    <span class="text-sm font-medium truncate">{{ item.name }}</span>
+                    <Badge :class="statusBgClass(effectiveStatus(item))" variant="secondary" class="text-xs">
+                      {{ item.status === 'completed' ? item.conclusion || item.status : item.status }}
                     </Badge>
                   </div>
-                  <p class="text-xs text-muted-foreground">
-                    {{ t(`repo.workflows.event.${run.event_name}`) }}
-                    <span class="mx-1">·</span>
-                    <code class="font-mono text-[10px]">{{ shortSha(run.commit_sha) }}</code>
-                    <template v-if="run.started_at">
-                      <span class="mx-1">·</span>
-                      {{ duration(run.started_at, run.finished_at) }}
-                    </template>
-                    <span class="mx-1">·</span>
-                    {{ rel(run.created_at) }}
-                  </p>
                 </div>
               </NuxtLink>
+              <!-- Non-linkable check (no run_id) -->
+              <div
+                v-else
+                class="flex items-center gap-3 px-4 py-2.5"
+              >
+                <component
+                  :is="statusIcon(effectiveStatus(item))"
+                  :class="statusIconClass(effectiveStatus(item))"
+                  class="size-4 shrink-0"
+                />
+                <div class="min-w-0 flex-1 space-y-0.5">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-sm font-medium truncate">{{ item.name }}</span>
+                    <Badge :class="statusBgClass(effectiveStatus(item))" variant="secondary" class="text-xs">
+                      {{ item.status === 'completed' ? item.conclusion || item.status : item.status }}
+                    </Badge>
+                  </div>
+                </div>
+              </div>
             </li>
           </ul>
         </CardContent>

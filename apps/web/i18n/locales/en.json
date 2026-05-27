@@ -972,10 +972,9 @@
         "comments": "Comments",
         "checks": "Checks"
       },
-      "checksPlaceholder": "CI checks coming soon",
       "checksLoading": "Loading checks…",
       "checksLoadFailed": "Failed to load checks",
-      "checksEmpty": "No CI checks yet — workflow runs matching this contribution will appear here.",
+      "checksEmpty": "No CI checks for this issue yet.",
       "checksAllPassed": "All checks passed",
       "checksSomeFailed": "Some checks failed",
       "checksRunning": "Checks in progress",
