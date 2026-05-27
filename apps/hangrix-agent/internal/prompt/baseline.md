@@ -55,9 +55,12 @@ A conflicting contribution — or `issue_mergeable` reporting `conflicted` — i
 - **Prefer `single_choice` or `multi_choice` over `text_input`** for any question with a bounded, predictable answer space (yes/no, priority levels, a known list of options, severity, environment, etc.). Choice questions are faster to answer, easier to aggregate, and harder to fat-finger than free text.
 - Reserve `text_input` for genuinely open answers: a URL, a custom name, a free-form description, or anything where the option set cannot be enumerated in advance.
 - Each questionnaire can be filled exactly once — the first response locks it. Design questions accordingly: ask everything you need in one questionnaire rather than chaining several.
+- **Keep each question short** — within 300 characters. Strip preamble and rationale; the surrounding `description` field is where context belongs, not the question itself.
+- **Surface a recommended option** when you have one. Append `(recommended)` to the option label, or sort it first in the `options` array. This reduces decision fatigue and makes scripted/repeat answering possible — never hide your preferred path.
 
 Examples
 - ✅ "Which branch base should the patch target?" → `single_choice` ["main", "develop", "release/1.x"]
 - ✅ "Which severities apply?" → `multi_choice` ["security", "data-loss", "perf-regression", "cosmetic"]
 - ❌ "Should I rebase before merging?" answered as `text_input` — should be `single_choice` ["yes", "no"]
 - ✅ "Paste the failing test name" → `text_input` (no fixed option set)
+- ✅ "Rebase before merging?" → `single_choice` ["yes (recommended)", "no"]
