@@ -739,7 +739,7 @@ func (s *APIService) GetMergeability(ctx context.Context, p *apidomain.Actor) (a
 			hint = block
 			for _, t := range incTodos {
 				incompleteTodos = append(incompleteTodos, apiTodo{
-					ID:      int64(t["id"].(float64)),
+					ID:      t["id"].(int64),
 					Content: t["content"].(string),
 					Status:  t["status"].(string),
 				})
