@@ -978,6 +978,7 @@
     },
     "questionnaire": {
       "title": "Questionnaire",
+      "asked": "asked",
       "empty": "No questionnaires yet.",
       "submit": "Submit",
       "submitting": "Submitting…",
