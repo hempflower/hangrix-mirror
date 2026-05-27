@@ -13,6 +13,7 @@ import {
   GitBranch,
   GitCommit,
   GitMerge,
+  LayoutGrid,
   ListTodo,
   Lock,
   Play,
@@ -27,6 +28,7 @@ import ActorBadge from '@/components/ActorBadge.vue'
 import AgentSessionsView from '@/components/issue/AgentSessionsView.vue'
 import CheckRunPanel from '@/components/issue/CheckRunPanel.vue'
 import ContributionsView from '@/components/issue/ContributionsView.vue'
+import PlanView from '@/components/issue/PlanView.vue'
 import QuestionnaireTimelineCard from '@/components/issue/QuestionnaireTimelineCard.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -163,13 +165,13 @@ const actionError = ref<string | null>(null)
 const actionInfo = ref<string | null>(null)
 const actionSubIssues = ref<OpenDescendant[]>([])
 
-type IssueTab = 'conversation' | 'commits' | 'diff' | 'contributions' | 'agents'
+type IssueTab = 'conversation' | 'commits' | 'diff' | 'contributions' | 'agents' | 'plan'
 
 // tab state is mirrored into ?tab= so the URL is shareable / refresh-stable.
 // `conversation` is the implicit default — we drop the query key entirely
 // when it's selected so deep links to "/issues/N" stay clean.
 function parseTab(raw: unknown): IssueTab {
-  if (raw === 'commits' || raw === 'diff' || raw === 'contributions' || raw === 'agents') return raw
+  if (raw === 'commits' || raw === 'diff' || raw === 'contributions' || raw === 'agents' || raw === 'plan') return raw
   return 'conversation'
 }
 const tab = ref<IssueTab>(parseTab(route.query.tab))
@@ -782,6 +784,11 @@ onUnmounted(() => {
   <Bot class="size-4" />
   {{ t('issue.tabs.agents') }}
   </TabsTrigger>
+
+  <TabsTrigger v-if="children.length > 0" value="plan">
+  <LayoutGrid class="size-4" />
+  {{ t('issue.tabs.plan') }}
+  </TabsTrigger>
   </TabsList>
   </div>
   </div>
@@ -1018,6 +1025,14 @@ onUnmounted(() => {
                 :issue-number="Number(number)"
               />
     </TabsContent>
+
+            <TabsContent value="plan" class="space-y-4">
+              <PlanView
+                :owner="owner"
+                :name="name"
+                :issue-number="Number(number)"
+              />
+            </TabsContent>
   </div>
 
   <aside

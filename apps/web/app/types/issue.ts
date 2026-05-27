@@ -320,3 +320,34 @@ export interface TodoSummary {
   all_done: boolean
 }
 
+// --- Plan View ---
+export interface PlanNode {
+  number: number
+  title: string
+  state: IssueState
+  actor?: ActorRef
+  agent_role: string
+  review_status?: ReviewStatus | null
+  todo_summary?: TodoSummary | null
+  depends_on: number[]
+  blocked: boolean
+  ready: boolean
+  children: PlanNode[]
+}
+
+export interface PlanRollup {
+  total_leaves: number
+  merged: number
+  in_review: number
+  in_progress: number
+  open: number
+  closed: number
+}
+
+export interface PlanResp {
+  root: PlanNode
+  rollup: PlanRollup
+  ready: number[]
+  heuristic: boolean
+}
+
