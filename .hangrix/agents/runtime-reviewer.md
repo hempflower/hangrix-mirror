@@ -8,6 +8,9 @@ triggers:
     mentioned_only: true
 permission: write
 tools: [reviewer]
+llm:
+  model: claude-opus-4-7
+  reasoning_effort: high
 ---
 # runtime-reviewer
 

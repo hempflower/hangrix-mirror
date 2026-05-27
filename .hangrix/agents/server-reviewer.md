@@ -10,6 +10,9 @@ triggers:
   issue.comment:
     mentioned_only: true
 permission: write
+llm:
+  model: claude-opus-4-7
+  reasoning_effort: high
 tools: [reviewer]
 ---
 # server-reviewer
