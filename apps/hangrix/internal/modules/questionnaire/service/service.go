@@ -62,39 +62,46 @@ func (s *Service) GetByIssue(ctx context.Context, issueID int64) ([]*domain.Ques
 }
 
 func (s *Service) Close(ctx context.Context, id int64, reason string) (*domain.Questionnaire, error) {
+	// Idempotency guard: if already closed, skip the UPDATE and return
+	// the row unchanged to avoid rewriting closed_at.
+	qn, err := s.store.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if qn.Status != domain.StatusOpen {
+		return qn, nil
+	}
 	return s.store.Close(ctx, id, reason)
 }
 
 // ---- AnswerStore delegation ---- //
 
 func (s *Service) UpsertAnswer(ctx context.Context, qID, userID int64, perQ map[int64]domain.AnswerValue) (*domain.Answer, *domain.Questionnaire, error) {
-	// Load questionnaire to validate answers.
+	// Load questionnaire for fast-path status check and answer validation.
 	qn, err := s.store.Get(ctx, qID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load questionnaire for validation: %w", err)
 	}
 
+	// Fast-path: reject immediately if already closed. Correctness is
+	// held by the infra-layer SELECT FOR UPDATE; this is a UX optimisation.
 	if qn.Status != domain.StatusOpen {
-		return nil, nil, &ValidationError{
-			Errors: []domain.FieldError{{Field: "answers", Code: "questionnaire_closed"}},
-		}
+		return nil, nil, domain.ErrQuestionnaireLocked
 	}
 
 	if errs := domain.ValidateAnswer(qn.Questions, perQ); len(errs) > 0 {
 		return nil, nil, &ValidationError{Errors: errs}
 	}
 
-	answer, err := s.answerStore.UpsertAnswer(ctx, qID, userID, perQ)
+	answer, closedQn, err := s.answerStore.InsertFirstAnswer(ctx, qID, userID, perQ)
 	if err != nil {
-		if errors.Is(err, domain.ErrAlreadyAnswered) {
-			return nil, nil, &ValidationError{
-				Errors: []domain.FieldError{{Field: "answers", Code: "already_submitted", Message: "you have already submitted this questionnaire"}},
-			}
+		if errors.Is(err, domain.ErrQuestionnaireLocked) {
+			return nil, nil, err
 		}
 		return nil, nil, err
 	}
 
-	return answer, qn, nil
+	return answer, closedQn, nil
 }
 
 func (s *Service) GetUserAnswer(ctx context.Context, qID, userID int64) (*domain.Answer, error) {

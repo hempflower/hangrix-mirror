@@ -147,7 +147,15 @@ type Store interface {
 
 // AnswerStore manages answer persistence.
 type AnswerStore interface {
-	UpsertAnswer(ctx context.Context, qID, userID int64, perQ map[int64]AnswerValue) (*Answer, error)
+	// InsertFirstAnswer atomically inserts the answer AND closes the
+	// questionnaire, but ONLY if the questionnaire is currently open.
+	// Returns (answer, closedQuestionnaire, nil) on success. Returns
+	// (nil, nil, ErrQuestionnaireLocked) if the questionnaire was
+	// already closed (race-safe — the check + insert + close run in
+	// one transaction).
+	InsertFirstAnswer(ctx context.Context, qID, userID int64,
+		perQ map[int64]AnswerValue) (*Answer, *Questionnaire, error)
+
 	GetUserAnswer(ctx context.Context, qID, userID int64) (*Answer, error)
 	ListAnswers(ctx context.Context, qID int64) ([]*Answer, error)
 	CountAnswers(ctx context.Context, qID int64) (int64, error)
@@ -356,9 +364,11 @@ func (e FieldError) Error() string {
 	return s
 }
 
-// ErrAlreadyAnswered is returned by AnswerStore when the user has already
-// submitted an answer for the given questionnaire (ON CONFLICT DO NOTHING).
-var ErrAlreadyAnswered = errors.New("questionnaire already answered by this user")
+// ErrQuestionnaireLocked is returned by Service.UpsertAnswer when the
+// questionnaire is no longer accepting submissions — either because
+// it was explicitly closed, or because a prior submission already
+// locked it. Handlers map this to HTTP 409 Conflict.
+var ErrQuestionnaireLocked = errors.New("questionnaire is locked and no longer accepting responses")
 
 // ---- Helpers ---- //
 

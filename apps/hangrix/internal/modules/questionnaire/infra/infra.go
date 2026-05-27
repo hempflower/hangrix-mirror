@@ -7,12 +7,10 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"strconv"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
@@ -163,26 +161,55 @@ func (s *PostgresStore) Close(ctx context.Context, id int64, reason string) (*do
 
 // ---- AnswerStore ---- //
 
-func (s *PostgresStore) UpsertAnswer(ctx context.Context, qID, userID int64, perQ map[int64]domain.AnswerValue) (*domain.Answer, error) {
-	answersJSON, err := json.Marshal(answerPerQuestionToJSON(perQ))
+func (s *PostgresStore) InsertFirstAnswer(ctx context.Context, qID, userID int64, perQ map[int64]domain.AnswerValue) (*domain.Answer, *domain.Questionnaire, error) {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("marshal answers: %w", err)
+		return nil, nil, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := s.q.WithTx(tx)
+
+	// 1. Lock the questionnaire row to serialise concurrent submitters.
+	statusRow, err := qtx.GetStatusForUpdate(ctx, qID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("lock questionnaire: %w", err)
+	}
+	if domain.Status(statusRow) != domain.StatusOpen {
+		return nil, nil, domain.ErrQuestionnaireLocked
 	}
 
-	row, err := s.q.UpsertAnswer(ctx, questionnairedb.UpsertAnswerParams{
+	// 2. Insert the answer.
+	answersJSON, err := json.Marshal(answerPerQuestionToJSON(perQ))
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal answers: %w", err)
+	}
+	answerRow, err := qtx.InsertAnswer(ctx, questionnairedb.InsertAnswerParams{
 		QuestionnaireID: qID,
 		UserID:          userID,
 		Answers:         answersJSON,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, domain.ErrAlreadyAnswered
-		}
-		return nil, fmt.Errorf("upsert answer: %w", err)
+		return nil, nil, fmt.Errorf("insert answer: %w", err)
 	}
 
-	a := answerFromRow(row)
-	return &a, nil
+	// 3. Flip the questionnaire to closed in the same tx.
+	// AutoCloseQuestionnaire only updates when status='open', so a
+	// concurrent explicit close (already processed) doesn't get clobbered.
+	qnRow, err := qtx.AutoCloseQuestionnaire(ctx, questionnairedb.AutoCloseQuestionnaireParams{
+		ID:           qID,
+		ClosedReason: "",
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("auto-close questionnaire: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, fmt.Errorf("commit insert-first-answer: %w", err)
+	}
+
+	a := answerFromRow(answerRow)
+	qn := questionnaireFromRow(qnRow)
+	return &a, &qn, nil
 }
 
 func (s *PostgresStore) GetUserAnswer(ctx context.Context, qID, userID int64) (*domain.Answer, error) {
