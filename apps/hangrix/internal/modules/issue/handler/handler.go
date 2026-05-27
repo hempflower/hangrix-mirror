@@ -589,9 +589,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 // logged inside the spawner.
 func (h *Handler) fireIssueOpened(ctx context.Context, repoID, issueNumber, actorID int64) {
 	if h.spawner == nil {
+		log.Printf("issue: fireIssueOpened repo=%d issue=%d: Spawner is nil — event not fired", repoID, issueNumber)
 		return
 	}
-	if _, err := h.spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
+	if spawned, err := h.spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
 		CauseKind:   agentsessiondomain.CauseKindIssueOpened,
 		CauseID:     "",
@@ -600,6 +601,8 @@ func (h *Handler) fireIssueOpened(ctx context.Context, repoID, issueNumber, acto
 		ActorID:     actorID,
 	}); err != nil {
 		log.Printf("issue: fireIssueOpened repo=%d issue=%d: %v", repoID, issueNumber, err)
+	} else {
+		log.Printf("issue: fireIssueOpened repo=%d issue=%d → %d sessions spawned", repoID, issueNumber, len(spawned))
 	}
 }
 
