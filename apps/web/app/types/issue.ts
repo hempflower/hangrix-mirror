@@ -66,6 +66,7 @@ export type IssueEventKind =
   | 'contribution_merged'
   | 'contribution_rejected'
   | 'contribution_closed'
+  | 'questionnaire_posted'
 
 export interface IssueEvent {
   id: number

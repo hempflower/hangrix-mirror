@@ -13,7 +13,8 @@ export function useQuestionnaire(
   name: () => string,
   issueNumber: () => number,
 ) {
-  const questionnaires = useState<Questionnaire[]>('q-list', () => [])
+  const stateKey = `q-list-${issueNumber()}`
+  const questionnaires = useState<Questionnaire[]>(stateKey, () => [])
   const loading = ref(false)
   const error = ref<string | null>(null)
   const locked = ref(false)
