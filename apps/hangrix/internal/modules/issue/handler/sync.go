@@ -73,10 +73,14 @@ func (h *Handler) SyncIssueBranch(ctx context.Context, repo *repodomain.Repo, fs
 		// Spawned sessions must reference a real users(id) for created_by
 		// (agent_sessions.created_by FKs users(id) and rejects 0). When no
 		// human pushed (agent-driven or background sync), fall back to the
-		// issue's author.
+		// issue's author. For agent-created issues (AuthorID == 0), use the
+		// repo owner as the final fallback when the owner is a user.
 		spawnActor := actorID
 		if spawnActor == 0 {
 			spawnActor = iss.AuthorID
+		}
+		if spawnActor == 0 && repo.OwnerKind == repodomain.OwnerKindUser {
+			spawnActor = repo.OwnerID
 		}
 		h.fireCommitPushed(ctx, repo, fsPath, iss, oldRef, headSHA, raw, spawnActor)
 	}

@@ -340,14 +340,19 @@ func (s *APIService) CreateIssue(ctx context.Context, p *apidomain.Actor, title,
 	// wakes on its own. Failures don't block issue creation — the
 	// operator repairs the host yaml then nudges the issue. Mirrors the
 	// issue handler's fireIssueOpened().
+	//
+	// agent_sessions.created_by FKs users(id) and rejects 0, so when an
+	// agent creates the issue (no human actor), fall back to the calling
+	// session's created_by — the same pattern used by fanCommentMentions.
 	if s.r.deps.Spawner != nil {
+		actorID := p.Session.CreatedBy
 		if spawned, err := s.r.deps.Spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
 			Trigger:     agentsconfig.TriggerIssueOpened,
 			CauseKind:   agentsessiondomain.CauseKindIssueOpened,
 			CauseID:     "",
 			RepoID:      scope.repo.ID,
 			IssueNumber: int32(iss.Number),
-			ActorID:     0, // agent-created issues have no user actor
+			ActorID:     actorID,
 		}); err != nil {
 			log.Printf("platform_api: fire issue.opened repo=%d issue=%d: %v", scope.repo.ID, iss.Number, err)
 		} else {
