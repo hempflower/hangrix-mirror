@@ -2,10 +2,13 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 )
 
@@ -171,6 +174,25 @@ func v1CreateComment(api AgentAPI) http.HandlerFunc {
 			WriteFieldError(w, http.StatusUnprocessableEntity, "body is required",
 				apidomain.FieldError{Field: "body", Code: "missing"},
 			)
+			return
+		}
+		if err := domain.ValidateCommentBody(req.Body); err != nil {
+			var tooLong *domain.ErrCommentBodyTooLong
+			if errors.As(err, &tooLong) {
+				splitHint := fmt.Sprintf(
+					"body has %d Unicode characters; the maximum is %d. "+
+						"Split the content into multiple `issue_comment` calls, "+
+						"each ≤%d characters. "+
+						"Prefix each segment with `[1/N]`, `[2/N]`, … so readers can follow the sequence.",
+					tooLong.Runes, tooLong.Limit, tooLong.Limit,
+				)
+				WriteFieldError(w, http.StatusUnprocessableEntity,
+					fmt.Sprintf("comment body too long: %d runes (limit %d)", tooLong.Runes, tooLong.Limit),
+					apidomain.FieldError{Resource: "comment", Field: "body", Code: "too_long", Message: splitHint},
+				)
+				return
+			}
+			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		comment, err := api.CreateComment(r.Context(), p, req.Body, req.FilePath, req.Line)

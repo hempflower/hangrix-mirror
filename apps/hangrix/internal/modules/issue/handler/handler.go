@@ -992,6 +992,33 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "body is required")
 		return
 	}
+	if err := domain.ValidateCommentBody(body); err != nil {
+		var tooLong *domain.ErrCommentBodyTooLong
+		if errors.As(err, &tooLong) {
+			splitHint := fmt.Sprintf(
+				"body has %d Unicode characters; the maximum is %d. "+
+					"Split the content into multiple issue_comment calls, "+
+					"each ≤%d characters. "+
+					"Prefix each segment with [1/N], [2/N], … so readers can follow the sequence.",
+				tooLong.Runes, tooLong.Limit, tooLong.Limit,
+			)
+			httpx.WriteJSON(w, http.StatusUnprocessableEntity, map[string]any{
+				"message":           fmt.Sprintf("comment body too long: %d runes (limit %d)", tooLong.Runes, tooLong.Limit),
+				"documentation_url": "https://hangrix.labx.ink/docs/api",
+				"errors": []map[string]any{
+					{
+						"resource": "comment",
+						"field":    "body",
+						"code":     "too_long",
+						"message":  splitHint,
+					},
+				},
+			})
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if req.Line < 0 {
 		req.Line = 0
 	}

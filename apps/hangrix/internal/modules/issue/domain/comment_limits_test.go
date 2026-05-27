@@ -1,0 +1,82 @@
+package domain
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestValidateCommentBody_WithinLimit(t *testing.T) {
+	// 4000 ASCII runes → should pass.
+	body := strings.Repeat("x", 4000)
+	if err := ValidateCommentBody(body); err != nil {
+		t.Fatalf("ValidateCommentBody(4000 runes) = %v, want nil", err)
+	}
+}
+
+func TestValidateCommentBody_Exactly4000Runes(t *testing.T) {
+	// Exactly at limit.
+	body := strings.Repeat("a", MaxCommentBodyRunes)
+	if err := ValidateCommentBody(body); err != nil {
+		t.Fatalf("ValidateCommentBody(exactly %d runes) = %v, want nil", MaxCommentBodyRunes, err)
+	}
+}
+
+func TestValidateCommentBody_ExceedsLimit(t *testing.T) {
+	// 4001 ASCII runes → should fail.
+	body := strings.Repeat("b", 4001)
+	err := ValidateCommentBody(body)
+	if err == nil {
+		t.Fatal("ValidateCommentBody(4001 runes) = nil, want error")
+	}
+	tooLong, ok := err.(*ErrCommentBodyTooLong)
+	if !ok {
+		t.Fatalf("ValidateCommentBody returned %T, want *ErrCommentBodyTooLong", err)
+	}
+	if tooLong.Runes != 4001 {
+		t.Errorf("Runes = %d, want 4001", tooLong.Runes)
+	}
+	if tooLong.Limit != MaxCommentBodyRunes {
+		t.Errorf("Limit = %d, want %d", tooLong.Limit, MaxCommentBodyRunes)
+	}
+}
+
+func TestValidateCommentBody_ChineseCharacters_UnderLimit(t *testing.T) {
+	// 4000 Chinese characters (each 3 bytes in UTF-8, 12000 bytes total).
+	// Should pass because rune count = 4000 ≤ MaxCommentBodyRunes.
+	body := strings.Repeat("中", 4000)
+	if err := ValidateCommentBody(body); err != nil {
+		t.Fatalf("ValidateCommentBody(4000 中) = %v, want nil", err)
+	}
+}
+
+func TestValidateCommentBody_ChineseCharacters_ExceedsLimit(t *testing.T) {
+	// 4001 Chinese characters (12003 bytes) → should fail with rune count 4001.
+	body := strings.Repeat("中", 4001)
+	err := ValidateCommentBody(body)
+	if err == nil {
+		t.Fatal("ValidateCommentBody(4001 中) = nil, want error")
+	}
+	tooLong, ok := err.(*ErrCommentBodyTooLong)
+	if !ok {
+		t.Fatalf("ValidateCommentBody returned %T, want *ErrCommentBodyTooLong", err)
+	}
+	if tooLong.Runes != 4001 {
+		t.Errorf("Runes = %d, want 4001", tooLong.Runes)
+	}
+}
+
+func TestValidateCommentBody_Empty(t *testing.T) {
+	// Empty body is NOT the domain's responsibility — it should pass.
+	if err := ValidateCommentBody(""); err != nil {
+		t.Fatalf("ValidateCommentBody(\"\") = %v, want nil", err)
+	}
+}
+
+func TestErrCommentBodyTooLong_Error(t *testing.T) {
+	e := &ErrCommentBodyTooLong{Runes: 4517, Limit: 4000}
+	got := e.Error()
+	want := "comment body too long: 4517 runes (limit 4000)"
+	if got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
