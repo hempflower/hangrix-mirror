@@ -7,7 +7,7 @@ export interface PlatformSetting {
 }
 
 export interface PlatformSettingsListResp {
-  settings: PlatformSetting[]
+  items: PlatformSetting[]
 }
 
 export interface PlatformSettingPatchReq {

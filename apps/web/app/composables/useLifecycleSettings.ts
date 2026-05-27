@@ -14,7 +14,7 @@ export function useLifecycleSettings() {
       const res = await $fetch<PlatformSettingsListResp>('/api/admin/platform-settings', {
         credentials: 'include',
       })
-      settings.value = res.settings ?? []
+      settings.value = res.items ?? []
     } catch (e: any) {
       error.value = e?.data?.error ?? 'Failed to load lifecycle settings'
     } finally {
@@ -42,15 +42,15 @@ export function useLifecycleSettings() {
   async function patch(key: string, value: string): Promise<boolean> {
     error.value = null
     try {
-      const updated = await $fetch<PlatformSetting>(`/api/admin/platform-settings/${encodeURIComponent(key)}`, {
+      await $fetch(`/api/admin/platform-settings/${encodeURIComponent(key)}`, {
         method: 'PATCH',
         credentials: 'include',
         body: { value },
       })
-      // Update local state with the server response
+      // PATCH returns 204 — update local state from the value we sent
       const idx = settings.value.findIndex(s => s.key === key)
       if (idx !== -1) {
-        settings.value[idx] = updated
+        settings.value[idx] = { ...settings.value[idx]!, value }
       }
       return true
     } catch (e: any) {
