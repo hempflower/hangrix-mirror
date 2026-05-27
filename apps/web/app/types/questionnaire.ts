@@ -108,3 +108,4 @@ export type QuestionnaireErrorCode =
   | 'text_for_choice_question'
   | 'already_submitted'
   | 'questionnaire_closed'
+  | 'questionnaire_locked'

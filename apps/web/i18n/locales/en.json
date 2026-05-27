@@ -1012,6 +1012,7 @@
       "placeholderRequired": "Required",
       "placeholderOptional": "Optional",
       "loginToSubmit": "Sign in to submit your answers.",
+      "locked": "This questionnaire has already been answered and is no longer accepting responses.",
       "error": {
         "loadFailed": "Failed to load questionnaire",
         "submitFailed": "Failed to submit answers"

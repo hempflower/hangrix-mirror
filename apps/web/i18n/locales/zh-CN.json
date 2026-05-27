@@ -1011,6 +1011,7 @@
       "placeholderRequired": "必填",
       "placeholderOptional": "可选",
       "loginToSubmit": "登录后提交答案。",
+      "locked": "本问卷已被回答，不再接受新的提交。",
       "error": {
         "loadFailed": "加载问卷失败",
         "submitFailed": "提交答案失败"

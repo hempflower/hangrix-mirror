@@ -16,6 +16,7 @@ export function useQuestionnaire(
   const questionnaires = useState<Questionnaire[]>('q-list', () => [])
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const locked = ref(false)
 
   const apiBase = computed(() =>
     `/api/repos/${owner()}/${name()}/issues/${issueNumber()}/questionnaires`,
@@ -60,6 +61,7 @@ export function useQuestionnaire(
     answers: SubmitAnswersRequest,
   ): Promise<boolean> {
     error.value = null
+    locked.value = false
     try {
       const res = await $fetch<SubmitAnswersResponse>(
         `${apiBase.value}/${id}/answers`,
@@ -69,11 +71,23 @@ export function useQuestionnaire(
           body: answers,
         },
       )
-      // Refresh the questionnaire so my_submission is populated
+      // Update local questionnaire status from the response immediately,
+      // then re-fetch so my_submission is populated.
+      const q = questionnaires.value.find((q) => q.id === id)
+      if (q) {
+        q.status = res.data.questionnaire_status
+      }
       await loadOne(id)
       return true
     } catch (e: any) {
       const body = e?.data
+      if (body?.error?.code === 'questionnaire_locked') {
+        error.value = body.error.message
+        locked.value = true
+        // Re-fetch so the status flips to closed
+        await loadOne(id)
+        return false
+      }
       if (body?.errors?.length) {
         error.value = body.errors
           .map((err: any) => err.message ?? err.code)
@@ -121,6 +135,7 @@ export function useQuestionnaire(
     questionnaires,
     loading,
     error,
+    locked,
     load,
     loadOne,
     submit,

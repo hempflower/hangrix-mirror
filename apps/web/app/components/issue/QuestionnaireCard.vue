@@ -24,7 +24,7 @@ const emit = defineEmits<{
   closed: []
 }>()
 
-const { submit, loadResults, close: closeApi, error } = useQuestionnaire(
+const { submit, loadResults, close: closeApi, error, locked } = useQuestionnaire(
   () => props.owner,
   () => props.name,
   () => props.issueNumber,
@@ -82,6 +82,9 @@ async function handleSubmit() {
       emit('submitted')
     } else {
       submitError.value = error.value
+      if (locked.value) {
+        emit('submitted') // re-fetch so parent updates status to closed
+      }
     }
   } finally {
     submitting.value = false
@@ -166,7 +169,7 @@ function optionLabel(qid: number, oid: string): string {
           <Button
             v-if="isLoggedIn"
             class="w-full"
-            :disabled="submitting"
+            :disabled="submitting || locked"
             @click="handleSubmit"
           >
             {{ submitting ? t('issue.questionnaire.submitting') : t('issue.questionnaire.submit') }}
@@ -174,7 +177,8 @@ function optionLabel(qid: number, oid: string): string {
           <p v-else class="text-xs text-muted-foreground text-center">
             {{ t('issue.questionnaire.loginToSubmit') }}
           </p>
-          <p v-if="submitError" class="text-xs text-destructive">{{ submitError }}</p>
+          <p v-if="locked" class="text-xs text-destructive">{{ t('issue.questionnaire.locked') }}</p>
+          <p v-else-if="submitError" class="text-xs text-destructive">{{ submitError }}</p>
         </div>
       </template>
 
