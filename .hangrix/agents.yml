@@ -86,6 +86,9 @@ tools:
     - contribution_list
     - contribution_read
     - roster_list
+    - ask_question
+    - check_questionnaire
+    - close_questionnaire
   designer:
     - issue_read
     - issue_read_by_number

@@ -63,13 +63,16 @@ tools:                            # 可复用工具规则：名字 → 平台工
     - issue_edit
     - contribution_*              # 通配：contribution_list/read/set_meta/close 等
     - roster_list
-  reviewer:                       # 审查者：读 + 评论 + 投票
+  reviewer:                       # 审查者：读 + 评论 + 投票 + 问卷
     - issue_read
     - issue_comment
     - issue_review_vote
     - contribution_list
     - contribution_read
     - roster_list
+    - ask_question
+    - check_questionnaire
+    - close_questionnaire
 ```
 
 `.hangrix/agents/backend.md`（一个 role；文件名 `backend` 就是 role key）：
