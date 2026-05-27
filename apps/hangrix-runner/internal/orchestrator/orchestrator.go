@@ -124,12 +124,10 @@ type ExecHandle interface {
 // implementation must be idempotent — calling on an already-gone id is
 // not an error, so the cleanup ACK is idempotent.
 //
-// StopContainer gracefully stops a running container via `docker stop
-// --time=10`. Used by the StopSweeper when the platform flags a session
-// for idle-stop. Must be idempotent: an already-stopped container
-// returns nil (docker stop exits 0 on a stopped container), and a
-// missing container is swallowed to nil (matching RemoveContainer's
-// pattern) so a manual `docker rm` between flag and sweep doesn't wedge.
+// StopContainer is used by the runner's stop sweeper to honour
+// platform-flagged idle stops. The implementation must gracefully stop
+// the container (docker stop --time=10 by default) and be idempotent —
+// calling on an already-gone or already-stopped id is not an error.
 //
 // WorkflowContainer creates a long-lived container (sleep infinity) for
 // workflow job execution without bind-mounting the agent binary or
