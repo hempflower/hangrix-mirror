@@ -42,6 +42,7 @@ type FakeOrchestrator struct {
 
 	lastTask Task
 	removed  []string
+	stopped  []string
 }
 
 func NewFake() *FakeOrchestrator {
@@ -117,6 +118,16 @@ func (h *fakeExecHandle) Wait() (int, error) {
 	return code, nil
 }
 
+// StopContainer records the stopped container ID and always succeeds.
+// Tests that drive the stop sweeper can assert against StoppedContainers
+// afterwards.
+func (f *FakeOrchestrator) StopContainer(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stopped = append(f.stopped, id)
+	return nil
+}
+
 // RemovedContainers returns the ids passed through RemoveContainer in
 // call order. Useful for asserting cleanup-sweeper behaviour in unit
 // tests.
@@ -124,6 +135,14 @@ func (f *FakeOrchestrator) RemovedContainers() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.removed...)
+}
+
+// StoppedContainers returns the ids passed through StopContainer in
+// call order. Useful for asserting stop-sweeper behaviour in unit tests.
+func (f *FakeOrchestrator) StoppedContainers() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.stopped...)
 }
 
 // AgentStdin is the read-side of the runner→agent pipe. Tests treat it

@@ -558,6 +558,20 @@ func (o *DockerOrchestrator) RemoveContainer(ctx context.Context, id string) err
 	return o.run(ctx, "rm", "-f", id)
 }
 
+// StopContainer gracefully stops a container via `docker stop --time=10`.
+// Called by the runner's stop sweeper when the platform flags an idle
+// container should be stopped. Returns nil when the container is already
+// gone so the stop ACK is idempotent.
+func (o *DockerOrchestrator) StopContainer(ctx context.Context, id string) error {
+	if id == "" {
+		return nil
+	}
+	if !o.containerExists(ctx, id) {
+		return nil
+	}
+	return o.run(ctx, "stop", "--time=10", id)
+}
+
 // absMount turns (host, container) into the `-v` arg form docker
 // expects. Trailing :ro flag added when ro is true. host is converted
 // to an absolute path because docker rejects relative bind-mount
