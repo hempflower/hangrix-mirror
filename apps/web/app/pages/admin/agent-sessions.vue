@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { AlertTriangle, ExternalLink, Search } from 'lucide-vue-next'
+import { AlertTriangle, ExternalLink, MoreHorizontal, Search, StopCircle, Trash2 } from 'lucide-vue-next'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -16,8 +16,21 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Separator } from '@/components/ui/separator'
 
-import type { AdminAgentSession, AdminAgentSessionListResp } from '~/types/agent-session'
+import type { AdminAgentSession, AdminAgentSessionListResp, ContainerState } from '~/types/agent-session'
+import { useLifecycleSettings } from '~/composables/useLifecycleSettings'
 
 definePageMeta({ layout: 'admin' })
 
@@ -108,7 +121,144 @@ function onOffsetChange(v: number) {
   load()
 }
 
-onMounted(load)
+// ---- Lifecycle settings ----
+
+const lifecycle = useLifecycleSettings()
+const lifecycleOpen = ref(false)
+
+const SETTING_KEYS = {
+  idleStop: 'lifecycle.idle_stop_threshold',
+  idleRemoval: 'lifecycle.idle_removal_threshold',
+  abandonedCleanup: 'lifecycle.abandoned_cleanup_threshold',
+} as const
+
+const idleStopDraft = ref('')
+const idleRemovalDraft = ref('')
+const abandonedCleanupDraft = ref('')
+const idleStopSaving = ref(false)
+const idleRemovalSaving = ref(false)
+const abandonedCleanupSaving = ref(false)
+
+function syncDrafts() {
+  idleStopDraft.value = lifecycle.getValue(SETTING_KEYS.idleStop)
+  idleRemovalDraft.value = lifecycle.getValue(SETTING_KEYS.idleRemoval)
+  abandonedCleanupDraft.value = lifecycle.getValue(SETTING_KEYS.abandonedCleanup)
+}
+
+async function saveSettingKey(key: string, value: string) {
+  if (!lifecycle.validateDuration(value)) return
+  const ok = await lifecycle.patch(key, value)
+  if (ok) syncDrafts()
+}
+
+async function saveIdleStop() {
+  if (!lifecycle.validateDuration(idleStopDraft.value)) return
+  idleStopSaving.value = true
+  try { await saveSettingKey(SETTING_KEYS.idleStop, idleStopDraft.value) }
+  finally { idleStopSaving.value = false }
+}
+
+async function saveIdleRemoval() {
+  if (!lifecycle.validateDuration(idleRemovalDraft.value)) return
+  idleRemovalSaving.value = true
+  try { await saveSettingKey(SETTING_KEYS.idleRemoval, idleRemovalDraft.value) }
+  finally { idleRemovalSaving.value = false }
+}
+
+async function saveAbandonedCleanup() {
+  if (!lifecycle.validateDuration(abandonedCleanupDraft.value)) return
+  abandonedCleanupSaving.value = true
+  try { await saveSettingKey(SETTING_KEYS.abandonedCleanup, abandonedCleanupDraft.value) }
+  finally { abandonedCleanupSaving.value = false }
+}
+
+function parseDurationSeconds(dur: string): number {
+  if (!dur || dur === '0') return 0
+  const m = dur.match(/^(\d+)(s|m|h|d)$/)
+  if (!m) return 0
+  const n = Number.parseInt(m[1]!, 10)
+  switch (m[2]!) {
+    case 's': return n
+    case 'm': return n * 60
+    case 'h': return n * 3600
+    case 'd': return n * 86400
+    default: return 0
+  }
+}
+
+// ---- Container state helpers ----
+
+function containerStateVariant(s: ContainerState | undefined | null) {
+  if (s === 'running') return 'secondary'
+  if (s === 'stopped') return 'outline'
+  if (s === 'pending_stop') return 'outline'
+  if (s === 'pending_removal') return 'destructive'
+  return undefined
+}
+
+function containerStateLabel(s: ContainerState | undefined | null): string {
+  switch (s) {
+    case 'running': return t('admin.agentSessions.container.running')
+    case 'stopped': return t('admin.agentSessions.container.stopped')
+    case 'pending_stop': return t('admin.agentSessions.container.pendingStop')
+    case 'pending_removal': return t('admin.agentSessions.container.pendingRemoval')
+    default: return t('admin.agentSessions.container.none')
+  }
+}
+
+function containerStateClass(s: ContainerState | undefined | null) {
+  if (s === 'pending_stop') return 'border-dashed'
+  if (s === 'pending_removal') return 'border-dashed'
+  return ''
+}
+
+function showStopAction(r: AdminAgentSession): boolean {
+  return r.container_state === 'running'
+}
+
+function showRemoveAction(r: AdminAgentSession): boolean {
+  return r.container_state === 'running' || r.container_state === 'stopped'
+}
+
+const actionSessionId = ref<number | null>(null)
+
+async function onStopContainer(r: AdminAgentSession) {
+  if (actionSessionId.value === r.session_id) return
+  actionSessionId.value = r.session_id
+  try {
+    await $fetch(`/api/admin/agent-sessions/${r.session_id}/stop-container`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    await load()
+  } catch (e: any) {
+    error.value = e?.data?.error ?? t('admin.agentSessions.stopFailed')
+  } finally {
+    actionSessionId.value = null
+  }
+}
+
+async function onRemoveContainer(r: AdminAgentSession) {
+  if (actionSessionId.value === r.session_id) return
+  actionSessionId.value = r.session_id
+  try {
+    await $fetch(`/api/admin/agent-sessions/${r.session_id}/remove-container`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    await load()
+  } catch (e: any) {
+    error.value = e?.data?.error ?? t('admin.agentSessions.removeFailed')
+  } finally {
+    actionSessionId.value = null
+  }
+}
+
+onMounted(async () => {
+  await lifecycle.load()
+  syncDrafts()
+  load()
+})
 </script>
 
 <template>
@@ -138,6 +288,122 @@ onMounted(load)
         </CardHeader>
       </Card>
     </div>
+
+    <!-- Lifecycle settings card -->
+    <Collapsible v-model:open="lifecycleOpen" class="overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm">
+      <CollapsibleTrigger as-child>
+        <div class="flex cursor-pointer items-center justify-between p-6 hover:bg-accent/50">
+          <div class="space-y-1">
+            <h3 class="font-semibold leading-none tracking-tight">
+              {{ t('admin.agentSessions.lifecycle.title') }}
+            </h3>
+            <p class="text-sm text-muted-foreground">
+              {{ t('admin.agentSessions.lifecycle.subtitle') }}
+            </p>
+          </div>
+          <div class="flex items-center gap-3">
+            <p v-if="lifecycle.loading" class="text-xs text-muted-foreground">{{ t('common.loading') }}</p>
+            <Button variant="ghost" size="icon" class="size-8 rounded-full" :class="lifecycleOpen ? 'rotate-180' : ''" as="span">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="transition-transform duration-200"><path d="m6 9 6 6 6-6"/></svg>
+            </Button>
+          </div>
+        </div>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <Separator />
+        <div class="space-y-4 p-6">
+          <!-- Idle stop threshold -->
+          <div class="grid gap-1.5 sm:grid-cols-[200px_1fr]">
+            <Label class="pt-1.5 text-sm font-medium" for="idle-stop">
+              {{ t('admin.agentSessions.lifecycle.idleStop') }}
+            </Label>
+            <div class="space-y-1.5">
+              <div class="flex items-center gap-2">
+                <Input
+                  id="idle-stop"
+                  v-model="idleStopDraft"
+                  class="w-28 font-mono"
+                  :class="lifecycle.validateDuration(idleStopDraft) ? '' : 'border-destructive'"
+                  @blur="saveIdleStop()"
+                  @keyup.enter="saveIdleStop()"
+                />
+                <span v-if="idleStopSaving" class="text-xs text-muted-foreground">{{ t('common.saving') }}</span>
+              </div>
+              <p class="text-xs text-muted-foreground">
+                {{ t('admin.agentSessions.lifecycle.idleStopHint') }}
+                {{ t('admin.agentSessions.lifecycle.defaultLabel', { value: lifecycle.getDefaultValue(SETTING_KEYS.idleStop) }) }}
+              </p>
+              <p v-if="lifecycle.getUpdatedMeta(SETTING_KEYS.idleStop).at" class="text-xs text-muted-foreground">
+                {{ t('admin.agentSessions.lifecycle.lastUpdated', {
+                  time: formatDate(lifecycle.getUpdatedMeta(SETTING_KEYS.idleStop).at!),
+                  by: lifecycle.getUpdatedMeta(SETTING_KEYS.idleStop).by ?? '—',
+                }) }}
+              </p>
+            </div>
+          </div>
+
+          <!-- Idle removal threshold -->
+          <div class="grid gap-1.5 sm:grid-cols-[200px_1fr]">
+            <Label class="pt-1.5 text-sm font-medium" for="idle-removal">
+              {{ t('admin.agentSessions.lifecycle.idleRemoval') }}
+            </Label>
+            <div class="space-y-1.5">
+              <div class="flex items-center gap-2">
+                <Input
+                  id="idle-removal"
+                  v-model="idleRemovalDraft"
+                  class="w-28 font-mono"
+                  :class="lifecycle.validateDuration(idleRemovalDraft) ? '' : 'border-destructive'"
+                  @blur="saveIdleRemoval()"
+                  @keyup.enter="saveIdleRemoval()"
+                />
+                <span v-if="idleRemovalSaving" class="text-xs text-muted-foreground">{{ t('common.saving') }}</span>
+              </div>
+              <p class="text-xs text-muted-foreground">
+                {{ t('admin.agentSessions.lifecycle.idleRemovalHint') }}
+                {{ t('admin.agentSessions.lifecycle.defaultLabel', { value: lifecycle.getDefaultValue(SETTING_KEYS.idleRemoval) }) }}
+              </p>
+              <p v-if="lifecycle.getUpdatedMeta(SETTING_KEYS.idleRemoval).at" class="text-xs text-muted-foreground">
+                {{ t('admin.agentSessions.lifecycle.lastUpdated', {
+                  time: formatDate(lifecycle.getUpdatedMeta(SETTING_KEYS.idleRemoval).at!),
+                  by: lifecycle.getUpdatedMeta(SETTING_KEYS.idleRemoval).by ?? '—',
+                }) }}
+              </p>
+            </div>
+          </div>
+
+          <!-- Abandoned cleanup threshold -->
+          <div class="grid gap-1.5 sm:grid-cols-[200px_1fr]">
+            <Label class="pt-1.5 text-sm font-medium" for="abandoned-cleanup">
+              {{ t('admin.agentSessions.lifecycle.abandonedCleanup') }}
+            </Label>
+            <div class="space-y-1.5">
+              <div class="flex items-center gap-2">
+                <Input
+                  id="abandoned-cleanup"
+                  v-model="abandonedCleanupDraft"
+                  class="w-28 font-mono"
+                  :class="lifecycle.validateDuration(abandonedCleanupDraft) ? '' : 'border-destructive'"
+                  @blur="saveAbandonedCleanup()"
+                  @keyup.enter="saveAbandonedCleanup()"
+                />
+                <span v-if="abandonedCleanupSaving" class="text-xs text-muted-foreground">{{ t('common.saving') }}</span>
+              </div>
+              <p class="text-xs text-muted-foreground">
+                {{ t('admin.agentSessions.lifecycle.abandonedCleanupHint') }}
+                {{ t('admin.agentSessions.lifecycle.defaultLabel', { value: lifecycle.getDefaultValue(SETTING_KEYS.abandonedCleanup) }) }}
+              </p>
+              <p v-if="lifecycle.getUpdatedMeta(SETTING_KEYS.abandonedCleanup).at" class="text-xs text-muted-foreground">
+                {{ t('admin.agentSessions.lifecycle.lastUpdated', {
+                  time: formatDate(lifecycle.getUpdatedMeta(SETTING_KEYS.abandonedCleanup).at!),
+                  by: lifecycle.getUpdatedMeta(SETTING_KEYS.abandonedCleanup).by ?? '—',
+                }) }}
+              </p>
+            </div>
+          </div>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
 
     <Card>
       <CardHeader>
@@ -190,12 +456,14 @@ onMounted(load)
               <TableHead>{{ t('admin.agentSessions.cols.id') }}</TableHead>
               <TableHead>{{ t('admin.agentSessions.cols.role') }}</TableHead>
               <TableHead>{{ t('admin.agentSessions.cols.status') }}</TableHead>
+              <TableHead>{{ t('admin.agentSessions.cols.container') }}</TableHead>
               <TableHead>{{ t('admin.agentSessions.cols.cause') }}</TableHead>
               <TableHead>{{ t('admin.agentSessions.cols.repoIssue') }}</TableHead>
               <TableHead>{{ t('admin.agentSessions.cols.repoSha') }}</TableHead>
               <TableHead>{{ t('admin.agentSessions.cols.created') }}</TableHead>
               <TableHead>{{ t('admin.agentSessions.cols.duration') }}</TableHead>
               <TableHead>{{ t('admin.agentSessions.cols.error') }}</TableHead>
+              <TableHead class="w-12" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -204,6 +472,16 @@ onMounted(load)
                 <TableCell class="font-mono text-xs">#{{ r.session_id }}</TableCell>
                 <TableCell class="font-medium">{{ r.role_key }}</TableCell>
                 <TableCell><Badge :variant="statusVariant(r.status)">{{ r.status }}</Badge></TableCell>
+                <TableCell>
+                  <Badge
+                    v-if="r.container_state && r.container_state !== 'none'"
+                    :variant="containerStateVariant(r.container_state)"
+                    :class="containerStateClass(r.container_state)"
+                  >
+                    {{ containerStateLabel(r.container_state) }}
+                  </Badge>
+                  <span v-else class="text-xs text-muted-foreground">—</span>
+                </TableCell>
                 <TableCell class="text-xs text-muted-foreground">
                   {{ r.cause_kind }}<span v-if="r.cause_id"> · {{ r.cause_id }}</span>
                 </TableCell>
@@ -224,10 +502,41 @@ onMounted(load)
                   </span>
                   <span v-else class="text-xs text-muted-foreground">—</span>
                 </TableCell>
+                <TableCell>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger as-child>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        class="size-8"
+                        :disabled="actionSessionId === r.session_id"
+                      >
+                        <MoreHorizontal class="size-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        v-if="showStopAction(r)"
+                        @click="onStopContainer(r)"
+                      >
+                        <StopCircle class="size-4" />
+                        {{ t('admin.agentSessions.actions.stopContainer') }}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        v-if="showRemoveAction(r)"
+                        @click="onRemoveContainer(r)"
+                        class="text-destructive"
+                      >
+                        <Trash2 class="size-4" />
+                        {{ t('admin.agentSessions.actions.removeContainer') }}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
               </TableRow>
               <TableRow v-if="r.error_message" class="border-t-0">
                 <TableCell />
-                <TableCell colspan="8" class="pt-0 pb-3">
+                <TableCell colspan="10" class="pt-0 pb-3">
                   <pre class="whitespace-pre-wrap wrap-break-word rounded border border-destructive/40 bg-destructive/5 p-2 font-mono text-[11px] text-destructive">{{ r.error_message }}</pre>
                 </TableCell>
               </TableRow>

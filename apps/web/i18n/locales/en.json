@@ -335,13 +335,39 @@
         "id": "ID",
         "role": "Role",
         "status": "Status",
+        "container": "Container",
         "cause": "Cause",
         "repoIssue": "Repo / issue",
         "repoSha": "Repo SHA",
         "created": "Created",
         "duration": "Duration",
         "error": "Error"
-      }
+      },
+      "container": {
+        "running": "Running",
+        "stopped": "Stopped",
+        "pendingStop": "Stopping…",
+        "pendingRemoval": "Removing…",
+        "none": "—"
+      },
+      "lifecycle": {
+        "title": "Container Lifecycle",
+        "subtitle": "Configure when idle agent containers are automatically stopped or removed. Changes take effect on the next reaper sweep.",
+        "idleStop": "Idle stop threshold",
+        "idleStopHint": "Duration after which an idle container is stopped. 0 = never auto-stop.",
+        "idleRemoval": "Idle removal threshold",
+        "idleRemovalHint": "Duration after which an idle/stopped container is permanently removed.",
+        "abandonedCleanup": "Abandoned cleanup threshold",
+        "abandonedCleanupHint": "Duration after which an unacked cleanup flag is force-cleared.",
+        "defaultLabel": "Default: {value}.",
+        "lastUpdated": "Last updated {time} by {by}"
+      },
+      "actions": {
+        "stopContainer": "Stop container",
+        "removeContainer": "Remove container"
+      },
+      "stopFailed": "Stop failed",
+      "removeFailed": "Remove failed"
     },
     "dashboard": {
       "title": "Dashboard",
