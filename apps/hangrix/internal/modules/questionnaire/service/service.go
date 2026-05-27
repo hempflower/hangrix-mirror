@@ -24,15 +24,21 @@ type Service struct {
 type ServiceDeps struct {
 	Store         domain.Store
 	AnswerStore   domain.AnswerStore
-	EventPublisher domain.EventPublisher // optional
+
 }
 
 func NewService(deps *ServiceDeps) *Service {
 	return &Service{
 		store:       deps.Store,
 		answerStore: deps.AnswerStore,
-		publisher:   deps.EventPublisher,
 	}
+}
+
+// WithEventPublisher sets an optional cross-module EventPublisher.
+// When nil the service skips event publishing (nil-safe call sites).
+func (s *Service) WithEventPublisher(pub domain.EventPublisher) *Service {
+	s.publisher = pub
+	return s
 }
 
 // ---- Store delegation ---- //
