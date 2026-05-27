@@ -88,13 +88,17 @@ async function handleSubmit() {
   }
 }
 
-async function toggleResults() {
+async function loadResultsIfClosed() {
   if (!result.value && props.questionnaire.status === 'closed') {
     resultLoading.value = true
     result.value = await loadResults(props.questionnaire.id)
     resultLoading.value = false
   }
 }
+
+// Load results on mount if already closed; also react when status flips to closed
+onMounted(() => { if (!isOpen.value) loadResultsIfClosed() })
+watch(() => props.questionnaire.status, (s) => { if (s === 'closed') loadResultsIfClosed() })
 
 async function handleClose() {
   const ok = await closeApi(props.questionnaire.id)
