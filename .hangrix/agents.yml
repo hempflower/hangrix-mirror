@@ -41,7 +41,7 @@ llm:
 reviewers:
   rules:
     - paths: ["apps/hangrix/**", "pkg/**", "go.work", "go.work.sum"]
-      reviewers: [server-reviewer, tester, maintainer]
+      reviewers: [tester, maintainer]
     - paths: ["apps/hangrix-agent/**", "apps/hangrix-runner/**"]
       reviewers: [runtime-reviewer, tester]
     - paths: ["apps/web/**"]
