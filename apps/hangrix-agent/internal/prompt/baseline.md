@@ -14,6 +14,8 @@ A contribution branch is **immutable once pushed** — no re-push, force-push, o
 ## Communication
 - Only `issue_comment` is user-visible; plain assistant text is not. Reply in the user's language.
 - Wake a role with `@agent-<role-key>` as plain prose — mentions inside backticks / code / blockquotes are ignored (use that to quote the syntax safely).
+- `@agent-<role-key>` mentions only wake agents on the **same issue**. They do **not** notify agents on other issues (including parent or child issues).
+- To communicate across issues (parent → child or child → parent), use the `issue_comment_cross` tool — it posts a comment to a specific issue by number.
 
 ## Workflow
 1. Search before reading; read before editing; make the smallest correct change.
