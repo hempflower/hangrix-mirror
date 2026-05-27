@@ -548,7 +548,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	caller, _ := authdomain.UserFromRequest(r)
-	iss, err := h.issues.Create(r.Context(), rc.repo.ID, caller.ID, title, req.Body, base, "", parentID, parentNumber)
+	iss, err := h.issues.Create(r.Context(), rc.repo.ID, caller.ID, caller.Username, title, req.Body, base, "", parentID, parentNumber)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -711,7 +711,7 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 		}
 		if titleChanged {
 			payload, _ := json.Marshal(domain.TitleChangedPayload{From: iss.Title, To: title})
-			_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventTitleChanged, payload, caller.ID)
+			_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventTitleChanged, payload, caller.ID, caller.Username)
 		}
 	}
 
@@ -738,7 +738,7 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			payload, _ := json.Marshal(domain.StateChangedPayload{From: updated.State, To: want})
-			_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventStateChanged, payload, caller.ID)
+			_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventStateChanged, payload, caller.ID, caller.Username)
 			updated = next
 			// Issue transitioned to closed → archive every live session
 			// on it. Transition from closed back to open does NOT
@@ -1004,7 +1004,7 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 		_ = wfActor // provenance tracked via the workflow actor ref in context
 	} else {
 		caller, _ := authdomain.UserFromRequest(r)
-		c, err = h.issues.CreateComment(r.Context(), iss.ID, caller.ID, body, strings.TrimSpace(req.FilePath), req.Line)
+		c, err = h.issues.CreateComment(r.Context(), iss.ID, caller.ID, caller.Username, body, strings.TrimSpace(req.FilePath), req.Line)
 	}
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
@@ -1192,9 +1192,9 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 		MergeSHA:   mergeSHA,
 		Mode:       mode,
 	})
-	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventBranchMerged, mergePayload, caller.ID)
+	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventBranchMerged, mergePayload, caller.ID, caller.Username)
 	statePayload, _ := json.Marshal(domain.StateChangedPayload{From: domain.StateOpen, To: domain.StateMerged})
-	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventStateChanged, statePayload, caller.ID)
+	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventStateChanged, statePayload, caller.ID, caller.Username)
 
 	// Try to delete the issue branch unless the host config disables it.
 	cleanup := h.tryDeleteIssueBranch(r.Context(), rc.repo.ID, rc.fsPath, iss.BranchName)
@@ -1703,7 +1703,7 @@ func (h *Handler) applyContribution(w http.ResponseWriter, r *http.Request) {
 		Title:          merged.Title,
 		MergeCommitSHA: mergeSHA,
 	})
-	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventContributionMerged, evtPayload, caller.ID)
+	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventContributionMerged, evtPayload, caller.ID, caller.Username)
 
 	// Refresh sibling contributions' mergeability against the new issue head:
 	// landing one contribution may put others into conflict.
@@ -1748,7 +1748,7 @@ func (h *Handler) closeContribution(w http.ResponseWriter, r *http.Request) {
 		AgentRole:      updated.AgentRole,
 		RefName:        updated.RefName,
 	})
-	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventContributionClosed, evtPayload, caller.ID)
+	_, _ = h.issues.CreateEvent(r.Context(), iss.ID, domain.EventContributionClosed, evtPayload, caller.ID, caller.Username)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"id":     updated.ID,
 		"status": string(updated.Status),
