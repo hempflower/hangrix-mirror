@@ -5,7 +5,7 @@ triggers:
 permission: write
 tools: [designer]
 llm:
-  model: gpt-5.4
+  model: claude-opus-4-7
 ---
 # architecture-designer
 

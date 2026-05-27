@@ -12,7 +12,7 @@ triggers:
 permission: write
 tools: [reviewer]
 llm:
-  model: gpt-5.4
+  model: claude-opus-4-7
   reasoning_effort: high
 ---
 # web-reviewer
