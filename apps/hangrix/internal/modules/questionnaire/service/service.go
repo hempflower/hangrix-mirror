@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base32"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -105,8 +106,7 @@ func (s *Service) UpsertAnswer(ctx context.Context, qID, userID int64, perQ map[
 
 	answer, err := s.answerStore.UpsertAnswer(ctx, qID, userID, perQ)
 	if err != nil {
-		// ON CONFLICT DO NOTHING returns no row → already submitted
-		if strings.Contains(err.Error(), "no rows") {
+		if errors.Is(err, domain.ErrAlreadyAnswered) {
 			return nil, &ValidationError{
 				Errors: []domain.FieldError{{Field: "answers", Code: "already_submitted", Message: "you have already submitted this questionnaire"}},
 			}

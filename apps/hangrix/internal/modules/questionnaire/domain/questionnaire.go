@@ -4,6 +4,7 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -361,6 +362,10 @@ func (e FieldError) Error() string {
 	}
 	return s
 }
+
+// ErrAlreadyAnswered is returned by AnswerStore when the user has already
+// submitted an answer for the given questionnaire (ON CONFLICT DO NOTHING).
+var ErrAlreadyAnswered = errors.New("questionnaire already answered by this user")
 
 // ---- Helpers ---- //
 

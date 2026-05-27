@@ -5,6 +5,8 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+
+	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 )
 
 // ---- Create Questionnaire ---- //
@@ -19,7 +21,7 @@ func v1CreateQuestionnaire(api AgentAPI) http.HandlerFunc {
 			return
 		}
 
-		var input CreateQuestionnaireInput
+		var input apidomain.CreateQuestionnaireInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return

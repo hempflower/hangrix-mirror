@@ -14,7 +14,6 @@ import (
 	"github.com/hangrix/hangrix/pkg/actor"
 
 	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
-	apihandler "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/handler"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
@@ -1221,7 +1220,7 @@ func contributionSummaryToAPI(c *issuedomain.Contribution) apiContribItem {
 // ---- Questionnaires ---- //
 
 // CreateQuestionnaire creates a new questionnaire on the current issue.
-func (s *APIService) CreateQuestionnaire(ctx context.Context, p *apidomain.Actor, input apihandler.CreateQuestionnaireInput) (any, error) {
+func (s *APIService) CreateQuestionnaire(ctx context.Context, p *apidomain.Actor, input apidomain.CreateQuestionnaireInput) (any, error) {
 	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
@@ -1259,7 +1258,7 @@ func (s *APIService) CreateQuestionnaire(ctx context.Context, p *apidomain.Actor
 
 // GetQuestionnaire returns a single questionnaire by ID.
 func (s *APIService) GetQuestionnaire(ctx context.Context, p *apidomain.Actor, id int64) (any, error) {
-	_, err := s.mustLoadScope(ctx, p)
+	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
 	}
@@ -1270,12 +1269,15 @@ func (s *APIService) GetQuestionnaire(ctx context.Context, p *apidomain.Actor, i
 	if err != nil {
 		return nil, err
 	}
+	if qn.IssueID != scope.issue.ID {
+		return nil, errors.New("questionnaire does not belong to the current issue")
+	}
 	return toAPIQuestionnaire(qn), nil
 }
 
 // GetQuestionnaireResult returns aggregated results for a questionnaire.
 func (s *APIService) GetQuestionnaireResult(ctx context.Context, p *apidomain.Actor, id int64) (any, error) {
-	_, err := s.mustLoadScope(ctx, p)
+	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
 	}
@@ -1285,6 +1287,9 @@ func (s *APIService) GetQuestionnaireResult(ctx context.Context, p *apidomain.Ac
 	result, err := s.r.deps.Questionnaires.BuildResult(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if result.Questionnaire.IssueID != scope.issue.ID {
+		return nil, errors.New("questionnaire does not belong to the current issue")
 	}
 	return toAPIResult(result), nil
 }
@@ -1314,7 +1319,7 @@ func (s *APIService) ListQuestionnaires(ctx context.Context, p *apidomain.Actor)
 
 // CloseQuestionnaire closes a questionnaire.
 func (s *APIService) CloseQuestionnaire(ctx context.Context, p *apidomain.Actor, id int64, reason string) (any, error) {
-	_, err := s.mustLoadScope(ctx, p)
+	scope, err := s.mustLoadScope(ctx, p)
 	if err != nil {
 		return nil, err
 	}
@@ -1324,6 +1329,9 @@ func (s *APIService) CloseQuestionnaire(ctx context.Context, p *apidomain.Actor,
 	qn, err := s.r.deps.Questionnaires.Close(ctx, id, reason)
 	if err != nil {
 		return nil, err
+	}
+	if qn.IssueID != scope.issue.ID {
+		return nil, errors.New("questionnaire does not belong to the current issue")
 	}
 	return toAPIQuestionnaire(qn), nil
 }

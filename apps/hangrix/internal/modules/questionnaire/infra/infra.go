@@ -7,9 +7,12 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
+	"strconv"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
@@ -172,6 +175,9 @@ func (s *PostgresStore) UpsertAnswer(ctx context.Context, qID, userID int64, per
 		Answers:         answersJSON,
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrAlreadyAnswered
+		}
 		return nil, fmt.Errorf("upsert answer: %w", err)
 	}
 
@@ -307,8 +313,10 @@ func jsonToAnswerPerQuestion(raw []byte) map[int64]domain.AnswerValue {
 	}
 	result := make(map[int64]domain.AnswerValue, len(js))
 	for k, v := range js {
-		var id int64
-		fmt.Sscanf(k, "%d", &id)
+		id, err := strconv.ParseInt(k, 10, 64)
+		if err != nil {
+			continue
+		}
 		result[id] = domain.AnswerValue{OptionIDs: v.OptionIDs, Text: v.Text}
 	}
 	return result
