@@ -108,19 +108,6 @@ func BotRef(name string) Ref {
 	}
 }
 
-// Deprecated: FromLegacy constructs a Ref from the pre-actor author_id/agent_role
-// columns. Superseded by the actor module's Resolver which resolves against the
-// actors table. Scheduled for removal once all callers (currently only
-// resolveActor in issue/infra) are migrated to actor JOINs.
-func FromLegacy(authorID int64, authorName, agentRole string) Ref {
-	if authorID > 0 {
-		return UserRef(authorID, authorName)
-	}
-	if agentRole != "" {
-		return AgentRef(agentRole)
-	}
-	return SystemRef()
-}
 
 // RefFromColumns reconstructs a Ref from the flat DB columns written by
 // the dual-write strategy. Callers should only pass this when kind is
