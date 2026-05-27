@@ -20,14 +20,16 @@ import (
 	"fmt"
 )
 
-// Kind enumerates the four actor classes.
+// Kind enumerates the actor classes.
 type Kind string
 
 const (
-	KindUser     Kind = "user"
-	KindAgent    Kind = "agent"
-	KindWorkflow Kind = "workflow"
-	KindSystem   Kind = "system"
+	KindUser          Kind = "user"
+	KindAgent         Kind = "agent"          // agent_role identity — the role-level actor
+	KindAgentSession  Kind = "agent_session"  // agent_session identity — the per-session actor
+	KindBot           Kind = "bot"            // automated bot identity
+	KindWorkflow      Kind = "workflow"
+	KindSystem        Kind = "system"
 )
 
 // Ref is the unified actor reference carried by every domain object.
@@ -37,9 +39,11 @@ type Ref struct {
 	Kind           Kind   `json:"kind"`
 	ID             string `json:"id"`         // stable key, e.g. "user:12", "agent:maintainer", "workflow:run:45", "system:server"
 	DisplayName    string `json:"display_name"`
+	ActorID        int64  `json:"actor_id,omitempty"` // PK in the actors table; resolved by the actor module
 	UserID         int64  `json:"user_id,omitempty"`
 	RoleKey        string `json:"role_key,omitempty"`
 	WorkflowRunID  int64  `json:"workflow_run_id,omitempty"`
+	SessionID      int64  `json:"session_id,omitempty"` // for KindAgentSession
 }
 
 // UserRef builds an actor from a platform user row.
@@ -84,9 +88,30 @@ func SystemRef() Ref {
 	}
 }
 
-// FromLegacy constructs a Ref from the pre-actor author_id/agent_role
-// columns. Used in the read fallback path for rows that haven't been
-// dual-written yet.
+// AgentSessionRef builds an actor from a specific agent session row.
+func AgentSessionRef(sessionID int64, roleKey string) Ref {
+	return Ref{
+		Kind:        KindAgentSession,
+		ID:          fmt.Sprintf("agent_session:%d", sessionID),
+		DisplayName: fmt.Sprintf("@agent-%s#%d", roleKey, sessionID),
+		SessionID:   sessionID,
+		RoleKey:     roleKey,
+	}
+}
+
+// BotRef builds an actor from an automated bot name.
+func BotRef(name string) Ref {
+	return Ref{
+		Kind:        KindBot,
+		ID:          fmt.Sprintf("bot:%s", name),
+		DisplayName: name,
+	}
+}
+
+// Deprecated: FromLegacy constructs a Ref from the pre-actor author_id/agent_role
+// columns. Superseded by the actor module's Resolver which resolves against the
+// actors table. Scheduled for removal once all callers (currently only
+// resolveActor in issue/infra) are migrated to actor JOINs.
 func FromLegacy(authorID int64, authorName, agentRole string) Ref {
 	if authorID > 0 {
 		return UserRef(authorID, authorName)
@@ -115,6 +140,20 @@ func RefFromColumns(kind Kind, userID int64, roleKey string, workflowRunID int64
 			ID:          fmt.Sprintf("agent:%s", roleKey),
 			DisplayName: displayName,
 			RoleKey:     roleKey,
+		}
+	case KindAgentSession:
+		return Ref{
+			Kind:        KindAgentSession,
+			ID:          fmt.Sprintf("agent_session:%d", workflowRunID), // workflowRunID reused for sessionID in flat-column convention
+			DisplayName: displayName,
+			SessionID:   workflowRunID,
+			RoleKey:     roleKey,
+		}
+	case KindBot:
+		return Ref{
+			Kind:        KindBot,
+			ID:          fmt.Sprintf("bot:%s", roleKey),
+			DisplayName: displayName,
 		}
 	case KindWorkflow:
 		return Ref{

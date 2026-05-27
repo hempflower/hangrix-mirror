@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
+	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
@@ -46,6 +47,7 @@ type RegistryDeps struct {
 	Spawner       agentsessiondomain.Spawner
 	Archiver      agentsessiondomain.Archiver
 	Controller    agentsessiondomain.Controller
+	ActorResolver actordomain.Resolver
 	Protections   repodomain.ProtectionStore
 	Guards        []repodomain.BranchWriteGuard
 	Releases      releasedomain.Store

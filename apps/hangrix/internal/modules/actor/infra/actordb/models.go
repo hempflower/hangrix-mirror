@@ -2,11 +2,23 @@
 // versions:
 //   sqlc v1.30.0
 
-package runnerdb
+package actordb
 
 import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+type Actor struct {
+	ID             int64
+	Kind           string
+	UserID         pgtype.Int8
+	AgentRoleKey   pgtype.Text
+	AgentSessionID pgtype.Int8
+	WorkflowRunID  pgtype.Int8
+	DisplayName    string
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
 
 type AgentSession struct {
 	ID                      int64
