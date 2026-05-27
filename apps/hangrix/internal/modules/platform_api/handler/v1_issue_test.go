@@ -35,6 +35,9 @@ func (s *stubAgentAPI) CreateComment(ctx context.Context, p *apidomain.Actor, bo
 	}
 	panic("unexpected")
 }
+func (s *stubAgentAPI) CreateCrossIssueComment(ctx context.Context, p *apidomain.Actor, targetIssueNumber int64, body, filePath string, line int) (any, error) {
+	panic("unexpected")
+}
 func (s *stubAgentAPI) GetComment(ctx context.Context, p *apidomain.Actor, id int64) (any, error) {
 	panic("unexpected")
 }
