@@ -97,11 +97,12 @@ RUN go install github.com/sqlc-dev/sqlc/cmd/sqlc@${SQLC_VERSION} \
  && go install github.com/pressly/goose/v3/cmd/goose@${GOOSE_VERSION} \
  && go install github.com/air-verse/air@v1.65.1
 
-# Playwright + Chrome for Testing — for browser-based verification (web role).
-# playwright install-deps pulls shared libraries chromium needs (libnss3, etc.).
-RUN npm install -g playwright \
-        && npx playwright install-deps chrome \
-        && npx playwright install chrome
+# Playwright MCP + Chrome for Testing — for browser-based verification (web role).
+# install-browser chrome-for-testing downloads the branded Chrome for Testing
+# binary and headless shell via @playwright/mcp's wrapper around
+# `playwright install` (replaces the older `npm install -g playwright` +
+# `npx playwright install chrome` combo).
+RUN npx @playwright/mcp@latest install-browser chrome-for-testing
 
 ENV PNPM_HOME=/caches/pnpm
 ENV PATH=$PNPM_HOME:/go/bin:$PATH
