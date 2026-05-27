@@ -1506,6 +1506,23 @@ func (g *GoGit) CheckAutoMerge(path, baseRef, headRef string) (bool, string, str
 	if headRef == "" {
 		return false, "unknown", "issue branch has no commits yet", nil
 	}
+
+	repo, err := openRepo(path)
+	if err != nil {
+		return false, "unknown", err.Error(), err
+	}
+
+	// Case: unborn base — if baseRef doesn't exist yet (no commits on the
+	// base branch), headRef is trivially mergeable as a fast-forward.
+	// This mirrors MergeBranch's Case 1.
+	baseRefName := plumbing.NewBranchReferenceName(baseRef)
+	if _, err := repo.Reference(baseRefName, false); err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return true, "fast-forward", "", nil
+		}
+		return false, "unknown", err.Error(), err
+	}
+
 	ok, err := g.IsAncestor(path, baseRef, headRef)
 	if err != nil {
 		if errors.Is(err, domain.ErrRefNotFound) {
@@ -1531,10 +1548,6 @@ func (g *GoGit) CheckAutoMerge(path, baseRef, headRef string) (bool, string, str
 	// Diverged — try three-way merge (same logic as MergeBranch's
 	// merge-commit path) so issue_mergeable's conflict detection is
 	// exactly equivalent to what issue_merge will encounter.
-	repo, err := openRepo(path)
-	if err != nil {
-		return false, "unknown", err.Error(), err
-	}
 	baseHash, err := resolveRef(repo, baseRef)
 	if err != nil {
 		return false, "unknown", "cannot resolve base ref", nil

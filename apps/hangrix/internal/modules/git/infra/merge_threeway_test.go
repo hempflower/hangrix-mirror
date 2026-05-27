@@ -165,3 +165,35 @@ func TestMergeRelativeRepoPath(t *testing.T) {
 		t.Fatalf("MergeBranch(%q): %v", relBare, err)
 	}
 }
+
+// TestCheckAutoMergeUnbornBase: when the base branch doesn't exist yet
+// (unborn — no commits), CheckAutoMerge must report mergeable=true
+// mode=fast-forward, mirroring MergeBranch's Case 1. This guards the
+// scenario where a sub-issue's contribution is applied before any
+// commits land on the issue branch.
+func TestCheckAutoMergeUnbornBase(t *testing.T) {
+	dir := t.TempDir()
+	bare := filepath.Join(dir, "host.git")
+
+	g := NewGoGit(&GoGitDeps{})
+	if err := g.Init(bare, "main"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	// Intentionally skip SeedInitialCommit — the "main" branch is unborn.
+
+	// Seed the issue branch with a commit so headRef resolves.
+	if err := g.SeedInitialCommit(bare, "issue/214", map[string][]byte{
+		"README.md": []byte("# test\n"),
+	}, "Tester", "tester@example.com"); err != nil {
+		t.Fatalf("seed issue branch: %v", err)
+	}
+
+	// main doesn't exist — CheckAutoMerge must report fast-forward.
+	ok, mode, hint, err := g.CheckAutoMerge(bare, "main", "issue/214")
+	if err != nil {
+		t.Fatalf("CheckAutoMerge: %v", err)
+	}
+	if !ok || mode != "fast-forward" {
+		t.Fatalf("CheckAutoMerge: ok=%v mode=%q hint=%q; want ok=true mode=fast-forward", ok, mode, hint)
+	}
+}
