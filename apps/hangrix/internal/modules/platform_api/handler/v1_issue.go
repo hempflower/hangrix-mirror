@@ -329,7 +329,7 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case containsAny(msg, "not found", "out of scope", "does not belong"):
 		WriteError(w, http.StatusNotFound, msg)
-	case containsAny(msg, "required", "invalid", "must be", "missing"):
+	case containsAny(msg, "required", "invalid", "must be", "missing", "too_long", "too_many", "too_few", "not_allowed", "duplicate", "validation"):
 		WriteError(w, http.StatusUnprocessableEntity, msg)
 	case containsAny(msg, "already", "conflict", "cannot be closed", "cannot change"):
 		WriteError(w, http.StatusConflict, msg)
