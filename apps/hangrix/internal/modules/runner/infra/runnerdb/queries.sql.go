@@ -11,6 +11,30 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const ackContainerStop = `-- name: AckContainerStop :execrows
+UPDATE agent_sessions
+SET container_stop_pending = FALSE,
+    container_stopped_at   = NOW()
+WHERE id = $1
+  AND runner_id = $2
+`
+
+type AckContainerStopParams struct {
+	ID       int64
+	RunnerID pgtype.Int8
+}
+
+// Runner reports `docker stop` succeeded: set stopped_at, clear the
+// stop flag. Scoped to the runner that owns the session so a misrouted
+// ACK can't clear a sibling's column.
+func (q *Queries) AckContainerStop(ctx context.Context, arg AckContainerStopParams) (int64, error) {
+	result, err := q.db.Exec(ctx, ackContainerStop, arg.ID, arg.RunnerID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const appendMessage = `-- name: AppendMessage :one
 
 INSERT INTO agent_session_messages (
@@ -134,7 +158,7 @@ func (q *Queries) ArchiveSessionsByIssue(ctx context.Context, arg ArchiveSession
 }
 
 const claimNextSessionLock = `-- name: ClaimNextSessionLock :one
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending FROM agent_sessions
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, container_stop_pending, container_stopped_at, running_jobs FROM agent_sessions
 WHERE status = 'pending'
   AND (runner_id = $1 OR runner_id IS NULL)
 ORDER BY created_at ASC, id ASC
@@ -183,6 +207,9 @@ func (q *Queries) ClaimNextSessionLock(ctx context.Context, runnerID pgtype.Int8
 		&i.ContainerID,
 		&i.ContainerLastUsedAt,
 		&i.ContainerCleanupPending,
+		&i.ContainerStopPending,
+		&i.ContainerStoppedAt,
+		&i.RunningJobs,
 	)
 	return i, err
 }
@@ -389,7 +416,7 @@ INSERT INTO agent_sessions (
     $18,
     $19::jsonb
 )
-RETURNING id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending
+RETURNING id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, container_stop_pending, container_stopped_at, running_jobs
 `
 
 type CreateSessionParams struct {
@@ -470,6 +497,9 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (A
 		&i.ContainerID,
 		&i.ContainerLastUsedAt,
 		&i.ContainerCleanupPending,
+		&i.ContainerStopPending,
+		&i.ContainerStoppedAt,
+		&i.RunningJobs,
 	)
 	return i, err
 }
@@ -575,6 +605,26 @@ func (q *Queries) FlagSessionContainerCleanup(ctx context.Context, id int64) (in
 	return result.RowsAffected(), nil
 }
 
+const flagSessionContainerStop = `-- name: FlagSessionContainerStop :execrows
+
+UPDATE agent_sessions
+SET container_stop_pending = TRUE
+WHERE id = $1
+  AND container_id <> ''
+  AND container_stop_pending = FALSE
+`
+
+// ---- container stop lifecycle (migration 00005) ----
+// Marks a single session's container for runner-side docker stop.
+// No-op when there is no live container or stop is already pending.
+func (q *Queries) FlagSessionContainerStop(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, flagSessionContainerStop, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getRunnerByAgentPrefix = `-- name: GetRunnerByAgentPrefix :one
 SELECT id, name, owner_user_id, visibility, status, capabilities, last_heartbeat_at, enroll_token_prefix, enroll_token_hash, enroll_token_used_at, agent_token_prefix, agent_token_hash, agent_token_revoked_at, created_by, created_at, updated_at FROM runners WHERE agent_token_prefix = $1
 `
@@ -664,7 +714,7 @@ func (q *Queries) GetRunnerByID(ctx context.Context, id int64) (Runner, error) {
 }
 
 const getSessionByID = `-- name: GetSessionByID :one
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending FROM agent_sessions WHERE id = $1
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, container_stop_pending, container_stopped_at, running_jobs FROM agent_sessions WHERE id = $1
 `
 
 func (q *Queries) GetSessionByID(ctx context.Context, id int64) (AgentSession, error) {
@@ -702,12 +752,15 @@ func (q *Queries) GetSessionByID(ctx context.Context, id int64) (AgentSession, e
 		&i.ContainerID,
 		&i.ContainerLastUsedAt,
 		&i.ContainerCleanupPending,
+		&i.ContainerStopPending,
+		&i.ContainerStoppedAt,
+		&i.RunningJobs,
 	)
 	return i, err
 }
 
 const getSessionByTokenPrefix = `-- name: GetSessionByTokenPrefix :one
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending FROM agent_sessions WHERE session_token_prefix = $1
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, container_stop_pending, container_stopped_at, running_jobs FROM agent_sessions WHERE session_token_prefix = $1
 `
 
 func (q *Queries) GetSessionByTokenPrefix(ctx context.Context, sessionTokenPrefix string) (AgentSession, error) {
@@ -745,6 +798,9 @@ func (q *Queries) GetSessionByTokenPrefix(ctx context.Context, sessionTokenPrefi
 		&i.ContainerID,
 		&i.ContainerLastUsedAt,
 		&i.ContainerCleanupPending,
+		&i.ContainerStopPending,
+		&i.ContainerStoppedAt,
+		&i.RunningJobs,
 	)
 	return i, err
 }
@@ -830,8 +886,51 @@ func (q *Queries) ListPendingContainerCleanups(ctx context.Context, arg ListPend
 	return items, nil
 }
 
+const listPendingContainerStops = `-- name: ListPendingContainerStops :many
+SELECT id, container_id
+FROM agent_sessions
+WHERE runner_id = $1
+  AND container_stop_pending = TRUE
+  AND container_id <> ''
+ORDER BY id ASC
+LIMIT $2
+`
+
+type ListPendingContainerStopsParams struct {
+	RunnerID pgtype.Int8
+	Lim      int32
+}
+
+type ListPendingContainerStopsRow struct {
+	ID          int64
+	ContainerID string
+}
+
+// Runner-side stop poll: every (id, container_id) on this runner with
+// a live container the platform has flagged for stop. The partial
+// index `agent_sessions_stop_idx` makes this O(flagged rows).
+func (q *Queries) ListPendingContainerStops(ctx context.Context, arg ListPendingContainerStopsParams) ([]ListPendingContainerStopsRow, error) {
+	rows, err := q.db.Query(ctx, listPendingContainerStops, arg.RunnerID, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPendingContainerStopsRow{}
+	for rows.Next() {
+		var i ListPendingContainerStopsRow
+		if err := rows.Scan(&i.ID, &i.ContainerID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecentSessions = `-- name: ListRecentSessions :many
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending FROM agent_sessions
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, container_stop_pending, container_stopped_at, running_jobs FROM agent_sessions
 WHERE ($1::TEXT   IS NULL OR role_key   = $1::TEXT)
   AND ($2::TEXT     IS NULL OR status     = $2::TEXT)
   AND ($3::BIGINT  IS NULL OR repo_id    = $3::BIGINT)
@@ -902,6 +1001,9 @@ func (q *Queries) ListRecentSessions(ctx context.Context, arg ListRecentSessions
 			&i.ContainerID,
 			&i.ContainerLastUsedAt,
 			&i.ContainerCleanupPending,
+			&i.ContainerStopPending,
+			&i.ContainerStoppedAt,
+			&i.RunningJobs,
 		); err != nil {
 			return nil, err
 		}
@@ -963,7 +1065,7 @@ func (q *Queries) ListRunners(ctx context.Context, arg ListRunnersParams) ([]Run
 }
 
 const listSessions = `-- name: ListSessions :many
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending FROM agent_sessions
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, container_stop_pending, container_stopped_at, running_jobs FROM agent_sessions
 WHERE ($1::BIGINT IS NULL OR runner_id = $1)
   AND ($2::TEXT   IS NULL OR status    = $2)
 ORDER BY id DESC
@@ -1017,6 +1119,9 @@ func (q *Queries) ListSessions(ctx context.Context, arg ListSessionsParams) ([]A
 			&i.ContainerID,
 			&i.ContainerLastUsedAt,
 			&i.ContainerCleanupPending,
+			&i.ContainerStopPending,
+			&i.ContainerStoppedAt,
+			&i.RunningJobs,
 		); err != nil {
 			return nil, err
 		}
@@ -1029,7 +1134,7 @@ func (q *Queries) ListSessions(ctx context.Context, arg ListSessionsParams) ([]A
 }
 
 const listSessionsByIssue = `-- name: ListSessionsByIssue :many
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending FROM agent_sessions
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, container_stop_pending, container_stopped_at, running_jobs FROM agent_sessions
 WHERE repo_id      = $1
   AND issue_number = $2
 ORDER BY id ASC
@@ -1084,6 +1189,9 @@ func (q *Queries) ListSessionsByIssue(ctx context.Context, arg ListSessionsByIss
 			&i.ContainerID,
 			&i.ContainerLastUsedAt,
 			&i.ContainerCleanupPending,
+			&i.ContainerStopPending,
+			&i.ContainerStoppedAt,
+			&i.RunningJobs,
 		); err != nil {
 			return nil, err
 		}
@@ -1307,8 +1415,10 @@ func (q *Queries) ResumeSession(ctx context.Context, arg ResumeSessionParams) (i
 const setSessionContainer = `-- name: SetSessionContainer :execrows
 
 UPDATE agent_sessions
-SET container_id           = $1,
-    container_last_used_at = NOW()
+SET container_id            = $1,
+    container_last_used_at  = NOW(),
+    container_stopped_at    = NULL,
+    container_stop_pending  = FALSE
 WHERE id = $2
 `
 
@@ -1324,6 +1434,9 @@ type SetSessionContainerParams struct {
 // runner posts this right after orchestrator.Start succeeds. Idempotent:
 // writing the same container_id twice in a row just re-stamps the
 // timestamp.
+//
+// Also clears container_stopped_at and container_stop_pending on every
+// set so a rewoken/resumed session starts with a clean stop slate.
 func (q *Queries) SetSessionContainer(ctx context.Context, arg SetSessionContainerParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setSessionContainer, arg.ContainerID, arg.ID)
 	if err != nil {
@@ -1340,17 +1453,18 @@ SET container_id              = '',
 WHERE container_cleanup_pending = TRUE
   AND container_id <> ''
   AND container_last_used_at IS NOT NULL
-  AND container_last_used_at < NOW() - INTERVAL '30 days'
+  AND container_last_used_at < NOW() - $1::INTERVAL
 `
 
-// 30-day giveup sweep (platform side): if a session has been flagged
-// for cleanup for over 30 days with no runner pickup (e.g. the owning
-// runner is permanently offline / deleted), clear the column server-
-// side. The container is effectively orphaned on the host, but holding
-// the flag forever just blocks future "session truly gone" UI affordances.
-// Logged at WARN level by the reaper so operators see what was dropped.
-func (q *Queries) SweepAbandonedSessionContainers(ctx context.Context) (int64, error) {
-	result, err := q.db.Exec(ctx, sweepAbandonedSessionContainers)
+// Giveup sweep (platform side): if a session has been flagged
+// for cleanup for longer than the threshold with no runner pickup
+// (e.g. the owning runner is permanently offline / deleted), clear the
+// column server-side. The container is effectively orphaned on the
+// host, but holding the flag forever just blocks future "session truly
+// gone" UI affordances. Logged at WARN level by the reaper so operators
+// see what was dropped.
+func (q *Queries) SweepAbandonedSessionContainers(ctx context.Context, threshold pgtype.Interval) (int64, error) {
+	result, err := q.db.Exec(ctx, sweepAbandonedSessionContainers, threshold)
 	if err != nil {
 		return 0, err
 	}
@@ -1364,16 +1478,42 @@ WHERE container_id <> ''
   AND container_cleanup_pending = FALSE
   AND status IN ('idle', 'succeeded', 'failed', 'cancelled', 'archived')
   AND container_last_used_at IS NOT NULL
-  AND container_last_used_at < NOW() - INTERVAL '7 days'
+  AND container_last_used_at < NOW() - $1::INTERVAL
 `
 
-// 7-day idle reaper (platform side): flags every live container whose
-// session is non-running and hasn't been touched in 7 days. Bounded by
-// the partial index `agent_sessions_container_idle_idx`. The reaper
-// runs on a 1-hour ticker; setting the flag is cheap and the actual
-// `docker rm` happens runner-side on its next cleanup poll.
-func (q *Queries) SweepIdleSessionContainers(ctx context.Context) (int64, error) {
-	result, err := q.db.Exec(ctx, sweepIdleSessionContainers)
+// Idle reaper (platform side): flags every live container whose
+// session is non-running and hasn't been touched within the given
+// threshold duration. Bounded by the partial index
+// `agent_sessions_container_idle_idx`. The reaper runs on a 1-hour
+// ticker; setting the flag is cheap and the actual `docker rm` happens
+// runner-side on its next cleanup poll.
+func (q *Queries) SweepIdleSessionContainers(ctx context.Context, threshold pgtype.Interval) (int64, error) {
+	result, err := q.db.Exec(ctx, sweepIdleSessionContainers, threshold)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const sweepIdleSessionContainersForStop = `-- name: SweepIdleSessionContainersForStop :execrows
+UPDATE agent_sessions
+SET container_stop_pending = TRUE
+WHERE container_id <> ''
+  AND container_stop_pending = FALSE
+  AND container_cleanup_pending = FALSE
+  AND running_jobs = 0
+  AND status IN ('idle', 'succeeded', 'failed', 'cancelled')
+  AND container_last_used_at IS NOT NULL
+  AND container_last_used_at < NOW() - $1::INTERVAL
+`
+
+// Idle-stop reaper (platform side): flags every live container whose
+// session has been idle longer than the threshold for a `docker stop`.
+// Excludes rows with running_jobs > 0 (mid-flight agent turn) and rows
+// already flagged for stop or cleanup. Bounded by the partial index
+// `agent_sessions_container_idle_idx`.
+func (q *Queries) SweepIdleSessionContainersForStop(ctx context.Context, threshold pgtype.Interval) (int64, error) {
+	result, err := q.db.Exec(ctx, sweepIdleSessionContainersForStop, threshold)
 	if err != nil {
 		return 0, err
 	}

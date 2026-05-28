@@ -1,10 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { AlertTriangle, ExternalLink, Search } from 'lucide-vue-next'
+import { AlertTriangle, ChevronDown, ExternalLink, MoreHorizontal, Search, StopCircle, Trash2 } from 'lucide-vue-next'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Pagination } from '@/components/ui/pagination'
@@ -17,7 +24,10 @@ import {
 } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
-import type { AdminAgentSession, AdminAgentSessionListResp } from '~/types/agent-session'
+import { useLifecycleSettings } from '~/composables/useLifecycleSettings'
+import type { AdminAgentSession, AdminAgentSessionListResp, ContainerState } from '~/types/agent-session'
+import { deriveContainerState } from '~/types/agent-session'
+import { LIFECYCLE_KEYS } from '~/types/platform-settings'
 
 definePageMeta({ layout: 'admin' })
 
@@ -29,6 +39,26 @@ setBreadcrumbs(() => [
   { label: t('admin.agentSessions.title') },
 ])
 
+// ── Lifecycle settings ────────────────────────────────────────────────
+const { settings: lifecycleItems, loading: lifecycleLoading, load: loadLifecycle, patchSetting } = useLifecycleSettings()
+const lifecycleOpen = ref(false)
+const lifecyclePatchError = ref<string | null>(null)
+
+/** Look up a known setting value by key. */
+function lifecycleValue(key: string): string {
+  return lifecycleItems.value.find(s => s.key === key)?.value ?? ''
+}
+
+async function onLifecycleBlur(key: string, value: string) {
+  lifecyclePatchError.value = null
+  try {
+    await patchSetting(key, value)
+  } catch {
+    lifecyclePatchError.value = t('admin.lifecycle.patchFailed')
+  }
+}
+
+// ── Session list ──────────────────────────────────────────────────────
 const rows = ref<AdminAgentSession[]>([])
 const total = ref(0)
 const loading = ref(false)
@@ -49,6 +79,30 @@ function statusVariant(s: string) {
   if (s === 'failed' || s === 'cancelled') return 'destructive'
   if (s === 'archived' || s === 'succeeded') return 'outline'
   return 'outline'
+}
+
+function containerStateVariant(s: ContainerState) {
+  if (s === 'running') return 'secondary' as const
+  if (s === 'pending_stop' || s === 'stopped') return 'outline' as const
+  if (s === 'pending_removal') return 'outline' as const
+  return undefined
+}
+
+function containerStateClass(s: ContainerState): string | undefined {
+  if (s === 'pending_stop') return 'border-dashed'
+  if (s === 'pending_removal') return 'border-destructive text-destructive'
+  return undefined
+}
+
+function containerStateLabel(s: ContainerState): string {
+  const keyMap: Record<ContainerState, string> = {
+    running: 'admin.lifecycle.containerState.running',
+    stopped: 'admin.lifecycle.containerState.stopped',
+    pending_stop: 'admin.lifecycle.containerState.pendingStop',
+    pending_removal: 'admin.lifecycle.containerState.pendingRemoval',
+    none: 'admin.lifecycle.containerState.none',
+  }
+  return t(keyMap[s])
 }
 
 function formatDate(s: string) {
@@ -108,7 +162,37 @@ function onOffsetChange(v: number) {
   load()
 }
 
-onMounted(load)
+// ── Container actions ─────────────────────────────────────────────────
+async function stopContainer(row: AdminAgentSession) {
+  if (!confirm(t('admin.lifecycle.actions.stopConfirm', { id: row.session_id }))) return
+  try {
+    await $fetch(`/api/admin/agent-sessions/${row.session_id}/stop-container`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    row.container_stop_pending = true
+  } catch (e: any) {
+    alert(e?.data?.error ?? t('admin.lifecycle.actions.stopFailed'))
+  }
+}
+
+async function removeContainer(row: AdminAgentSession) {
+  if (!confirm(t('admin.lifecycle.actions.removeConfirm', { id: row.session_id }))) return
+  try {
+    await $fetch(`/api/admin/agent-sessions/${row.session_id}/remove-container`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    row.container_cleanup_pending = true
+  } catch (e: any) {
+    alert(e?.data?.error ?? t('admin.lifecycle.actions.removeFailed'))
+  }
+}
+
+onMounted(() => {
+  loadLifecycle()
+  load()
+})
 </script>
 
 <template>
@@ -139,6 +223,95 @@ onMounted(load)
       </Card>
     </div>
 
+    <!-- ── Lifecycle settings card ──────────────────────────────── -->
+    <Collapsible v-model:open="lifecycleOpen">
+      <Card>
+        <CardHeader class="pb-3">
+          <div class="flex items-center justify-between">
+            <div>
+              <CardTitle class="text-base">{{ t('admin.lifecycle.title') }}</CardTitle>
+              <CardDescription>{{ t('admin.lifecycle.subtitle') }}</CardDescription>
+            </div>
+            <CollapsibleTrigger as-child>
+              <Button variant="ghost" size="sm" class="size-8 p-0">
+                <ChevronDown
+                  class="size-4 transition-transform duration-200"
+                  :class="{ 'rotate-180': lifecycleOpen }"
+                />
+              </Button>
+            </CollapsibleTrigger>
+          </div>
+        </CardHeader>
+        <CollapsibleContent>
+          <CardContent class="space-y-4 pt-0">
+            <p v-if="lifecycleLoading" class="text-sm text-muted-foreground">{{ t('common.loading') }}</p>
+            <template v-else-if="lifecycleItems.length > 0">
+              <div class="grid gap-4 sm:grid-cols-3">
+                <!-- Idle stop -->
+                <div>
+                  <Label class="text-xs" for="lifecycle-idle">{{ t('admin.lifecycle.idleStop') }}</Label>
+                  <Input
+                    id="lifecycle-idle"
+                    :model-value="lifecycleValue(LIFECYCLE_KEYS.idleStop)"
+                    class="mt-1"
+                    @blur="(e: FocusEvent) => {
+                      const v = (e.target as HTMLInputElement).value.trim()
+                      if (v && v !== lifecycleValue(LIFECYCLE_KEYS.idleStop)) {
+                        onLifecycleBlur(LIFECYCLE_KEYS.idleStop, v)
+                      }
+                    }"
+                  />
+                  <p class="mt-1 text-[11px] text-muted-foreground">
+                    {{ t('admin.lifecycle.idleStopHint') }}
+                  </p>
+                </div>
+                <!-- Archive remove -->
+                <div>
+                  <Label class="text-xs" for="lifecycle-archive">{{ t('admin.lifecycle.archiveRemove') }}</Label>
+                  <Input
+                    id="lifecycle-archive"
+                    :model-value="lifecycleValue(LIFECYCLE_KEYS.idleRemoval)"
+                    class="mt-1"
+                    @blur="(e: FocusEvent) => {
+                      const v = (e.target as HTMLInputElement).value.trim()
+                      if (v && v !== lifecycleValue(LIFECYCLE_KEYS.idleRemoval)) {
+                        onLifecycleBlur(LIFECYCLE_KEYS.idleRemoval, v)
+                      }
+                    }"
+                  />
+                  <p class="mt-1 text-[11px] text-muted-foreground">
+                    {{ t('admin.lifecycle.archiveRemoveHint') }}
+                  </p>
+                </div>
+                <!-- Abandoned cleanup -->
+                <div>
+                  <Label class="text-xs" for="lifecycle-abandoned">{{ t('admin.lifecycle.periodicCheck') }}</Label>
+                  <Input
+                    id="lifecycle-abandoned"
+                    :model-value="lifecycleValue(LIFECYCLE_KEYS.abandonedCleanup)"
+                    class="mt-1"
+                    @blur="(e: FocusEvent) => {
+                      const v = (e.target as HTMLInputElement).value.trim()
+                      if (v && v !== lifecycleValue(LIFECYCLE_KEYS.abandonedCleanup)) {
+                        onLifecycleBlur(LIFECYCLE_KEYS.abandonedCleanup, v)
+                      }
+                    }"
+                  />
+                  <p class="mt-1 text-[11px] text-muted-foreground">
+                    {{ t('admin.lifecycle.periodicCheckHint') }}
+                  </p>
+                </div>
+              </div>
+              <p v-if="lifecyclePatchError" class="text-sm text-destructive">{{ lifecyclePatchError }}</p>
+              <p class="text-xs text-muted-foreground">{{ t('admin.lifecycle.asyncHint') }}</p>
+            </template>
+            <p v-else class="text-sm text-muted-foreground">{{ t('admin.lifecycle.loadFailed') }}</p>
+          </CardContent>
+        </CollapsibleContent>
+      </Card>
+    </Collapsible>
+
+    <!-- ── Session table ────────────────────────────────────────── -->
     <Card>
       <CardHeader>
         <CardTitle>{{ t('admin.agentSessions.cardTitle') }}</CardTitle>
@@ -195,7 +368,10 @@ onMounted(load)
               <TableHead>{{ t('admin.agentSessions.cols.repoSha') }}</TableHead>
               <TableHead>{{ t('admin.agentSessions.cols.created') }}</TableHead>
               <TableHead>{{ t('admin.agentSessions.cols.duration') }}</TableHead>
+              <TableHead>{{ t('admin.agentSessions.cols.container') }}</TableHead>
+              <TableHead>{{ t('admin.agentSessions.cols.containerActivity') }}</TableHead>
               <TableHead>{{ t('admin.agentSessions.cols.error') }}</TableHead>
+              <TableHead class="w-10">{{ t('admin.agentSessions.cols.actions') }}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -214,6 +390,17 @@ onMounted(load)
                 <TableCell class="whitespace-nowrap text-xs text-muted-foreground">{{ formatDate(r.created_at) }}</TableCell>
                 <TableCell class="text-xs text-muted-foreground">{{ duration(r.created_at, r.ended_at) }}</TableCell>
                 <TableCell>
+                  <template v-if="deriveContainerState(r) === 'none'">
+                    <span class="text-xs text-muted-foreground">{{ containerStateLabel('none') }}</span>
+                  </template>
+                  <Badge v-else :variant="containerStateVariant(deriveContainerState(r))" :class="containerStateClass(deriveContainerState(r))">
+                    {{ containerStateLabel(deriveContainerState(r)) }}
+                  </Badge>
+                </TableCell>
+                <TableCell class="whitespace-nowrap text-xs text-muted-foreground">
+                  {{ r.container_last_used_at ? formatDate(r.container_last_used_at) : '—' }}
+                </TableCell>
+                <TableCell>
                   <span
                     v-if="r.error_message || (r.exit_code != null && r.exit_code !== 0)"
                     class="flex items-center gap-1 text-xs text-destructive"
@@ -224,10 +411,34 @@ onMounted(load)
                   </span>
                   <span v-else class="text-xs text-muted-foreground">—</span>
                 </TableCell>
+                <TableCell>
+                  <DropdownMenu v-if="deriveContainerState(r) === 'running' || deriveContainerState(r) === 'stopped'">
+                    <DropdownMenuTrigger as-child>
+                      <Button variant="ghost" size="icon" class="size-7">
+                        <MoreHorizontal class="size-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        v-if="deriveContainerState(r) === 'running'"
+                        @click="stopContainer(r)"
+                      >
+                        <StopCircle class="size-4" />
+                        {{ t('admin.lifecycle.actions.stopContainer') }}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        @click="removeContainer(r)"
+                      >
+                        <Trash2 class="size-4" />
+                        {{ t('admin.lifecycle.actions.removeContainer') }}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
               </TableRow>
               <TableRow v-if="r.error_message" class="border-t-0">
                 <TableCell />
-                <TableCell colspan="8" class="pt-0 pb-3">
+                <TableCell colspan="11" class="pt-0 pb-3">
                   <pre class="whitespace-pre-wrap wrap-break-word rounded border border-destructive/40 bg-destructive/5 p-2 font-mono text-[11px] text-destructive">{{ r.error_message }}</pre>
                 </TableCell>
               </TableRow>

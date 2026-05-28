@@ -40,6 +40,9 @@ type AgentSession struct {
 	ContainerID             string
 	ContainerLastUsedAt     pgtype.Timestamptz
 	ContainerCleanupPending bool
+	ContainerStopPending    bool
+	ContainerStoppedAt      pgtype.Timestamptz
+	RunningJobs             int32
 }
 
 type AgentSessionInput struct {

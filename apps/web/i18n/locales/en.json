@@ -340,7 +340,40 @@
         "repoSha": "Repo SHA",
         "created": "Created",
         "duration": "Duration",
-        "error": "Error"
+        "error": "Error",
+        "container": "Container",
+        "containerActivity": "Last container activity",
+        "actions": "Actions"
+      }
+    },
+    "lifecycle": {
+      "title": "Container lifecycle",
+      "subtitle": "Configure when idle containers are stopped and when archived sessions have their containers removed.",
+      "idleStop": "Stop idle containers after",
+      "idleStopHint": "Go duration (e.g. 1h, 30m) of inactivity before the container is automatically stopped.",
+      "archiveRemove": "Remove containers after archive",
+      "archiveRemoveHint": "Go duration (e.g. 168h = 7d) after a session is archived before its container is permanently removed.",
+      "periodicCheck": "Abandoned cleanup after",
+      "periodicCheckHint": "Go duration (e.g. 720h = 30d) after a session is abandoned before its container is cleaned up.",
+      "loadFailed": "Failed to load lifecycle settings",
+      "patchFailed": "Failed to save",
+      "saved": "Saved",
+      "saving": "Saving…",
+      "asyncHint": "Settings take effect on the next periodic scan — containers already running are not affected retroactively.",
+      "containerState": {
+        "running": "Running",
+        "stopped": "Stopped",
+        "pendingStop": "Stopping…",
+        "pendingRemoval": "Removing…",
+        "none": "—"
+      },
+      "actions": {
+        "stopContainer": "Stop container",
+        "removeContainer": "Remove container",
+        "stopConfirm": "Stop the container for session #{id}?",
+        "removeConfirm": "Remove the container for session #{id}? This cannot be undone.",
+        "stopFailed": "Failed to stop container",
+        "removeFailed": "Failed to remove container"
       }
     },
     "dashboard": {

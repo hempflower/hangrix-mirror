@@ -51,6 +51,16 @@ type noopMiddleware struct{}
 func (noopMiddleware) RequireAuth(next http.Handler) http.Handler  { return next }
 func (noopMiddleware) RequireAdmin(next http.Handler) http.Handler { return next }
 
+// stubController satisfies domain.Controller for tests.
+type stubController struct{}
+
+func (stubController) Stop(ctx context.Context, sessionID int64, reason string) error               { return nil }
+func (stubController) Resume(ctx context.Context, sessionID int64) error                            { return nil }
+func (stubController) Recover(ctx context.Context, sessionID int64, recoveredBy string) error       { return nil }
+func (stubController) Delete(ctx context.Context, sessionID int64) error                            { return nil }
+func (stubController) StopContainerNow(ctx context.Context, sessionID int64) error                  { return nil }
+func (stubController) RemoveContainerNow(ctx context.Context, sessionID int64) error                { return nil }
+
 func newRouter(h *AdminHandler) http.Handler {
 	r := chi.NewRouter()
 	h.RegisterRoutes(r)
@@ -78,6 +88,7 @@ func TestAdminListByIssueRoundTrip(t *testing.T) {
 
 	h := NewAdminHandler(&AdminHandlerDeps{
 		Auditor:    aud,
+		Controller: stubController{},
 		Middleware: noopMiddleware{},
 	})
 
@@ -128,6 +139,7 @@ func TestAdminListByIssueRoundTrip(t *testing.T) {
 func TestAdminListByIssueInvalidParams(t *testing.T) {
 	h := NewAdminHandler(&AdminHandlerDeps{
 		Auditor:    &stubAuditor{},
+		Controller: stubController{},
 		Middleware: noopMiddleware{},
 	})
 	srv := httptest.NewServer(newRouter(h))
@@ -158,6 +170,7 @@ func TestAdminListByIssueInvalidParams(t *testing.T) {
 func TestAdminListByIssueEmpty(t *testing.T) {
 	h := NewAdminHandler(&AdminHandlerDeps{
 		Auditor:    &stubAuditor{rows: nil},
+		Controller: stubController{},
 		Middleware: noopMiddleware{},
 	})
 	srv := httptest.NewServer(newRouter(h))
