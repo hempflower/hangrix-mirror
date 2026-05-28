@@ -50,12 +50,12 @@ func NewPostgresRepo(deps *PostgresRepoDeps) *PostgresRepo {
 
 // ---- OrgRepo ----
 
-func (r *PostgresRepo) Create(ctx context.Context, name, displayName, description string, createdBy int64) (*domain.Org, error) {
+func (r *PostgresRepo) Create(ctx context.Context, name, displayName, description string, actorID int64) (*domain.Org, error) {
 	row, err := r.q.CreateOrganization(ctx, orgdb.CreateOrganizationParams{
 		Name:        name,
 		DisplayName: displayName,
 		Description: description,
-		CreatedBy:   createdBy,
+		ActorID:     actorID,
 	})
 	if err != nil {
 		if database.IsUniqueViolation(err) {
@@ -119,12 +119,12 @@ func (r *PostgresRepo) SoftDelete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (r *PostgresRepo) AddMember(ctx context.Context, orgID, userID, addedBy int64, role domain.Role) error {
+func (r *PostgresRepo) AddMember(ctx context.Context, orgID, userID, actorID int64, role domain.Role) error {
 	err := r.q.AddOrganizationMember(ctx, orgdb.AddOrganizationMemberParams{
 		OrgID:   orgID,
 		UserID:  userID,
 		Role:    string(role),
-		AddedBy: addedBy,
+		ActorID: actorID,
 	})
 	if err != nil {
 		if database.IsUniqueViolation(err) {
@@ -176,7 +176,7 @@ func (r *PostgresRepo) ListMembers(ctx context.Context, orgID int64) ([]*domain.
 			UserID:   row.UserID,
 			Username: row.Username,
 			Role:     domain.Role(row.Role),
-			AddedBy:  row.AddedBy,
+			AddedBy:  row.ActorID,
 			AddedAt:  row.AddedAt.Time,
 		})
 	}
@@ -199,7 +199,7 @@ func (r *PostgresRepo) GetMember(ctx context.Context, orgID, userID int64) (*dom
 		UserID:   row.UserID,
 		Username: row.Username,
 		Role:     domain.Role(row.Role),
-		AddedBy:  row.AddedBy,
+		AddedBy:  row.ActorID,
 		AddedAt:  row.AddedAt.Time,
 	}, nil
 }
@@ -267,7 +267,7 @@ func rowToOrg(r orgdb.Organization) *domain.Org {
 		DisplayName: r.DisplayName,
 		Description: r.Description,
 		AvatarURL:   r.AvatarUrl,
-		CreatedBy:   r.CreatedBy,
+		CreatedBy:   r.ActorID,
 		CreatedAt:   r.CreatedAt.Time,
 		UpdatedAt:   r.UpdatedAt.Time,
 	}

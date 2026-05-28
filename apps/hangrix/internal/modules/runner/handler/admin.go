@@ -377,6 +377,7 @@ func toPublicSession(s *domain.AgentSession) publicSession {
 // will receive it over its own authenticated channel.
 func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authdomain.UserFromRequest(r)
+	_ = caller // TODO: resolve caller.ID → actor ID via actor module for CreatedByActorID
 
 	runnerID, ok := httpx.ParseID(w, chi.URLParam(r, "id"))
 	if !ok {
@@ -449,7 +450,7 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 		SessionTokenPrefix: prefix,
 		SessionTokenHash:   string(hashed),
 		SessionTokenSealed: sealed,
-		CreatedBy:          caller.ID,
+		CreatedByActorID:   0, // TODO: resolve caller.ID → actor ID via actor module Resolver
 	}
 	sess, err := h.repo.CreateSession(r.Context(), in)
 	if err != nil {

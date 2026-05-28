@@ -1,5 +1,5 @@
 -- name: CreateOrganization :one
-INSERT INTO organizations (name, display_name, description, created_by)
+INSERT INTO organizations (name, display_name, description, actor_id)
 VALUES ($1, $2, $3, $4)
 RETURNING *;
 
@@ -34,7 +34,7 @@ SET deleted_at = NOW(),
 WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: AddOrganizationMember :exec
-INSERT INTO organization_members (org_id, user_id, role, added_by)
+INSERT INTO organization_members (org_id, user_id, role, actor_id)
 VALUES ($1, $2, $3, $4);
 
 -- name: UpdateOrganizationMemberRole :execrows
@@ -47,13 +47,13 @@ DELETE FROM organization_members
 WHERE org_id = $1 AND user_id = $2;
 
 -- name: GetOrganizationMember :one
-SELECT m.org_id, m.user_id, u.username, m.role, m.added_by, m.added_at
+SELECT m.org_id, m.user_id, u.username, m.role, m.actor_id, m.added_at
 FROM organization_members m
 JOIN users u ON u.id = m.user_id
 WHERE m.org_id = $1 AND m.user_id = $2;
 
 -- name: ListOrganizationMembers :many
-SELECT m.org_id, m.user_id, u.username, m.role, m.added_by, m.added_at
+SELECT m.org_id, m.user_id, u.username, m.role, m.actor_id, m.added_at
 FROM organization_members m
 JOIN users u ON u.id = m.user_id
 WHERE m.org_id = $1

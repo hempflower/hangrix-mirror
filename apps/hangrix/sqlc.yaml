@@ -37,10 +37,12 @@ sql:
         emit_empty_slices: true
   - engine: postgresql
     queries: internal/modules/org/infra/queries.sql
-    # Org migrations reference users(id); union the user schema so sqlc can
-    # resolve the FK. At runtime each module applies only its own migrations.
+    # Org migrations reference users(id) and actors(id); union the user and
+    # actor schemas so sqlc can resolve the FK. At runtime each module applies
+    # only its own migrations.
     schema:
       - internal/modules/user/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/org/infra/migrations
     gen:
       go:
@@ -54,14 +56,15 @@ sql:
         emit_empty_slices: true
   - engine: postgresql
     queries: internal/modules/repo/infra/queries.sql
-    # Repo migrations FK users(id) and (since M5) organizations(id); union all
-    # three schemas so sqlc can parse the joins. At runtime each module still
-    # applies only its own migrations via goose with a module-scoped version
-    # table; the repo module declares an org dependency in its ioc deps so
-    # org migrations win the build-order race.
+    # Repo migrations FK users(id), organizations(id), and actors(id); union
+    # all four schemas so sqlc can parse the joins. At runtime each module
+    # still applies only its own migrations via goose with a module-scoped
+    # version table; the repo module declares an org dependency in its ioc
+    # deps so org migrations win the build-order race.
     schema:
       - internal/modules/user/infra/migrations
       - internal/modules/org/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/repo/infra/migrations
     gen:
       go:
@@ -133,13 +136,15 @@ sql:
         emit_empty_slices: true
   - engine: postgresql
     queries: internal/modules/runner/infra/queries.sql
-    # runner tables FK users(id) (created_by) and repos(id) (agent_sessions.repo_id);
-    # union user + org + repo migrations so sqlc can resolve both. At
-    # runtime each module applies only its own migrations.
+    # runner tables FK users(id) (created_by → dropped), actors(id)
+    # (created_by_actor_id, actor_id), and repos(id) (agent_sessions.repo_id);
+    # union user + org + repo + actor migrations so sqlc can resolve all
+    # references. At runtime each module applies only its own migrations.
     schema:
       - internal/modules/user/infra/migrations
       - internal/modules/org/infra/migrations
       - internal/modules/repo/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/runner/infra/migrations
     gen:
       go:

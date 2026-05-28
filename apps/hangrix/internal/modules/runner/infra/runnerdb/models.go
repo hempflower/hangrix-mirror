@@ -8,6 +8,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Actor struct {
+	ID             int64
+	Kind           string
+	UserID         pgtype.Int8
+	AgentRoleKey   pgtype.Text
+	AgentSessionID pgtype.Int8
+	WorkflowRunID  pgtype.Int8
+	DisplayName    string
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
 type AgentSession struct {
 	ID                      int64
 	RunnerID                pgtype.Int8
@@ -27,7 +39,6 @@ type AgentSession struct {
 	SessionTokenRevokedAt   pgtype.Timestamptz
 	ExitCode                pgtype.Int4
 	ErrorMessage            string
-	CreatedBy               int64
 	CreatedAt               pgtype.Timestamptz
 	ClaimedAt               pgtype.Timestamptz
 	StartedAt               pgtype.Timestamptz
@@ -40,7 +51,8 @@ type AgentSession struct {
 	ContainerID             string
 	ContainerLastUsedAt     pgtype.Timestamptz
 	ContainerCleanupPending bool
-	CreatedByActorID        pgtype.Int8
+	CreatedByActorID        int64
+	ActorID                 pgtype.Int8
 }
 
 type AgentSessionInput struct {
@@ -83,18 +95,18 @@ type Organization struct {
 	DisplayName string
 	Description string
 	AvatarUrl   string
-	CreatedBy   int64
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
 	DeletedAt   pgtype.Timestamptz
+	ActorID     int64
 }
 
 type OrganizationMember struct {
 	OrgID   int64
 	UserID  int64
 	Role    string
-	AddedBy int64
 	AddedAt pgtype.Timestamptz
+	ActorID int64
 }
 
 type Repo struct {
@@ -113,8 +125,8 @@ type RepoMember struct {
 	RepoID  int64
 	UserID  int64
 	Role    string
-	AddedBy int64
 	AddedAt pgtype.Timestamptz
+	ActorID int64
 }
 
 type RepoVariable struct {

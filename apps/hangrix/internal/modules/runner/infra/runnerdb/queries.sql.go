@@ -134,7 +134,7 @@ func (q *Queries) ArchiveSessionsByIssue(ctx context.Context, arg ArchiveSession
 }
 
 const claimNextSessionLock = `-- name: ClaimNextSessionLock :one
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, created_by_actor_id FROM agent_sessions
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, created_by_actor_id, actor_id FROM agent_sessions
 WHERE status = 'pending'
   AND (runner_id = $1 OR runner_id IS NULL)
 ORDER BY created_at ASC, id ASC
@@ -170,7 +170,6 @@ func (q *Queries) ClaimNextSessionLock(ctx context.Context, runnerID pgtype.Int8
 		&i.SessionTokenRevokedAt,
 		&i.ExitCode,
 		&i.ErrorMessage,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.ClaimedAt,
 		&i.StartedAt,
@@ -184,6 +183,7 @@ func (q *Queries) ClaimNextSessionLock(ctx context.Context, runnerID pgtype.Int8
 		&i.ContainerLastUsedAt,
 		&i.ContainerCleanupPending,
 		&i.CreatedByActorID,
+		&i.ActorID,
 	)
 	return i, err
 }
@@ -366,7 +366,7 @@ INSERT INTO agent_sessions (
     runner_id, repo_id, issue_number, status, role, model,
     agent_image, working_branch, base_branch,
     host_addendum, env, session_token_prefix, session_token_hash,
-    session_token_sealed, created_by, created_by_actor_id,
+    session_token_sealed, created_by_actor_id,
     repo_sha, role_key, cause_kind, cause_id, role_config
 ) VALUES (
     $1,
@@ -388,10 +388,9 @@ INSERT INTO agent_sessions (
     $16,
     $17,
     $18,
-    $19,
-    $20::jsonb
+    $19::jsonb
 )
-RETURNING id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, created_by_actor_id
+RETURNING id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, created_by_actor_id, actor_id
 `
 
 type CreateSessionParams struct {
@@ -408,8 +407,7 @@ type CreateSessionParams struct {
 	SessionTokenPrefix string
 	SessionTokenHash   string
 	SessionTokenSealed pgtype.Text
-	CreatedBy          int64
-	CreatedByActorID   pgtype.Int8
+	CreatedByActorID   int64
 	RepoSha            string
 	RoleKey            string
 	CauseKind          string
@@ -433,7 +431,6 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (A
 		arg.SessionTokenPrefix,
 		arg.SessionTokenHash,
 		arg.SessionTokenSealed,
-		arg.CreatedBy,
 		arg.CreatedByActorID,
 		arg.RepoSha,
 		arg.RoleKey,
@@ -461,7 +458,6 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (A
 		&i.SessionTokenRevokedAt,
 		&i.ExitCode,
 		&i.ErrorMessage,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.ClaimedAt,
 		&i.StartedAt,
@@ -475,6 +471,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (A
 		&i.ContainerLastUsedAt,
 		&i.ContainerCleanupPending,
 		&i.CreatedByActorID,
+		&i.ActorID,
 	)
 	return i, err
 }
@@ -580,6 +577,22 @@ func (q *Queries) FlagSessionContainerCleanup(ctx context.Context, id int64) (in
 	return result.RowsAffected(), nil
 }
 
+const getActorUserID = `-- name: GetActorUserID :one
+
+SELECT COALESCE(user_id, 0)::BIGINT AS user_id FROM actors WHERE id = $1
+`
+
+// ---- actor helpers ----
+// Resolves the user_id for a given actor row. Returns 0 when the actor
+// kind is not 'user' or the row doesn't exist. Used by sessionFromRow to
+// backfill the deprecated CreatedBy field from CreatedByActorID.
+func (q *Queries) GetActorUserID(ctx context.Context, actorID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, getActorUserID, actorID)
+	var user_id int64
+	err := row.Scan(&user_id)
+	return user_id, err
+}
+
 const getRunnerByAgentPrefix = `-- name: GetRunnerByAgentPrefix :one
 SELECT id, name, owner_user_id, visibility, status, capabilities, last_heartbeat_at, enroll_token_prefix, enroll_token_hash, enroll_token_used_at, agent_token_prefix, agent_token_hash, agent_token_revoked_at, created_by, created_at, updated_at FROM runners WHERE agent_token_prefix = $1
 `
@@ -669,7 +682,7 @@ func (q *Queries) GetRunnerByID(ctx context.Context, id int64) (Runner, error) {
 }
 
 const getSessionByID = `-- name: GetSessionByID :one
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, created_by_actor_id FROM agent_sessions WHERE id = $1
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, created_by_actor_id, actor_id FROM agent_sessions WHERE id = $1
 `
 
 func (q *Queries) GetSessionByID(ctx context.Context, id int64) (AgentSession, error) {
@@ -694,7 +707,6 @@ func (q *Queries) GetSessionByID(ctx context.Context, id int64) (AgentSession, e
 		&i.SessionTokenRevokedAt,
 		&i.ExitCode,
 		&i.ErrorMessage,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.ClaimedAt,
 		&i.StartedAt,
@@ -708,12 +720,13 @@ func (q *Queries) GetSessionByID(ctx context.Context, id int64) (AgentSession, e
 		&i.ContainerLastUsedAt,
 		&i.ContainerCleanupPending,
 		&i.CreatedByActorID,
+		&i.ActorID,
 	)
 	return i, err
 }
 
 const getSessionByTokenPrefix = `-- name: GetSessionByTokenPrefix :one
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, created_by_actor_id FROM agent_sessions WHERE session_token_prefix = $1
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, created_by_actor_id, actor_id FROM agent_sessions WHERE session_token_prefix = $1
 `
 
 func (q *Queries) GetSessionByTokenPrefix(ctx context.Context, sessionTokenPrefix string) (AgentSession, error) {
@@ -738,7 +751,6 @@ func (q *Queries) GetSessionByTokenPrefix(ctx context.Context, sessionTokenPrefi
 		&i.SessionTokenRevokedAt,
 		&i.ExitCode,
 		&i.ErrorMessage,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.ClaimedAt,
 		&i.StartedAt,
@@ -752,6 +764,7 @@ func (q *Queries) GetSessionByTokenPrefix(ctx context.Context, sessionTokenPrefi
 		&i.ContainerLastUsedAt,
 		&i.ContainerCleanupPending,
 		&i.CreatedByActorID,
+		&i.ActorID,
 	)
 	return i, err
 }
@@ -838,7 +851,7 @@ func (q *Queries) ListPendingContainerCleanups(ctx context.Context, arg ListPend
 }
 
 const listRecentSessions = `-- name: ListRecentSessions :many
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, created_by_actor_id FROM agent_sessions
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, created_by_actor_id, actor_id FROM agent_sessions
 WHERE ($1::TEXT   IS NULL OR role_key   = $1::TEXT)
   AND ($2::TEXT     IS NULL OR status     = $2::TEXT)
   AND ($3::BIGINT  IS NULL OR repo_id    = $3::BIGINT)
@@ -896,7 +909,6 @@ func (q *Queries) ListRecentSessions(ctx context.Context, arg ListRecentSessions
 			&i.SessionTokenRevokedAt,
 			&i.ExitCode,
 			&i.ErrorMessage,
-			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.ClaimedAt,
 			&i.StartedAt,
@@ -910,6 +922,7 @@ func (q *Queries) ListRecentSessions(ctx context.Context, arg ListRecentSessions
 			&i.ContainerLastUsedAt,
 			&i.ContainerCleanupPending,
 			&i.CreatedByActorID,
+			&i.ActorID,
 		); err != nil {
 			return nil, err
 		}
@@ -971,7 +984,7 @@ func (q *Queries) ListRunners(ctx context.Context, arg ListRunnersParams) ([]Run
 }
 
 const listSessions = `-- name: ListSessions :many
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, created_by_actor_id FROM agent_sessions
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, created_by_actor_id, actor_id FROM agent_sessions
 WHERE ($1::BIGINT IS NULL OR runner_id = $1)
   AND ($2::TEXT   IS NULL OR status    = $2)
 ORDER BY id DESC
@@ -1012,7 +1025,6 @@ func (q *Queries) ListSessions(ctx context.Context, arg ListSessionsParams) ([]A
 			&i.SessionTokenRevokedAt,
 			&i.ExitCode,
 			&i.ErrorMessage,
-			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.ClaimedAt,
 			&i.StartedAt,
@@ -1026,6 +1038,7 @@ func (q *Queries) ListSessions(ctx context.Context, arg ListSessionsParams) ([]A
 			&i.ContainerLastUsedAt,
 			&i.ContainerCleanupPending,
 			&i.CreatedByActorID,
+			&i.ActorID,
 		); err != nil {
 			return nil, err
 		}
@@ -1038,7 +1051,7 @@ func (q *Queries) ListSessions(ctx context.Context, arg ListSessionsParams) ([]A
 }
 
 const listSessionsByIssue = `-- name: ListSessionsByIssue :many
-SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_by, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, created_by_actor_id FROM agent_sessions
+SELECT id, runner_id, repo_id, issue_number, status, role, model, agent_image, working_branch, base_branch, host_addendum, env, session_token_prefix, session_token_hash, session_token_sealed, session_token_revoked_at, exit_code, error_message, created_at, claimed_at, started_at, ended_at, repo_sha, role_key, cause_kind, cause_id, role_config, container_id, container_last_used_at, container_cleanup_pending, created_by_actor_id, actor_id FROM agent_sessions
 WHERE repo_id      = $1
   AND issue_number = $2
 ORDER BY id ASC
@@ -1080,7 +1093,6 @@ func (q *Queries) ListSessionsByIssue(ctx context.Context, arg ListSessionsByIss
 			&i.SessionTokenRevokedAt,
 			&i.ExitCode,
 			&i.ErrorMessage,
-			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.ClaimedAt,
 			&i.StartedAt,
@@ -1094,6 +1106,7 @@ func (q *Queries) ListSessionsByIssue(ctx context.Context, arg ListSessionsByIss
 			&i.ContainerLastUsedAt,
 			&i.ContainerCleanupPending,
 			&i.CreatedByActorID,
+			&i.ActorID,
 		); err != nil {
 			return nil, err
 		}

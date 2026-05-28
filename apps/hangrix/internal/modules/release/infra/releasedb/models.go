@@ -25,18 +25,18 @@ type Organization struct {
 	DisplayName string
 	Description string
 	AvatarUrl   string
-	CreatedBy   int64
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
 	DeletedAt   pgtype.Timestamptz
+	ActorID     int64
 }
 
 type OrganizationMember struct {
 	OrgID   int64
 	UserID  int64
 	Role    string
-	AddedBy int64
 	AddedAt pgtype.Timestamptz
+	ActorID int64
 }
 
 type Release struct {
@@ -93,8 +93,8 @@ type RepoMember struct {
 	RepoID  int64
 	UserID  int64
 	Role    string
-	AddedBy int64
 	AddedAt pgtype.Timestamptz
+	ActorID int64
 }
 
 type RepoVariable struct {

@@ -302,10 +302,6 @@ func (r *PostgresRepo) CreateSession(ctx context.Context, in domain.CreateSessio
 	if len(roleConfig) == 0 {
 		roleConfig = []byte("{}")
 	}
-	var actorArg pgtype.Int8
-	if in.CreatedByActorID > 0 {
-		actorArg = pgtype.Int8{Int64: in.CreatedByActorID, Valid: true}
-	}
 	row, err := r.q.CreateSession(ctx, runnerdb.CreateSessionParams{
 		RunnerID:           runnerArg,
 		RepoID:             repoArg,
@@ -320,8 +316,7 @@ func (r *PostgresRepo) CreateSession(ctx context.Context, in domain.CreateSessio
 		SessionTokenPrefix: in.SessionTokenPrefix,
 		SessionTokenHash:   in.SessionTokenHash,
 		SessionTokenSealed: sealedArg,
-		CreatedBy:          in.CreatedBy,
-		CreatedByActorID:   actorArg,
+		CreatedByActorID:   in.CreatedByActorID,
 		RepoSha:            in.RepoSHA,
 		RoleKey:            in.RoleKey,
 		CauseKind:          in.CauseKind,
@@ -890,8 +885,8 @@ func sessionFromRow(r runnerdb.AgentSession) *domain.AgentSession {
 		SessionTokenPrefix:      r.SessionTokenPrefix,
 		SessionTokenHash:        r.SessionTokenHash,
 		ErrorMessage:            r.ErrorMessage,
-		CreatedBy:               r.CreatedBy,
-		CreatedByActorID:        r.CreatedByActorID.Int64,
+		CreatedBy:               0, // deprecated — use CreatedByActorID; resolved via GetActorUserID in post-processing
+		CreatedByActorID:        r.CreatedByActorID,
 		CreatedAt:               r.CreatedAt.Time,
 		RepoSHA:                 r.RepoSha,
 		RoleKey:                 r.RoleKey,

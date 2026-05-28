@@ -76,7 +76,7 @@ INSERT INTO agent_sessions (
     runner_id, repo_id, issue_number, status, role, model,
     agent_image, working_branch, base_branch,
     host_addendum, env, session_token_prefix, session_token_hash,
-    session_token_sealed, created_by, created_by_actor_id,
+    session_token_sealed, created_by_actor_id,
     repo_sha, role_key, cause_kind, cause_id, role_config
 ) VALUES (
     sqlc.narg('runner_id'),
@@ -93,8 +93,7 @@ INSERT INTO agent_sessions (
     sqlc.arg('session_token_prefix'),
     sqlc.arg('session_token_hash'),
     sqlc.narg('session_token_sealed'),
-    sqlc.arg('created_by'),
-    sqlc.narg('created_by_actor_id'),
+    sqlc.arg('created_by_actor_id'),
     sqlc.arg('repo_sha'),
     sqlc.arg('role_key'),
     sqlc.arg('cause_kind'),
@@ -435,3 +434,11 @@ WHERE container_cleanup_pending = TRUE
   AND container_id <> ''
   AND container_last_used_at IS NOT NULL
   AND container_last_used_at < NOW() - INTERVAL '30 days';
+
+-- ---- actor helpers ----
+
+-- name: GetActorUserID :one
+-- Resolves the user_id for a given actor row. Returns 0 when the actor
+-- kind is not 'user' or the row doesn't exist. Used by sessionFromRow to
+-- backfill the deprecated CreatedBy field from CreatedByActorID.
+SELECT COALESCE(user_id, 0)::BIGINT AS user_id FROM actors WHERE id = sqlc.arg('actor_id');

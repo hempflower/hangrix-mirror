@@ -399,11 +399,9 @@ type CreateSessionInput struct {
 	SessionTokenPrefix string
 	SessionTokenHash   string
 	SessionTokenSealed string
-	CreatedBy          int64
 	// CreatedByActorID is the FK to the actors table for the entity
-	// that triggered this session. Set by the spawner after resolving
-	// the actor via the actor module's Resolver. Zero means not set
-	// (legacy rows or races where EnsureActorRole hasn't run yet).
+	// that triggered this session. Required — set by the spawner after
+	// resolving the actor via the actor module's Resolver.
 	CreatedByActorID int64
 
 	// Snapshot.

@@ -553,7 +553,6 @@ func (s *Spawner) spawnRole(
 		SessionTokenPrefix: prefix,
 		SessionTokenHash:   string(hashed),
 		SessionTokenSealed: sealed,
-		CreatedBy:          in.ActorID,
 		CreatedByActorID:   createdByActorID,
 		RepoSHA:            repoSHA,
 		RoleKey:            roleKey,
