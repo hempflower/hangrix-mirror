@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -83,10 +84,54 @@ func NewPostgresStore(deps *PostgresStoreDeps) *PostgresStore {
 	if err := database.Migrate(deps.Pool, sub, "goose_issue", "."); err != nil {
 		panic(fmt.Errorf("apply issue migrations: %w", err))
 	}
+	// Backfill questionnaire events on startup. This replaces the former
+	// 00013 migration (deleted to break the circular FK dependency). On a
+	// fresh database the questionnaires table doesn't exist yet (the
+	// questionnaire module constructs later) — we catch that and skip.
+	// On an existing DB the table is present and the INSERT ... WHERE NOT
+	// EXISTS is idempotent across restarts.
+	backfillQuestionnaireEvents(deps.Pool)
 	return &PostgresStore{
 		q:          issuedb.New(deps.Pool),
 		pool:       deps.Pool,
 		actorStore: deps.ActorStore,
+	}
+}
+
+// backfillQuestionnaireEvents inserts issue_events rows for every existing
+// questionnaire so they appear on the issue timeline. On a fresh database
+// the questionnaires table doesn't exist yet (questionnaire module
+// constructs later) — the undefined_table error is caught and logged at
+// debug level. On an existing DB the WHERE NOT EXISTS guard keeps
+// repeated calls idempotent.
+func backfillQuestionnaireEvents(pool *pgxpool.Pool) {
+	ctx := context.Background()
+	_, err := pool.Exec(ctx, `
+INSERT INTO issue_events (issue_id, kind, payload, agent_role, created_at,
+                           actor_kind, actor_role_key, actor_display_name)
+SELECT q.issue_id,
+       'questionnaire_posted',
+       jsonb_build_object(
+           'questionnaire_id', q.id,
+           'title',            q.title,
+           'question_count',   (SELECT COUNT(*) FROM questionnaire_questions WHERE questionnaire_id = q.id)
+       ),
+       q.created_by_agent,
+       q.created_at,
+       'agent',
+       q.created_by_agent,
+       q.created_by_agent
+FROM questionnaires q
+WHERE NOT EXISTS (
+    SELECT 1 FROM issue_events e
+    WHERE e.issue_id = q.issue_id
+      AND e.kind = 'questionnaire_posted'
+      AND e.payload->>'questionnaire_id' = q.id::text
+)`)
+	if err != nil {
+		// On a fresh database the questionnaires table doesn't exist yet.
+		// pgx wraps the postgres error; log and continue.
+		log.Printf("issue: backfill questionnaire events skipped: %v", err)
 	}
 }
 
