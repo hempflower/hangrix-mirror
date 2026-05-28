@@ -852,10 +852,12 @@ onUnmounted(() => {
                   </CardContent>
                 </Card>
 
-                <!-- review_vote events get the same card chrome as comments
-                     because the reason body is often substantive (the agent
-                     explaining why) — burying it in a one-line event strip
-                     would hide the audit trail humans need to trust the vote. -->
+                <!-- review_vote events render as a header-strip-only Card: the
+                     verdict + actor are the signal; the reason body is omitted
+                     here to keep the timeline scannable. The full reason is
+                     still surfaced in the Contributions view alongside the
+                     review-gate summary. -->
+
                 <Card
                   v-else-if="it.kind === 'event' && it.data.kind === 'review_vote'"
                   class="gap-0 py-0"
@@ -874,10 +876,7 @@ onUnmounted(() => {
                         · {{ rel(it.data.created_at) }}
                       </span>
                     </div>
-                    <div class="px-4 py-3 text-sm">
-                      <MarkdownBody v-if="it.data.payload?.reason" :source="it.data.payload.reason"  />
-                      <p v-else class="text-muted-foreground">{{ t('issue.review.noReason') }}</p>
-                    </div>
+
                   </CardContent>
                 </Card>
 

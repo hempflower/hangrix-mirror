@@ -959,7 +959,6 @@
       "review": {
       "title": "评审",
       "empty": "暂无评审意见。",
-      "noReason": "未填写理由。",
       "vote": {
       "approve": "通过",
       "reject": "拒绝",
