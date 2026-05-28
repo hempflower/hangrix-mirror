@@ -1,5 +1,5 @@
 -- name: CreateOrganization :one
-INSERT INTO organizations (name, display_name, description, created_by)
+INSERT INTO organizations (name, display_name, description, actor_id)
 VALUES ($1, $2, $3, $4)
 RETURNING *;
 

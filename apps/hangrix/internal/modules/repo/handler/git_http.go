@@ -272,7 +272,7 @@ func pusherFromCaller(c *gitCaller) domain.Pusher {
 		if c.session.RoleKey != "" {
 			return domain.Pusher{AgentRole: c.session.RoleKey}
 		}
-		return domain.Pusher{UserID: c.session.CreatedBy}
+		return domain.Pusher{UserID: c.session.CreatedByActorID}
 	}
 	if c.user != nil {
 		return domain.Pusher{UserID: c.user.ID}

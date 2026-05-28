@@ -47,7 +47,7 @@ type Org struct {
 	DisplayName string
 	Description string
 	AvatarURL   string
-	CreatedBy   int64
+	ActorID     int64
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
@@ -90,7 +90,7 @@ var (
 // `name` to ErrOrgConflict and missing rows to ErrOrgNotFound /
 // ErrMemberNotFound.
 type OrgRepo interface {
-	Create(ctx context.Context, name, displayName, description string, createdBy int64) (*Org, error)
+	Create(ctx context.Context, name, displayName, description string, userID int64) (*Org, error)
 	GetByName(ctx context.Context, name string) (*Org, error)
 	GetByID(ctx context.Context, id int64) (*Org, error)
 	Exists(ctx context.Context, name string) (bool, error)

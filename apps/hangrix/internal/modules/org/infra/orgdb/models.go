@@ -8,16 +8,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Actor struct {
+	ID             int64
+	Kind           string
+	UserID         pgtype.Int8
+	AgentRoleKey   pgtype.Text
+	AgentSessionID pgtype.Int8
+	WorkflowRunID  pgtype.Int8
+	DisplayName    string
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
 type Organization struct {
 	ID          int64
 	Name        string
 	DisplayName string
 	Description string
 	AvatarUrl   string
-	CreatedBy   int64
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
 	DeletedAt   pgtype.Timestamptz
+	ActorID     int64
 }
 
 type OrganizationMember struct {

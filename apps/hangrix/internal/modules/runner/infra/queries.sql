@@ -76,7 +76,7 @@ INSERT INTO agent_sessions (
     runner_id, repo_id, issue_number, status, role, model,
     agent_image, working_branch, base_branch,
     host_addendum, env, session_token_prefix, session_token_hash,
-    session_token_sealed, created_by, created_by_actor_id,
+    session_token_sealed, created_by_actor_id,
     repo_sha, role_key, cause_kind, cause_id, role_config
 ) VALUES (
     sqlc.narg('runner_id'),
@@ -93,7 +93,6 @@ INSERT INTO agent_sessions (
     sqlc.arg('session_token_prefix'),
     sqlc.arg('session_token_hash'),
     sqlc.narg('session_token_sealed'),
-    sqlc.arg('created_by'),
     sqlc.narg('created_by_actor_id'),
     sqlc.arg('repo_sha'),
     sqlc.arg('role_key'),

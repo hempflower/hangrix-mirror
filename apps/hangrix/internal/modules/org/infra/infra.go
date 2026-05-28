@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
+	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/infra/orgdb"
 	userdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/user/domain"
@@ -28,13 +29,15 @@ var migrationsFS embed.FS
 // just duplicate the pool reference; the two interfaces are wired to the
 // same instance in the module.
 type PostgresRepo struct {
-	q     *orgdb.Queries
-	users userdomain.Repo
+	q      *orgdb.Queries
+	users  userdomain.Repo
+	actors actordomain.Store
 }
 
 type PostgresRepoDeps struct {
-	Pool  *pgxpool.Pool
-	Users userdomain.Repo
+	Pool   *pgxpool.Pool
+	Users  userdomain.Repo
+	Actors actordomain.Store
 }
 
 func NewPostgresRepo(deps *PostgresRepoDeps) *PostgresRepo {
@@ -45,17 +48,24 @@ func NewPostgresRepo(deps *PostgresRepoDeps) *PostgresRepo {
 	if err := database.Migrate(deps.Pool, sub, "goose_org", "."); err != nil {
 		panic(fmt.Errorf("apply org migrations: %w", err))
 	}
-	return &PostgresRepo{q: orgdb.New(deps.Pool), users: deps.Users}
+	return &PostgresRepo{q: orgdb.New(deps.Pool), users: deps.Users, actors: deps.Actors}
 }
 
 // ---- OrgRepo ----
 
-func (r *PostgresRepo) Create(ctx context.Context, name, displayName, description string, createdBy int64) (*domain.Org, error) {
+func (r *PostgresRepo) Create(ctx context.Context, name, displayName, description string, userID int64) (*domain.Org, error) {
+	// Resolve the user to their actor row. EnsureUser is idempotent — if the
+	// actor row already exists (it does for all users post-backfill), the
+	// existing row is returned.
+	actorRef, err := r.actors.EnsureUser(ctx, userID, "")
+	if err != nil {
+		return nil, fmt.Errorf("resolve actor for user %d: %w", userID, err)
+	}
 	row, err := r.q.CreateOrganization(ctx, orgdb.CreateOrganizationParams{
 		Name:        name,
 		DisplayName: displayName,
 		Description: description,
-		CreatedBy:   createdBy,
+		ActorID:     actorRef.ActorID,
 	})
 	if err != nil {
 		if database.IsUniqueViolation(err) {
@@ -267,7 +277,7 @@ func rowToOrg(r orgdb.Organization) *domain.Org {
 		DisplayName: r.DisplayName,
 		Description: r.Description,
 		AvatarURL:   r.AvatarUrl,
-		CreatedBy:   r.CreatedBy,
+		ActorID:     r.ActorID,
 		CreatedAt:   r.CreatedAt.Time,
 		UpdatedAt:   r.UpdatedAt.Time,
 	}

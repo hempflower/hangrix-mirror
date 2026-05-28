@@ -449,7 +449,7 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 		SessionTokenPrefix: prefix,
 		SessionTokenHash:   string(hashed),
 		SessionTokenSealed: sealed,
-		CreatedBy:          caller.ID,
+		CreatedByActorID:   caller.ID,
 	}
 	sess, err := h.repo.CreateSession(r.Context(), in)
 	if err != nil {

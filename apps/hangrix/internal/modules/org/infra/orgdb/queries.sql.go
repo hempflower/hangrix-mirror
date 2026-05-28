@@ -46,16 +46,16 @@ func (q *Queries) CountOrganizationOwners(ctx context.Context, orgID int64) (int
 }
 
 const createOrganization = `-- name: CreateOrganization :one
-INSERT INTO organizations (name, display_name, description, created_by)
+INSERT INTO organizations (name, display_name, description, actor_id)
 VALUES ($1, $2, $3, $4)
-RETURNING id, name, display_name, description, avatar_url, created_by, created_at, updated_at, deleted_at
+RETURNING id, name, display_name, description, avatar_url, created_at, updated_at, deleted_at, actor_id
 `
 
 type CreateOrganizationParams struct {
 	Name        string
 	DisplayName string
 	Description string
-	CreatedBy   int64
+	ActorID     int64
 }
 
 func (q *Queries) CreateOrganization(ctx context.Context, arg CreateOrganizationParams) (Organization, error) {
@@ -63,7 +63,7 @@ func (q *Queries) CreateOrganization(ctx context.Context, arg CreateOrganization
 		arg.Name,
 		arg.DisplayName,
 		arg.Description,
-		arg.CreatedBy,
+		arg.ActorID,
 	)
 	var i Organization
 	err := row.Scan(
@@ -72,10 +72,10 @@ func (q *Queries) CreateOrganization(ctx context.Context, arg CreateOrganization
 		&i.DisplayName,
 		&i.Description,
 		&i.AvatarUrl,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.ActorID,
 	)
 	return i, err
 }
@@ -94,7 +94,7 @@ func (q *Queries) ExistsOrganizationName(ctx context.Context, name string) (bool
 }
 
 const getOrganizationByID = `-- name: GetOrganizationByID :one
-SELECT id, name, display_name, description, avatar_url, created_by, created_at, updated_at, deleted_at
+SELECT id, name, display_name, description, avatar_url, created_at, updated_at, deleted_at, actor_id
 FROM organizations
 WHERE id = $1 AND deleted_at IS NULL
 `
@@ -108,16 +108,16 @@ func (q *Queries) GetOrganizationByID(ctx context.Context, id int64) (Organizati
 		&i.DisplayName,
 		&i.Description,
 		&i.AvatarUrl,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.ActorID,
 	)
 	return i, err
 }
 
 const getOrganizationByName = `-- name: GetOrganizationByName :one
-SELECT id, name, display_name, description, avatar_url, created_by, created_at, updated_at, deleted_at
+SELECT id, name, display_name, description, avatar_url, created_at, updated_at, deleted_at, actor_id
 FROM organizations
 WHERE name = $1 AND deleted_at IS NULL
 `
@@ -131,10 +131,10 @@ func (q *Queries) GetOrganizationByName(ctx context.Context, name string) (Organ
 		&i.DisplayName,
 		&i.Description,
 		&i.AvatarUrl,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.ActorID,
 	)
 	return i, err
 }
@@ -219,7 +219,7 @@ func (q *Queries) ListOrganizationMembers(ctx context.Context, orgID int64) ([]L
 }
 
 const listOrganizationsForUser = `-- name: ListOrganizationsForUser :many
-SELECT o.id, o.name, o.display_name, o.description, o.avatar_url, o.created_by, o.created_at, o.updated_at, o.deleted_at
+SELECT o.id, o.name, o.display_name, o.description, o.avatar_url, o.created_at, o.updated_at, o.deleted_at, o.actor_id
 FROM organizations o
 JOIN organization_members m ON m.org_id = o.id
 WHERE m.user_id = $1 AND o.deleted_at IS NULL
@@ -241,10 +241,10 @@ func (q *Queries) ListOrganizationsForUser(ctx context.Context, userID int64) ([
 			&i.DisplayName,
 			&i.Description,
 			&i.AvatarUrl,
-			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.ActorID,
 		); err != nil {
 			return nil, err
 		}
@@ -316,7 +316,7 @@ SET display_name = $2,
     avatar_url   = $4,
     updated_at   = NOW()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, name, display_name, description, avatar_url, created_by, created_at, updated_at, deleted_at
+RETURNING id, name, display_name, description, avatar_url, created_at, updated_at, deleted_at, actor_id
 `
 
 type UpdateOrganizationMetaParams struct {
@@ -340,10 +340,10 @@ func (q *Queries) UpdateOrganizationMeta(ctx context.Context, arg UpdateOrganiza
 		&i.DisplayName,
 		&i.Description,
 		&i.AvatarUrl,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.ActorID,
 	)
 	return i, err
 }
