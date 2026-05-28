@@ -17,6 +17,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -115,15 +116,24 @@ type publicRunner struct {
 	EnrollTokenUsed   bool        `json:"enroll_token_used"`
 	AgentTokenPrefix  string      `json:"agent_token_prefix,omitempty"`
 	AgentTokenRevoked bool        `json:"agent_token_revoked"`
-	CreatedBy         int64       `json:"created_by"`
+	CreatedBy         int64       `json:"created_by,omitempty"`
+	ActorID           int64       `json:"actor_id,omitempty"`
 	CreatedAt         time.Time   `json:"created_at"`
 	UpdatedAt         time.Time   `json:"updated_at"`
 }
 
-func toPublicRunner(r *domain.Runner) publicRunner {
+func (h *AdminHandler) toPublicRunner(r *domain.Runner) publicRunner {
 	var caps any = map[string]any{}
 	if len(r.Capabilities) > 0 {
 		_ = json.Unmarshal(r.Capabilities, &caps)
+	}
+	// Resolve actor_id → user_id for the legacy created_by JSON key.
+	createdBy := int64(0)
+	if h.actorResolver != nil {
+		uid, ok := h.actorResolver.UserID(context.Background(), r.ActorID)
+		if ok {
+			createdBy = uid
+		}
 	}
 	return publicRunner{
 		ID:                r.ID,
@@ -138,7 +148,8 @@ func toPublicRunner(r *domain.Runner) publicRunner {
 		EnrollTokenUsed:   r.EnrollTokenUsedAt != nil,
 		AgentTokenPrefix:  r.AgentTokenPrefix,
 		AgentTokenRevoked: r.AgentTokenRevokedAt != nil,
-		CreatedBy:         r.CreatedBy,
+		CreatedBy:         createdBy,
+		ActorID:           r.ActorID,
 		CreatedAt:         r.CreatedAt,
 		UpdatedAt:         r.UpdatedAt,
 	}
@@ -180,7 +191,14 @@ func (h *AdminHandler) createRunner(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "admin path only supports platform runners")
 		return
 	}
-	in := domain.CreateRunnerInput{Name: req.Name, Visibility: v, CreatedBy: caller.ID}
+	var actorID int64
+	if caller != nil && h.actorResolver != nil {
+		resolved, err := h.actorResolver.From(r.Context(), actor.UserRef(caller.ID, ""))
+		if err == nil {
+			actorID = resolved.ActorID
+		}
+	}
+	in := domain.CreateRunnerInput{Name: req.Name, Visibility: v, ActorID: actorID}
 	if err := in.Validate(); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
@@ -207,7 +225,7 @@ func (h *AdminHandler) createRunner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, createRunnerResp{
-		Runner:               toPublicRunner(runner),
+		Runner:               h.toPublicRunner(runner),
 		EnrollTokenPlaintext: plaintext,
 	})
 }
@@ -220,7 +238,7 @@ func (h *AdminHandler) listRunners(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]publicRunner, 0, len(rows))
 	for _, p := range rows {
-		items = append(items, toPublicRunner(p))
+		items = append(items, h.toPublicRunner(p))
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
@@ -239,7 +257,7 @@ func (h *AdminHandler) getRunner(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, toPublicRunner(out))
+	httpx.WriteJSON(w, http.StatusOK, h.toPublicRunner(out))
 }
 
 func (h *AdminHandler) disableRunner(w http.ResponseWriter, r *http.Request) {

@@ -154,7 +154,7 @@ func (s *Service) BuildResult(ctx context.Context, qID int64) (*domain.Result, e
 	// Build submitters list.
 	for _, a := range answers {
 		sd := domain.SubmitterDetail{
-			UserID:      a.UserID,
+			UserID:      a.ActorID,
 			SubmittedAt: a.SubmittedAt,
 		}
 		for _, q := range qn.Questions {
@@ -213,7 +213,7 @@ func buildTextResponses(q domain.Question, answers []*domain.Answer) []domain.Te
 			continue
 		}
 		responses = append(responses, domain.TextResponse{
-			UserID:      a.UserID,
+			UserID:      a.ActorID,
 			Text:        av.Text,
 			SubmittedAt: a.SubmittedAt,
 		})

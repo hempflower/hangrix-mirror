@@ -14,8 +14,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hangrix/hangrix/pkg/actor"
+
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
+	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
@@ -29,37 +32,40 @@ import (
 
 // Handler is the HTTP handler for the user-facing questionnaire API.
 type Handler struct {
-	svc        questionnairedomain.Service
-	issues     issuedomain.Store
-	repos      repodomain.Store
-	storage    *repoinfra.Storage
-	resolver   orgdomain.Resolver
-	middleware authdomain.Middleware
-	users      userdomain.Repo
-	spawner    agentsessiondomain.Spawner // optional — nil-safe (e.g. tests)
+	svc           questionnairedomain.Service
+	issues        issuedomain.Store
+	repos         repodomain.Store
+	storage       *repoinfra.Storage
+	resolver      orgdomain.Resolver
+	middleware    authdomain.Middleware
+	users         userdomain.Repo
+	spawner       agentsessiondomain.Spawner    // optional — nil-safe (e.g. tests)
+	actorResolver actordomain.Resolver
 }
 
 type HandlerDeps struct {
-	Service    questionnairedomain.Service
-	Issues     issuedomain.Store
-	Repos      repodomain.Store
-	Storage    *repoinfra.Storage
-	Resolver   orgdomain.Resolver
-	Middleware authdomain.Middleware
-	Users      userdomain.Repo
-	Spawner    agentsessiondomain.Spawner // optional — nil-safe
+	Service       questionnairedomain.Service
+	Issues        issuedomain.Store
+	Repos         repodomain.Store
+	Storage       *repoinfra.Storage
+	Resolver      orgdomain.Resolver
+	Middleware    authdomain.Middleware
+	Users         userdomain.Repo
+	Spawner       agentsessiondomain.Spawner    // optional — nil-safe
+	ActorResolver actordomain.Resolver
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
-		svc:        deps.Service,
-		issues:     deps.Issues,
-		repos:      deps.Repos,
-		storage:    deps.Storage,
-		resolver:   deps.Resolver,
-		middleware: deps.Middleware,
-		users:      deps.Users,
-		spawner:    deps.Spawner,
+		svc:           deps.Service,
+		issues:        deps.Issues,
+		repos:         deps.Repos,
+		storage:       deps.Storage,
+		resolver:      deps.Resolver,
+		middleware:    deps.Middleware,
+		users:         deps.Users,
+		spawner:       deps.Spawner,
+		actorResolver: deps.ActorResolver,
 	}
 }
 
@@ -238,12 +244,20 @@ func (h *Handler) loadIssue(w http.ResponseWriter, r *http.Request, repoID int64
 	return iss, true
 }
 
-func (h *Handler) currentUserID(r *http.Request) (int64, bool) {
+// currentActorID resolves the authenticated user's user_id → actor_id via the
+// actor.Resolver. Returns (0, false) for unauthenticated or unresolved callers.
+func (h *Handler) currentActorID(r *http.Request) (int64, bool) {
 	caller, ok := authdomain.UserFromRequest(r)
 	if !ok || caller == nil {
 		return 0, false
 	}
-	return caller.ID, true
+	if h.actorResolver != nil {
+		resolved, err := h.actorResolver.From(r.Context(), actor.UserRef(caller.ID, ""))
+		if err == nil {
+			return resolved.ActorID, true
+		}
+	}
+	return 0, false
 }
 
 // ---- handlers ---- //
@@ -269,8 +283,8 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	for _, qn := range qns {
 		pq := toPublicQuestionnaire(qn)
 		// Optionally include my_submission for authenticated users.
-		if uid, ok := h.currentUserID(r); ok {
-			if ans, err := h.svc.GetUserAnswer(r.Context(), qn.ID, uid); err == nil && ans != nil {
+		if aid, ok := h.currentActorID(r); ok {
+			if ans, err := h.svc.GetUserAnswer(r.Context(), qn.ID, aid); err == nil && ans != nil {
 				pq.MySubmission = toPublicMySubmission(ans)
 			}
 		}
@@ -303,8 +317,8 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pq := toPublicQuestionnaire(qn)
-	if uid, ok := h.currentUserID(r); ok {
-		if ans, err := h.svc.GetUserAnswer(r.Context(), qn.ID, uid); err == nil && ans != nil {
+	if aid, ok := h.currentActorID(r); ok {
+		if ans, err := h.svc.GetUserAnswer(r.Context(), qn.ID, aid); err == nil && ans != nil {
 			pq.MySubmission = toPublicMySubmission(ans)
 		}
 	}
@@ -324,7 +338,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uid, ok := h.currentUserID(r)
+	aid, ok := h.currentActorID(r)
 	if !ok {
 		httpx.WriteError(w, http.StatusUnauthorized, "login required")
 		return
@@ -351,7 +365,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	answer, qn, err := h.svc.UpsertAnswer(r.Context(), qid, uid, perQ)
+	answer, qn, err := h.svc.UpsertAnswer(r.Context(), qid, aid, perQ)
 	if err != nil {
 		if errors.Is(err, questionnairedomain.ErrQuestionnaireLocked) {
 			writeJSON(w, http.StatusConflict, map[string]any{
@@ -379,7 +393,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		payload, _ := json.Marshal(map[string]any{
 			"questionnaire_id": qid,
 			"answer_id":        answer.ID,
-			"respondent_id":    uid,
+			"respondent_id":    aid,
 		})
 		issueNum, _ := strconv.ParseInt(chi.URLParam(r, "number"), 10, 32)
 		_, _ = h.spawner.OnTrigger(r.Context(), agentsessiondomain.TriggerInput{
@@ -388,7 +402,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 			CauseID:     strconv.FormatInt(answer.ID, 10),
 			RepoID:      rc.repo.ID,
 			IssueNumber: int32(issueNum),
-			ActorID:     uid,
+			ActorID:     aid,
 			RoleKey:     qn.CreatedByAgent,
 			Payload:     payload,
 		})

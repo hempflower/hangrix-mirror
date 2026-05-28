@@ -306,7 +306,7 @@ const createRunner = `-- name: CreateRunner :one
 
 INSERT INTO runners (
     name, owner_user_id, visibility, status,
-    enroll_token_prefix, enroll_token_hash, created_by
+    enroll_token_prefix, enroll_token_hash, actor_id
 ) VALUES (
     $1,
     $2,
@@ -316,7 +316,7 @@ INSERT INTO runners (
     $5,
     $6
 )
-RETURNING id, name, owner_user_id, visibility, status, capabilities, last_heartbeat_at, enroll_token_prefix, enroll_token_hash, enroll_token_used_at, agent_token_prefix, agent_token_hash, agent_token_revoked_at, created_by, created_at, updated_at
+RETURNING id, name, owner_user_id, visibility, status, capabilities, last_heartbeat_at, enroll_token_prefix, enroll_token_hash, enroll_token_used_at, agent_token_prefix, agent_token_hash, agent_token_revoked_at, created_at, updated_at, actor_id
 `
 
 type CreateRunnerParams struct {
@@ -325,7 +325,7 @@ type CreateRunnerParams struct {
 	Visibility        string
 	EnrollTokenPrefix string
 	EnrollTokenHash   string
-	CreatedBy         int64
+	ActorID           int64
 }
 
 // ---- runners ----
@@ -336,7 +336,7 @@ func (q *Queries) CreateRunner(ctx context.Context, arg CreateRunnerParams) (Run
 		arg.Visibility,
 		arg.EnrollTokenPrefix,
 		arg.EnrollTokenHash,
-		arg.CreatedBy,
+		arg.ActorID,
 	)
 	var i Runner
 	err := row.Scan(
@@ -353,9 +353,9 @@ func (q *Queries) CreateRunner(ctx context.Context, arg CreateRunnerParams) (Run
 		&i.AgentTokenPrefix,
 		&i.AgentTokenHash,
 		&i.AgentTokenRevokedAt,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ActorID,
 	)
 	return i, err
 }
@@ -594,7 +594,7 @@ func (q *Queries) GetActorUserID(ctx context.Context, actorID int64) (int64, err
 }
 
 const getRunnerByAgentPrefix = `-- name: GetRunnerByAgentPrefix :one
-SELECT id, name, owner_user_id, visibility, status, capabilities, last_heartbeat_at, enroll_token_prefix, enroll_token_hash, enroll_token_used_at, agent_token_prefix, agent_token_hash, agent_token_revoked_at, created_by, created_at, updated_at FROM runners WHERE agent_token_prefix = $1
+SELECT id, name, owner_user_id, visibility, status, capabilities, last_heartbeat_at, enroll_token_prefix, enroll_token_hash, enroll_token_used_at, agent_token_prefix, agent_token_hash, agent_token_revoked_at, created_at, updated_at, actor_id FROM runners WHERE agent_token_prefix = $1
 `
 
 func (q *Queries) GetRunnerByAgentPrefix(ctx context.Context, agentTokenPrefix pgtype.Text) (Runner, error) {
@@ -614,15 +614,15 @@ func (q *Queries) GetRunnerByAgentPrefix(ctx context.Context, agentTokenPrefix p
 		&i.AgentTokenPrefix,
 		&i.AgentTokenHash,
 		&i.AgentTokenRevokedAt,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ActorID,
 	)
 	return i, err
 }
 
 const getRunnerByEnrollPrefixForUpdate = `-- name: GetRunnerByEnrollPrefixForUpdate :one
-SELECT id, name, owner_user_id, visibility, status, capabilities, last_heartbeat_at, enroll_token_prefix, enroll_token_hash, enroll_token_used_at, agent_token_prefix, agent_token_hash, agent_token_revoked_at, created_by, created_at, updated_at FROM runners
+SELECT id, name, owner_user_id, visibility, status, capabilities, last_heartbeat_at, enroll_token_prefix, enroll_token_hash, enroll_token_used_at, agent_token_prefix, agent_token_hash, agent_token_revoked_at, created_at, updated_at, actor_id FROM runners
 WHERE enroll_token_prefix = $1
 FOR UPDATE
 `
@@ -646,15 +646,15 @@ func (q *Queries) GetRunnerByEnrollPrefixForUpdate(ctx context.Context, enrollTo
 		&i.AgentTokenPrefix,
 		&i.AgentTokenHash,
 		&i.AgentTokenRevokedAt,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ActorID,
 	)
 	return i, err
 }
 
 const getRunnerByID = `-- name: GetRunnerByID :one
-SELECT id, name, owner_user_id, visibility, status, capabilities, last_heartbeat_at, enroll_token_prefix, enroll_token_hash, enroll_token_used_at, agent_token_prefix, agent_token_hash, agent_token_revoked_at, created_by, created_at, updated_at FROM runners WHERE id = $1
+SELECT id, name, owner_user_id, visibility, status, capabilities, last_heartbeat_at, enroll_token_prefix, enroll_token_hash, enroll_token_used_at, agent_token_prefix, agent_token_hash, agent_token_revoked_at, created_at, updated_at, actor_id FROM runners WHERE id = $1
 `
 
 func (q *Queries) GetRunnerByID(ctx context.Context, id int64) (Runner, error) {
@@ -674,9 +674,9 @@ func (q *Queries) GetRunnerByID(ctx context.Context, id int64) (Runner, error) {
 		&i.AgentTokenPrefix,
 		&i.AgentTokenHash,
 		&i.AgentTokenRevokedAt,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ActorID,
 	)
 	return i, err
 }
@@ -935,7 +935,7 @@ func (q *Queries) ListRecentSessions(ctx context.Context, arg ListRecentSessions
 }
 
 const listRunners = `-- name: ListRunners :many
-SELECT id, name, owner_user_id, visibility, status, capabilities, last_heartbeat_at, enroll_token_prefix, enroll_token_hash, enroll_token_used_at, agent_token_prefix, agent_token_hash, agent_token_revoked_at, created_by, created_at, updated_at FROM runners
+SELECT id, name, owner_user_id, visibility, status, capabilities, last_heartbeat_at, enroll_token_prefix, enroll_token_hash, enroll_token_used_at, agent_token_prefix, agent_token_hash, agent_token_revoked_at, created_at, updated_at, actor_id FROM runners
 WHERE ($1::BIGINT IS NULL OR owner_user_id = $1)
   AND ($2::TEXT  IS NULL OR visibility    = $2)
 ORDER BY id DESC
@@ -969,9 +969,9 @@ func (q *Queries) ListRunners(ctx context.Context, arg ListRunnersParams) ([]Run
 			&i.AgentTokenPrefix,
 			&i.AgentTokenHash,
 			&i.AgentTokenRevokedAt,
-			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ActorID,
 		); err != nil {
 			return nil, err
 		}
