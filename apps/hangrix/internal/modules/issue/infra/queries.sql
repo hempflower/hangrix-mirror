@@ -40,7 +40,7 @@ SELECT i.id, i.repo_id, i.number,
        CASE WHEN a.kind = 'user' THEN COALESCE(a.user_id, 0) ELSE 0 END::BIGINT AS author_id,
        CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END         AS author_name,
        CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
-       CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END AS actor_kind,
+       (CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END)::TEXT AS actor_kind,
        COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
        COALESCE(a.agent_role_key, '') AS actor_role_key,
        COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
@@ -60,7 +60,7 @@ SELECT i.id, i.repo_id, i.number,
        CASE WHEN a.kind = 'user' THEN COALESCE(a.user_id, 0) ELSE 0 END::BIGINT AS author_id,
        CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END         AS author_name,
        CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
-       CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END AS actor_kind,
+       (CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END)::TEXT AS actor_kind,
        COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
        COALESCE(a.agent_role_key, '') AS actor_role_key,
        COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
@@ -81,7 +81,7 @@ SELECT i.id, i.repo_id, i.number,
        CASE WHEN a.kind = 'user' THEN COALESCE(a.user_id, 0) ELSE 0 END::BIGINT AS author_id,
        CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END         AS author_name,
        CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
-       CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END AS actor_kind,
+       (CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END)::TEXT AS actor_kind,
        COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
        COALESCE(a.agent_role_key, '') AS actor_role_key,
        COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
@@ -109,7 +109,7 @@ SELECT i.id, i.repo_id, i.number,
        CASE WHEN a.kind = 'user' THEN COALESCE(a.user_id, 0) ELSE 0 END::BIGINT AS author_id,
        CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END         AS author_name,
        CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
-       CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END AS actor_kind,
+       (CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END)::TEXT AS actor_kind,
        COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
        COALESCE(a.agent_role_key, '') AS actor_role_key,
        COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
@@ -200,7 +200,7 @@ SELECT c.id, c.issue_id,
        CASE WHEN a.kind = 'user' THEN COALESCE(a.user_id, 0) ELSE 0 END::BIGINT AS author_id,
        CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END         AS author_name,
        CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
-       CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END AS actor_kind,
+       (CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END)::TEXT AS actor_kind,
        COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
        COALESCE(a.agent_role_key, '') AS actor_role_key,
        COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
@@ -217,7 +217,7 @@ SELECT c.id, c.issue_id,
        CASE WHEN a.kind = 'user' THEN COALESCE(a.user_id, 0) ELSE 0 END::BIGINT AS author_id,
        CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END         AS author_name,
        CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
-       CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END AS actor_kind,
+       (CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END)::TEXT AS actor_kind,
        COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
        COALESCE(a.agent_role_key, '') AS actor_role_key,
        COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
@@ -232,74 +232,64 @@ ORDER BY c.created_at, c.id;
 -- ---- issue_events ----
 
 -- name: CreateEvent :one
--- actor_id is nullable for system-generated events (M5+); agent_role
--- is the role-key string for agent-generated events. Both can be set
--- on a row to attribute a system-side action to a specific agent role.
--- actor_* columns are dual-written alongside legacy fields.
-INSERT INTO issue_events (
-    issue_id, kind, payload, actor_id, agent_role,
-    actor_kind, actor_user_id, actor_role_key, actor_workflow_run_id, actor_display_name
-)
+-- Phase 3d Batch 4: single actor_id replaces the 5 denormalized actor_* columns
+-- and the legacy agent_role. The actor must have been resolved before calling
+-- this — caller passes the actors.id.
+INSERT INTO issue_events (issue_id, kind, payload, actor_id)
 VALUES (
     sqlc.arg('issue_id'),
     sqlc.arg('kind'),
     sqlc.arg('payload')::jsonb,
-    sqlc.narg('actor_id'),
-    sqlc.arg('agent_role'),
-    sqlc.arg('actor_kind'),
-    sqlc.narg('actor_user_id'),
-    sqlc.arg('actor_role_key'),
-    sqlc.narg('actor_workflow_run_id'),
-    sqlc.arg('actor_display_name')
+    sqlc.arg('actor_id')
 )
 RETURNING id, created_at;
 
 -- name: GetEventByID :one
 SELECT e.id, e.issue_id, e.kind, e.payload,
-       COALESCE(e.actor_id, 0)::BIGINT AS actor_id,
-       COALESCE(u.username, '')        AS actor_name,
-       e.agent_role, e.created_at,
-       e.actor_kind,
-       COALESCE(e.actor_user_id, 0)::BIGINT AS actor_user_id,
-       e.actor_role_key,
-       COALESCE(e.actor_workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
-       e.actor_display_name
+       e.actor_id,
+       CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END AS actor_name,
+       CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
+       (CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END)::TEXT AS actor_kind,
+       COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
+       COALESCE(a.agent_role_key, '') AS actor_role_key,
+       COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
+       a.display_name AS actor_display_name,
+       e.created_at
 FROM issue_events e
-LEFT JOIN users u ON u.id = e.actor_id
+JOIN actors a ON a.id = e.actor_id
 WHERE e.id = sqlc.arg('id');
 
 -- name: ListEvents :many
 SELECT e.id, e.issue_id, e.kind, e.payload,
-       COALESCE(e.actor_id, 0)::BIGINT AS actor_id,
-       COALESCE(u.username, '')        AS actor_name,
-       e.agent_role, e.created_at,
-       e.actor_kind,
-       COALESCE(e.actor_user_id, 0)::BIGINT AS actor_user_id,
-       e.actor_role_key,
-       COALESCE(e.actor_workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
-       e.actor_display_name
+       e.actor_id,
+       CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END AS actor_name,
+       CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
+       (CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END)::TEXT AS actor_kind,
+       COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
+       COALESCE(a.agent_role_key, '') AS actor_role_key,
+       COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
+       a.display_name AS actor_display_name,
+       e.created_at
 FROM issue_events e
-LEFT JOIN users u ON u.id = e.actor_id
+JOIN actors a ON a.id = e.actor_id
 WHERE e.issue_id = sqlc.arg('issue_id')
 ORDER BY e.created_at, e.id;
 
 -- ---- issue_attachments ----
 
 -- name: CreateAttachment :one
--- Human path: sqlc.narg('author_id'), agent_role=''
--- Agent path: author_id=NULL (omit), agent_role with the role key.
--- actor_* columns are dual-written alongside legacy fields.
+-- Phase 3d Batch 4: single actor_id replaces author_id/agent_role + the
+-- 5 denormalized actor_* columns. The actor must have been resolved before
+-- calling this — caller passes the actors.id.
 INSERT INTO issue_attachments (
-    repo_id, issue_id, author_id, agent_role, storage_key,
+    repo_id, issue_id, actor_id, storage_key,
     original_name, display_name, size_bytes, mime_type, detected_mime_type,
-    sha256, kind, inline, status,
-    actor_kind, actor_user_id, actor_role_key, actor_workflow_run_id, actor_display_name
+    sha256, kind, inline, status
 )
 VALUES (
     sqlc.arg('repo_id'),
     sqlc.arg('issue_id'),
-    sqlc.narg('author_id'),
-    sqlc.arg('agent_role'),
+    sqlc.arg('actor_id'),
     sqlc.arg('storage_key'),
     sqlc.arg('original_name'),
     sqlc.arg('display_name'),
@@ -309,45 +299,44 @@ VALUES (
     sqlc.arg('sha256'),
     sqlc.arg('kind'),
     sqlc.arg('inline'),
-    sqlc.arg('status'),
-    sqlc.arg('actor_kind'),
-    sqlc.narg('actor_user_id'),
-    sqlc.arg('actor_role_key'),
-    sqlc.narg('actor_workflow_run_id'),
-    sqlc.arg('actor_display_name')
+    sqlc.arg('status')
 )
 RETURNING id, created_at;
 
 -- name: GetAttachment :one
 SELECT a.id, a.repo_id, a.issue_id,
        COALESCE(a.comment_id, 0)::BIGINT AS comment_id,
-       COALESCE(a.author_id, 0)::BIGINT   AS author_id,
-       a.agent_role, a.storage_key, a.original_name,
+       CASE WHEN ac.kind = 'user' THEN COALESCE(ac.user_id, 0) ELSE 0 END::BIGINT AS author_id,
+       CASE WHEN ac.kind = 'agent_role' THEN COALESCE(ac.agent_role_key, '') ELSE '' END AS agent_role,
+       a.storage_key, a.original_name,
        a.display_name, a.size_bytes, a.mime_type, a.detected_mime_type,
        a.sha256, a.kind, a.inline, a.status,
-       a.created_at, a.deleted_at,
-       a.actor_kind,
-       COALESCE(a.actor_user_id, 0)::BIGINT AS actor_user_id,
-       a.actor_role_key,
-       COALESCE(a.actor_workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
-       a.actor_display_name
+       (CASE WHEN ac.kind = 'agent_role' THEN 'agent' WHEN ac.kind = 'workflow_run' THEN 'workflow' ELSE ac.kind END)::TEXT AS actor_kind,
+       COALESCE(ac.user_id, 0)::BIGINT AS actor_user_id,
+       COALESCE(ac.agent_role_key, '') AS actor_role_key,
+       COALESCE(ac.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
+       ac.display_name AS actor_display_name,
+       a.created_at, a.deleted_at
 FROM issue_attachments a
+JOIN actors ac ON ac.id = a.actor_id
 WHERE a.id = sqlc.arg('id');
 
 -- name: ListAttachments :many
 SELECT a.id, a.repo_id, a.issue_id,
        COALESCE(a.comment_id, 0)::BIGINT AS comment_id,
-       COALESCE(a.author_id, 0)::BIGINT   AS author_id,
-       a.agent_role, a.storage_key, a.original_name,
+       CASE WHEN ac.kind = 'user' THEN COALESCE(ac.user_id, 0) ELSE 0 END::BIGINT AS author_id,
+       CASE WHEN ac.kind = 'agent_role' THEN COALESCE(ac.agent_role_key, '') ELSE '' END AS agent_role,
+       a.storage_key, a.original_name,
        a.display_name, a.size_bytes, a.mime_type, a.detected_mime_type,
        a.sha256, a.kind, a.inline, a.status,
-       a.created_at, a.deleted_at,
-       a.actor_kind,
-       COALESCE(a.actor_user_id, 0)::BIGINT AS actor_user_id,
-       a.actor_role_key,
-       COALESCE(a.actor_workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
-       a.actor_display_name
+       (CASE WHEN ac.kind = 'agent_role' THEN 'agent' WHEN ac.kind = 'workflow_run' THEN 'workflow' ELSE ac.kind END)::TEXT AS actor_kind,
+       COALESCE(ac.user_id, 0)::BIGINT AS actor_user_id,
+       COALESCE(ac.agent_role_key, '') AS actor_role_key,
+       COALESCE(ac.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
+       ac.display_name AS actor_display_name,
+       a.created_at, a.deleted_at
 FROM issue_attachments a
+JOIN actors ac ON ac.id = a.actor_id
 WHERE a.issue_id = sqlc.arg('issue_id')
   AND (sqlc.narg('comment_id')::BIGINT IS NULL OR a.comment_id = sqlc.narg('comment_id'))
 ORDER BY a.created_at, a.id;
@@ -372,11 +361,11 @@ WHERE id = sqlc.arg('id') AND status <> 'deleted';
 -- git layer rejects re-pushes to an existing ref), so the ON CONFLICT path
 -- only fires on idempotent re-delivery of the same push — it refreshes the
 -- diff snapshot but leaves the review status untouched.
--- actor_* columns are dual-written alongside legacy agent_role.
+-- Phase 3d Batch 4: single actor_id replaces the actor_* denormalized columns.
 INSERT INTO contributions (
     repo_id, issue_id, session_id, agent_role, ref_name,
     head_sha, base_sha, changed_paths, files, additions, deletions, status,
-    actor_kind, actor_role_key, actor_display_name
+    actor_id
 )
 VALUES (
     sqlc.arg('repo_id'),
@@ -391,9 +380,7 @@ VALUES (
     sqlc.arg('additions'),
     sqlc.arg('deletions'),
     'pending',
-    sqlc.arg('actor_kind'),
-    sqlc.arg('actor_role_key'),
-    sqlc.arg('actor_display_name')
+    sqlc.arg('actor_id')
 )
 ON CONFLICT (issue_id, ref_name) DO UPDATE SET
     session_id    = EXCLUDED.session_id,
@@ -404,57 +391,58 @@ ON CONFLICT (issue_id, ref_name) DO UPDATE SET
     files         = EXCLUDED.files,
     additions     = EXCLUDED.additions,
     deletions     = EXCLUDED.deletions,
-    actor_kind    = EXCLUDED.actor_kind,
-    actor_role_key = EXCLUDED.actor_role_key,
-    actor_display_name = EXCLUDED.actor_display_name,
+    actor_id      = EXCLUDED.actor_id,
     updated_at    = NOW()
 RETURNING id;
 
 -- name: GetContribution :one
-SELECT id, repo_id, issue_id, session_id, agent_role, ref_name,
-       head_sha, base_sha, title, description, status, mergeable,
-       merge_mode, changed_paths, files, additions, deletions,
-       merged_commit_sha, merged_at, created_at, updated_at,
-       actor_kind,
-       COALESCE(actor_user_id, 0)::BIGINT AS actor_user_id,
-       actor_role_key,
-       COALESCE(actor_workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
-       actor_display_name
-FROM contributions
-WHERE id = sqlc.arg('id');
+SELECT c.id, c.repo_id, c.issue_id, c.session_id, c.agent_role, c.ref_name,
+       c.head_sha, c.base_sha, c.title, c.description, c.status, c.mergeable,
+       c.merge_mode, c.changed_paths, c.files, c.additions, c.deletions,
+       c.merged_commit_sha, c.merged_at, c.created_at, c.updated_at,
+       (CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END)::TEXT AS actor_kind,
+       COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
+       COALESCE(a.agent_role_key, '') AS actor_role_key,
+       COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
+       a.display_name AS actor_display_name
+FROM contributions c
+JOIN actors a ON a.id = c.actor_id
+WHERE c.id = sqlc.arg('id');
 
 -- name: GetContributionByRef :one
-SELECT id, repo_id, issue_id, session_id, agent_role, ref_name,
-       head_sha, base_sha, title, description, status, mergeable,
-       merge_mode, changed_paths, files, additions, deletions,
-       merged_commit_sha, merged_at, created_at, updated_at,
-       actor_kind,
-       COALESCE(actor_user_id, 0)::BIGINT AS actor_user_id,
-       actor_role_key,
-       COALESCE(actor_workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
-       actor_display_name
-FROM contributions
-WHERE issue_id = sqlc.arg('issue_id') AND ref_name = sqlc.arg('ref_name');
+SELECT c.id, c.repo_id, c.issue_id, c.session_id, c.agent_role, c.ref_name,
+       c.head_sha, c.base_sha, c.title, c.description, c.status, c.mergeable,
+       c.merge_mode, c.changed_paths, c.files, c.additions, c.deletions,
+       c.merged_commit_sha, c.merged_at, c.created_at, c.updated_at,
+       (CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END)::TEXT AS actor_kind,
+       COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
+       COALESCE(a.agent_role_key, '') AS actor_role_key,
+       COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
+       a.display_name AS actor_display_name
+FROM contributions c
+JOIN actors a ON a.id = c.actor_id
+WHERE c.issue_id = sqlc.arg('issue_id') AND c.ref_name = sqlc.arg('ref_name');
 
 -- name: ListContributions :many
 -- include_closed / include_merged are optional booleans that control
 -- whether terminal (closed / merged) contributions appear in the result.
 -- When both are false (the default), only non-terminal contributions
 -- (pending, approved, rejected) are returned — the "active" view.
-SELECT id, repo_id, issue_id, session_id, agent_role, ref_name,
-       head_sha, base_sha, title, description, status, mergeable,
-       merge_mode, changed_paths, files, additions, deletions,
-       merged_commit_sha, merged_at, created_at, updated_at,
-       actor_kind,
-       COALESCE(actor_user_id, 0)::BIGINT AS actor_user_id,
-       actor_role_key,
-       COALESCE(actor_workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
-       actor_display_name
-FROM contributions
-WHERE issue_id = sqlc.arg('issue_id')
-  AND (sqlc.arg('include_closed')::BOOLEAN OR status <> 'closed')
-  AND (sqlc.arg('include_merged')::BOOLEAN OR status <> 'merged')
-ORDER BY created_at, id;
+SELECT c.id, c.repo_id, c.issue_id, c.session_id, c.agent_role, c.ref_name,
+       c.head_sha, c.base_sha, c.title, c.description, c.status, c.mergeable,
+       c.merge_mode, c.changed_paths, c.files, c.additions, c.deletions,
+       c.merged_commit_sha, c.merged_at, c.created_at, c.updated_at,
+       (CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END)::TEXT AS actor_kind,
+       COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
+       COALESCE(a.agent_role_key, '') AS actor_role_key,
+       COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
+       a.display_name AS actor_display_name
+FROM contributions c
+JOIN actors a ON a.id = c.actor_id
+WHERE c.issue_id = sqlc.arg('issue_id')
+  AND (sqlc.arg('include_closed')::BOOLEAN OR c.status <> 'closed')
+  AND (sqlc.arg('include_merged')::BOOLEAN OR c.status <> 'merged')
+ORDER BY c.created_at, c.id;
 
 -- name: SetContributionMeta :one
 UPDATE contributions
@@ -613,7 +601,7 @@ SELECT pt.id, pt.number, pt.title, pt.state,
        CASE WHEN a.kind = 'user' THEN COALESCE(a.user_id, 0) ELSE 0 END::BIGINT AS author_id,
        CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END         AS author_name,
        CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
-       CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END AS actor_kind,
+       (CASE WHEN a.kind = 'agent_role' THEN 'agent' WHEN a.kind = 'workflow_run' THEN 'workflow' ELSE a.kind END)::TEXT AS actor_kind,
        COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
        COALESCE(a.agent_role_key, '') AS actor_role_key,
        COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,

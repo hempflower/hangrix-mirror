@@ -20,32 +20,28 @@ type BranchProtection struct {
 }
 
 type Contribution struct {
-	ID                 int64
-	RepoID             int64
-	IssueID            int64
-	SessionID          int64
-	AgentRole          string
-	RefName            string
-	HeadSha            string
-	BaseSha            string
-	Title              string
-	Description        string
-	Status             string
-	Mergeable          bool
-	MergeMode          string
-	ChangedPaths       []string
-	Files              int32
-	Additions          int32
-	Deletions          int32
-	MergedCommitSha    string
-	MergedAt           pgtype.Timestamptz
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
-	ActorKind          string
-	ActorUserID        pgtype.Int8
-	ActorRoleKey       string
-	ActorWorkflowRunID pgtype.Int8
-	ActorDisplayName   string
+	ID              int64
+	RepoID          int64
+	IssueID         int64
+	SessionID       int64
+	AgentRole       string
+	RefName         string
+	HeadSha         string
+	BaseSha         string
+	Title           string
+	Description     string
+	Status          string
+	Mergeable       bool
+	MergeMode       string
+	ChangedPaths    []string
+	Files           int32
+	Additions       int32
+	Deletions       int32
+	MergedCommitSha string
+	MergedAt        pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	ActorID         int64
 }
 
 type Issue struct {
@@ -68,29 +64,23 @@ type Issue struct {
 }
 
 type IssueAttachment struct {
-	ID                 int64
-	RepoID             int64
-	IssueID            int64
-	CommentID          pgtype.Int8
-	AuthorID           pgtype.Int8
-	AgentRole          string
-	StorageKey         string
-	OriginalName       string
-	SizeBytes          int64
-	MimeType           string
-	DetectedMimeType   string
-	Sha256             string
-	Kind               string
-	Status             string
-	CreatedAt          pgtype.Timestamptz
-	DeletedAt          pgtype.Timestamptz
-	DisplayName        string
-	Inline             bool
-	ActorKind          string
-	ActorUserID        pgtype.Int8
-	ActorRoleKey       string
-	ActorWorkflowRunID pgtype.Int8
-	ActorDisplayName   string
+	ID               int64
+	RepoID           int64
+	IssueID          int64
+	CommentID        pgtype.Int8
+	StorageKey       string
+	OriginalName     string
+	SizeBytes        int64
+	MimeType         string
+	DetectedMimeType string
+	Sha256           string
+	Kind             string
+	Status           string
+	CreatedAt        pgtype.Timestamptz
+	DeletedAt        pgtype.Timestamptz
+	DisplayName      string
+	Inline           bool
+	ActorID          int64
 }
 
 type IssueComment struct {
@@ -119,18 +109,12 @@ type IssueDependency struct {
 }
 
 type IssueEvent struct {
-	ID                 int64
-	IssueID            int64
-	Kind               string
-	Payload            []byte
-	ActorID            pgtype.Int8
-	CreatedAt          pgtype.Timestamptz
-	AgentRole          string
-	ActorKind          string
-	ActorUserID        pgtype.Int8
-	ActorRoleKey       string
-	ActorWorkflowRunID pgtype.Int8
-	ActorDisplayName   string
+	ID        int64
+	IssueID   int64
+	Kind      string
+	Payload   []byte
+	ActorID   int64
+	CreatedAt pgtype.Timestamptz
 }
 
 type Organization struct {
