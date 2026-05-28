@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
+	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire/infra/questionnairedb"
 )
@@ -32,7 +33,8 @@ type PostgresStore struct {
 }
 
 type PostgresStoreDeps struct {
-	Pool *pgxpool.Pool
+	Pool   *pgxpool.Pool
+	Issues issuedomain.Store
 }
 
 func NewPostgresStore(deps *PostgresStoreDeps) *PostgresStore {
@@ -40,6 +42,7 @@ func NewPostgresStore(deps *PostgresStoreDeps) *PostgresStore {
 	if err != nil {
 		panic(fmt.Errorf("questionnaire migrations sub-fs: %w", err))
 	}
+	_ = deps.Issues // ensure IOC resolves issue.Store first → issue migrations run before questionnaire ones
 	if err := database.Migrate(deps.Pool, sub, "goose_questionnaire", "."); err != nil {
 		panic(fmt.Errorf("apply questionnaire migrations: %w", err))
 	}
