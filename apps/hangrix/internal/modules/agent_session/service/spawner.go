@@ -537,7 +537,10 @@ func (s *Spawner) spawnRole(
 	}
 
 	// Resolve the triggering actor via the actor module.
-	createdByActorID := s.resolveTriggerActor(ctx, in)
+	createdByActorID, err := s.resolveTriggerActor(ctx, in)
+	if err != nil {
+		return domain.SpawnedSession{}, fmt.Errorf("resolve trigger actor: %w", err)
+	}
 
 	createIn := runnerdomain.CreateSessionInput{
 		RunnerID:           runnerID,
@@ -612,32 +615,29 @@ func (s *Spawner) spawnRole(
 // resolveTriggerActor resolves the triggering entity to an actors table id.
 // When in.Actor is non-nil (new path, set by callers via actor module),
 // it resolves through the Resolver. Otherwise it falls back to in.ActorID
-// and constructs a user actor. Returns 0 when neither is set (legacy
-// callers that haven't migrated yet).
-func (s *Spawner) resolveTriggerActor(ctx context.Context, in domain.TriggerInput) int64 {
+// and constructs a user actor. Returns an error when resolution fails.
+func (s *Spawner) resolveTriggerActor(ctx context.Context, in domain.TriggerInput) (int64, error) {
 	if s.actorResolver == nil {
-		return 0
+		return 0, nil
 	}
 	// New path: caller already resolved the actor.
 	if in.Actor != nil && !in.Actor.IsZero() {
 		resolved, err := s.actorResolver.From(ctx, *in.Actor)
 		if err != nil {
-			log.Printf("spawner: resolve trigger actor %s: %v", in.Actor.ID, err)
-			return 0
+			return 0, fmt.Errorf("spawner: resolve trigger actor %s: %w", in.Actor.ID, err)
 		}
-		return resolved.ActorID
+		return resolved.ActorID, nil
 	}
 	// Legacy path: ActorID > 0 means a user triggered this. Resolve
 	// the user actor (or create it via EnsureUser).
 	if in.ActorID > 0 {
 		resolved, err := s.actorResolver.From(ctx, actor.UserRef(in.ActorID, ""))
 		if err != nil {
-			log.Printf("spawner: resolve legacy actor user:%d: %v", in.ActorID, err)
-			return 0
+			return 0, fmt.Errorf("spawner: resolve legacy actor user:%d: %w", in.ActorID, err)
 		}
-		return resolved.ActorID
+		return resolved.ActorID, nil
 	}
-	return 0
+	return 0, nil
 }
 
 // hostFileProvider adapts HostBlobReader to agentsconfig.FileProvider for

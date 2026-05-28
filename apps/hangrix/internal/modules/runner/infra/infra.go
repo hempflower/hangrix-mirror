@@ -302,9 +302,8 @@ func (r *PostgresRepo) CreateSession(ctx context.Context, in domain.CreateSessio
 	if len(roleConfig) == 0 {
 		roleConfig = []byte("{}")
 	}
-	var actorArg pgtype.Int8
-	if in.CreatedByActorID > 0 {
-		actorArg = pgtype.Int8{Int64: in.CreatedByActorID, Valid: true}
+	if in.CreatedByActorID == 0 {
+		return nil, fmt.Errorf("CreateSession: CreatedByActorID is required")
 	}
 	row, err := r.q.CreateSession(ctx, runnerdb.CreateSessionParams{
 		RunnerID:           runnerArg,
@@ -320,7 +319,7 @@ func (r *PostgresRepo) CreateSession(ctx context.Context, in domain.CreateSessio
 		SessionTokenPrefix: in.SessionTokenPrefix,
 		SessionTokenHash:   in.SessionTokenHash,
 		SessionTokenSealed: sealedArg,
-		CreatedByActorID:   actorArg,
+		CreatedByActorID:   in.CreatedByActorID,
 		RepoSha:            in.RepoSHA,
 		RoleKey:            in.RoleKey,
 		CauseKind:          in.CauseKind,

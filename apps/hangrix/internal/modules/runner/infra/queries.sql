@@ -93,7 +93,7 @@ INSERT INTO agent_sessions (
     sqlc.arg('session_token_prefix'),
     sqlc.arg('session_token_hash'),
     sqlc.narg('session_token_sealed'),
-    sqlc.narg('created_by_actor_id'),
+    sqlc.arg('created_by_actor_id'),
     sqlc.arg('repo_sha'),
     sqlc.arg('role_key'),
     sqlc.arg('cause_kind'),

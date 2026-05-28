@@ -407,7 +407,7 @@ type CreateSessionParams struct {
 	SessionTokenPrefix string
 	SessionTokenHash   string
 	SessionTokenSealed pgtype.Text
-	CreatedByActorID   pgtype.Int8
+	CreatedByActorID   int64
 	RepoSha            string
 	RoleKey            string
 	CauseKind          string

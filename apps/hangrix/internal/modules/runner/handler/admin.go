@@ -28,6 +28,7 @@ import (
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
+	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
@@ -45,6 +46,7 @@ type AdminHandler struct {
 	repos      repodomain.Store
 	middleware authdomain.Middleware
 	box        *cryptobox.Box
+	actors     actordomain.Store
 }
 
 type AdminHandlerDeps struct {
@@ -52,6 +54,7 @@ type AdminHandlerDeps struct {
 	Repos      repodomain.Store
 	Middleware authdomain.Middleware
 	Config     *config.Config
+	Actors     actordomain.Store
 }
 
 func NewAdminHandler(deps *AdminHandlerDeps) *AdminHandler {
@@ -64,6 +67,7 @@ func NewAdminHandler(deps *AdminHandlerDeps) *AdminHandler {
 		repos:      deps.Repos,
 		middleware: deps.Middleware,
 		box:        box,
+		actors:     deps.Actors,
 	}
 }
 
@@ -435,6 +439,14 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 		_ = repoID
 	}
 
+	// Resolve the caller user to their actor row via the actor module
+	// (same pattern as org/infra.Create — EnsureUser is idempotent).
+	actorRef, err := h.actors.EnsureUser(r.Context(), caller.ID, "")
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "resolve actor: "+err.Error())
+		return
+	}
+
 	in := domain.CreateSessionInput{
 		RunnerID:           &runnerRow.ID,
 		RepoID:             repoID,
@@ -449,7 +461,7 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 		SessionTokenPrefix: prefix,
 		SessionTokenHash:   string(hashed),
 		SessionTokenSealed: sealed,
-		CreatedByActorID:   caller.ID,
+		CreatedByActorID:   actorRef.ActorID,
 	}
 	sess, err := h.repo.CreateSession(r.Context(), in)
 	if err != nil {
