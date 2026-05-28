@@ -55,4 +55,9 @@ type Resolver interface {
 
 	// System returns the singleton system actor (id=1).
 	System() actor.Ref
+
+	// UserID resolves an actor ID back to its user ID. Returns
+	// (0, false) when the actor doesn't exist or isn't a user.
+	// Useful for DTOs that still emit a legacy "user_id"-shaped key.
+	UserID(ctx context.Context, actorID int64) (int64, bool)
 }

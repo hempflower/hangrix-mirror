@@ -8,6 +8,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Actor struct {
+	ID             int64
+	Kind           string
+	UserID         pgtype.Int8
+	AgentRoleKey   pgtype.Text
+	AgentSessionID pgtype.Int8
+	WorkflowRunID  pgtype.Int8
+	DisplayName    string
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
 type AgentSession struct {
 	ID                      int64
 	RunnerID                pgtype.Int8
@@ -84,10 +96,10 @@ type LlmProvider struct {
 	BaseUrl         string
 	ApiKeyEncrypted string
 	AllowedModels   []string
-	CreatedBy       int64
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
 	Disabled        bool
+	ActorID         int64
 }
 
 type LlmUsageLog struct {
@@ -171,9 +183,9 @@ type Runner struct {
 	AgentTokenPrefix    pgtype.Text
 	AgentTokenHash      pgtype.Text
 	AgentTokenRevokedAt pgtype.Timestamptz
-	CreatedBy           int64
 	CreatedAt           pgtype.Timestamptz
 	UpdatedAt           pgtype.Timestamptz
+	ActorID             int64
 }
 
 type User struct {

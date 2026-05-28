@@ -13,6 +13,7 @@ package handler
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,9 +27,11 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
+	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider/infra"
+	"github.com/hangrix/hangrix/pkg/actor"
 )
 
 // providerNameRe matches the URL-path slug for a provider. Lower-case so
@@ -44,9 +47,10 @@ const (
 )
 
 type Handler struct {
-	repo       domain.Repo
-	usage      *infra.PostgresRepo
-	middleware authdomain.Middleware
+	repo          domain.Repo
+	usage         *infra.PostgresRepo
+	middleware    authdomain.Middleware
+	actorResolver actordomain.Resolver
 }
 
 // HandlerDeps wires the same Postgres instance into both the narrow domain
@@ -54,13 +58,14 @@ type Handler struct {
 // admin-only usage read, which has no need to sit on the cross-module
 // interface).
 type HandlerDeps struct {
-	Repo       domain.Repo
-	Usage      *infra.PostgresRepo
-	Middleware authdomain.Middleware
+	Repo          domain.Repo
+	Usage         *infra.PostgresRepo
+	Middleware    authdomain.Middleware
+	ActorResolver actordomain.Resolver
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
-	return &Handler{repo: deps.Repo, usage: deps.Usage, middleware: deps.Middleware}
+	return &Handler{repo: deps.Repo, usage: deps.Usage, middleware: deps.Middleware, actorResolver: deps.ActorResolver}
 }
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
@@ -94,12 +99,20 @@ type publicProvider struct {
 	HasAPIKey     bool      `json:"has_api_key"`
 	AllowedModels []string  `json:"allowed_models"`
 	Disabled      bool      `json:"disabled"`
-	CreatedBy     int64     `json:"created_by"`
+	CreatedBy     int64     `json:"created_by,omitempty"`
+	ActorID       int64     `json:"actor_id,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
-func toPublicProvider(p *domain.Provider) publicProvider {
+func (h *Handler) toPublicProvider(p *domain.Provider) publicProvider {
+	createdBy := int64(0)
+	if h.actorResolver != nil {
+		uid, ok := h.actorResolver.UserID(context.Background(), p.ActorID)
+		if ok {
+			createdBy = uid
+		}
+	}
 	return publicProvider{
 		ID:            p.ID,
 		Name:          p.Name,
@@ -108,7 +121,8 @@ func toPublicProvider(p *domain.Provider) publicProvider {
 		HasAPIKey:     p.ApiKey != "",
 		AllowedModels: sliceOrEmpty(p.AllowedModels),
 		Disabled:      p.Disabled,
-		CreatedBy:     p.CreatedBy,
+		CreatedBy:     createdBy,
+		ActorID:       p.ActorID,
 		CreatedAt:     p.CreatedAt,
 		UpdatedAt:     p.UpdatedAt,
 	}
@@ -160,13 +174,20 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var actorID int64
+	if caller != nil && h.actorResolver != nil {
+		resolved, err := h.actorResolver.From(r.Context(), actor.UserRef(caller.ID, ""))
+		if err == nil {
+			actorID = resolved.ActorID
+		}
+	}
 	in := &domain.Provider{
 		Name:          req.Name,
 		Type:          domain.ProviderType(req.Type),
 		BaseURL:       strings.TrimSpace(req.BaseURL),
 		ApiKey:        req.APIKey,
 		AllowedModels: sliceOrEmpty(req.AllowedModels),
-		CreatedBy:     caller.ID,
+		ActorID:       actorID,
 	}
 	out, err := h.repo.CreateProvider(r.Context(), in)
 	if err != nil {
@@ -177,7 +198,7 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	httpx.WriteJSON(w, http.StatusCreated, toPublicProvider(out))
+	httpx.WriteJSON(w, http.StatusCreated, h.toPublicProvider(out))
 }
 
 func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request) {
@@ -188,7 +209,7 @@ func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]publicProvider, 0, len(rows))
 	for _, p := range rows {
-		items = append(items, toPublicProvider(p))
+		items = append(items, h.toPublicProvider(p))
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
@@ -198,7 +219,7 @@ func (h *Handler) getProvider(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, toPublicProvider(p))
+	httpx.WriteJSON(w, http.StatusOK, h.toPublicProvider(p))
 }
 
 type patchProviderReq struct {
@@ -247,7 +268,7 @@ func (h *Handler) patchProvider(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, toPublicProvider(out))
+	httpx.WriteJSON(w, http.StatusOK, h.toPublicProvider(out))
 }
 
 type setDisabledReq struct {
@@ -276,7 +297,7 @@ func (h *Handler) setProviderDisabled(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, toPublicProvider(out))
+	httpx.WriteJSON(w, http.StatusOK, h.toPublicProvider(out))
 }
 
 func (h *Handler) deleteProvider(w http.ResponseWriter, r *http.Request) {

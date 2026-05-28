@@ -50,8 +50,7 @@ type Attachment struct {
 	Kind             AttachmentKind
 	Inline           bool
 	Status           AttachmentStatus
-	AuthorID         int64  // 0 for agent uploads
-	AgentRole        string // empty for human uploads
+	ActorID          int64  // FK to actors(id); replaces author_id+agent_role
 	CreatedAt        time.Time
 	DeletedAt        *time.Time
 }
@@ -64,7 +63,7 @@ type CommentAttachment struct {
 
 // Store is the persistence abstraction for platform-level attachments.
 type Store interface {
-	CreateAttachment(ctx context.Context, authorID int64, agentRole, storageKey, originalName, displayName string, sizeBytes int64, mimeType, detectedMimeType, sha256 string, kind AttachmentKind, inline bool) (*Attachment, error)
+	CreateAttachment(ctx context.Context, actorID int64, storageKey, originalName, displayName string, sizeBytes int64, mimeType, detectedMimeType, sha256 string, kind AttachmentKind, inline bool) (*Attachment, error)
 	GetAttachment(ctx context.Context, id int64) (*Attachment, error)
 	SoftDeleteAttachment(ctx context.Context, id int64) error
 }

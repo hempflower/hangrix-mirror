@@ -36,6 +36,19 @@ func (r *Resolver) System() actor.Ref {
 	return actor.SystemRef()
 }
 
+// UserID resolves an actor ID back to its user ID. Returns (0, false)
+// when the actor doesn't exist or isn't a 'user' kind actor.
+func (r *Resolver) UserID(ctx context.Context, actorID int64) (int64, bool) {
+	if actorID <= 0 {
+		return 0, false
+	}
+	ref, err := r.store.GetByID(ctx, actorID)
+	if err != nil || ref.Kind != actor.KindUser {
+		return 0, false
+	}
+	return ref.UserID, true
+}
+
 // From resolves an actor from a Ref. When ref.ActorID > 0 the row is
 // fetched by PK (fast path for already-resolved actors). Otherwise
 // the resolver calls the appropriate Ensure* method based on Kind:

@@ -8,6 +8,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Actor struct {
+	ID             int64
+	Kind           string
+	UserID         pgtype.Int8
+	AgentRoleKey   pgtype.Text
+	AgentSessionID pgtype.Int8
+	WorkflowRunID  pgtype.Int8
+	DisplayName    string
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
 type Attachment struct {
 	ID               int64
 	StorageKey       string
@@ -20,10 +32,9 @@ type Attachment struct {
 	Kind             string
 	Inline           bool
 	Status           string
-	AuthorID         pgtype.Int8
-	AgentRole        string
 	CreatedAt        pgtype.Timestamptz
 	DeletedAt        pgtype.Timestamptz
+	ActorID          int64
 }
 
 type BranchProtection struct {

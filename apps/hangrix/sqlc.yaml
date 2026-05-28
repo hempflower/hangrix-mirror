@@ -96,14 +96,16 @@ sql:
         emit_empty_slices: true
   - engine: postgresql
     queries: internal/modules/llm_provider/infra/queries.sql
-    # llm_providers FKs users(id) for created_by; llm_usage_log keeps no FK
+    # llm_providers FKs actors(id) for actor_id; llm_usage_log keeps no FK
     # to the runner module so the schema set stays narrow.
     schema:
       - internal/modules/user/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/llm_provider/infra/migrations/00001_create_llm_providers.sql
       - internal/modules/llm_provider/infra/migrations/00002_add_provider_disabled.sql
       - internal/modules/llm_provider/infra/migrations/00003_add_usage_body_columns.sql
       - internal/modules/llm_provider/infra/migrations/00005_fix_mock_provider_constraint.sql
+      - internal/modules/llm_provider/infra/migrations/00006_add_actor_id_to_llm_providers.sql
     gen:
       go:
         package: llmproviderdb
@@ -227,10 +229,12 @@ sql:
       - internal/modules/user/infra/migrations
       - internal/modules/org/infra/migrations
       - internal/modules/repo/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/llm_provider/infra/migrations/00001_create_llm_providers.sql
       - internal/modules/llm_provider/infra/migrations/00002_add_provider_disabled.sql
       - internal/modules/llm_provider/infra/migrations/00003_add_usage_body_columns.sql
       - internal/modules/llm_provider/infra/migrations/00005_fix_mock_provider_constraint.sql
+      - internal/modules/llm_provider/infra/migrations/00006_add_actor_id_to_llm_providers.sql
       - internal/modules/runner/infra/migrations
     gen:
       go:
@@ -245,11 +249,12 @@ sql:
 
   - engine: postgresql
     queries: internal/modules/attachment/infra/queries.sql
-    # attachments FK users(id); comment_attachments FK issue_comments(id)
-    # and attachments(id). Union user + issue (and its transitive schemas)
-    # so sqlc can resolve all references at generate time.
+    # attachments FK actors(id); comment_attachments FK issue_comments(id)
+    # and attachments(id). Union user + actor + issue (and its transitive
+    # schemas) so sqlc can resolve all references at generate time.
     schema:
       - internal/modules/user/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/org/infra/migrations
       - internal/modules/repo/infra/migrations
       - internal/modules/issue/infra/migrations
@@ -267,12 +272,13 @@ sql:
 
   - engine: postgresql
     queries: internal/modules/questionnaire/infra/queries.sql
-    # questionnaire tables FK issues(id) and users(id); union user + org +
+    # questionnaire tables FK issues(id) and actors(id); union user + actor + org +
     # repo + issue + questionnaire schemas so sqlc can resolve both
     # references at generate time. Runtime still applies only its own
     # migrations via goose_questionnaire.
     schema:
       - internal/modules/user/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/org/infra/migrations
       - internal/modules/repo/infra/migrations
       - internal/modules/issue/infra/migrations

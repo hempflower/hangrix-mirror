@@ -92,14 +92,14 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 
 	// Workflow-authenticated uploads use authorID=0, agentRole="workflow"
 	// to satisfy the XOR constraint (author_id IS NULL, agent_role <> '').
-	authorID := int64(0)
-	agentRole := ""
+	actorID := int64(0)
+	
 	if isWF {
-		agentRole = "workflow"
+		actorID = 1 // system actor for workflow uploads
 	} else if caller != nil {
-		authorID = caller.ID
+		actorID = caller.ID
 	}
-	attachment, err := h.svc.UploadMultipart(r.Context(), authorID, agentRole, displayName, inline, file, header)
+	attachment, err := h.svc.UploadMultipart(r.Context(), actorID, displayName, inline, file, header)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrAttachmentTooLarge):
@@ -174,7 +174,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 
 	// Only the uploader can delete. Agent-uploaded attachments (AuthorID == 0)
 	// can be deleted by any authenticated user.
-	if att.AuthorID != 0 && caller.ID != att.AuthorID {
+	if att.ActorID != 0 && caller.ID != att.ActorID {
 		httpx.WriteError(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -232,8 +232,7 @@ func toPublicAttachment(a *domain.Attachment) publicAttachment {
 		Kind:             string(a.Kind),
 		Inline:           a.Inline,
 		Status:           string(a.Status),
-		AuthorID:         a.AuthorID,
-		AgentRole:        a.AgentRole,
+		AuthorID:         a.ActorID,
 		URL:              downloadURL,
 		MarkdownSnippet:  markdownSnippet,
 		CreatedAt:        a.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),

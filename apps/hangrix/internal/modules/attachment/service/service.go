@@ -69,8 +69,7 @@ func NewService(deps *ServiceDeps) *Service {
 // domain.Attachment row (status = uploaded).
 func (s *Service) UploadMultipart(
 	ctx context.Context,
-	authorID int64,
-	agentRole string,
+	actorID int64,
 	displayName string,
 	inline bool,
 	file multipart.File,
@@ -159,7 +158,7 @@ func (s *Service) UploadMultipart(
 		displayName = originalName
 	}
 
-	attachment, err := s.store.CreateAttachment(ctx, authorID, agentRole,
+	attachment, err := s.store.CreateAttachment(ctx, actorID,
 		storageKey, originalName, displayName, totalBytes, clientMime, detectedMime, sha256Sum, kind, inline)
 	if err != nil {
 		_ = os.Remove(targetPath)
@@ -246,7 +245,7 @@ func (s *Service) Upload(
 		displayName = params.Name
 	}
 
-	attachment, err := s.store.CreateAttachment(ctx, 0, params.AgentRole,
+	attachment, err := s.store.CreateAttachment(ctx, 0,
 		storageKey, params.Name, displayName, int64(len(params.Data)),
 		clientMime, detectedMime, sha256Sum, kind, params.Inline)
 	if err != nil {

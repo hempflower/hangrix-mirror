@@ -1,12 +1,10 @@
 -- ---- attachments (platform-level) ----
 
 -- name: CreateAttachment :one
--- Human path: sqlc.narg('author_id'), agent_role=''
--- Agent path: author_id=NULL (omit), agent_role with the role key.
 INSERT INTO attachments (
     storage_key, original_name, display_name, size_bytes,
     mime_type, detected_mime_type, sha256, kind, inline,
-    status, author_id, agent_role
+    status, actor_id
 )
 VALUES (
     sqlc.arg('storage_key'),
@@ -19,8 +17,7 @@ VALUES (
     sqlc.arg('kind'),
     sqlc.arg('inline'),
     sqlc.arg('status'),
-    sqlc.narg('author_id'),
-    sqlc.arg('agent_role')
+    sqlc.arg('actor_id')
 )
 RETURNING id, created_at;
 
@@ -28,8 +25,7 @@ RETURNING id, created_at;
 SELECT a.id, a.storage_key, a.original_name, a.display_name,
        a.size_bytes, a.mime_type, a.detected_mime_type, a.sha256,
        a.kind, a.inline, a.status,
-       COALESCE(a.author_id, 0)::BIGINT AS author_id,
-       a.agent_role, a.created_at, a.deleted_at
+       a.actor_id, a.created_at, a.deleted_at
 FROM attachments a
 WHERE a.id = sqlc.arg('id');
 

@@ -81,7 +81,7 @@ type AnswerValue struct {
 type Answer struct {
 	ID              int64                 `json:"id"`
 	QuestionnaireID int64                 `json:"questionnaire_id"`
-	UserID          int64                 `json:"user_id"`
+	ActorID         int64                 `json:"actor_id"`
 	PerQuestion     map[int64]AnswerValue `json:"per_question"`
 	SubmittedAt     time.Time             `json:"submitted_at"`
 	UpdatedAt       time.Time             `json:"updated_at"`
@@ -153,10 +153,10 @@ type AnswerStore interface {
 	// (nil, nil, ErrQuestionnaireLocked) if the questionnaire was
 	// already closed (race-safe — the check + insert + close run in
 	// one transaction).
-	InsertFirstAnswer(ctx context.Context, qID, userID int64,
+	InsertFirstAnswer(ctx context.Context, qID, actorID int64,
 		perQ map[int64]AnswerValue) (*Answer, *Questionnaire, error)
 
-	GetUserAnswer(ctx context.Context, qID, userID int64) (*Answer, error)
+	GetUserAnswer(ctx context.Context, qID, actorID int64) (*Answer, error)
 	ListAnswers(ctx context.Context, qID int64) ([]*Answer, error)
 	CountAnswers(ctx context.Context, qID int64) (int64, error)
 }
@@ -166,10 +166,10 @@ type Service interface {
 	Store
 	// AnswerStore methods except UpsertAnswer which returns the
 	// questionnaire alongside the answer for cross-module orchestration.
-	GetUserAnswer(ctx context.Context, qID, userID int64) (*Answer, error)
+	GetUserAnswer(ctx context.Context, qID, actorID int64) (*Answer, error)
 	ListAnswers(ctx context.Context, qID int64) ([]*Answer, error)
 	CountAnswers(ctx context.Context, qID int64) (int64, error)
-	UpsertAnswer(ctx context.Context, qID, userID int64, perQ map[int64]AnswerValue) (*Answer, *Questionnaire, error)
+	UpsertAnswer(ctx context.Context, qID, actorID int64, perQ map[int64]AnswerValue) (*Answer, *Questionnaire, error)
 	BuildResult(ctx context.Context, qID int64) (*Result, error)
 }
 
