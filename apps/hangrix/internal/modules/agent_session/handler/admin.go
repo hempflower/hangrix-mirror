@@ -1,8 +1,6 @@
 // Package handler exposes the agent_session module's admin-only HTTP
-// surface — the audit query view. Mounted at /api/admin/agent-sessions;
-// cookie + RequireAdmin gated. The route returns the (repo_sha,
-// cause_kind, cause_id, role_config) snapshot tuples that reconstruct
-// who-did-what for any issue.
+// surface — the audit query view plus container lifecycle controls.
+// Mounted at /api/admin/agent-sessions; cookie + RequireAdmin gated.
 package handler
 
 import (
@@ -21,17 +19,20 @@ import (
 
 type AdminHandler struct {
 	auditor    domain.Auditor
+	controller domain.Controller
 	middleware authdomain.Middleware
 }
 
 type AdminHandlerDeps struct {
 	Auditor    domain.Auditor
+	Controller domain.Controller
 	Middleware authdomain.Middleware
 }
 
 func NewAdminHandler(deps *AdminHandlerDeps) *AdminHandler {
 	return &AdminHandler{
 		auditor:    deps.Auditor,
+		controller: deps.Controller,
 		middleware: deps.Middleware,
 	}
 }
@@ -42,6 +43,8 @@ func (h *AdminHandler) RegisterRoutes(r chi.Router) {
 		r.Use(h.middleware.RequireAdmin)
 		r.Get("/", h.listRecent)
 		r.Get("/by-issue/{repo_id}/{issue_number}", h.listByIssue)
+		r.Post("/{id}/stop-container", h.stopContainer)
+		r.Post("/{id}/remove-container", h.removeContainer)
 	})
 }
 
@@ -120,24 +123,38 @@ type publicAuditSession struct {
 	ErrorMessage string          `json:"error_message,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
 	EndedAt      *time.Time      `json:"ended_at,omitempty"`
+
+	// Container lifecycle.
+	ContainerID             string     `json:"container_id,omitempty"`
+	ContainerLastUsedAt     *time.Time `json:"container_last_used_at,omitempty"`
+	ContainerStoppedAt      *time.Time `json:"container_stopped_at,omitempty"`
+	ContainerStopPending    bool       `json:"container_stop_pending"`
+	ContainerCleanupPending bool       `json:"container_cleanup_pending"`
+	RunningJobs             int32      `json:"running_jobs"`
 }
 
 func toPublicAuditSession(r domain.AuditSession) publicAuditSession {
 	return publicAuditSession{
-		SessionID:    r.SessionID,
-		RunnerID:     r.RunnerID,
-		RepoID:       r.RepoID,
-		Issue:        r.Issue,
-		RoleKey:      r.RoleKey,
-		Status:       r.Status,
-		RepoSHA:      r.RepoSHA,
-		CauseKind:    r.CauseKind,
-		CauseID:      r.CauseID,
-		RoleConfig:   r.RoleConfig,
-		ExitCode:     r.ExitCode,
-		ErrorMessage: r.ErrorMessage,
-		CreatedAt:    r.CreatedAt,
-		EndedAt:      r.EndedAt,
+		SessionID:              r.SessionID,
+		RunnerID:               r.RunnerID,
+		RepoID:                 r.RepoID,
+		Issue:                  r.Issue,
+		RoleKey:                r.RoleKey,
+		Status:                 r.Status,
+		RepoSHA:                r.RepoSHA,
+		CauseKind:              r.CauseKind,
+		CauseID:                r.CauseID,
+		RoleConfig:             r.RoleConfig,
+		ExitCode:               r.ExitCode,
+		ErrorMessage:           r.ErrorMessage,
+		CreatedAt:              r.CreatedAt,
+		EndedAt:                r.EndedAt,
+		ContainerID:            r.ContainerID,
+		ContainerLastUsedAt:    r.ContainerLastUsedAt,
+		ContainerStoppedAt:     r.ContainerStoppedAt,
+		ContainerStopPending:   r.ContainerStopPending,
+		ContainerCleanupPending: r.ContainerCleanupPending,
+		RunningJobs:            r.RunningJobs,
 	}
 }
 
@@ -162,4 +179,32 @@ func (h *AdminHandler) listByIssue(w http.ResponseWriter, r *http.Request) {
 		items = append(items, toPublicAuditSession(r))
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// stopContainer flags the session's container for an immediate docker
+// stop by the owning runner. POST /api/admin/agent-sessions/{id}/stop-container
+func (h *AdminHandler) stopContainer(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	if err := h.controller.StopContainerNow(r.Context(), id); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// removeContainer flags the session's container for an immediate docker
+// rm by the owning runner. POST /api/admin/agent-sessions/{id}/remove-container
+func (h *AdminHandler) removeContainer(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	if err := h.controller.RemoveContainerNow(r.Context(), id); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
