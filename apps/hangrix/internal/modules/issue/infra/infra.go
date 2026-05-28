@@ -31,10 +31,9 @@ var migrationsFS embed.FS
 // explicit transaction (issue creation, where counter UPSERT + insert
 // must be atomic).
 type PostgresStore struct {
-	q           *issuedb.Queries
-	pool        *pgxpool.Pool
-	actorStore  actordomain.Store
-	actorSystem actor.Ref
+	q          *issuedb.Queries
+	pool       *pgxpool.Pool
+	actorStore actordomain.Store
 }
 
 type PostgresStoreDeps struct {
@@ -46,8 +45,6 @@ type PostgresStoreDeps struct {
 // When authorID > 0 it ensures a user actor; when agentRole is set it ensures
 // an agent actor; otherwise it falls back to the system actor.
 func (s *PostgresStore) resolvedActor(ctx context.Context, authorID int64, agentRole string) (int64, error) {
-	ref := issueActorRef(authorID, "", agentRole)
-	// Try to resolve via the actor store. If that fails, fall back to system.
 	switch {
 	case authorID > 0:
 		a, err := s.actorStore.EnsureUser(ctx, authorID, "")
@@ -67,7 +64,6 @@ func (s *PostgresStore) resolvedActor(ctx context.Context, authorID int64, agent
 		if err != nil {
 			return 0, fmt.Errorf("get system actor: %w", err)
 		}
-		_ = ref // unused here but kept for readability
 		return a.ActorID, nil
 	}
 }
@@ -81,8 +77,9 @@ func NewPostgresStore(deps *PostgresStoreDeps) *PostgresStore {
 		panic(fmt.Errorf("apply issue migrations: %w", err))
 	}
 	return &PostgresStore{
-		q:    issuedb.New(deps.Pool),
-		pool: deps.Pool,
+		q:          issuedb.New(deps.Pool),
+		pool:       deps.Pool,
+		actorStore: deps.ActorStore,
 	}
 }
 
