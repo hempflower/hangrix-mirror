@@ -295,7 +295,7 @@ func (r *stubRunnerRepo) CreateSession(_ context.Context, in runnerdomain.Create
 		SessionTokenPrefix: in.SessionTokenPrefix,
 		SessionTokenHash:   in.SessionTokenHash,
 		SessionTokenSealed: in.SessionTokenSealed,
-		CreatedBy:          in.CreatedBy,
+		CreatedByActorID:   in.CreatedByActorID,
 		CreatedAt:          time.Now(),
 		RepoSHA:            in.RepoSHA,
 		RoleKey:            in.RoleKey,

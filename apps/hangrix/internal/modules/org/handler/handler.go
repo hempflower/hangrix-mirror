@@ -78,7 +78,7 @@ type publicOrg struct {
 	DisplayName string    `json:"display_name"`
 	Description string    `json:"description"`
 	AvatarURL   string    `json:"avatar_url"`
-	CreatedBy   int64     `json:"created_by"`
+	ActorID     int64     `json:"actor_id"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -90,7 +90,7 @@ func toPublic(o *domain.Org) publicOrg {
 		DisplayName: o.DisplayName,
 		Description: o.Description,
 		AvatarURL:   o.AvatarURL,
-		CreatedBy:   o.CreatedBy,
+		ActorID:     o.ActorID,
 		CreatedAt:   o.CreatedAt,
 		UpdatedAt:   o.UpdatedAt,
 	}

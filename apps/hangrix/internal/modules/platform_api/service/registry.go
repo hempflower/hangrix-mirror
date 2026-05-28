@@ -166,7 +166,7 @@ func (r *Registry) fanCommentMentionsForIssue(ctx context.Context, sess *runnerd
 		CauseID:     strconv.FormatInt(c.ID, 10),
 		RepoID:      repoID,
 		IssueNumber: targetIssueNumber,
-		ActorID:     sess.CreatedBy,
+		ActorID:     sess.CreatedByActorID,
 		Comment:     commentCtx,
 		Payload:     payload,
 	})
