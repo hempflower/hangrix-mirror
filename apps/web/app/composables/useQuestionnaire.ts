@@ -100,6 +100,9 @@ export function useQuestionnaire(
     }
   }
 
+
+  /** @deprecated The timeline card no longer renders aggregate results (see issue #236).
+   *  Kept for potential non-UI consumers (agent scripts, exports). */
   async function loadResults(
     id: number,
   ): Promise<QuestionnaireResult | null> {

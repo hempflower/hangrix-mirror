@@ -297,6 +297,22 @@ sql:
 
 
   - engine: postgresql
+    queries: internal/modules/platform_settings/infra/queries.sql
+    # platform_settings is a standalone module with no foreign keys.
+    schema:
+      - internal/modules/platform_settings/infra/migrations
+    gen:
+      go:
+        package: platformsettingsdb
+        out: internal/modules/platform_settings/infra/platformsettingsdb
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_empty_slices: true
+
+  - engine: postgresql
     queries: internal/modules/plan_engine/infra/queries.sql
     # plan_state FK issues(id); union issue + its transitive schemas
     # so sqlc can resolve the FK at generate time.

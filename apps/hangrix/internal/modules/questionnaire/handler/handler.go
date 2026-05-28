@@ -8,9 +8,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -90,25 +92,25 @@ func (h *Handler) authGate(next http.Handler) http.Handler {
 // ---- DTOs ---- //
 
 type publicQuestionnaire struct {
-	ID             int64                     `json:"id"`
-	IssueID        int64                     `json:"issue_id"`
-	Title          string                    `json:"title"`
-	Description    string                    `json:"description"`
-	Status         string                    `json:"status"`
-	CreatedByAgent string                    `json:"created_by_agent"`
-	CreatedAt      string                    `json:"created_at"`
-	ClosedAt       *string                   `json:"closed_at,omitempty"`
-	Questions      []publicQuestion          `json:"questions"`
-	MySubmission   *publicMySubmission       `json:"my_submission,omitempty"`
+	ID             int64               `json:"id"`
+	IssueID        int64               `json:"issue_id"`
+	Title          string              `json:"title"`
+	Description    string              `json:"description"`
+	Status         string              `json:"status"`
+	CreatedByAgent string              `json:"created_by_agent"`
+	CreatedAt      string              `json:"created_at"`
+	ClosedAt       *string             `json:"closed_at,omitempty"`
+	Questions      []publicQuestion    `json:"questions"`
+	MySubmission   *publicMySubmission `json:"my_submission,omitempty"`
 }
 
 type publicQuestion struct {
-	ID       int64           `json:"id"`
-	Position int             `json:"position"`
-	Text     string          `json:"text"`
-	Type     string          `json:"type"`
-	Options  []publicOption  `json:"options,omitempty"`
-	Required bool            `json:"required"`
+	ID       int64          `json:"id"`
+	Position int            `json:"position"`
+	Text     string         `json:"text"`
+	Type     string         `json:"type"`
+	Options  []publicOption `json:"options,omitempty"`
+	Required bool           `json:"required"`
 }
 
 type publicOption struct {
@@ -128,10 +130,10 @@ type publicAnswerEntry struct {
 }
 
 type publicResult struct {
-	Questionnaire *publicQuestionnaire           `json:"questionnaire"`
-	Submissions   int                            `json:"submissions"`
+	Questionnaire *publicQuestionnaire            `json:"questionnaire"`
+	Submissions   int                             `json:"submissions"`
 	ByQuestion    map[string]publicQuestionResult `json:"by_question"`
-	Submitters    []publicSubmitter              `json:"submitters,omitempty"`
+	Submitters    []publicSubmitter               `json:"submitters,omitempty"`
 }
 
 type publicQuestionResult struct {
@@ -390,11 +392,18 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	// per-role trigger config — the agent doesn't need an explicit
 	// questionnaire.answered entry in agents.yml.
 	if h.spawner != nil && qn.CreatedByAgent != "" {
-		payload, _ := json.Marshal(map[string]any{
+		payloadMap := map[string]any{
 			"questionnaire_id": qid,
 			"answer_id":        answer.ID,
 			"respondent_id":    aid,
-		})
+		}
+		if result, err := h.svc.BuildResult(r.Context(), qid); err != nil {
+			log.Printf("questionnaire: BuildResult(%d) failed: %v", qid, err)
+			payloadMap["result_error"] = "failed to build result: " + err.Error()
+		} else {
+			payloadMap["result"] = toPublicResult(result)
+		}
+		payload, _ := json.Marshal(payloadMap)
 		issueNum, _ := strconv.ParseInt(chi.URLParam(r, "number"), 10, 32)
 		_, _ = h.spawner.OnTrigger(r.Context(), agentsessiondomain.TriggerInput{
 			Trigger:     agentsconfig.TriggerIssueComment,
@@ -410,8 +419,8 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"data": map[string]any{
-			"answer_id":           answer.ID,
-			"submitted_at":        answer.SubmittedAt.Format("2006-01-02T15:04:05Z"),
+			"answer_id":            answer.ID,
+			"submitted_at":         answer.SubmittedAt.Format(time.RFC3339Nano),
 			"questionnaire_status": string(qn.Status),
 		},
 	})
@@ -449,10 +458,10 @@ func toPublicQuestionnaire(qn *questionnairedomain.Questionnaire) publicQuestion
 		Description:    qn.Description,
 		Status:         string(qn.Status),
 		CreatedByAgent: qn.CreatedByAgent,
-		CreatedAt:      qn.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		CreatedAt:      qn.CreatedAt.Format(time.RFC3339Nano),
 	}
 	if qn.ClosedAt != nil {
-		s := qn.ClosedAt.Format("2006-01-02T15:04:05Z")
+		s := qn.ClosedAt.Format(time.RFC3339Nano)
 		pq.ClosedAt = &s
 	}
 	for _, q := range qn.Questions {
@@ -477,7 +486,7 @@ func toPublicQuestion(q questionnairedomain.Question) publicQuestion {
 
 func toPublicMySubmission(a *questionnairedomain.Answer) *publicMySubmission {
 	ms := &publicMySubmission{
-		SubmittedAt: a.SubmittedAt.Format("2006-01-02T15:04:05Z"),
+		SubmittedAt: a.SubmittedAt.Format(time.RFC3339Nano),
 	}
 	for qid, av := range a.PerQuestion {
 		ms.Answers = append(ms.Answers, publicAnswerEntry{
@@ -511,7 +520,7 @@ func toPublicResult(r *questionnairedomain.Result) publicResult {
 		for _, tr := range qr.Responses {
 			pqr.Responses = append(pqr.Responses, publicTextResponse{
 				UserID: tr.UserID, DisplayName: tr.DisplayName,
-				Text: tr.Text, SubmittedAt: tr.SubmittedAt.Format("2006-01-02T15:04:05Z"),
+				Text: tr.Text, SubmittedAt: tr.SubmittedAt.Format(time.RFC3339Nano),
 			})
 		}
 		pr.ByQuestion[key] = pqr
@@ -520,7 +529,7 @@ func toPublicResult(r *questionnairedomain.Result) publicResult {
 		ps := publicSubmitter{
 			UserID:      sd.UserID,
 			DisplayName: sd.DisplayName,
-			SubmittedAt: sd.SubmittedAt.Format("2006-01-02T15:04:05Z"),
+			SubmittedAt: sd.SubmittedAt.Format(time.RFC3339Nano),
 		}
 		for _, a := range sd.Answers {
 			ps.Answers = append(ps.Answers, publicAnswerEntry{

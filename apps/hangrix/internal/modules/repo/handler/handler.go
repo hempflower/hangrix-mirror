@@ -29,6 +29,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/kv"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
+	issuegatedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue_gate/domain"
 	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/infra"
@@ -78,7 +79,10 @@ type Handler struct {
 	// sessions validates hgxs_ agent session tokens for git push. Nil
 	// in test configurations that don't load the runner module; the
 	// inline auth path nil-checks before consulting it.
-	sessions   runnerdomain.SessionTokenValidator
+	sessions runnerdomain.SessionTokenValidator
+	// gate blocks git pushes from agent sessions targeting closed/merged
+	// issues. Nil when the issue_gate module is not loaded.
+	gate       issuegatedomain.IssueActivityGate
 	middleware authdomain.Middleware
 	cache      *kv.RepoCache
 	guards     []domain.BranchWriteGuard
@@ -110,7 +114,10 @@ type HandlerDeps struct {
 	// agent_session row so the agent path can `git push` over the same
 	// Smart-HTTP endpoint humans use. Optional — repo handler works
 	// without it (no agent push support).
-	Sessions   runnerdomain.SessionTokenValidator
+	Sessions runnerdomain.SessionTokenValidator
+	// Gate blocks git pushes from agent sessions targeting closed/merged
+	// issues. Optional — repo handler works without it.
+	Gate       issuegatedomain.IssueActivityGate
 	Middleware authdomain.Middleware
 	// Guards is injected as the slice of every BranchWriteGuard registered
 	// in the ioc container — currently 0 or 1 element (the issue module's
@@ -144,6 +151,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		resolver:        deps.Resolver,
 		tokens:          deps.Tokens,
 		sessions:        deps.Sessions,
+		gate:            deps.Gate,
 		middleware:      deps.Middleware,
 		cache:           deps.Cache,
 		guards:          deps.Guards,

@@ -920,7 +920,7 @@ func All(client *Client, async local.AsyncLifecycle, readOnly bool) []local.Tool
 		},
 
 		// ---- questionnaire tools ----
-		{name: "ask_question", description: "Create a questionnaire in the current issue and wait for users to answer asynchronously. Returns immediately with status='scheduled'; you will be woken with a notification once an answer arrives. End your turn after calling — do not chain other tool calls in the same batch. Use check_questionnaire to poll results, close_questionnaire to close. The questionnaire is single-fill — the first response locks it. Prefer single_choice / multi_choice question types; reserve text_input for genuinely open answers (URLs, names, free-form descriptions).",
+		{name: "ask_question", description: "Create a questionnaire in the current issue and wait for users to answer asynchronously. Returns immediately with status='scheduled'; you will be woken with a notification once an answer arrives. End your turn after calling — do not chain other tool calls in the same batch. Use check_questionnaire to poll results, close_questionnaire to close. The questionnaire is single-fill — the first response locks it. Prefer single_choice / multi_choice question types; reserve text_input for genuinely open answers (URLs, names, free-form descriptions). Keep each question short and unambiguous (≤300 chars). When you have a preferred answer, surface it — mark it in the option label (e.g. 'yes (recommended)') or note it in the question text — so the user can pick the suggested choice with minimum friction.",
 			kind: "questionnaire", write: true,
 			schema: askQuestionSchema(),
 		},
@@ -1114,9 +1114,9 @@ func askQuestionSchema() map[string]any {
 						},
 						"text": map[string]any{
 							"type":        "string",
-							"description": "Question text. 1-500 characters.",
+							"description": "Question text. 1-300 characters. Keep it concise and unambiguous.",
 							"minLength":   1,
-							"maxLength":   500,
+							"maxLength":   300,
 						},
 						"required": map[string]any{
 							"type":        "boolean",

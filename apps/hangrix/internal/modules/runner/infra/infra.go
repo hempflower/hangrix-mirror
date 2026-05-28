@@ -691,20 +691,89 @@ func (r *PostgresRepo) ClearSessionContainer(ctx context.Context, sessionID, own
 }
 
 // SweepIdleSessionContainers flags every live container whose session has
-// been idle (in a non-running terminal-ish state) for over 7 days. The
-// platform reaper calls this on a 1-hour ticker; the runner picks the
-// flagged rows up on its next cleanup poll.
-func (r *PostgresRepo) SweepIdleSessionContainers(ctx context.Context) (int64, error) {
-	return r.q.SweepIdleSessionContainers(ctx)
+// been idle (in a non-running terminal-ish state) for longer than
+// `threshold`. The platform reaper calls this on a 1-hour ticker; the
+// runner picks the flagged rows up on its next cleanup poll.
+func (r *PostgresRepo) SweepIdleSessionContainers(ctx context.Context, threshold time.Duration) (int64, error) {
+	return r.q.SweepIdleSessionContainers(ctx, pgtype.Interval{Microseconds: threshold.Microseconds(), Valid: true})
 }
 
 // SweepAbandonedSessionContainers clears the container_id column for
-// sessions that have been flagged for cleanup for over 30 days with no
-// runner pickup. After this fires, the container is orphaned on the
-// host (if the host still exists), but the session row stops claiming
-// ownership of it so user-facing affordances can show it as fully gone.
-func (r *PostgresRepo) SweepAbandonedSessionContainers(ctx context.Context) (int64, error) {
-	return r.q.SweepAbandonedSessionContainers(ctx)
+// sessions that have been flagged for cleanup for longer than
+// `threshold` with no runner pickup. After this fires, the container is
+// orphaned on the host (if the host still exists), but the session row
+// stops claiming ownership of it so user-facing affordances can show it
+// as fully gone.
+func (r *PostgresRepo) SweepAbandonedSessionContainers(ctx context.Context, threshold time.Duration) (int64, error) {
+	return r.q.SweepAbandonedSessionContainers(ctx, pgtype.Interval{Microseconds: threshold.Microseconds(), Valid: true})
+}
+
+// ---- container stop lifecycle (migration 00005) ----
+
+// FlagSessionContainerStop marks one session's container for runner-side
+// `docker stop`. No-op when the row has no live container or stop is
+// already pending.
+func (r *PostgresRepo) FlagSessionContainerStop(ctx context.Context, sessionID int64) error {
+	n, err := r.q.FlagSessionContainerStop(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		// Either the row is gone, or it had no live container / stop
+		// was already pending. Probe existence so the caller's error
+		// path is meaningful.
+		if _, err := r.q.GetSessionByID(ctx, sessionID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return domain.ErrSessionNotFound
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// ListPendingContainerStops powers the runner's stop-tasks poll. The
+// partial index keeps this O(flagged rows on this runner).
+func (r *PostgresRepo) ListPendingContainerStops(ctx context.Context, runnerID int64, limit int) ([]domain.ContainerStopTask, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := r.q.ListPendingContainerStops(ctx, runnerdb.ListPendingContainerStopsParams{
+		RunnerID: pgtype.Int8{Int64: runnerID, Valid: true},
+		Lim:      int32(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.ContainerStopTask, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.ContainerStopTask{
+			SessionID:   row.ID,
+			ContainerID: row.ContainerID,
+		})
+	}
+	return out, nil
+}
+
+// AckContainerStop is the runner's ACK that `docker stop` succeeded.
+func (r *PostgresRepo) AckContainerStop(ctx context.Context, sessionID, ownerRunnerID int64) error {
+	n, err := r.q.AckContainerStop(ctx, runnerdb.AckContainerStopParams{
+		ID:       sessionID,
+		RunnerID: pgtype.Int8{Int64: ownerRunnerID, Valid: true},
+	})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrSessionNotFound
+	}
+	return nil
+}
+
+// SweepIdleSessionContainersForStop flags every live container whose
+// session has been idle longer than `threshold` for a `docker stop`.
+func (r *PostgresRepo) SweepIdleSessionContainersForStop(ctx context.Context, threshold time.Duration) (int64, error) {
+	return r.q.SweepIdleSessionContainersForStop(ctx, pgtype.Interval{Microseconds: threshold.Microseconds(), Valid: true})
 }
 
 // ---- messages ----
@@ -906,10 +975,16 @@ func (r *PostgresRepo) sessionFromRow(ctx context.Context, row runnerdb.AgentSes
 		RoleConfig:              row.RoleConfig,
 		ContainerID:             row.ContainerID,
 		ContainerCleanupPending: row.ContainerCleanupPending,
+		ContainerStopPending:    row.ContainerStopPending,
+		RunningJobs:             row.RunningJobs,
 	}
 	if row.ContainerLastUsedAt.Valid {
 		v := row.ContainerLastUsedAt.Time
 		out.ContainerLastUsedAt = &v
+	}
+	if row.ContainerStoppedAt.Valid {
+		v := row.ContainerStoppedAt.Time
+		out.ContainerStoppedAt = &v
 	}
 	if row.RunnerID.Valid {
 		v := row.RunnerID.Int64

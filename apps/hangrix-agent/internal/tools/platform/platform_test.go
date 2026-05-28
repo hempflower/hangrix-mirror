@@ -228,3 +228,70 @@ func TestIssueCommentSchemaBodyMaxLengthAndSplitHint(t *testing.T) {
 		t.Fatalf("issue_comment body description missing '[1/N]': %s", desc)
 	}
 }
+
+func TestAskQuestionSchemaTextMaxLength(t *testing.T) {
+	schema := askQuestionSchema()
+	questions, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("askQuestionSchema properties not found or wrong type: %T", schema["properties"])
+	}
+	questionsSchema, ok := questions["questions"].(map[string]any)
+	if !ok {
+		t.Fatalf("questions property not found or wrong type: %T", questions["questions"])
+	}
+	items, ok := questionsSchema["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("questions.items not found or wrong type: %T", questionsSchema["items"])
+	}
+	itemProps, ok := items["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("questions.items.properties not found or wrong type: %T", items["properties"])
+	}
+	textSchema, ok := itemProps["text"].(map[string]any)
+	if !ok {
+		t.Fatalf("questions.items.properties.text not found or wrong type: %T", itemProps["text"])
+	}
+
+	maxLength, ok := textSchema["maxLength"]
+	if !ok {
+		t.Fatal("question text schema is missing maxLength")
+	}
+	if ml, ok := maxLength.(int); !ok || ml != 300 {
+		t.Fatalf("question text maxLength = %v (%T), want 300", maxLength, maxLength)
+	}
+
+	desc, ok := textSchema["description"].(string)
+	if !ok {
+		t.Fatalf("question text description not found or wrong type: %T", textSchema["description"])
+	}
+	if !strings.Contains(desc, "1-300") {
+		t.Fatalf("question text description missing '1-300': %s", desc)
+	}
+	if !strings.Contains(desc, "concise") {
+		t.Fatalf("question text description missing 'concise': %s", desc)
+	}
+}
+
+func TestAskQuestionToolDescriptionHasGuidance(t *testing.T) {
+	client := NewClient("https://example.invalid", "token")
+	tools := All(client, nil, false)
+
+	var askQuestionTool local.Tool
+	for _, tool := range tools {
+		if tool.Name() == "ask_question" {
+			askQuestionTool = tool
+			break
+		}
+	}
+	if askQuestionTool == nil {
+		t.Fatal("ask_question tool not found in All()")
+	}
+
+	desc := askQuestionTool.Description()
+	if !strings.Contains(desc, "\u2264300") {
+		t.Fatalf("ask_question description missing '\u2264300': %s", desc)
+	}
+	if !strings.Contains(desc, "recommended") {
+		t.Fatalf("ask_question description missing 'recommended': %s", desc)
+	}
+}

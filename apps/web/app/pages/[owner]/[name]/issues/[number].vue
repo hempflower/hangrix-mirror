@@ -521,7 +521,7 @@ const timelineItems = computed<TimelineItem[]>(() => {
     out.push({ key: `e-${e.id}`, at: e.created_at, kind: 'event', data: e })
   }
   for (const q of questionnaires.value ?? []) {
-    out.push({ key: `q-${q.id}`, at: q.created_at, kind: 'questionnaire', data: q })
+    out.push({ key: `q-${q.id}`, at: q.my_submission?.submitted_at ?? q.created_at, kind: 'questionnaire', data: q })
   }
   out.sort((a, b) => {
     const ta = Date.parse(a.at)
@@ -852,10 +852,12 @@ onUnmounted(() => {
                   </CardContent>
                 </Card>
 
-                <!-- review_vote events get the same card chrome as comments
-                     because the reason body is often substantive (the agent
-                     explaining why) — burying it in a one-line event strip
-                     would hide the audit trail humans need to trust the vote. -->
+                <!-- review_vote events render as a header-strip-only Card: the
+                     verdict + actor are the signal; the reason body is omitted
+                     here to keep the timeline scannable. The full reason is
+                     still surfaced in the Contributions view alongside the
+                     review-gate summary. -->
+
                 <Card
                   v-else-if="it.kind === 'event' && it.data.kind === 'review_vote'"
                   class="gap-0 py-0"
@@ -874,18 +876,15 @@ onUnmounted(() => {
                         · {{ rel(it.data.created_at) }}
                       </span>
                     </div>
-                    <div class="px-4 py-3 text-sm">
-                      <MarkdownBody v-if="it.data.payload?.reason" :source="it.data.payload.reason"  />
-                      <p v-else class="text-muted-foreground">{{ t('issue.review.noReason') }}</p>
-                    </div>
+
                   </CardContent>
                 </Card>
 
                 <!-- Questionnaires: agent-created surveys rendered as
                      first-class timeline cards with the same card chrome
                      as comments (ActorBadge header strip). The card
-                     handles its own three states (open unanswered,
-                     open answered, closed with results). -->
+                     handles its own two states (unanswered placeholder,
+                     answered with per-question results). -->
                 <QuestionnaireTimelineCard
                   v-else-if="it.kind === 'questionnaire'"
                   :key="it.key"

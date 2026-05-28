@@ -458,10 +458,22 @@ func (r *stubRunnerRepo) ListPendingContainerCleanups(context.Context, int64, in
 func (r *stubRunnerRepo) ClearSessionContainer(context.Context, int64, int64) error {
 	return nil
 }
-func (r *stubRunnerRepo) SweepIdleSessionContainers(context.Context) (int64, error) {
+func (r *stubRunnerRepo) SweepIdleSessionContainers(context.Context, time.Duration) (int64, error) {
 	return 0, nil
 }
-func (r *stubRunnerRepo) SweepAbandonedSessionContainers(context.Context) (int64, error) {
+func (r *stubRunnerRepo) SweepAbandonedSessionContainers(context.Context, time.Duration) (int64, error) {
+	return 0, nil
+}
+func (r *stubRunnerRepo) FlagSessionContainerStop(context.Context, int64) error {
+	return nil
+}
+func (r *stubRunnerRepo) ListPendingContainerStops(context.Context, int64, int) ([]runnerdomain.ContainerStopTask, error) {
+	return nil, nil
+}
+func (r *stubRunnerRepo) AckContainerStop(context.Context, int64, int64) error {
+	return nil
+}
+func (r *stubRunnerRepo) SweepIdleSessionContainersForStop(context.Context, time.Duration) (int64, error) {
 	return 0, nil
 }
 func (r *stubRunnerRepo) ArchiveSessionByID(_ context.Context, id int64) error {

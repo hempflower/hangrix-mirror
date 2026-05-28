@@ -40,6 +40,9 @@ type AgentSession struct {
 	ContainerLastUsedAt     pgtype.Timestamptz
 	ContainerCleanupPending bool
 	CreatedByActorID        int64
+	ContainerStopPending    bool
+	ContainerStoppedAt      pgtype.Timestamptz
+	RunningJobs             int32
 	ActorID                 pgtype.Int8
 }
 

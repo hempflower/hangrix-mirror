@@ -9,6 +9,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/kv"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor"
 	platformapi "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api"
+	platformsettings "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_settings"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire"
 	agentsession "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment"
@@ -19,6 +20,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/healthz"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/hello"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue"
+	issuegate "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue_gate"
 	llmprovider "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider"
 	llmproxy "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_proxy"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/org"
@@ -53,6 +55,7 @@ func main() {
 		repo.Module(),
 		release.Module(),
 		issue.Module(),
+		issuegate.Module(),
 		planengine.Module(),
 		questionnaire.Module(),
 		llmprovider.Module(),
@@ -62,6 +65,7 @@ func main() {
 		agentsession.Module(),
 		dashboard.Module(),
 		platformapi.Module(),
+		platformsettings.Module(),
 		automation.Module(),
 		workflow.Module(),
 		web.Module(),

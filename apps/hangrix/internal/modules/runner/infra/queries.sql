@@ -355,9 +355,14 @@ UPDATE agent_session_inputs SET consumed_at = NOW() WHERE id = ANY(sqlc.arg('ids
 -- runner posts this right after orchestrator.Start succeeds. Idempotent:
 -- writing the same container_id twice in a row just re-stamps the
 -- timestamp.
+--
+-- Also clears container_stopped_at and container_stop_pending on every
+-- set so a rewoken/resumed session starts with a clean stop slate.
 UPDATE agent_sessions
-SET container_id           = sqlc.arg('container_id'),
-    container_last_used_at = NOW()
+SET container_id            = sqlc.arg('container_id'),
+    container_last_used_at  = NOW(),
+    container_stopped_at    = NULL,
+    container_stop_pending  = FALSE
 WHERE id = sqlc.arg('id');
 
 -- name: PingSession :execrows
@@ -406,26 +411,28 @@ WHERE id = sqlc.arg('id')
   AND runner_id = sqlc.arg('runner_id');
 
 -- name: SweepIdleSessionContainers :execrows
--- 7-day idle reaper (platform side): flags every live container whose
--- session is non-running and hasn't been touched in 7 days. Bounded by
--- the partial index `agent_sessions_container_idle_idx`. The reaper
--- runs on a 1-hour ticker; setting the flag is cheap and the actual
--- `docker rm` happens runner-side on its next cleanup poll.
+-- Idle reaper (platform side): flags every live container whose
+-- session is non-running and hasn't been touched within the given
+-- threshold duration. Bounded by the partial index
+-- `agent_sessions_container_idle_idx`. The reaper runs on a 1-hour
+-- ticker; setting the flag is cheap and the actual `docker rm` happens
+-- runner-side on its next cleanup poll.
 UPDATE agent_sessions
 SET container_cleanup_pending = TRUE
 WHERE container_id <> ''
   AND container_cleanup_pending = FALSE
   AND status IN ('idle', 'succeeded', 'failed', 'cancelled', 'archived')
   AND container_last_used_at IS NOT NULL
-  AND container_last_used_at < NOW() - INTERVAL '7 days';
+  AND container_last_used_at < NOW() - sqlc.arg('threshold')::INTERVAL;
 
 -- name: SweepAbandonedSessionContainers :execrows
--- 30-day giveup sweep (platform side): if a session has been flagged
--- for cleanup for over 30 days with no runner pickup (e.g. the owning
--- runner is permanently offline / deleted), clear the column server-
--- side. The container is effectively orphaned on the host, but holding
--- the flag forever just blocks future "session truly gone" UI affordances.
--- Logged at WARN level by the reaper so operators see what was dropped.
+-- Giveup sweep (platform side): if a session has been flagged
+-- for cleanup for longer than the threshold with no runner pickup
+-- (e.g. the owning runner is permanently offline / deleted), clear the
+-- column server-side. The container is effectively orphaned on the
+-- host, but holding the flag forever just blocks future "session truly
+-- gone" UI affordances. Logged at WARN level by the reaper so operators
+-- see what was dropped.
 UPDATE agent_sessions
 SET container_id              = '',
     container_cleanup_pending = FALSE,
@@ -433,7 +440,40 @@ SET container_id              = '',
 WHERE container_cleanup_pending = TRUE
   AND container_id <> ''
   AND container_last_used_at IS NOT NULL
-  AND container_last_used_at < NOW() - INTERVAL '30 days';
+  AND container_last_used_at < NOW() - sqlc.arg('threshold')::INTERVAL;
+
+-- ---- container stop lifecycle (migration 00005) ----
+
+-- name: FlagSessionContainerStop :execrows
+-- Marks a single session's container for runner-side docker stop.
+-- No-op when there is no live container or stop is already pending.
+UPDATE agent_sessions
+SET container_stop_pending = TRUE
+WHERE id = sqlc.arg('id')
+  AND container_id <> ''
+  AND container_stop_pending = FALSE;
+
+-- name: ListPendingContainerStops :many
+-- Runner-side stop poll: every (id, container_id) on this runner with
+-- a live container the platform has flagged for stop. The partial
+-- index `agent_sessions_stop_idx` makes this O(flagged rows).
+SELECT id, container_id
+FROM agent_sessions
+WHERE runner_id = sqlc.arg('runner_id')
+  AND container_stop_pending = TRUE
+  AND container_id <> ''
+ORDER BY id ASC
+LIMIT sqlc.arg('lim');
+
+-- name: AckContainerStop :execrows
+-- Runner reports `docker stop` succeeded: set stopped_at, clear the
+-- stop flag. Scoped to the runner that owns the session so a misrouted
+-- ACK can't clear a sibling's column.
+UPDATE agent_sessions
+SET container_stop_pending = FALSE,
+    container_stopped_at   = NOW()
+WHERE id = sqlc.arg('id')
+  AND runner_id = sqlc.arg('runner_id');
 
 -- ---- actor helpers ----
 
@@ -442,3 +482,21 @@ WHERE container_cleanup_pending = TRUE
 -- kind is not 'user' or the row doesn't exist. Used by sessionFromRow to
 -- backfill the deprecated CreatedBy field from CreatedByActorID.
 SELECT COALESCE(user_id, 0)::BIGINT AS user_id FROM actors WHERE id = sqlc.arg('actor_id');
+
+-- ---- container stop lifecycle (migration 00005) ----
+
+-- name: SweepIdleSessionContainersForStop :execrows
+-- Idle-stop reaper (platform side): flags every live container whose
+-- session has been idle longer than the threshold for a `docker stop`.
+-- Excludes rows with running_jobs > 0 (mid-flight agent turn) and rows
+-- already flagged for stop or cleanup. Bounded by the partial index
+-- `agent_sessions_container_idle_idx`.
+UPDATE agent_sessions
+SET container_stop_pending = TRUE
+WHERE container_id <> ''
+  AND container_stop_pending = FALSE
+  AND container_cleanup_pending = FALSE
+  AND running_jobs = 0
+  AND status IN ('idle', 'succeeded', 'failed', 'cancelled')
+  AND container_last_used_at IS NOT NULL
+  AND container_last_used_at < NOW() - sqlc.arg('threshold')::INTERVAL;

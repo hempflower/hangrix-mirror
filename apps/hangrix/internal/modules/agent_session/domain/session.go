@@ -312,6 +312,23 @@ type Controller interface {
 	// first so the running container can't keep emitting messages
 	// onto a row that no longer exists.
 	Delete(ctx context.Context, sessionID int64) error
+
+	// StopContainerNow flags the session's container for an immediate
+	// docker stop by the owning runner. The runner picks this up on
+	// its next stop-tasks poll, `docker stop`s the container, and
+	// ACKs. Administrators use this to manually stop a stuck or
+	// idle container without terminating the session row —
+	// the session stays in its current status and can be resumed
+	// later.
+	StopContainerNow(ctx context.Context, sessionID int64) error
+
+	// RemoveContainerNow flags the session's container for an
+	// immediate docker rm by the owning runner. The runner picks this
+	// up on its next cleanup-tasks poll. Use this when the container
+	// is already stopped (or StopContainerNow was called first) and
+	// the admin wants to free the runner's disk space immediately
+	// rather than wait for the idle removal sweep.
+	RemoveContainerNow(ctx context.Context, sessionID int64) error
 }
 
 // ErrNotResumable is returned by Controller.Resume when a session row
@@ -330,6 +347,9 @@ var ErrSessionLive = errors.New("session is still live; stop it first")
 // via MarkSessionTerminal when a session ends in a non-success status.
 // They give the audit consumer a one-line "why did this fail" hook
 // without having to fetch the full message log.
+//
+// Container fields are populated from the agent_sessions row so the
+// admin UI can render container lifecycle state inline.
 type AuditSession struct {
 	SessionID    int64
 	RunnerID     *int64
@@ -345,6 +365,14 @@ type AuditSession struct {
 	ErrorMessage string
 	CreatedAt    time.Time
 	EndedAt      *time.Time
+
+	// Container lifecycle (migration 00004 + 00005).
+	ContainerID             string
+	ContainerLastUsedAt     *time.Time
+	ContainerStoppedAt      *time.Time
+	ContainerStopPending    bool
+	ContainerCleanupPending bool
+	RunningJobs             int32
 }
 
 // SessionMessage is one frame of a session's message log. Agents emit

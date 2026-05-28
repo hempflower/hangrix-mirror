@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 
@@ -13,6 +14,7 @@ import (
 	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
+	issuegatedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue_gate/domain"
 	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
@@ -33,26 +35,28 @@ const hostConfigPath = ".hangrix/agents.yml"
 // history frame". Splitting it further produces shells with one method
 // each.
 type Spawner struct {
-	repos        repodomain.Store
-	resolver     orgdomain.Resolver
-	storage      repodomain.PathResolver
-	git          gitdomain.Git
-	blob         domain.HostBlobReader
-	runner       runnerdomain.Repo
-	actorResolver actordomain.Resolver
-	box          *cryptobox.Box
-	hostURL      string
+	repos          repodomain.Store
+	resolver       orgdomain.Resolver
+	storage        repodomain.PathResolver
+	git            gitdomain.Git
+	blob           domain.HostBlobReader
+	runner         runnerdomain.Repo
+	actorResolver  actordomain.Resolver
+	gate           issuegatedomain.IssueActivityGate
+	box            *cryptobox.Box
+	hostURL        string
 }
 
 type SpawnerDeps struct {
-	Repos        repodomain.Store
-	Resolver     orgdomain.Resolver
-	Storage      repodomain.PathResolver
-	Git          gitdomain.Git
-	Blob         domain.HostBlobReader
-	Runner       runnerdomain.Repo
-	ActorResolver actordomain.Resolver
-	Config       *config.Config
+	Repos          repodomain.Store
+	Resolver       orgdomain.Resolver
+	Storage        repodomain.PathResolver
+	Git            gitdomain.Git
+	Blob           domain.HostBlobReader
+	Runner         runnerdomain.Repo
+	ActorResolver  actordomain.Resolver
+	Gate           issuegatedomain.IssueActivityGate
+	Config         *config.Config
 }
 
 // NewSpawner panics on a malformed encryption key — the runner module
@@ -64,15 +68,16 @@ func NewSpawner(deps *SpawnerDeps) *Spawner {
 		panic(fmt.Errorf("agent_session spawner: %w", err))
 	}
 	return &Spawner{
-		repos:        deps.Repos,
-		resolver:     deps.Resolver,
-		storage:      deps.Storage,
-		git:          deps.Git,
-		blob:         deps.Blob,
-		runner:       deps.Runner,
-		actorResolver: deps.ActorResolver,
-		box:          box,
-		hostURL:      deps.Config.Server.URL,
+		repos:          deps.Repos,
+		resolver:       deps.Resolver,
+		storage:        deps.Storage,
+		git:            deps.Git,
+		blob:           deps.Blob,
+		runner:         deps.Runner,
+		actorResolver:  deps.ActorResolver,
+		gate:           deps.Gate,
+		box:            box,
+		hostURL:        deps.Config.Server.URL,
 	}
 }
 
@@ -96,6 +101,21 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 	if !agentsconfig.IsValidTrigger(string(in.Trigger)) {
 		return nil, fmt.Errorf("spawner: trigger %q not recognised", in.Trigger)
 	}
+
+	// Gate: block spawning on closed/merged issues, surface non-terminal
+	// errors to the caller. Terminal-state suppression is best-effort
+	// audited so an operator can see the suppressed wake.
+	if s.gate != nil {
+		if err := s.gate.CheckIssue(ctx, in.RepoID, in.IssueNumber); err != nil {
+			var term *issuegatedomain.ErrIssueTerminal
+			if errors.As(err, &term) {
+				s.recordSpawnError(ctx, in, in.RoleKey, err)
+				return nil, nil
+			}
+			return nil, fmt.Errorf("issue gate check: %w", err)
+		}
+	}
+
 	log.Printf("spawner: OnTrigger repo=%d issue=%d trigger=%s cause=%s role=%q",
 		in.RepoID, in.IssueNumber, in.Trigger, in.CauseID, in.RoleKey)
 
@@ -959,7 +979,6 @@ func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, a
 	}
 	return json.Marshal(snap)
 }
-
 
 // serializeTriggers turns a role's Triggers map into an audit-stable
 // JSON shape: `{ "<event>": <filter-or-empty-object> }`. The filter

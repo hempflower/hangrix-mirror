@@ -65,6 +65,25 @@ func TestAssemble_BaselineOnly(t *testing.T) {
 	}
 }
 
+
+// TestAssemble_BaselineGuidance verifies that the embedded baseline.md
+// contains the ask_question guidance phrases introduced by issue #243
+// (300-character limit and recommended-option convention).
+func TestAssemble_BaselineGuidance(t *testing.T) {
+	t.Parallel()
+	a, err := prompt.Assemble(prompt.Inputs{Role: "test"})
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+
+	if !strings.Contains(a.Prompt, "300 characters") {
+		t.Error("baseline missing '300 characters' ask_question guidance")
+	}
+	if !strings.Contains(a.Prompt, "recommended option") {
+		t.Error("baseline missing 'recommended option' ask_question guidance")
+	}
+}
+
 // TestAssemble_BadHostPath: a configured host addendum path we can't
 // read should surface as an error (loud) rather than fall back to
 // "baseline only" (silent). A typo in the runner's bind-mount path

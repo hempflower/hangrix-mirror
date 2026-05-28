@@ -340,7 +340,40 @@
         "repoSha": "Repo SHA",
         "created": "创建时间",
         "duration": "时长",
-        "error": "错误"
+        "error": "错误",
+        "container": "容器",
+        "containerActivity": "容器最后活动",
+        "actions": "操作"
+      }
+    },
+    "lifecycle": {
+      "title": "容器生命周期",
+      "subtitle": "配置空闲容器的自动停止和已归档会话容器的自动移除策略。",
+      "idleStop": "空闲容器停止等待",
+      "idleStopHint": "容器空闲超过此时长后自动停止（Go duration 格式，如 1h、30m）。",
+      "archiveRemove": "归档后容器移除等待",
+      "archiveRemoveHint": "会话归档超过此时长后，容器将被永久移除（如 168h = 7 天）。",
+      "periodicCheck": "放弃会话清理等待",
+      "periodicCheckHint": "会话被放弃超过此时长后清理容器（如 720h = 30 天）。",
+      "loadFailed": "加载生命周期设置失败",
+      "patchFailed": "保存失败",
+      "saved": "已保存",
+      "saving": "保存中…",
+      "asyncHint": "设置在下一次定期扫描时生效 — 已运行的容器不受影响。",
+      "containerState": {
+        "running": "运行中",
+        "stopped": "已停止",
+        "pendingStop": "停止中…",
+        "pendingRemoval": "移除中…",
+        "none": "—"
+      },
+      "actions": {
+        "stopContainer": "停止容器",
+        "removeContainer": "移除容器",
+        "stopConfirm": "确认停止会话 #{id} 的容器？",
+        "removeConfirm": "确认移除会话 #{id} 的容器？此操作不可撤销。",
+        "stopFailed": "停止容器失败",
+        "removeFailed": "移除容器失败"
       }
     },
     "dashboard": {
@@ -926,7 +959,6 @@
       "review": {
       "title": "评审",
       "empty": "暂无评审意见。",
-      "noReason": "未填写理由。",
       "vote": {
       "approve": "通过",
       "reject": "拒绝",
@@ -1022,6 +1054,8 @@
     "questionnaire": {
       "title": "问卷",
       "asked": "发起了",
+      "answered": "回答了问卷",
+      "awaitingResponse": "等待填写…",
       "empty": "暂无问卷。",
       "submit": "提交",
       "submitting": "提交中…",
