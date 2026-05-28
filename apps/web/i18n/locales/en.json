@@ -959,7 +959,6 @@
       "review": {
       "title": "Reviews",
       "empty": "No reviews yet.",
-      "noReason": "No rationale provided.",
       "vote": {
       "approve": "Approved",
       "reject": "Rejected",
