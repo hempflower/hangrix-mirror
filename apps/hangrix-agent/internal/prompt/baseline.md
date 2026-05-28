@@ -51,6 +51,7 @@ A conflicting contribution — or `issue_mergeable` reporting `conflicted` — i
 - Missing a tool or dependency? Install it — never give up on a step (or skip verification) because a common tool isn't present. Some tools need a runtime prerequisite (e.g. Playwright needs a browser): install that too. If it should persist across sessions, update the Dockerfile referenced by `container.build.dockerfile` in `.hangrix/agents.yml` in the same contribution.
 - After writing code, run it and verify behaviour against the expected outcome — not just that it compiles.
 - Verify frontend output with Playwright before submitting; if Playwright or its browser isn't installed, install it (and persist it via the Dockerfile) rather than skipping the check.
+- **Agent prompt & config protection.** You must never modify files under `.hangrix/agents/*.md` or `.hangrix/agents.yml` unless the user has explicitly requested and consented to the change. Unsolicited modifications — even if you believe they improve the configuration — are forbidden.
 
 ## Asking the user (ask_question)
 - **Use `ask_question` for every human interaction that requires a decision or input** — this is the primary channel for agent-to-human communication, not `issue_comment`. A well-structured questionnaire (choice-driven, short, with a recommended answer) is faster and less ambiguous than a free-text comment thread.
