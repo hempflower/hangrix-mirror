@@ -21,6 +21,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/infra/issuedb"
+	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 )
 
 //go:embed migrations/*.sql
@@ -39,6 +40,11 @@ type PostgresStore struct {
 type PostgresStoreDeps struct {
 	Pool       *pgxpool.Pool
 	ActorStore actordomain.Store
+	// Repos is wired purely for migration ordering: the issue module's
+	// 00001_create_issues.sql has a FK to repos(id), so the repo module's
+	// migrations must run first. ioc constructs deps before owners, so
+	// depending on the repo store guarantees the right order.
+	Repos repodomain.Store
 }
 
 // resolvedActor resolves an actor_id from legacy authorID/agentRole params.
@@ -69,6 +75,7 @@ func (s *PostgresStore) resolvedActor(ctx context.Context, authorID int64, agent
 }
 
 func NewPostgresStore(deps *PostgresStoreDeps) *PostgresStore {
+	_ = deps.Repos // see deps doc comment — referenced for build order only.
 	sub, err := fs.Sub(migrationsFS, "migrations")
 	if err != nil {
 		panic(fmt.Errorf("issue migrations sub-fs: %w", err))
