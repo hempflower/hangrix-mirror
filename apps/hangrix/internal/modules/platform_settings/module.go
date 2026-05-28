@@ -7,7 +7,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_settings/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_settings/handler"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_settings/infra"
-	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_settings/service"
+	platsvc "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_settings/service"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/server"
 	"github.com/hangrix/hangrix/pkg/ioc"
 )
@@ -42,10 +42,11 @@ func Module() *ioc.Module {
 	// service layer.
 	repo := m.Provide(infra.NewPostgresRepo)
 	repo.ToSelf()
+	repo.ToInterface(new(platsvc.Repo))
 
 	// Service: cache + Store interface. Bind to domain.Store so the
 	// reaper and admin handlers consume it through the interface.
-	svc := m.Provide(service.NewService)
+	svc := m.Provide(platsvc.NewService)
 	svc.ToInterface(new(domain.Store))
 
 	// Admin handler

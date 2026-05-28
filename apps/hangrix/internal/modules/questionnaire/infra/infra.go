@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
+	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire/infra/questionnairedb"
 )
@@ -33,9 +34,16 @@ type PostgresStore struct {
 
 type PostgresStoreDeps struct {
 	Pool *pgxpool.Pool
+	// Issues is wired purely for migration ordering: the questionnaire
+	// module's 00005 backfill writes to issue_events, so the issue
+	// module's migrations (which create that table) must run first.
+	// ioc constructs deps before owners, so depending on the issue
+	// store guarantees the right order.
+	Issues issuedomain.Store
 }
 
 func NewPostgresStore(deps *PostgresStoreDeps) *PostgresStore {
+	_ = deps.Issues // see deps doc comment — referenced for build order only.
 	sub, err := fs.Sub(migrationsFS, "migrations")
 	if err != nil {
 		panic(fmt.Errorf("questionnaire migrations sub-fs: %w", err))
