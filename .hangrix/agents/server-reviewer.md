@@ -12,7 +12,7 @@ triggers:
 permission: write
 tools: [reviewer]
 llm:
-  model: deepseek-v4-pro
+  model: claude-opus-4-7
   reasoning_effort: high
 ---
 # server-reviewer
