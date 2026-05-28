@@ -1224,7 +1224,7 @@ onUnmounted(() => {
                 </div>
 
                 <!-- Detail list -->
-                <ul class="space-y-1.5">
+                <ul class="space-y-1.5 max-h-[200px] overflow-y-auto pr-1">
                   <li v-for="item in todos" :key="item.id" class="flex items-start gap-2 text-xs">
                     <component :is="todoStatusIcon(item.status)" class="size-3 shrink-0 mt-0.5" :class="todoStatusClass(item.status)" />
                     <span class="min-w-0 flex-1 whitespace-normal break-words">{{ item.content }}</span>
