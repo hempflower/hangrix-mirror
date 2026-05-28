@@ -45,7 +45,7 @@ reviewers:
     - paths: ["apps/hangrix-agent/**", "apps/hangrix-runner/**"]
       reviewers: [runtime-reviewer, tester]
     - paths: ["apps/web/**"]
-      reviewers: [web-reviewer, tester, maintainer]
+      reviewers: [web-reviewer, tester]
   fallback: [maintainer]
 
 # Reusable tool rules: named whitelists of platform tool-name globs (`*`
