@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"strconv"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
@@ -161,7 +162,7 @@ func (s *PostgresStore) Close(ctx context.Context, id int64, reason string) (*do
 
 // ---- AnswerStore ---- //
 
-func (s *PostgresStore) InsertFirstAnswer(ctx context.Context, qID, userID int64, perQ map[int64]domain.AnswerValue) (*domain.Answer, *domain.Questionnaire, error) {
+func (s *PostgresStore) InsertFirstAnswer(ctx context.Context, qID, actorID int64, perQ map[int64]domain.AnswerValue) (*domain.Answer, *domain.Questionnaire, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -185,7 +186,7 @@ func (s *PostgresStore) InsertFirstAnswer(ctx context.Context, qID, userID int64
 	}
 	answerRow, err := qtx.InsertAnswer(ctx, questionnairedb.InsertAnswerParams{
 		QuestionnaireID: qID,
-		UserID:          userID,
+		ActorID:         actorID,
 		Answers:         answersJSON,
 	})
 	if err != nil {
@@ -207,20 +208,20 @@ func (s *PostgresStore) InsertFirstAnswer(ctx context.Context, qID, userID int64
 		return nil, nil, fmt.Errorf("commit insert-first-answer: %w", err)
 	}
 
-	a := answerFromRow(answerRow)
+	a := buildAnswer(answerRow.ID, answerRow.QuestionnaireID, answerRow.ActorID, answerRow.Answers, answerRow.SubmittedAt, answerRow.UpdatedAt)
 	qn := questionnaireFromRow(qnRow)
 	return &a, &qn, nil
 }
 
-func (s *PostgresStore) GetUserAnswer(ctx context.Context, qID, userID int64) (*domain.Answer, error) {
+func (s *PostgresStore) GetUserAnswer(ctx context.Context, qID, actorID int64) (*domain.Answer, error) {
 	row, err := s.q.GetUserAnswer(ctx, questionnairedb.GetUserAnswerParams{
 		QuestionnaireID: qID,
-		UserID:          userID,
+		ActorID:         actorID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get user answer: %w", err)
 	}
-	a := answerFromRow(row)
+	a := buildAnswer(row.ID, row.QuestionnaireID, row.ActorID, row.Answers, row.SubmittedAt, row.UpdatedAt)
 	return &a, nil
 }
 
@@ -231,7 +232,7 @@ func (s *PostgresStore) ListAnswers(ctx context.Context, qID int64) ([]*domain.A
 	}
 	var result []*domain.Answer
 	for _, row := range rows {
-		a := answerFromRow(row)
+		a := buildAnswer(row.ID, row.QuestionnaireID, row.ActorID, row.Answers, row.SubmittedAt, row.UpdatedAt)
 		result = append(result, &a)
 	}
 	return result, nil
@@ -279,16 +280,18 @@ func questionFromRow(row questionnairedb.QuestionnaireQuestion) domain.Question 
 	return q
 }
 
-func answerFromRow(row questionnairedb.QuestionnaireAnswer) domain.Answer {
+
+
+func buildAnswer(id, questionnaireID, actorID int64, answersJSON []byte, submittedAt, updatedAt pgtype.Timestamptz) domain.Answer {
 	a := domain.Answer{
-		ID:              row.ID,
-		QuestionnaireID: row.QuestionnaireID,
-		UserID:          row.UserID,
-		SubmittedAt:     row.SubmittedAt.Time,
-		UpdatedAt:       row.UpdatedAt.Time,
+		ID:              id,
+		QuestionnaireID: questionnaireID,
+		ActorID:         actorID,
+		SubmittedAt:     submittedAt.Time,
+		UpdatedAt:       updatedAt.Time,
 	}
-	if len(row.Answers) > 0 {
-		a.PerQuestion = jsonToAnswerPerQuestion(row.Answers)
+	if len(answersJSON) > 0 {
+		a.PerQuestion = jsonToAnswerPerQuestion(answersJSON)
 	}
 	return a
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
+	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
 	issuegatedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue_gate/domain"
@@ -18,6 +19,7 @@ import (
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/service"
+	"github.com/hangrix/hangrix/pkg/actor"
 	"github.com/hangrix/hangrix/pkg/cryptobox"
 )
 
@@ -33,26 +35,28 @@ const hostConfigPath = ".hangrix/agents.yml"
 // history frame". Splitting it further produces shells with one method
 // each.
 type Spawner struct {
-	repos    repodomain.Store
-	resolver orgdomain.Resolver
-	storage  repodomain.PathResolver
-	git      gitdomain.Git
-	blob     domain.HostBlobReader
-	runner   runnerdomain.Repo
-	gate     issuegatedomain.IssueActivityGate
-	box      *cryptobox.Box
-	hostURL  string
+	repos          repodomain.Store
+	resolver       orgdomain.Resolver
+	storage        repodomain.PathResolver
+	git            gitdomain.Git
+	blob           domain.HostBlobReader
+	runner         runnerdomain.Repo
+	actorResolver  actordomain.Resolver
+	gate           issuegatedomain.IssueActivityGate
+	box            *cryptobox.Box
+	hostURL        string
 }
 
 type SpawnerDeps struct {
-	Repos    repodomain.Store
-	Resolver orgdomain.Resolver
-	Storage  repodomain.PathResolver
-	Git      gitdomain.Git
-	Blob     domain.HostBlobReader
-	Runner   runnerdomain.Repo
-	Gate     issuegatedomain.IssueActivityGate
-	Config   *config.Config
+	Repos          repodomain.Store
+	Resolver       orgdomain.Resolver
+	Storage        repodomain.PathResolver
+	Git            gitdomain.Git
+	Blob           domain.HostBlobReader
+	Runner         runnerdomain.Repo
+	ActorResolver  actordomain.Resolver
+	Gate           issuegatedomain.IssueActivityGate
+	Config         *config.Config
 }
 
 // NewSpawner panics on a malformed encryption key — the runner module
@@ -64,15 +68,16 @@ func NewSpawner(deps *SpawnerDeps) *Spawner {
 		panic(fmt.Errorf("agent_session spawner: %w", err))
 	}
 	return &Spawner{
-		repos:    deps.Repos,
-		resolver: deps.Resolver,
-		storage:  deps.Storage,
-		git:      deps.Git,
-		blob:     deps.Blob,
-		runner:   deps.Runner,
-		gate:     deps.Gate,
-		box:      box,
-		hostURL:  deps.Config.Server.URL,
+		repos:          deps.Repos,
+		resolver:       deps.Resolver,
+		storage:        deps.Storage,
+		git:            deps.Git,
+		blob:           deps.Blob,
+		runner:         deps.Runner,
+		actorResolver:  deps.ActorResolver,
+		gate:           deps.Gate,
+		box:            box,
+		hostURL:        deps.Config.Server.URL,
 	}
 }
 
@@ -551,6 +556,9 @@ func (s *Spawner) spawnRole(
 		env["HANGRIX_PLATFORM_TOOLS"] = string(patternsJSON)
 	}
 
+	// Resolve the triggering actor via the actor module.
+	createdByActorID := s.resolveTriggerActor(ctx, in)
+
 	createIn := runnerdomain.CreateSessionInput{
 		RunnerID:           runnerID,
 		RepoID:             &hostRepo.ID,
@@ -565,7 +573,7 @@ func (s *Spawner) spawnRole(
 		SessionTokenPrefix: prefix,
 		SessionTokenHash:   string(hashed),
 		SessionTokenSealed: sealed,
-		CreatedBy:          in.ActorID,
+		CreatedByActorID:   createdByActorID,
 		RepoSHA:            repoSHA,
 		RoleKey:            roleKey,
 		CauseKind:          string(in.CauseKind),
@@ -583,6 +591,16 @@ func (s *Spawner) spawnRole(
 	sess, err := s.runner.CreateSession(ctx, createIn)
 	if err != nil {
 		return domain.SpawnedSession{}, fmt.Errorf("create session row: %w", err)
+	}
+
+	// Ensure the agent_session actor row exists. This is idempotent:
+	// concurrent spawns for the same session will get the same row back.
+	if s.actorResolver != nil {
+		if _, err := s.actorResolver.From(ctx, actor.AgentSessionRef(sess.ID, roleKey)); err != nil {
+			// Best-effort — the session was created successfully; a missing
+			// actor row is a recoverable audit gap, not a fatal error.
+			log.Printf("spawner: ensure agent_session actor %d: %v", sess.ID, err)
+		}
 	}
 
 	// Seed the inputs queue with just the cause event. The history frame
@@ -609,6 +627,37 @@ func (s *Spawner) spawnRole(
 		RunnerID:  runnerID,
 		Action:    domain.SpawnActionSpawned,
 	}, nil
+}
+
+// resolveTriggerActor resolves the triggering entity to an actors table id.
+// When in.Actor is non-nil (new path, set by callers via actor module),
+// it resolves through the Resolver. Otherwise it falls back to in.ActorID
+// and constructs a user actor. Returns 0 when neither is set (legacy
+// callers that haven't migrated yet).
+func (s *Spawner) resolveTriggerActor(ctx context.Context, in domain.TriggerInput) int64 {
+	if s.actorResolver == nil {
+		return 0
+	}
+	// New path: caller already resolved the actor.
+	if in.Actor != nil && !in.Actor.IsZero() {
+		resolved, err := s.actorResolver.From(ctx, *in.Actor)
+		if err != nil {
+			log.Printf("spawner: resolve trigger actor %s: %v", in.Actor.ID, err)
+			return 0
+		}
+		return resolved.ActorID
+	}
+	// Legacy path: ActorID > 0 means a user triggered this. Resolve
+	// the user actor (or create it via EnsureUser).
+	if in.ActorID > 0 {
+		resolved, err := s.actorResolver.From(ctx, actor.UserRef(in.ActorID, ""))
+		if err != nil {
+			log.Printf("spawner: resolve legacy actor user:%d: %v", in.ActorID, err)
+			return 0
+		}
+		return resolved.ActorID
+	}
+	return 0
 }
 
 // hostFileProvider adapts HostBlobReader to agentsconfig.FileProvider for

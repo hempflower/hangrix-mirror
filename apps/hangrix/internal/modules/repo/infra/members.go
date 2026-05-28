@@ -27,12 +27,12 @@ func NewPostgresMemberStore(deps *PostgresMemberStoreDeps) *PostgresMemberStore 
 	return &PostgresMemberStore{q: repodb.New(deps.Pool)}
 }
 
-func (s *PostgresMemberStore) AddMember(ctx context.Context, repoID, userID, addedBy int64, role domain.MemberRole) error {
+func (s *PostgresMemberStore) AddMember(ctx context.Context, repoID, userID, actorID int64, role domain.MemberRole) error {
 	err := s.q.AddRepoMember(ctx, repodb.AddRepoMemberParams{
 		RepoID:  repoID,
 		UserID:  userID,
 		Role:    string(role),
-		AddedBy: addedBy,
+		ActorID: actorID,
 	})
 	if err != nil {
 		if database.IsUniqueViolation(err) {
@@ -90,7 +90,7 @@ func listMemberRowToDomain(r repodb.ListRepoMembersRow) *domain.RepoMember {
 		UserID:   r.UserID,
 		Username: r.Username,
 		Role:     domain.MemberRole(r.Role),
-		AddedBy:  r.AddedBy,
+		AddedBy:  r.ActorID,
 		AddedAt:  r.AddedAt.Time,
 	}
 }
@@ -115,7 +115,7 @@ func memberRowToDomain(r repodb.GetRepoMemberRow) *domain.RepoMember {
 		UserID:   r.UserID,
 		Username: r.Username,
 		Role:     domain.MemberRole(r.Role),
-		AddedBy:  r.AddedBy,
+		AddedBy:  r.ActorID,
 		AddedAt:  r.AddedAt.Time,
 	}
 }

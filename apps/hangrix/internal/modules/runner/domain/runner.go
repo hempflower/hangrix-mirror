@@ -81,7 +81,7 @@ type Runner struct {
 	AgentTokenPrefix    string
 	AgentTokenHash      string
 	AgentTokenRevokedAt *time.Time
-	CreatedBy           int64
+	ActorID             int64   // FK to actors(id); replaces created_by
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 }
@@ -222,6 +222,7 @@ type AgentSession struct {
 	ExitCode              *int32
 	ErrorMessage          string
 	CreatedBy             int64
+	CreatedByActorID      int64  // FK to actors(id); resolved by spawner
 	CreatedAt             time.Time
 	ClaimedAt             *time.Time
 	StartedAt             *time.Time
@@ -368,7 +369,7 @@ type CreateRunnerInput struct {
 	Name        string
 	OwnerUserID *int64
 	Visibility  Visibility
-	CreatedBy   int64
+	ActorID     int64 // FK to actors(id); resolved by handler
 }
 
 // Validate enforces the platform/user visibility invariant: platform
@@ -414,7 +415,10 @@ type CreateSessionInput struct {
 	SessionTokenPrefix string
 	SessionTokenHash   string
 	SessionTokenSealed string
-	CreatedBy          int64
+	// CreatedByActorID is the FK to the actors table for the entity
+	// that triggered this session. Required — set by the spawner after
+	// resolving the actor via the actor module's Resolver.
+	CreatedByActorID int64
 
 	// Snapshot.
 	RepoSHA    string

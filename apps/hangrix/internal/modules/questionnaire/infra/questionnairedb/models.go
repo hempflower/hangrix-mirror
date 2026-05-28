@@ -8,6 +8,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Actor struct {
+	ID             int64
+	Kind           string
+	UserID         pgtype.Int8
+	AgentRoleKey   pgtype.Text
+	AgentSessionID pgtype.Int8
+	WorkflowRunID  pgtype.Int8
+	DisplayName    string
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
 type BranchProtection struct {
 	ID               int64
 	RepoID           int64
@@ -20,100 +32,78 @@ type BranchProtection struct {
 }
 
 type Contribution struct {
-	ID                 int64
-	RepoID             int64
-	IssueID            int64
-	SessionID          int64
-	AgentRole          string
-	RefName            string
-	HeadSha            string
-	BaseSha            string
-	Title              string
-	Description        string
-	Status             string
-	Mergeable          bool
-	MergeMode          string
-	ChangedPaths       []string
-	Files              int32
-	Additions          int32
-	Deletions          int32
-	MergedCommitSha    string
-	MergedAt           pgtype.Timestamptz
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
-	ActorKind          string
-	ActorUserID        pgtype.Int8
-	ActorRoleKey       string
-	ActorWorkflowRunID pgtype.Int8
-	ActorDisplayName   string
+	ID              int64
+	RepoID          int64
+	IssueID         int64
+	SessionID       int64
+	AgentRole       string
+	RefName         string
+	HeadSha         string
+	BaseSha         string
+	Title           string
+	Description     string
+	Status          string
+	Mergeable       bool
+	MergeMode       string
+	ChangedPaths    []string
+	Files           int32
+	Additions       int32
+	Deletions       int32
+	MergedCommitSha string
+	MergedAt        pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	ActorID         int64
 }
 
 type Issue struct {
-	ID                 int64
-	RepoID             int64
-	Number             int64
-	AuthorID           pgtype.Int8
-	Title              string
-	Body               string
-	State              string
-	BranchName         string
-	BaseBranch         string
-	HeadSha            string
-	MergeCommitSha     string
-	MergedAt           pgtype.Timestamptz
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
-	ParentID           pgtype.Int8
-	ParentNumber       int64
-	AgentRole          string
-	ActorKind          string
-	ActorUserID        pgtype.Int8
-	ActorRoleKey       string
-	ActorWorkflowRunID pgtype.Int8
-	ActorDisplayName   string
+	ID             int64
+	RepoID         int64
+	Number         int64
+	Title          string
+	Body           string
+	State          string
+	BranchName     string
+	BaseBranch     string
+	HeadSha        string
+	MergeCommitSha string
+	MergedAt       pgtype.Timestamptz
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	ParentID       pgtype.Int8
+	ParentNumber   int64
+	ActorID        int64
 }
 
 type IssueAttachment struct {
-	ID                 int64
-	RepoID             int64
-	IssueID            int64
-	CommentID          pgtype.Int8
-	AuthorID           pgtype.Int8
-	AgentRole          string
-	StorageKey         string
-	OriginalName       string
-	SizeBytes          int64
-	MimeType           string
-	DetectedMimeType   string
-	Sha256             string
-	Kind               string
-	Status             string
-	CreatedAt          pgtype.Timestamptz
-	DeletedAt          pgtype.Timestamptz
-	DisplayName        string
-	Inline             bool
-	ActorKind          string
-	ActorUserID        pgtype.Int8
-	ActorRoleKey       string
-	ActorWorkflowRunID pgtype.Int8
-	ActorDisplayName   string
+	ID               int64
+	RepoID           int64
+	IssueID          int64
+	CommentID        pgtype.Int8
+	StorageKey       string
+	OriginalName     string
+	SizeBytes        int64
+	MimeType         string
+	DetectedMimeType string
+	Sha256           string
+	Kind             string
+	Status           string
+	CreatedAt        pgtype.Timestamptz
+	DeletedAt        pgtype.Timestamptz
+	DisplayName      string
+	Inline           bool
+	ActorID          int64
 }
 
 type IssueComment struct {
-	ID                 int64
-	IssueID            int64
-	AuthorID           pgtype.Int8
-	Body               string
-	FilePath           string
-	Line               int32
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
-	AgentRole          string
-	ActorKind          string
-	ActorUserID        pgtype.Int8
-	ActorRoleKey       string
-	ActorWorkflowRunID pgtype.Int8
-	ActorDisplayName   string
+	ID        int64
+	IssueID   int64
+	Body      string
+	FilePath  string
+	Line      int32
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+	ActorID   int64
 }
 
 type IssueCounter struct {
@@ -131,18 +121,12 @@ type IssueDependency struct {
 }
 
 type IssueEvent struct {
-	ID                 int64
-	IssueID            int64
-	Kind               string
-	Payload            []byte
-	ActorID            pgtype.Int8
-	CreatedAt          pgtype.Timestamptz
-	AgentRole          string
-	ActorKind          string
-	ActorUserID        pgtype.Int8
-	ActorRoleKey       string
-	ActorWorkflowRunID pgtype.Int8
-	ActorDisplayName   string
+	ID        int64
+	IssueID   int64
+	Kind      string
+	Payload   []byte
+	ActorID   int64
+	CreatedAt pgtype.Timestamptz
 }
 
 type Organization struct {
@@ -151,18 +135,18 @@ type Organization struct {
 	DisplayName string
 	Description string
 	AvatarUrl   string
-	CreatedBy   int64
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
 	DeletedAt   pgtype.Timestamptz
+	ActorID     int64
 }
 
 type OrganizationMember struct {
 	OrgID   int64
 	UserID  int64
 	Role    string
-	AddedBy int64
 	AddedAt pgtype.Timestamptz
+	ActorID int64
 }
 
 type Questionnaire struct {
@@ -180,10 +164,10 @@ type Questionnaire struct {
 type QuestionnaireAnswer struct {
 	ID              int64
 	QuestionnaireID int64
-	UserID          int64
 	Answers         []byte
 	SubmittedAt     pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
+	ActorID         int64
 }
 
 type QuestionnaireQuestion struct {
@@ -212,8 +196,8 @@ type RepoMember struct {
 	RepoID  int64
 	UserID  int64
 	Role    string
-	AddedBy int64
 	AddedAt pgtype.Timestamptz
+	ActorID int64
 }
 
 type RepoVariable struct {

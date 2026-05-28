@@ -7,6 +7,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/app"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/kv"
+	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor"
 	platformapi "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api"
 	platformsettings "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_settings"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire"
@@ -60,6 +61,7 @@ func main() {
 		llmprovider.Module(),
 		llmproxy.Module(),
 		runner.Module(),
+		actor.Module(),
 		agentsession.Module(),
 		dashboard.Module(),
 		platformapi.Module(),

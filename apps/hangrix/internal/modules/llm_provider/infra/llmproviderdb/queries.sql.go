@@ -34,7 +34,7 @@ func (q *Queries) CountUsage(ctx context.Context, arg CountUsageParams) (int64, 
 
 const createProvider = `-- name: CreateProvider :one
 INSERT INTO llm_providers (
-    name, type, base_url, api_key_encrypted, allowed_models, created_by
+    name, type, base_url, api_key_encrypted, allowed_models, actor_id
 ) VALUES (
     $1,
     $2,
@@ -43,7 +43,7 @@ INSERT INTO llm_providers (
     $5,
     $6
 )
-RETURNING id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled
+RETURNING id, name, type, base_url, api_key_encrypted, allowed_models, created_at, updated_at, disabled, actor_id
 `
 
 type CreateProviderParams struct {
@@ -52,7 +52,7 @@ type CreateProviderParams struct {
 	BaseUrl         string
 	ApiKeyEncrypted string
 	AllowedModels   []string
-	CreatedBy       int64
+	ActorID         int64
 }
 
 func (q *Queries) CreateProvider(ctx context.Context, arg CreateProviderParams) (LlmProvider, error) {
@@ -62,7 +62,7 @@ func (q *Queries) CreateProvider(ctx context.Context, arg CreateProviderParams) 
 		arg.BaseUrl,
 		arg.ApiKeyEncrypted,
 		arg.AllowedModels,
-		arg.CreatedBy,
+		arg.ActorID,
 	)
 	var i LlmProvider
 	err := row.Scan(
@@ -72,10 +72,10 @@ func (q *Queries) CreateProvider(ctx context.Context, arg CreateProviderParams) 
 		&i.BaseUrl,
 		&i.ApiKeyEncrypted,
 		&i.AllowedModels,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Disabled,
+		&i.ActorID,
 	)
 	return i, err
 }
@@ -270,7 +270,7 @@ func (q *Queries) ExportUsageJSONL(ctx context.Context, arg ExportUsageJSONLPara
 }
 
 const findProviderByModel = `-- name: FindProviderByModel :one
-SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled FROM llm_providers
+SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_at, updated_at, disabled, actor_id FROM llm_providers
 WHERE $1::TEXT = ANY(allowed_models)
   AND NOT disabled
 ORDER BY id ASC
@@ -292,16 +292,16 @@ func (q *Queries) FindProviderByModel(ctx context.Context, model string) (LlmPro
 		&i.BaseUrl,
 		&i.ApiKeyEncrypted,
 		&i.AllowedModels,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Disabled,
+		&i.ActorID,
 	)
 	return i, err
 }
 
 const getProviderByID = `-- name: GetProviderByID :one
-SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled FROM llm_providers WHERE id = $1
+SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_at, updated_at, disabled, actor_id FROM llm_providers WHERE id = $1
 `
 
 func (q *Queries) GetProviderByID(ctx context.Context, id int64) (LlmProvider, error) {
@@ -314,16 +314,16 @@ func (q *Queries) GetProviderByID(ctx context.Context, id int64) (LlmProvider, e
 		&i.BaseUrl,
 		&i.ApiKeyEncrypted,
 		&i.AllowedModels,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Disabled,
+		&i.ActorID,
 	)
 	return i, err
 }
 
 const getProviderByName = `-- name: GetProviderByName :one
-SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled FROM llm_providers WHERE name = $1
+SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_at, updated_at, disabled, actor_id FROM llm_providers WHERE name = $1
 `
 
 func (q *Queries) GetProviderByName(ctx context.Context, name string) (LlmProvider, error) {
@@ -336,10 +336,10 @@ func (q *Queries) GetProviderByName(ctx context.Context, name string) (LlmProvid
 		&i.BaseUrl,
 		&i.ApiKeyEncrypted,
 		&i.AllowedModels,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Disabled,
+		&i.ActorID,
 	)
 	return i, err
 }
@@ -395,7 +395,7 @@ func (q *Queries) GetUsageByID(ctx context.Context, id int64) (GetUsageByIDRow, 
 }
 
 const listProviders = `-- name: ListProviders :many
-SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled FROM llm_providers ORDER BY name ASC
+SELECT id, name, type, base_url, api_key_encrypted, allowed_models, created_at, updated_at, disabled, actor_id FROM llm_providers ORDER BY name ASC
 `
 
 func (q *Queries) ListProviders(ctx context.Context) ([]LlmProvider, error) {
@@ -414,10 +414,10 @@ func (q *Queries) ListProviders(ctx context.Context) ([]LlmProvider, error) {
 			&i.BaseUrl,
 			&i.ApiKeyEncrypted,
 			&i.AllowedModels,
-			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Disabled,
+			&i.ActorID,
 		); err != nil {
 			return nil, err
 		}
@@ -569,7 +569,7 @@ UPDATE llm_providers SET
     disabled   = $1,
     updated_at = NOW()
 WHERE id = $2
-RETURNING id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled
+RETURNING id, name, type, base_url, api_key_encrypted, allowed_models, created_at, updated_at, disabled, actor_id
 `
 
 type SetProviderDisabledParams struct {
@@ -590,10 +590,10 @@ func (q *Queries) SetProviderDisabled(ctx context.Context, arg SetProviderDisabl
 		&i.BaseUrl,
 		&i.ApiKeyEncrypted,
 		&i.AllowedModels,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Disabled,
+		&i.ActorID,
 	)
 	return i, err
 }
@@ -606,7 +606,7 @@ UPDATE llm_providers SET
     disabled          = $4,
     updated_at        = NOW()
 WHERE id = $5
-RETURNING id, name, type, base_url, api_key_encrypted, allowed_models, created_by, created_at, updated_at, disabled
+RETURNING id, name, type, base_url, api_key_encrypted, allowed_models, created_at, updated_at, disabled, actor_id
 `
 
 type UpdateProviderParams struct {
@@ -635,10 +635,10 @@ func (q *Queries) UpdateProvider(ctx context.Context, arg UpdateProviderParams) 
 		&i.BaseUrl,
 		&i.ApiKeyEncrypted,
 		&i.AllowedModels,
-		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Disabled,
+		&i.ActorID,
 	)
 	return i, err
 }

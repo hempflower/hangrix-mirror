@@ -89,7 +89,7 @@ var (
 
 // MemberStore is the persistence abstraction for repo_members.
 type MemberStore interface {
-	AddMember(ctx context.Context, repoID, userID, addedBy int64, role MemberRole) error
+	AddMember(ctx context.Context, repoID, userID, actorID int64, role MemberRole) error
 	UpdateMemberRole(ctx context.Context, repoID, userID int64, role MemberRole) error
 	RemoveMember(ctx context.Context, repoID, userID int64) error
 	ListMembers(ctx context.Context, repoID int64) ([]*RepoMember, error)

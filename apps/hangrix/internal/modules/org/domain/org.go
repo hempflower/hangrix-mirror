@@ -90,14 +90,14 @@ var (
 // `name` to ErrOrgConflict and missing rows to ErrOrgNotFound /
 // ErrMemberNotFound.
 type OrgRepo interface {
-	Create(ctx context.Context, name, displayName, description string, createdBy int64) (*Org, error)
+	Create(ctx context.Context, name, displayName, description string, actorID int64) (*Org, error)
 	GetByName(ctx context.Context, name string) (*Org, error)
 	GetByID(ctx context.Context, id int64) (*Org, error)
 	Exists(ctx context.Context, name string) (bool, error)
 	UpdateMeta(ctx context.Context, id int64, displayName, description, avatarURL string) (*Org, error)
 	SoftDelete(ctx context.Context, id int64) error
 
-	AddMember(ctx context.Context, orgID, userID, addedBy int64, role Role) error
+	AddMember(ctx context.Context, orgID, userID, actorID int64, role Role) error
 	UpdateMemberRole(ctx context.Context, orgID, userID int64, role Role) error
 	RemoveMember(ctx context.Context, orgID, userID int64) error
 	ListMembers(ctx context.Context, orgID int64) ([]*Membership, error)

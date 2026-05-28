@@ -12,7 +12,7 @@ import (
 )
 
 const addRepoMember = `-- name: AddRepoMember :exec
-INSERT INTO repo_members (repo_id, user_id, role, added_by)
+INSERT INTO repo_members (repo_id, user_id, role, actor_id)
 VALUES ($1, $2, $3, $4)
 `
 
@@ -20,7 +20,7 @@ type AddRepoMemberParams struct {
 	RepoID  int64
 	UserID  int64
 	Role    string
-	AddedBy int64
+	ActorID int64
 }
 
 func (q *Queries) AddRepoMember(ctx context.Context, arg AddRepoMemberParams) error {
@@ -28,7 +28,7 @@ func (q *Queries) AddRepoMember(ctx context.Context, arg AddRepoMemberParams) er
 		arg.RepoID,
 		arg.UserID,
 		arg.Role,
-		arg.AddedBy,
+		arg.ActorID,
 	)
 	return err
 }
@@ -431,7 +431,7 @@ func (q *Queries) GetRepoByUserOwnerAndName(ctx context.Context, arg GetRepoByUs
 }
 
 const getRepoMember = `-- name: GetRepoMember :one
-SELECT m.repo_id, m.user_id, u.username, m.role, m.added_by, m.added_at
+SELECT m.repo_id, m.user_id, u.username, m.role, m.actor_id, m.added_at
 FROM repo_members m
 JOIN users u ON u.id = m.user_id
 WHERE m.repo_id = $1 AND m.user_id = $2
@@ -447,7 +447,7 @@ type GetRepoMemberRow struct {
 	UserID   int64
 	Username string
 	Role     string
-	AddedBy  int64
+	ActorID  int64
 	AddedAt  pgtype.Timestamptz
 }
 
@@ -459,7 +459,7 @@ func (q *Queries) GetRepoMember(ctx context.Context, arg GetRepoMemberParams) (G
 		&i.UserID,
 		&i.Username,
 		&i.Role,
-		&i.AddedBy,
+		&i.ActorID,
 		&i.AddedAt,
 	)
 	return i, err
@@ -554,7 +554,7 @@ func (q *Queries) ListBranchProtectionsByRepo(ctx context.Context, repoID int64)
 }
 
 const listRepoMembers = `-- name: ListRepoMembers :many
-SELECT m.repo_id, m.user_id, u.username, m.role, m.added_by, m.added_at
+SELECT m.repo_id, m.user_id, u.username, m.role, m.actor_id, m.added_at
 FROM repo_members m
 JOIN users u ON u.id = m.user_id
 WHERE m.repo_id = $1
@@ -566,7 +566,7 @@ type ListRepoMembersRow struct {
 	UserID   int64
 	Username string
 	Role     string
-	AddedBy  int64
+	ActorID  int64
 	AddedAt  pgtype.Timestamptz
 }
 
@@ -584,7 +584,7 @@ func (q *Queries) ListRepoMembers(ctx context.Context, repoID int64) ([]ListRepo
 			&i.UserID,
 			&i.Username,
 			&i.Role,
-			&i.AddedBy,
+			&i.ActorID,
 			&i.AddedAt,
 		); err != nil {
 			return nil, err

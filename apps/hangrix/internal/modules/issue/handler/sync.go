@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log"
 
+	"github.com/hangrix/hangrix/pkg/actor"
+
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
@@ -70,15 +72,12 @@ func (h *Handler) SyncIssueBranch(ctx context.Context, repo *repodomain.Repo, fs
 		// spawn hiccup must not break the head-sha update or the
 		// timeline event we just wrote.
 		//
-		// Spawned sessions must reference a real users(id) for created_by
-		// (agent_sessions.created_by FKs users(id) and rejects 0). When no
-		// human pushed (agent-driven or background sync), fall back to the
-		// issue's author.
-		spawnActor := actorID
-		if spawnActor == 0 {
-			spawnActor = iss.AuthorID
-		}
-		h.fireCommitPushed(ctx, repo, fsPath, iss, oldRef, headSHA, raw, spawnActor)
+		// Resolve the triggering actor via the actor module's Resolver.
+		// The old 3-way fallback (actorID → iss.AuthorID → repo.OwnerID)
+		// is replaced with a single resolution path. When the resolver
+		// is nil (tests), we fall back to the legacy actorID.
+		triggerActor := h.resolveCommitPushedActor(ctx, actorID, agentRole, repo, iss)
+		h.fireCommitPushed(ctx, repo, fsPath, iss, oldRef, headSHA, raw, actorID, triggerActor)
 	}
 	return nil
 }
@@ -93,7 +92,7 @@ func (h *Handler) SyncIssueBranch(ctx context.Context, repo *repodomain.Repo, fs
 // headSHA — collected once here so the spawner can match each
 // subscribed role's commit.pushed paths / paths_ignore filter without
 // re-shelling out to git per role.
-func (h *Handler) fireCommitPushed(ctx context.Context, repo *repodomain.Repo, fsPath string, iss *domain.Issue, oldRef, headSHA string, commitsJSON []byte, actorID int64) {
+func (h *Handler) fireCommitPushed(ctx context.Context, repo *repodomain.Repo, fsPath string, iss *domain.Issue, oldRef, headSHA string, commitsJSON []byte, actorID int64, triggerActor *actor.Ref) {
 	if h.spawner == nil {
 		return
 	}
@@ -103,6 +102,7 @@ func (h *Handler) fireCommitPushed(ctx context.Context, repo *repodomain.Repo, f
 		CauseID:      headSHA,
 		RepoID:       repo.ID,
 		IssueNumber:  int32(iss.Number),
+		Actor:        triggerActor,
 		ActorID:      actorID,
 		ChangedPaths: collectChangedPaths(h.git, fsPath, oldRef, headSHA),
 		Payload:      commitsJSON,
@@ -177,4 +177,49 @@ func collectNewCommits(g gitdomain.Git, fsPath, baseline, head string) []domain.
 		})
 	}
 	return out
+}
+
+
+// resolveCommitPushedActor resolves the pusher's actor identity for the
+// commit.pushed trigger. When the actorResolver is available, it resolves
+// from actorID (user push) or agentRole (agent push); otherwise returns nil.
+func (h *Handler) resolveCommitPushedActor(ctx context.Context, actorID int64, agentRole string, repo *repodomain.Repo, iss *domain.Issue) *actor.Ref {
+	if h.actorResolver == nil {
+		return nil
+	}
+	if actorID > 0 {
+		resolved, err := h.actorResolver.From(ctx, actor.UserRef(actorID, ""))
+		if err != nil {
+			log.Printf("issue: resolve commit_pushed actor user:%d: %v", actorID, err)
+			return nil
+		}
+		return resolved
+	}
+	if agentRole != "" {
+		resolved, err := h.actorResolver.From(ctx, actor.AgentRef(agentRole))
+		if err != nil {
+			log.Printf("issue: resolve commit_pushed actor agent:%s: %v", agentRole, err)
+			return nil
+		}
+		return resolved
+	}
+	// No direct pusher — fall back to issue author.
+	if iss.AuthorID > 0 {
+		resolved, err := h.actorResolver.From(ctx, actor.UserRef(iss.AuthorID, ""))
+		if err != nil {
+			log.Printf("issue: resolve commit_pushed actor issue_author:%d: %v", iss.AuthorID, err)
+			return nil
+		}
+		return resolved
+	}
+	// Last resort: system actor.
+	if repo.OwnerKind == repodomain.OwnerKindUser && repo.OwnerID > 0 {
+		resolved, err := h.actorResolver.From(ctx, actor.UserRef(repo.OwnerID, ""))
+		if err != nil {
+			log.Printf("issue: resolve commit_pushed actor repo_owner:%d: %v", repo.OwnerID, err)
+			return nil
+		}
+		return resolved
+	}
+	return nil
 }

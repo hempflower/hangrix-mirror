@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
+	"github.com/hangrix/hangrix/pkg/actor"
 )
 
 // CauseKind classifies the upstream event that spawned a session. It maps
@@ -105,9 +106,22 @@ type TriggerInput struct {
 	// issue.
 	IssueNumber int32
 
-	// ActorID is the user who triggered the event (issue author for
-	// issue_opened, commenter for comment_mentioned). Stored as the
-	// session row's `created_by`.
+	// Actor is the resolved actor.Ref for the entity that triggered
+	// this event. Set by callers via the actor module's Resolver.
+	// When non-nil, the spawner uses it directly; when nil (legacy
+	// callers), the spawner falls back to ActorID below.
+	//
+	// Supersedes ActorID — new callers should populate Actor instead.
+	Actor *actor.Ref
+
+	// Deprecated: ActorID is the user who triggered the event (issue
+	// author for issue_opened, commenter for comment_mentioned).
+	// Stored as the session row's `created_by`.
+	//
+	// New callers should set Actor instead; the spawner will use
+	// Actor when non-nil and fall back to ActorID otherwise. This
+	// field is kept for backward compatibility while callers
+	// (issue handler, platform_api) migrate.
 	//
 	// Mention_by gating is NOT applied here — the issue handler is
 	// the authority on the actor↔repo relationship and pre-filters

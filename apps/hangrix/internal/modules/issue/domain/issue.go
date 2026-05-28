@@ -371,6 +371,7 @@ type Issue struct {
 	// AgentRole is set on agent-created issues. Empty for human-created
 	// issues. Mirrors the same field on Comment and Event.
 	AgentRole      string
+	ActorID        int64     // FK to actors(id); replaces denormalized actor_* columns
 	Actor          actor.Ref
 	Title          string
 	Body           string
@@ -408,6 +409,7 @@ type Comment struct {
 	AuthorID   int64
 	AuthorName string
 	AgentRole  string
+	ActorID    int64     // FK to actors(id)
 	Actor      actor.Ref
 	Body       string
 	FilePath   string

@@ -1,6 +1,28 @@
 version: "2"
 sql:
   - engine: postgresql
+    queries: internal/modules/actor/infra/queries.sql
+    # Actor module FK references to users(id), repos(id), and
+    # agent_sessions(id) (in the runner module); union those schemas
+    # so sqlc can resolve references at generate time. At runtime
+    # each module applies only its own migrations via goose_actor.
+    schema:
+      - internal/modules/user/infra/migrations
+      - internal/modules/org/infra/migrations
+      - internal/modules/repo/infra/migrations
+      - internal/modules/runner/infra/migrations
+      - internal/modules/actor/infra/migrations
+    gen:
+      go:
+        package: actordb
+        out: internal/modules/actor/infra/actordb
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_empty_slices: true
+  - engine: postgresql
     queries: internal/modules/user/infra/queries.sql
     schema: internal/modules/user/infra/migrations
     gen:
@@ -15,10 +37,12 @@ sql:
         emit_empty_slices: true
   - engine: postgresql
     queries: internal/modules/org/infra/queries.sql
-    # Org migrations reference users(id); union the user schema so sqlc can
-    # resolve the FK. At runtime each module applies only its own migrations.
+    # Org migrations reference users(id) and actors(id); union the user and
+    # actor schemas so sqlc can resolve the FK. At runtime each module applies
+    # only its own migrations.
     schema:
       - internal/modules/user/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/org/infra/migrations
     gen:
       go:
@@ -32,14 +56,15 @@ sql:
         emit_empty_slices: true
   - engine: postgresql
     queries: internal/modules/repo/infra/queries.sql
-    # Repo migrations FK users(id) and (since M5) organizations(id); union all
-    # three schemas so sqlc can parse the joins. At runtime each module still
-    # applies only its own migrations via goose with a module-scoped version
-    # table; the repo module declares an org dependency in its ioc deps so
-    # org migrations win the build-order race.
+    # Repo migrations FK users(id), organizations(id), and actors(id); union
+    # all four schemas so sqlc can parse the joins. At runtime each module
+    # still applies only its own migrations via goose with a module-scoped
+    # version table; the repo module declares an org dependency in its ioc
+    # deps so org migrations win the build-order race.
     schema:
       - internal/modules/user/infra/migrations
       - internal/modules/org/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/repo/infra/migrations
     gen:
       go:
@@ -71,14 +96,16 @@ sql:
         emit_empty_slices: true
   - engine: postgresql
     queries: internal/modules/llm_provider/infra/queries.sql
-    # llm_providers FKs users(id) for created_by; llm_usage_log keeps no FK
+    # llm_providers FKs actors(id) for actor_id; llm_usage_log keeps no FK
     # to the runner module so the schema set stays narrow.
     schema:
       - internal/modules/user/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/llm_provider/infra/migrations/00001_create_llm_providers.sql
       - internal/modules/llm_provider/infra/migrations/00002_add_provider_disabled.sql
       - internal/modules/llm_provider/infra/migrations/00003_add_usage_body_columns.sql
       - internal/modules/llm_provider/infra/migrations/00005_fix_mock_provider_constraint.sql
+      - internal/modules/llm_provider/infra/migrations/00006_add_actor_id_to_llm_providers.sql
     gen:
       go:
         package: llmproviderdb
@@ -91,13 +118,14 @@ sql:
         emit_empty_slices: true
   - engine: postgresql
     queries: internal/modules/issue/infra/queries.sql
-    # issue_* tables FK users(id) and repos(id); union those so sqlc
-    # can resolve the joins. Runtime migrations are still applied
-    # per-module via the goose_issue version table.
+    # issue_* tables FK users(id), repos(id), and actors(id); union
+    # those so sqlc can resolve the joins. Runtime migrations are still
+    # applied per-module via the goose_issue version table.
     schema:
       - internal/modules/user/infra/migrations
       - internal/modules/org/infra/migrations
       - internal/modules/repo/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/issue/infra/migrations
     gen:
       go:
@@ -111,13 +139,15 @@ sql:
         emit_empty_slices: true
   - engine: postgresql
     queries: internal/modules/runner/infra/queries.sql
-    # runner tables FK users(id) (created_by) and repos(id) (agent_sessions.repo_id);
-    # union user + org + repo migrations so sqlc can resolve both. At
-    # runtime each module applies only its own migrations.
+    # runner tables FK users(id) (created_by → dropped), actors(id)
+    # (created_by_actor_id, actor_id), and repos(id) (agent_sessions.repo_id);
+    # union user + org + repo + actor migrations so sqlc can resolve all
+    # references. At runtime each module applies only its own migrations.
     schema:
       - internal/modules/user/infra/migrations
       - internal/modules/org/infra/migrations
       - internal/modules/repo/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/runner/infra/migrations
     gen:
       go:
@@ -200,10 +230,12 @@ sql:
       - internal/modules/user/infra/migrations
       - internal/modules/org/infra/migrations
       - internal/modules/repo/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/llm_provider/infra/migrations/00001_create_llm_providers.sql
       - internal/modules/llm_provider/infra/migrations/00002_add_provider_disabled.sql
       - internal/modules/llm_provider/infra/migrations/00003_add_usage_body_columns.sql
       - internal/modules/llm_provider/infra/migrations/00005_fix_mock_provider_constraint.sql
+      - internal/modules/llm_provider/infra/migrations/00006_add_actor_id_to_llm_providers.sql
       - internal/modules/runner/infra/migrations
     gen:
       go:
@@ -218,11 +250,12 @@ sql:
 
   - engine: postgresql
     queries: internal/modules/attachment/infra/queries.sql
-    # attachments FK users(id); comment_attachments FK issue_comments(id)
-    # and attachments(id). Union user + issue (and its transitive schemas)
-    # so sqlc can resolve all references at generate time.
+    # attachments FK actors(id); comment_attachments FK issue_comments(id)
+    # and attachments(id). Union user + actor + issue (and its transitive
+    # schemas) so sqlc can resolve all references at generate time.
     schema:
       - internal/modules/user/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/org/infra/migrations
       - internal/modules/repo/infra/migrations
       - internal/modules/issue/infra/migrations
@@ -240,12 +273,13 @@ sql:
 
   - engine: postgresql
     queries: internal/modules/questionnaire/infra/queries.sql
-    # questionnaire tables FK issues(id) and users(id); union user + org +
+    # questionnaire tables FK issues(id) and actors(id); union user + actor + org +
     # repo + issue + questionnaire schemas so sqlc can resolve both
     # references at generate time. Runtime still applies only its own
     # migrations via goose_questionnaire.
     schema:
       - internal/modules/user/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/org/infra/migrations
       - internal/modules/repo/infra/migrations
       - internal/modules/issue/infra/migrations

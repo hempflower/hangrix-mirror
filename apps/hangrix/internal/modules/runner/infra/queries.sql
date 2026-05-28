@@ -3,7 +3,7 @@
 -- name: CreateRunner :one
 INSERT INTO runners (
     name, owner_user_id, visibility, status,
-    enroll_token_prefix, enroll_token_hash, created_by
+    enroll_token_prefix, enroll_token_hash, actor_id
 ) VALUES (
     sqlc.arg('name'),
     sqlc.narg('owner_user_id'),
@@ -11,7 +11,7 @@ INSERT INTO runners (
     'pending',
     sqlc.arg('enroll_token_prefix'),
     sqlc.arg('enroll_token_hash'),
-    sqlc.arg('created_by')
+    sqlc.arg('actor_id')
 )
 RETURNING *;
 
@@ -76,7 +76,7 @@ INSERT INTO agent_sessions (
     runner_id, repo_id, issue_number, status, role, model,
     agent_image, working_branch, base_branch,
     host_addendum, env, session_token_prefix, session_token_hash,
-    session_token_sealed, created_by,
+    session_token_sealed, created_by_actor_id,
     repo_sha, role_key, cause_kind, cause_id, role_config
 ) VALUES (
     sqlc.narg('runner_id'),
@@ -93,7 +93,7 @@ INSERT INTO agent_sessions (
     sqlc.arg('session_token_prefix'),
     sqlc.arg('session_token_hash'),
     sqlc.narg('session_token_sealed'),
-    sqlc.arg('created_by'),
+    sqlc.arg('created_by_actor_id'),
     sqlc.arg('repo_sha'),
     sqlc.arg('role_key'),
     sqlc.arg('cause_kind'),
@@ -474,6 +474,16 @@ SET container_stop_pending = FALSE,
     container_stopped_at   = NOW()
 WHERE id = sqlc.arg('id')
   AND runner_id = sqlc.arg('runner_id');
+
+-- ---- actor helpers ----
+
+-- name: GetActorUserID :one
+-- Resolves the user_id for a given actor row. Returns 0 when the actor
+-- kind is not 'user' or the row doesn't exist. Used by sessionFromRow to
+-- backfill the deprecated CreatedBy field from CreatedByActorID.
+SELECT COALESCE(user_id, 0)::BIGINT AS user_id FROM actors WHERE id = sqlc.arg('actor_id');
+
+-- ---- container stop lifecycle (migration 00005) ----
 
 -- name: SweepIdleSessionContainersForStop :execrows
 -- Idle-stop reaper (platform side): flags every live container whose

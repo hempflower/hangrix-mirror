@@ -27,7 +27,6 @@ type AgentSession struct {
 	SessionTokenRevokedAt   pgtype.Timestamptz
 	ExitCode                pgtype.Int4
 	ErrorMessage            string
-	CreatedBy               int64
 	CreatedAt               pgtype.Timestamptz
 	ClaimedAt               pgtype.Timestamptz
 	StartedAt               pgtype.Timestamptz
@@ -40,9 +39,11 @@ type AgentSession struct {
 	ContainerID             string
 	ContainerLastUsedAt     pgtype.Timestamptz
 	ContainerCleanupPending bool
+	CreatedByActorID        int64
 	ContainerStopPending    bool
 	ContainerStoppedAt      pgtype.Timestamptz
 	RunningJobs             int32
+	ActorID                 pgtype.Int8
 }
 
 type AgentSessionInput struct {
@@ -85,18 +86,18 @@ type Organization struct {
 	DisplayName string
 	Description string
 	AvatarUrl   string
-	CreatedBy   int64
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
 	DeletedAt   pgtype.Timestamptz
+	ActorID     int64
 }
 
 type OrganizationMember struct {
 	OrgID   int64
 	UserID  int64
 	Role    string
-	AddedBy int64
 	AddedAt pgtype.Timestamptz
+	ActorID int64
 }
 
 type Repo struct {
@@ -115,8 +116,8 @@ type RepoMember struct {
 	RepoID  int64
 	UserID  int64
 	Role    string
-	AddedBy int64
 	AddedAt pgtype.Timestamptz
+	ActorID int64
 }
 
 type RepoVariable struct {
@@ -143,9 +144,9 @@ type Runner struct {
 	AgentTokenPrefix    pgtype.Text
 	AgentTokenHash      pgtype.Text
 	AgentTokenRevokedAt pgtype.Timestamptz
-	CreatedBy           int64
 	CreatedAt           pgtype.Timestamptz
 	UpdatedAt           pgtype.Timestamptz
+	ActorID             int64
 }
 
 type User struct {

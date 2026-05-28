@@ -35,9 +35,9 @@ WHERE id = sqlc.arg('id')
 RETURNING id, issue_id, title, description, status, created_by_agent, created_at, closed_at, closed_reason;
 
 -- name: InsertAnswer :one
-INSERT INTO questionnaire_answers (questionnaire_id, user_id, answers)
-VALUES (sqlc.arg('questionnaire_id'), sqlc.arg('user_id'), sqlc.arg('answers'))
-RETURNING id, questionnaire_id, user_id, answers, submitted_at, updated_at;
+INSERT INTO questionnaire_answers (questionnaire_id, actor_id, answers)
+VALUES (sqlc.arg('questionnaire_id'), sqlc.arg('actor_id'), sqlc.arg('answers'))
+RETURNING id, questionnaire_id, actor_id, answers, submitted_at, updated_at;
 
 -- name: AutoCloseQuestionnaire :one
 UPDATE questionnaires
@@ -47,12 +47,12 @@ WHERE id = sqlc.arg('id') AND status = 'open'
 RETURNING id, issue_id, title, description, status, created_by_agent, created_at, closed_at, closed_reason;
 
 -- name: GetUserAnswer :one
-SELECT id, questionnaire_id, user_id, answers, submitted_at, updated_at
+SELECT id, questionnaire_id, actor_id, answers, submitted_at, updated_at
 FROM questionnaire_answers
-WHERE questionnaire_id = sqlc.arg('questionnaire_id') AND user_id = sqlc.arg('user_id');
+WHERE questionnaire_id = sqlc.arg('questionnaire_id') AND actor_id = sqlc.arg('actor_id');
 
 -- name: ListAnswers :many
-SELECT id, questionnaire_id, user_id, answers, submitted_at, updated_at
+SELECT id, questionnaire_id, actor_id, answers, submitted_at, updated_at
 FROM questionnaire_answers
 WHERE questionnaire_id = sqlc.arg('questionnaire_id')
 ORDER BY submitted_at ASC;
