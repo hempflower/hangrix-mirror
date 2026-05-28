@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
+	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/infra/orgdb"
 	userdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/user/domain"
@@ -33,11 +34,18 @@ type PostgresRepo struct {
 }
 
 type PostgresRepoDeps struct {
-	Pool  *pgxpool.Pool
-	Users userdomain.Repo
+	Pool   *pgxpool.Pool
+	Users  userdomain.Repo
+	// Actors is wired purely for migration ordering: the org module's
+	// 00003_add_actor_id_to_organizations.sql has FKs to actors(id), so
+	// the actor module's migrations must run first. ioc constructs deps
+	// before owners, so depending on the actor store guarantees the
+	// right order.
+	Actors actordomain.Store
 }
 
 func NewPostgresRepo(deps *PostgresRepoDeps) *PostgresRepo {
+	_ = deps.Actors // see deps doc comment — referenced for build order only.
 	sub, err := fs.Sub(migrationsFS, "migrations")
 	if err != nil {
 		panic(fmt.Errorf("org migrations sub-fs: %w", err))
