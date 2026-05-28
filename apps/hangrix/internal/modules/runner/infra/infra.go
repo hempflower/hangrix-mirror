@@ -267,7 +267,7 @@ func (r *PostgresRepo) GetSessionByTokenPrefix(ctx context.Context, prefix strin
 		}
 		return nil, err
 	}
-	return sessionFromRow(row), nil
+	return r.sessionFromRow(ctx, row), nil
 }
 
 // ---- sessions ----
@@ -326,7 +326,7 @@ func (r *PostgresRepo) CreateSession(ctx context.Context, in domain.CreateSessio
 	if err != nil {
 		return nil, err
 	}
-	return sessionFromRow(row), nil
+	return r.sessionFromRow(ctx, row), nil
 }
 
 func (r *PostgresRepo) GetSessionByID(ctx context.Context, id int64) (*domain.AgentSession, error) {
@@ -337,7 +337,7 @@ func (r *PostgresRepo) GetSessionByID(ctx context.Context, id int64) (*domain.Ag
 		}
 		return nil, err
 	}
-	return sessionFromRow(row), nil
+	return r.sessionFromRow(ctx, row), nil
 }
 
 func (r *PostgresRepo) ListSessions(ctx context.Context, runnerID *int64, status *domain.SessionStatus, limit int) ([]*domain.AgentSession, error) {
@@ -364,7 +364,7 @@ func (r *PostgresRepo) ListSessions(ctx context.Context, runnerID *int64, status
 	}
 	out := make([]*domain.AgentSession, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, sessionFromRow(row))
+		out = append(out, r.sessionFromRow(ctx, row))
 	}
 	return out, nil
 }
@@ -383,7 +383,7 @@ func (r *PostgresRepo) ListSessionsByIssue(ctx context.Context, repoID int64, is
 	}
 	out := make([]*domain.AgentSession, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, sessionFromRow(row))
+		out = append(out, r.sessionFromRow(ctx, row))
 	}
 	return out, nil
 }
@@ -408,7 +408,7 @@ func (r *PostgresRepo) ListRecentSessions(ctx context.Context, filter domain.Ses
 	}
 	out := make([]*domain.AgentSession, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, sessionFromRow(row))
+		out = append(out, r.sessionFromRow(ctx, row))
 	}
 	return out, nil
 }
@@ -483,7 +483,7 @@ func (r *PostgresRepo) ClaimNextSession(ctx context.Context, runnerID int64) (*d
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	s := sessionFromRow(row)
+	s := r.sessionFromRow(ctx, row)
 	s.Status = domain.SessionStatusClaimed
 	now := time.Now()
 	s.ClaimedAt = &now
@@ -871,68 +871,79 @@ func runnerFromRow(r runnerdb.Runner) *domain.Runner {
 	return out
 }
 
-func sessionFromRow(r runnerdb.AgentSession) *domain.AgentSession {
-	out := &domain.AgentSession{
-		ID:                      r.ID,
-		Status:                  domain.SessionStatus(r.Status),
-		Role:                    r.Role,
-		Model:                   r.Model,
-		AgentImage:              r.AgentImage,
-		WorkingBranch:           r.WorkingBranch,
-		BaseBranch:              r.BaseBranch,
-		HostAddendum:            r.HostAddendum,
-		Env:                     r.Env,
-		SessionTokenPrefix:      r.SessionTokenPrefix,
-		SessionTokenHash:        r.SessionTokenHash,
-		ErrorMessage:            r.ErrorMessage,
-		CreatedBy:               0, // deprecated — use CreatedByActorID; resolved via GetActorUserID in post-processing
-		CreatedByActorID:        r.CreatedByActorID,
-		CreatedAt:               r.CreatedAt.Time,
-		RepoSHA:                 r.RepoSha,
-		RoleKey:                 r.RoleKey,
-		CauseKind:               r.CauseKind,
-		CauseID:                 r.CauseID,
-		RoleConfig:              r.RoleConfig,
-		ContainerID:             r.ContainerID,
-		ContainerCleanupPending: r.ContainerCleanupPending,
+// sessionFromRow converts a generated AgentSession row to the domain type.
+// It resolves the legacy CreatedBy user_id from the actor table when
+// CreatedByActorID > 0. Pass ctx = context.Background() if no request context
+// is available.
+func (r *PostgresRepo) sessionFromRow(ctx context.Context, row runnerdb.AgentSession) *domain.AgentSession {
+	createdBy := int64(0)
+	if row.CreatedByActorID > 0 {
+		uid, err := r.q.GetActorUserID(ctx, row.CreatedByActorID)
+		if err == nil {
+			createdBy = uid
+		}
 	}
-	if r.ContainerLastUsedAt.Valid {
-		v := r.ContainerLastUsedAt.Time
+	out := &domain.AgentSession{
+		ID:                      row.ID,
+		Status:                  domain.SessionStatus(row.Status),
+		Role:                    row.Role,
+		Model:                   row.Model,
+		AgentImage:              row.AgentImage,
+		WorkingBranch:           row.WorkingBranch,
+		BaseBranch:              row.BaseBranch,
+		HostAddendum:            row.HostAddendum,
+		Env:                     row.Env,
+		SessionTokenPrefix:      row.SessionTokenPrefix,
+		SessionTokenHash:        row.SessionTokenHash,
+		ErrorMessage:            row.ErrorMessage,
+		CreatedBy:               createdBy,
+		CreatedByActorID:        row.CreatedByActorID,
+		CreatedAt:               row.CreatedAt.Time,
+		RepoSHA:                 row.RepoSha,
+		RoleKey:                 row.RoleKey,
+		CauseKind:               row.CauseKind,
+		CauseID:                 row.CauseID,
+		RoleConfig:              row.RoleConfig,
+		ContainerID:             row.ContainerID,
+		ContainerCleanupPending: row.ContainerCleanupPending,
+	}
+	if row.ContainerLastUsedAt.Valid {
+		v := row.ContainerLastUsedAt.Time
 		out.ContainerLastUsedAt = &v
 	}
-	if r.RunnerID.Valid {
-		v := r.RunnerID.Int64
+	if row.RunnerID.Valid {
+		v := row.RunnerID.Int64
 		out.RunnerID = &v
 	}
-	if r.RepoID.Valid {
-		v := r.RepoID.Int64
+	if row.RepoID.Valid {
+		v := row.RepoID.Int64
 		out.RepoID = &v
 	}
-	if r.IssueNumber.Valid {
-		v := r.IssueNumber.Int32
+	if row.IssueNumber.Valid {
+		v := row.IssueNumber.Int32
 		out.IssueNumber = &v
 	}
-	if r.SessionTokenSealed.Valid {
-		out.SessionTokenSealed = r.SessionTokenSealed.String
+	if row.SessionTokenSealed.Valid {
+		out.SessionTokenSealed = row.SessionTokenSealed.String
 	}
-	if r.SessionTokenRevokedAt.Valid {
-		v := r.SessionTokenRevokedAt.Time
+	if row.SessionTokenRevokedAt.Valid {
+		v := row.SessionTokenRevokedAt.Time
 		out.SessionTokenRevokedAt = &v
 	}
-	if r.ExitCode.Valid {
-		v := r.ExitCode.Int32
+	if row.ExitCode.Valid {
+		v := row.ExitCode.Int32
 		out.ExitCode = &v
 	}
-	if r.ClaimedAt.Valid {
-		v := r.ClaimedAt.Time
+	if row.ClaimedAt.Valid {
+		v := row.ClaimedAt.Time
 		out.ClaimedAt = &v
 	}
-	if r.StartedAt.Valid {
-		v := r.StartedAt.Time
+	if row.StartedAt.Valid {
+		v := row.StartedAt.Time
 		out.StartedAt = &v
 	}
-	if r.EndedAt.Valid {
-		v := r.EndedAt.Time
+	if row.EndedAt.Valid {
+		v := row.EndedAt.Time
 		out.EndedAt = &v
 	}
 	return out

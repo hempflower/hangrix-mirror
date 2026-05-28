@@ -28,10 +28,12 @@ import (
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
+	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/service"
+	"github.com/hangrix/hangrix/pkg/actor"
 	"github.com/hangrix/hangrix/pkg/cryptobox"
 )
 
@@ -41,17 +43,19 @@ import (
 var runnerNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,63}$`)
 
 type AdminHandler struct {
-	repo       domain.Repo
-	repos      repodomain.Store
-	middleware authdomain.Middleware
-	box        *cryptobox.Box
+	repo          domain.Repo
+	repos         repodomain.Store
+	middleware    authdomain.Middleware
+	box           *cryptobox.Box
+	actorResolver actordomain.Resolver
 }
 
 type AdminHandlerDeps struct {
-	Repo       domain.Repo
-	Repos      repodomain.Store
-	Middleware authdomain.Middleware
-	Config     *config.Config
+	Repo          domain.Repo
+	Repos         repodomain.Store
+	Middleware    authdomain.Middleware
+	Config        *config.Config
+	ActorResolver actordomain.Resolver
 }
 
 func NewAdminHandler(deps *AdminHandlerDeps) *AdminHandler {
@@ -60,10 +64,11 @@ func NewAdminHandler(deps *AdminHandlerDeps) *AdminHandler {
 		panic(err)
 	}
 	return &AdminHandler{
-		repo:       deps.Repo,
-		repos:      deps.Repos,
-		middleware: deps.Middleware,
-		box:        box,
+		repo:          deps.Repo,
+		repos:         deps.Repos,
+		middleware:    deps.Middleware,
+		box:           box,
+		actorResolver: deps.ActorResolver,
 	}
 }
 
@@ -377,7 +382,13 @@ func toPublicSession(s *domain.AgentSession) publicSession {
 // will receive it over its own authenticated channel.
 func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authdomain.UserFromRequest(r)
-	_ = caller // TODO: resolve caller.ID → actor ID via actor module for CreatedByActorID
+	var createdByActorID int64
+	if caller != nil && h.actorResolver != nil {
+		resolved, err := h.actorResolver.From(r.Context(), actor.UserRef(caller.ID, ""))
+		if err == nil {
+			createdByActorID = resolved.ActorID
+		}
+	}
 
 	runnerID, ok := httpx.ParseID(w, chi.URLParam(r, "id"))
 	if !ok {
@@ -450,7 +461,7 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 		SessionTokenPrefix: prefix,
 		SessionTokenHash:   string(hashed),
 		SessionTokenSealed: sealed,
-		CreatedByActorID:   0, // TODO: resolve caller.ID → actor ID via actor module Resolver
+		CreatedByActorID:   createdByActorID,
 	}
 	sess, err := h.repo.CreateSession(r.Context(), in)
 	if err != nil {
