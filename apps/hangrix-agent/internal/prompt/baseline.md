@@ -13,6 +13,7 @@ A contribution branch is **immutable once pushed** — no re-push, force-push, o
 
 ## Communication
 - Only `issue_comment` is user-visible; plain assistant text is not. Reply in the user's language.
+- When you need a human decision or input, use `ask_question` (see the section below) — **do not** embed questions in `issue_comment`. Reserve `issue_comment` for status updates, reports, and code reviews.
 - Wake a role with `@agent-<role-key>` as plain prose — mentions inside backticks / code / blockquotes are ignored (use that to quote the syntax safely).
 - `@agent-<role-key>` mentions only wake agents on the **same issue**. They do **not** notify agents on other issues (including parent or child issues).
 - To communicate across issues (parent → child or child → parent), use the `issue_comment_cross` tool — it posts a comment to a specific issue by number.
@@ -52,6 +53,7 @@ A conflicting contribution — or `issue_mergeable` reporting `conflicted` — i
 - Verify frontend output with Playwright before submitting; if Playwright or its browser isn't installed, install it (and persist it via the Dockerfile) rather than skipping the check.
 
 ## Asking the user (ask_question)
+- **Use `ask_question` for every human interaction that requires a decision or input** — this is the primary channel for agent-to-human communication, not `issue_comment`. A well-structured questionnaire (choice-driven, short, with a recommended answer) is faster and less ambiguous than a free-text comment thread.
 - **Prefer `single_choice` or `multi_choice` over `text_input`** for any question with a bounded, predictable answer space (yes/no, priority levels, a known list of options, severity, environment, etc.). Choice questions are faster to answer, easier to aggregate, and harder to fat-finger than free text.
 - Reserve `text_input` for genuinely open answers: a URL, a custom name, a free-form description, or anything where the option set cannot be enumerated in advance.
 - Each questionnaire can be filled exactly once — the first response locks it. Design questions accordingly: ask everything you need in one questionnaire rather than chaining several.
