@@ -89,4 +89,6 @@ func (r *PostgresRepo) ListSettings(ctx context.Context) ([]domain.Setting, erro
 	return out, nil
 }
 
-var _ interface{ GetSetting(context.Context, string) (domain.Setting, error) } = (*PostgresRepo)(nil)
+var _ interface {
+	GetSetting(context.Context, string) (domain.Setting, error)
+} = (*PostgresRepo)(nil)
