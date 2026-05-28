@@ -32,6 +32,7 @@ import (
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/agentsconfig"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/kv"
+	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	agentsessiondomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 	planenginedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/plan_engine/domain"
@@ -89,6 +90,9 @@ type Handler struct {
 	// GET .../plan/state with real data rather than a hardcoded stub.
 	// Nil-safe (tests).
 	planState planenginedomain.PlanStateStore
+	// actorResolver resolves actor identities for trigger attribution.
+	// Nil-safe (tests).
+	actorResolver actordomain.Resolver
 }
 
 type HandlerDeps struct {
@@ -139,6 +143,9 @@ type HandlerDeps struct {
 	// PlanState is the plan_state persistence store.
 	// Nil-safe (tests).
 	PlanState planenginedomain.PlanStateStore
+	// ActorResolver resolves actor identities for trigger attribution.
+	// Nil-safe (tests).
+	ActorResolver actordomain.Resolver
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
@@ -165,6 +172,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		deps:               deps.Deps,
 		planEngine:         deps.PlanEngine,
 		planState:          deps.PlanState,
+		actorResolver:      deps.ActorResolver,
 	}
 }
 
@@ -618,12 +626,14 @@ func (h *Handler) fireIssueOpened(ctx context.Context, repoID, issueNumber, acto
 		log.Printf("issue: fireIssueOpened repo=%d issue=%d: Spawner is nil — event not fired", repoID, issueNumber)
 		return
 	}
+	triggerActor := h.resolveIssueOpenedActor(ctx, actorID)
 	if spawned, err := h.spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
 		Trigger:     agentsconfig.TriggerIssueOpened,
 		CauseKind:   agentsessiondomain.CauseKindIssueOpened,
 		CauseID:     "",
 		RepoID:      repoID,
 		IssueNumber: int32(issueNumber),
+		Actor:       triggerActor,
 		ActorID:     actorID,
 	}); err != nil {
 		log.Printf("issue: fireIssueOpened repo=%d issue=%d: %v", repoID, issueNumber, err)
@@ -639,6 +649,22 @@ func (h *Handler) fireIssueClosed(ctx context.Context, repoID int64, issueNumber
 		return
 	}
 	_, _ = h.archiver.OnIssueClosed(ctx, repoID, issueNumber)
+}
+
+// resolveIssueOpenedActor resolves the issue creator's actor identity.
+func (h *Handler) resolveIssueOpenedActor(ctx context.Context, actorID int64) *actor.Ref {
+	if h.actorResolver == nil {
+		return nil
+	}
+	if actorID > 0 {
+		resolved, err := h.actorResolver.From(ctx, actor.UserRef(actorID, ""))
+		if err != nil {
+			log.Printf("issue: resolve issue.opened actor user:%d: %v", actorID, err)
+			return nil
+		}
+		return resolved
+	}
+	return nil
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {

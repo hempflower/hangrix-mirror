@@ -40,6 +40,7 @@ type AgentSession struct {
 	ContainerID             string
 	ContainerLastUsedAt     pgtype.Timestamptz
 	ContainerCleanupPending bool
+	CreatedByActorID        pgtype.Int8
 }
 
 type AgentSessionInput struct {

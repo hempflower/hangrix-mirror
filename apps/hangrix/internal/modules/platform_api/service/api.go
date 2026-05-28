@@ -58,6 +58,22 @@ func actorRef(roleKey string) actor.Ref {
 	return actor.AgentRef(roleKey)
 }
 
+// resolvePlatformActor resolves the actor for a platform API caller.
+// When the Registry has an ActorResolver, we resolve the caller's agent
+// role as an actor via the actors table. Returns nil when the resolver
+// is not available (tests, or before the actor module is loaded).
+func (s *APIService) resolvePlatformActor(ctx context.Context, p *apidomain.Actor) *actor.Ref {
+	if s.r.deps.ActorResolver == nil {
+		return nil
+	}
+	resolved, err := s.r.deps.ActorResolver.From(ctx, actor.AgentRef(p.RoleKey))
+	if err != nil {
+		log.Printf("platform_api: resolve actor for %s: %v", p.RoleKey, err)
+		return nil
+	}
+	return resolved
+}
+
 func decodeBase64(s string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(s)
 }
@@ -341,18 +357,16 @@ func (s *APIService) CreateIssue(ctx context.Context, p *apidomain.Actor, title,
 	// operator repairs the host yaml then nudges the issue. Mirrors the
 	// issue handler's fireIssueOpened().
 	//
-	// agent_sessions.created_by FKs users(id) and rejects 0, so when an
-	// agent creates the issue (no human actor), fall back to the calling
-	// session's created_by — the same pattern used by fanCommentMentions.
+	// Resolve the actor for the trigger via the actor module's Resolver.
 	if s.r.deps.Spawner != nil {
-		actorID := p.Session.CreatedBy
+		triggerActor := s.resolvePlatformActor(ctx, p)
 		if spawned, err := s.r.deps.Spawner.OnTrigger(ctx, agentsessiondomain.TriggerInput{
 			Trigger:     agentsconfig.TriggerIssueOpened,
 			CauseKind:   agentsessiondomain.CauseKindIssueOpened,
 			CauseID:     "",
 			RepoID:      scope.repo.ID,
 			IssueNumber: int32(iss.Number),
-			ActorID:     actorID,
+			Actor:       triggerActor,
 		}); err != nil {
 			log.Printf("platform_api: fire issue.opened repo=%d issue=%d: %v", scope.repo.ID, iss.Number, err)
 		} else {

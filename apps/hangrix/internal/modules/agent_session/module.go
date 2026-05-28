@@ -23,6 +23,8 @@ func Module() *ioc.Module {
 	// domain.Archiver; the admin handler depends only on
 	// domain.Auditor. None of them sees the wider service struct.
 	m.Provide(service.NewGitBlobReader).ToInterface(new(domain.HostBlobReader))
+	// Spawner depends on actor domain.Resolver for trigger attribution.
+	// ioc resolves it from the actor module.
 	m.Provide(service.NewSpawner).ToInterface(new(domain.Spawner))
 	m.Provide(service.NewArchiver).ToInterface(new(domain.Archiver))
 	m.Provide(service.NewAuditor).ToInterface(new(domain.Auditor))
