@@ -20,6 +20,7 @@ import (
 	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
+	questionnairedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/infra/issuedb"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 )
@@ -45,6 +46,11 @@ type PostgresStoreDeps struct {
 	// migrations must run first. ioc constructs deps before owners, so
 	// depending on the repo store guarantees the right order.
 	Repos repodomain.Store
+	// QuestionnaireStore is wired purely for migration ordering: the
+	// 00013_backfill_questionnaire_events.sql migration references the
+	// questionnaires table, so the questionnaire module's migrations
+	// must run first.
+	QuestionnaireStore questionnairedomain.Store
 }
 
 // resolvedActor resolves an actor_id from legacy authorID/agentRole params.
