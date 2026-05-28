@@ -535,8 +535,8 @@ func (h *Handler) authorizeGitWrite(w http.ResponseWriter, r *http.Request) (*do
 					http.Error(w, term.Error(), http.StatusForbidden)
 					return nil, "", nil, false
 				}
-				// Non-terminal errors don't block git — let the
-				// push proceed; the DB hiccup is logged later.
+				http.Error(w, "issue gate check: "+err.Error(), http.StatusInternalServerError)
+				return nil, "", nil, false
 			}
 		}
 	}

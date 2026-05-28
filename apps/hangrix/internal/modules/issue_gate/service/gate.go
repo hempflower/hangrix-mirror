@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	issuegatedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue_gate/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
+	issuegatedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue_gate/domain"
 )
 
 // Gate implements issuegatedomain.IssueActivityGate by consulting the
@@ -29,7 +29,7 @@ func (g *Gate) CheckIssue(ctx context.Context, repoID int64, issueNumber int32) 
 	iss, err := g.issues.GetByNumber(ctx, repoID, int64(issueNumber))
 	if err != nil {
 		if errors.Is(err, issuedomain.ErrIssueNotFound) {
-			return fmt.Errorf("issue_gate: issue #%d not found in repo %d: %w", issueNumber, repoID, err)
+			return nil // not our concern — issue may be mid-creation
 		}
 		return fmt.Errorf("issue_gate: lookup issue #%d: %w", issueNumber, err)
 	}

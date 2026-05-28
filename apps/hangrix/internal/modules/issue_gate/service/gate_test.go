@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	issuegatedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue_gate/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
+	issuegatedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue_gate/domain"
 )
 
 // stubIssueStore implements issuedomain.Store just enough for Gate tests.
@@ -30,38 +30,54 @@ func (s *stubIssueStore) GetByNumber(_ context.Context, _ int64, number int64) (
 func (s *stubIssueStore) Create(context.Context, int64, int64, string, string, string, string, string, int64, int64) (*issuedomain.Issue, error) {
 	panic("not implemented")
 }
-func (s *stubIssueStore) GetByID(context.Context, int64) (*issuedomain.Issue, error)          { panic("not implemented") }
+func (s *stubIssueStore) GetByID(context.Context, int64) (*issuedomain.Issue, error) {
+	panic("not implemented")
+}
 func (s *stubIssueStore) List(context.Context, int64, issuedomain.ListFilter) ([]*issuedomain.Issue, int64, error) {
 	panic("not implemented")
 }
-func (s *stubIssueStore) ListChildren(context.Context, int64) ([]*issuedomain.Issue, error) { panic("not implemented") }
+func (s *stubIssueStore) ListChildren(context.Context, int64) ([]*issuedomain.Issue, error) {
+	panic("not implemented")
+}
 func (s *stubIssueStore) ListOpenDescendants(context.Context, int64) ([]*issuedomain.OpenDescendant, error) {
 	panic("not implemented")
 }
-func (s *stubIssueStore) Plan(context.Context, int64, int64) (*issuedomain.PlanTree, error) { panic("not implemented") }
+func (s *stubIssueStore) Plan(context.Context, int64, int64) (*issuedomain.PlanTree, error) {
+	panic("not implemented")
+}
 func (s *stubIssueStore) UpdateTitleBody(context.Context, int64, string, string) (*issuedomain.Issue, error) {
 	panic("not implemented")
 }
 func (s *stubIssueStore) UpdateState(context.Context, int64, issuedomain.State, string) (*issuedomain.Issue, error) {
 	panic("not implemented")
 }
-func (s *stubIssueStore) UpdateHeadSHA(context.Context, int64, string) error { panic("not implemented") }
-func (s *stubIssueStore) ListOpenIssueNumbers(context.Context, int64) ([]int64, error) { panic("not implemented") }
+func (s *stubIssueStore) UpdateHeadSHA(context.Context, int64, string) error {
+	panic("not implemented")
+}
+func (s *stubIssueStore) ListOpenIssueNumbers(context.Context, int64) ([]int64, error) {
+	panic("not implemented")
+}
 func (s *stubIssueStore) CreateComment(context.Context, int64, int64, string, string, string, int) (*issuedomain.Comment, error) {
 	panic("not implemented")
 }
 func (s *stubIssueStore) CreateAgentComment(context.Context, int64, string, string, string, int) (*issuedomain.Comment, error) {
 	panic("not implemented")
 }
-func (s *stubIssueStore) ListComments(context.Context, int64) ([]*issuedomain.Comment, error) { panic("not implemented") }
-func (s *stubIssueStore) GetCommentByID(context.Context, int64) (*issuedomain.Comment, error) { panic("not implemented") }
+func (s *stubIssueStore) ListComments(context.Context, int64) ([]*issuedomain.Comment, error) {
+	panic("not implemented")
+}
+func (s *stubIssueStore) GetCommentByID(context.Context, int64) (*issuedomain.Comment, error) {
+	panic("not implemented")
+}
 func (s *stubIssueStore) CreateEvent(context.Context, int64, issuedomain.EventKind, []byte, int64, string) (*issuedomain.Event, error) {
 	panic("not implemented")
 }
 func (s *stubIssueStore) CreateAgentEvent(context.Context, int64, issuedomain.EventKind, []byte, string) (*issuedomain.Event, error) {
 	panic("not implemented")
 }
-func (s *stubIssueStore) ListEvents(context.Context, int64) ([]*issuedomain.Event, error) { panic("not implemented") }
+func (s *stubIssueStore) ListEvents(context.Context, int64) ([]*issuedomain.Event, error) {
+	panic("not implemented")
+}
 
 func TestGate_CheckIssue_Open(t *testing.T) {
 	store := &stubIssueStore{
@@ -127,11 +143,8 @@ func TestGate_CheckIssue_NotFound(t *testing.T) {
 	g := NewGate(&GateDeps{Issues: store})
 
 	err := g.CheckIssue(context.Background(), 1, 99)
-	if err == nil {
-		t.Fatal("expected error for missing issue, got nil")
-	}
-	if !errors.Is(err, issuedomain.ErrIssueNotFound) {
-		t.Fatalf("expected ErrIssueNotFound, got: %v", err)
+	if err != nil {
+		t.Fatalf("expected nil for missing issue (not our concern), got: %v", err)
 	}
 }
 

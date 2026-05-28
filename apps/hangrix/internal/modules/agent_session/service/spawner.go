@@ -97,20 +97,17 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 		return nil, fmt.Errorf("spawner: trigger %q not recognised", in.Trigger)
 	}
 
-	// Gate: skip spawning on closed/merged issues. Return nil, nil so
-	// the caller treats this as "nothing to do" rather than an error.
+	// Gate: block spawning on closed/merged issues, surface non-terminal
+	// errors to the caller. Terminal-state suppression is best-effort
+	// audited so an operator can see the suppressed wake.
 	if s.gate != nil {
 		if err := s.gate.CheckIssue(ctx, in.RepoID, in.IssueNumber); err != nil {
 			var term *issuegatedomain.ErrIssueTerminal
 			if errors.As(err, &term) {
-				log.Printf("spawner: issue #%d is %s — skipping spawn (repo=%d trigger=%s)",
-					term.IssueNumber, term.State, in.RepoID, in.Trigger)
+				s.recordSpawnError(ctx, in, in.RoleKey, err)
 				return nil, nil
 			}
-			// Non-terminal errors (DB failures) are logged but
-			// don't block spawn — a transient hiccup shouldn't
-			// suppress a genuine trigger.
-			s.recordSpawnError(ctx, in, "", fmt.Errorf("issue gate check: %w", err))
+			return nil, fmt.Errorf("issue gate check: %w", err)
 		}
 	}
 
@@ -933,7 +930,6 @@ func buildRoleSnapshot(role *agentsconfig.Role, host *agentsconfig.HostConfig, a
 	}
 	return json.Marshal(snap)
 }
-
 
 // serializeTriggers turns a role's Triggers map into an audit-stable
 // JSON shape: `{ "<event>": <filter-or-empty-object> }`. The filter
