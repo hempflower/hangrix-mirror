@@ -16,7 +16,7 @@ const createAttachment = `-- name: CreateAttachment :one
 INSERT INTO attachments (
     storage_key, original_name, display_name, size_bytes,
     mime_type, detected_mime_type, sha256, kind, inline,
-    status, author_id, agent_role
+    status, actor_id
 )
 VALUES (
     $1,
@@ -29,8 +29,7 @@ VALUES (
     $8,
     $9,
     $10,
-    $11,
-    $12
+    $11
 )
 RETURNING id, created_at
 `
@@ -46,8 +45,7 @@ type CreateAttachmentParams struct {
 	Kind             string
 	Inline           bool
 	Status           string
-	AuthorID         pgtype.Int8
-	AgentRole        string
+	ActorID          int64
 }
 
 type CreateAttachmentRow struct {
@@ -56,8 +54,6 @@ type CreateAttachmentRow struct {
 }
 
 // ---- attachments (platform-level) ----
-// Human path: sqlc.narg('author_id'), agent_role=”
-// Agent path: author_id=NULL (omit), agent_role with the role key.
 func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentParams) (CreateAttachmentRow, error) {
 	row := q.db.QueryRow(ctx, createAttachment,
 		arg.StorageKey,
@@ -70,8 +66,7 @@ func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentPara
 		arg.Kind,
 		arg.Inline,
 		arg.Status,
-		arg.AuthorID,
-		arg.AgentRole,
+		arg.ActorID,
 	)
 	var i CreateAttachmentRow
 	err := row.Scan(&i.ID, &i.CreatedAt)
@@ -100,8 +95,7 @@ const getAttachment = `-- name: GetAttachment :one
 SELECT a.id, a.storage_key, a.original_name, a.display_name,
        a.size_bytes, a.mime_type, a.detected_mime_type, a.sha256,
        a.kind, a.inline, a.status,
-       COALESCE(a.author_id, 0)::BIGINT AS author_id,
-       a.agent_role, a.created_at, a.deleted_at
+       a.actor_id, a.created_at, a.deleted_at
 FROM attachments a
 WHERE a.id = $1
 `
@@ -118,8 +112,7 @@ type GetAttachmentRow struct {
 	Kind             string
 	Inline           bool
 	Status           string
-	AuthorID         int64
-	AgentRole        string
+	ActorID          int64
 	CreatedAt        pgtype.Timestamptz
 	DeletedAt        pgtype.Timestamptz
 }
@@ -139,8 +132,7 @@ func (q *Queries) GetAttachment(ctx context.Context, id int64) (GetAttachmentRow
 		&i.Kind,
 		&i.Inline,
 		&i.Status,
-		&i.AuthorID,
-		&i.AgentRole,
+		&i.ActorID,
 		&i.CreatedAt,
 		&i.DeletedAt,
 	)

@@ -88,7 +88,7 @@ func (r *PostgresRepo) CreateProvider(ctx context.Context, p *domain.Provider) (
 		BaseUrl:         p.BaseURL,
 		ApiKeyEncrypted: sealed,
 		AllowedModels:   p.AllowedModels,
-		CreatedBy:       p.CreatedBy,
+		ActorID:         p.ActorID,
 	})
 	if err != nil {
 		if database.IsUniqueViolation(err) {
@@ -530,7 +530,7 @@ func providerFromRow(r llmproviderdb.LlmProvider) *domain.Provider {
 		ApiKey:        r.ApiKeyEncrypted,
 		AllowedModels: r.AllowedModels,
 		Disabled:      r.Disabled,
-		CreatedBy:     r.CreatedBy,
+		ActorID:       r.ActorID,
 		CreatedAt:     r.CreatedAt.Time,
 		UpdatedAt:     r.UpdatedAt.Time,
 	}

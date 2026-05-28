@@ -12,13 +12,14 @@ import (
 )
 
 const createToken = `-- name: CreateToken :one
-INSERT INTO access_tokens (user_id, name, prefix, hashed_key, scopes, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, user_id, name, prefix, hashed_key, scopes, last_used_at, expires_at, revoked_at, created_at
+INSERT INTO access_tokens (user_id, actor_id, name, prefix, hashed_key, scopes, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, user_id, name, prefix, hashed_key, scopes, last_used_at, expires_at, revoked_at, created_at, actor_id
 `
 
 type CreateTokenParams struct {
 	UserID    int64
+	ActorID   int64
 	Name      string
 	Prefix    string
 	HashedKey string
@@ -29,6 +30,7 @@ type CreateTokenParams struct {
 func (q *Queries) CreateToken(ctx context.Context, arg CreateTokenParams) (AccessToken, error) {
 	row := q.db.QueryRow(ctx, createToken,
 		arg.UserID,
+		arg.ActorID,
 		arg.Name,
 		arg.Prefix,
 		arg.HashedKey,
@@ -47,12 +49,13 @@ func (q *Queries) CreateToken(ctx context.Context, arg CreateTokenParams) (Acces
 		&i.ExpiresAt,
 		&i.RevokedAt,
 		&i.CreatedAt,
+		&i.ActorID,
 	)
 	return i, err
 }
 
 const getTokenByPrefix = `-- name: GetTokenByPrefix :one
-SELECT id, user_id, name, prefix, hashed_key, scopes, last_used_at, expires_at, revoked_at, created_at FROM access_tokens WHERE prefix = $1
+SELECT id, user_id, name, prefix, hashed_key, scopes, last_used_at, expires_at, revoked_at, created_at, actor_id FROM access_tokens WHERE prefix = $1
 `
 
 func (q *Queries) GetTokenByPrefix(ctx context.Context, prefix string) (AccessToken, error) {
@@ -69,12 +72,13 @@ func (q *Queries) GetTokenByPrefix(ctx context.Context, prefix string) (AccessTo
 		&i.ExpiresAt,
 		&i.RevokedAt,
 		&i.CreatedAt,
+		&i.ActorID,
 	)
 	return i, err
 }
 
 const listTokensByUser = `-- name: ListTokensByUser :many
-SELECT id, user_id, name, prefix, hashed_key, scopes, last_used_at, expires_at, revoked_at, created_at FROM access_tokens
+SELECT id, user_id, name, prefix, hashed_key, scopes, last_used_at, expires_at, revoked_at, created_at, actor_id FROM access_tokens
 WHERE user_id = $1
 ORDER BY created_at DESC
 `
@@ -99,6 +103,7 @@ func (q *Queries) ListTokensByUser(ctx context.Context, userID int64) ([]AccessT
 			&i.ExpiresAt,
 			&i.RevokedAt,
 			&i.CreatedAt,
+			&i.ActorID,
 		); err != nil {
 			return nil, err
 		}

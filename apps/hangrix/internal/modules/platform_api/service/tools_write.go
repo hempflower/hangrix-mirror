@@ -6,6 +6,8 @@ import (
 	"log"
 	"strings"
 
+	"github.com/hangrix/hangrix/pkg/actor"
+
 	apidomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_api/domain"
 	attachmentdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
@@ -174,6 +176,11 @@ func (r *Registry) UploadAttachment(
 		displayName = name
 	}
 
+	// Resolve agent role actor for the attachment.
+	actorRef, err := r.deps.ActorResolver.From(ctx, actor.AgentRef(sess.RoleKey))
+	if err != nil {
+		return errorResult("resolve agent actor for attachment: " + err.Error()), nil
+	}
 	att, err := r.deps.Attachments.Upload(ctx, &attachmentdomain.AttachmentUploadParams{
 		Data:        fileBytes,
 		Name:        name,
@@ -181,6 +188,7 @@ func (r *Registry) UploadAttachment(
 		Inline:      inline,
 		CommentID:   commentID,
 		AgentRole:   sess.RoleKey,
+		ActorID:     actorRef.ActorID,
 	})
 	if err != nil {
 		return errorResult("upload attachment: " + err.Error()), nil

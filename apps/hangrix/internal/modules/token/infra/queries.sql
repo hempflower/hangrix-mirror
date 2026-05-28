@@ -1,6 +1,6 @@
 -- name: CreateToken :one
-INSERT INTO access_tokens (user_id, name, prefix, hashed_key, scopes, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO access_tokens (user_id, actor_id, name, prefix, hashed_key, scopes, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
 
 -- name: GetTokenByPrefix :one

@@ -19,6 +19,19 @@ type AccessToken struct {
 	ExpiresAt  pgtype.Timestamptz
 	RevokedAt  pgtype.Timestamptz
 	CreatedAt  pgtype.Timestamptz
+	ActorID    int64
+}
+
+type Actor struct {
+	ID             int64
+	Kind           string
+	UserID         pgtype.Int8
+	AgentRoleKey   pgtype.Text
+	AgentSessionID pgtype.Int8
+	WorkflowRunID  pgtype.Int8
+	DisplayName    string
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
 }
 
 type User struct {

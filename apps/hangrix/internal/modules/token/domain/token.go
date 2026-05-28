@@ -64,7 +64,8 @@ const MaxNameLen = 64
 // Token is the persisted record. The plaintext secret is never stored.
 type Token struct {
 	ID         int64
-	UserID     int64
+	UserID     int64 // semantic = human owner
+	ActorID    int64 // FK to actors(id)
 	Name       string // human-friendly label set by the owner
 	Prefix     string // 8-char public identifier; indexed
 	HashedKey  string // bcrypt(secret)
@@ -115,6 +116,7 @@ type CreatedToken struct {
 // unvalidated input.
 type InsertParams struct {
 	UserID    int64
+	ActorID   int64 // FK to actors(id); resolved by caller via actor.Store.EnsureUser
 	Name      string
 	Prefix    string
 	HashedKey string

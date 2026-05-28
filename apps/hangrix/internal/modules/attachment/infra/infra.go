@@ -11,7 +11,6 @@ import (
 	"io/fs"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
@@ -49,11 +48,7 @@ func NewPostgresStore(deps *PostgresStoreDeps) *PostgresStore {
 
 // --- domain.Store ---
 
-func (s *PostgresStore) CreateAttachment(ctx context.Context, authorID int64, agentRole, storageKey, originalName, displayName string, sizeBytes int64, mimeType, detectedMimeType, sha256 string, kind domain.AttachmentKind, inline bool) (*domain.Attachment, error) {
-	var authorArg pgtype.Int8
-	if authorID > 0 {
-		authorArg = pgtype.Int8{Int64: authorID, Valid: true}
-	}
+func (s *PostgresStore) CreateAttachment(ctx context.Context, actorID int64, storageKey, originalName, displayName string, sizeBytes int64, mimeType, detectedMimeType, sha256 string, kind domain.AttachmentKind, inline bool) (*domain.Attachment, error) {
 	row, err := s.q.CreateAttachment(ctx, attachmentdb.CreateAttachmentParams{
 		StorageKey:       storageKey,
 		OriginalName:     originalName,
@@ -65,8 +60,7 @@ func (s *PostgresStore) CreateAttachment(ctx context.Context, authorID int64, ag
 		Kind:             string(kind),
 		Inline:           inline,
 		Status:           string(domain.AttachmentStatusUploaded),
-		AuthorID:         authorArg,
-		AgentRole:        agentRole,
+		ActorID:          actorID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create attachment: %w", err)
@@ -125,8 +119,7 @@ func attachmentFromRow(r attachmentdb.GetAttachmentRow) *domain.Attachment {
 		Kind:             domain.AttachmentKind(r.Kind),
 		Inline:           r.Inline,
 		Status:           domain.AttachmentStatus(r.Status),
-		AuthorID:         r.AuthorID,
-		AgentRole:        r.AgentRole,
+		ActorID:          r.ActorID,
 		CreatedAt:        r.CreatedAt.Time,
 	}
 	if r.DeletedAt.Valid {

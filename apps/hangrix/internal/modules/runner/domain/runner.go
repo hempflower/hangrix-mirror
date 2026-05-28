@@ -81,7 +81,7 @@ type Runner struct {
 	AgentTokenPrefix    string
 	AgentTokenHash      string
 	AgentTokenRevokedAt *time.Time
-	CreatedBy           int64
+	ActorID             int64 // FK to actors(id)
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 }
@@ -352,7 +352,7 @@ type CreateRunnerInput struct {
 	Name        string
 	OwnerUserID *int64
 	Visibility  Visibility
-	CreatedBy   int64
+	ActorID     int64 // FK to actors(id); resolved by caller via actor.Store.EnsureUser
 }
 
 // Validate enforces the platform/user visibility invariant: platform

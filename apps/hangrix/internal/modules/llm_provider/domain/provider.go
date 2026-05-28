@@ -75,7 +75,7 @@ type Provider struct {
 	// FindProviderByModel skips disabled rows, so the proxy returns
 	// ErrNoModelMatch as if the provider didn't exist.
 	Disabled  bool
-	CreatedBy int64
+	ActorID   int64 // FK to actors(id)
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

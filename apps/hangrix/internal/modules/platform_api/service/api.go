@@ -1063,8 +1063,13 @@ func (s *APIService) UploadAttachment(ctx context.Context, p *apidomain.Actor, f
 	if displayName == "" {
 		displayName = name
 	}
+	// Resolve agent role actor for the attachment.
+	actorRef, err := s.r.deps.ActorResolver.From(ctx, actor.AgentRef(p.RoleKey))
+	if err != nil {
+		return nil, fmt.Errorf("resolve agent actor for attachment: %w", err)
+	}
 	att, err := s.r.deps.Attachments.Upload(ctx, &attachmentdomain.AttachmentUploadParams{
-		Data: fileBytes, Name: name, DisplayName: displayName, Inline: inline, CommentID: commentID, AgentRole: p.RoleKey,
+		Data: fileBytes, Name: name, DisplayName: displayName, Inline: inline, CommentID: commentID, AgentRole: p.RoleKey, ActorID: actorRef.ActorID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("upload attachment: %w", err)

@@ -114,7 +114,7 @@ type publicRunner struct {
 	EnrollTokenUsed   bool        `json:"enroll_token_used"`
 	AgentTokenPrefix  string      `json:"agent_token_prefix,omitempty"`
 	AgentTokenRevoked bool        `json:"agent_token_revoked"`
-	CreatedBy         int64       `json:"created_by"`
+	ActorID           int64       `json:"actor_id"`
 	CreatedAt         time.Time   `json:"created_at"`
 	UpdatedAt         time.Time   `json:"updated_at"`
 }
@@ -137,7 +137,7 @@ func toPublicRunner(r *domain.Runner) publicRunner {
 		EnrollTokenUsed:   r.EnrollTokenUsedAt != nil,
 		AgentTokenPrefix:  r.AgentTokenPrefix,
 		AgentTokenRevoked: r.AgentTokenRevokedAt != nil,
-		CreatedBy:         r.CreatedBy,
+		ActorID:           r.ActorID,
 		CreatedAt:         r.CreatedAt,
 		UpdatedAt:         r.UpdatedAt,
 	}
@@ -179,7 +179,13 @@ func (h *AdminHandler) createRunner(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "admin path only supports platform runners")
 		return
 	}
-	in := domain.CreateRunnerInput{Name: req.Name, Visibility: v, CreatedBy: caller.ID}
+	// Resolve caller user to actor (same pattern as createSession).
+	actorRef, err := h.actors.EnsureUser(r.Context(), caller.ID, "")
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "resolve actor: "+err.Error())
+		return
+	}
+	in := domain.CreateRunnerInput{Name: req.Name, Visibility: v, ActorID: actorRef.ActorID}
 	if err := in.Validate(); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
@@ -430,15 +436,6 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// host_repo is "owner/name" — currently informational only on the
-	// admin path; the real session-spawn orchestrator resolves it for
-	// production triggers. Missing repo leaves repo_id NULL — the smoke
-	// path doesn't push.
-	var repoID *int64
-	if req.HostRepo != "" {
-		_ = repoID
-	}
-
 	// Resolve the caller user to their actor row via the actor module
 	// (same pattern as org/infra.Create — EnsureUser is idempotent).
 	actorRef, err := h.actors.EnsureUser(r.Context(), caller.ID, "")
@@ -449,7 +446,7 @@ func (h *AdminHandler) createSession(w http.ResponseWriter, r *http.Request) {
 
 	in := domain.CreateSessionInput{
 		RunnerID:           &runnerRow.ID,
-		RepoID:             repoID,
+		RepoID:             nil,
 		IssueNumber:        req.IssueNumber,
 		Role:               req.Role,
 		Model:              req.Model,

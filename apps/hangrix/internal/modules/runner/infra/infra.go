@@ -86,7 +86,7 @@ func (r *PostgresRepo) CreateRunner(
 		Visibility:        string(in.Visibility),
 		EnrollTokenPrefix: enroll.Prefix,
 		EnrollTokenHash:   enroll.Hash,
-		CreatedBy:         in.CreatedBy,
+		ActorID:           in.ActorID,
 	})
 	if err != nil {
 		if database.IsUniqueViolation(err) {
@@ -845,7 +845,7 @@ func runnerFromRow(r runnerdb.Runner) *domain.Runner {
 		Capabilities:      r.Capabilities,
 		EnrollTokenPrefix: r.EnrollTokenPrefix,
 		EnrollTokenHash:   r.EnrollTokenHash,
-		CreatedBy:         r.CreatedBy,
+		ActorID:           r.ActorID,
 		CreatedAt:         r.CreatedAt.Time,
 		UpdatedAt:         r.UpdatedAt.Time,
 	}

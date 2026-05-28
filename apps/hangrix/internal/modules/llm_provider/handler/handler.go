@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
+	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider/infra"
@@ -47,6 +48,7 @@ type Handler struct {
 	repo       domain.Repo
 	usage      *infra.PostgresRepo
 	middleware authdomain.Middleware
+	actors     actordomain.Store
 }
 
 // HandlerDeps wires the same Postgres instance into both the narrow domain
@@ -57,10 +59,11 @@ type HandlerDeps struct {
 	Repo       domain.Repo
 	Usage      *infra.PostgresRepo
 	Middleware authdomain.Middleware
+	Actors     actordomain.Store
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
-	return &Handler{repo: deps.Repo, usage: deps.Usage, middleware: deps.Middleware}
+	return &Handler{repo: deps.Repo, usage: deps.Usage, middleware: deps.Middleware, actors: deps.Actors}
 }
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
@@ -94,7 +97,7 @@ type publicProvider struct {
 	HasAPIKey     bool      `json:"has_api_key"`
 	AllowedModels []string  `json:"allowed_models"`
 	Disabled      bool      `json:"disabled"`
-	CreatedBy     int64     `json:"created_by"`
+	ActorID       int64     `json:"actor_id"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
@@ -108,7 +111,7 @@ func toPublicProvider(p *domain.Provider) publicProvider {
 		HasAPIKey:     p.ApiKey != "",
 		AllowedModels: sliceOrEmpty(p.AllowedModels),
 		Disabled:      p.Disabled,
-		CreatedBy:     p.CreatedBy,
+		ActorID:       p.ActorID,
 		CreatedAt:     p.CreatedAt,
 		UpdatedAt:     p.UpdatedAt,
 	}
@@ -160,13 +163,19 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Resolve caller user to actor.
+	actorRef, err := h.actors.EnsureUser(r.Context(), caller.ID, "")
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "resolve actor: "+err.Error())
+		return
+	}
 	in := &domain.Provider{
 		Name:          req.Name,
 		Type:          domain.ProviderType(req.Type),
 		BaseURL:       strings.TrimSpace(req.BaseURL),
 		ApiKey:        req.APIKey,
 		AllowedModels: sliceOrEmpty(req.AllowedModels),
-		CreatedBy:     caller.ID,
+		ActorID:       actorRef.ActorID,
 	}
 	out, err := h.repo.CreateProvider(r.Context(), in)
 	if err != nil {

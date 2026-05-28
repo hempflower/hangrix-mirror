@@ -8,6 +8,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Actor struct {
+	ID             int64
+	Kind           string
+	UserID         pgtype.Int8
+	AgentRoleKey   pgtype.Text
+	AgentSessionID pgtype.Int8
+	WorkflowRunID  pgtype.Int8
+	DisplayName    string
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
 type BranchProtection struct {
 	ID               int64
 	RepoID           int64
@@ -180,10 +192,10 @@ type Questionnaire struct {
 type QuestionnaireAnswer struct {
 	ID              int64
 	QuestionnaireID int64
-	UserID          int64
 	Answers         []byte
 	SubmittedAt     pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
+	ActorID         int64
 }
 
 type QuestionnaireQuestion struct {

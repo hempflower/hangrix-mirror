@@ -7,6 +7,8 @@ package questionnairedb
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const autoCloseQuestionnaire = `-- name: AutoCloseQuestionnaire :one
@@ -156,6 +158,40 @@ func (q *Queries) CreateQuestionnaire(ctx context.Context, arg CreateQuestionnai
 	return i, err
 }
 
+const getActorAnswer = `-- name: GetActorAnswer :one
+SELECT id, questionnaire_id, actor_id, answers, submitted_at, updated_at
+FROM questionnaire_answers
+WHERE questionnaire_id = $1 AND actor_id = $2
+`
+
+type GetActorAnswerParams struct {
+	QuestionnaireID int64
+	ActorID         int64
+}
+
+type GetActorAnswerRow struct {
+	ID              int64
+	QuestionnaireID int64
+	ActorID         int64
+	Answers         []byte
+	SubmittedAt     pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+}
+
+func (q *Queries) GetActorAnswer(ctx context.Context, arg GetActorAnswerParams) (GetActorAnswerRow, error) {
+	row := q.db.QueryRow(ctx, getActorAnswer, arg.QuestionnaireID, arg.ActorID)
+	var i GetActorAnswerRow
+	err := row.Scan(
+		&i.ID,
+		&i.QuestionnaireID,
+		&i.ActorID,
+		&i.Answers,
+		&i.SubmittedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getQuestionnaire = `-- name: GetQuestionnaire :one
 SELECT id, issue_id, title, description, status, created_by_agent, created_at, closed_at, closed_reason
 FROM questionnaires
@@ -265,50 +301,34 @@ func (q *Queries) GetStatusForUpdate(ctx context.Context, id int64) (string, err
 	return status, err
 }
 
-const getUserAnswer = `-- name: GetUserAnswer :one
-SELECT id, questionnaire_id, user_id, answers, submitted_at, updated_at
-FROM questionnaire_answers
-WHERE questionnaire_id = $1 AND user_id = $2
-`
-
-type GetUserAnswerParams struct {
-	QuestionnaireID int64
-	UserID          int64
-}
-
-func (q *Queries) GetUserAnswer(ctx context.Context, arg GetUserAnswerParams) (QuestionnaireAnswer, error) {
-	row := q.db.QueryRow(ctx, getUserAnswer, arg.QuestionnaireID, arg.UserID)
-	var i QuestionnaireAnswer
-	err := row.Scan(
-		&i.ID,
-		&i.QuestionnaireID,
-		&i.UserID,
-		&i.Answers,
-		&i.SubmittedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const insertAnswer = `-- name: InsertAnswer :one
-INSERT INTO questionnaire_answers (questionnaire_id, user_id, answers)
+INSERT INTO questionnaire_answers (questionnaire_id, actor_id, answers)
 VALUES ($1, $2, $3)
-RETURNING id, questionnaire_id, user_id, answers, submitted_at, updated_at
+RETURNING id, questionnaire_id, actor_id, answers, submitted_at, updated_at
 `
 
 type InsertAnswerParams struct {
 	QuestionnaireID int64
-	UserID          int64
+	ActorID         int64
 	Answers         []byte
 }
 
-func (q *Queries) InsertAnswer(ctx context.Context, arg InsertAnswerParams) (QuestionnaireAnswer, error) {
-	row := q.db.QueryRow(ctx, insertAnswer, arg.QuestionnaireID, arg.UserID, arg.Answers)
-	var i QuestionnaireAnswer
+type InsertAnswerRow struct {
+	ID              int64
+	QuestionnaireID int64
+	ActorID         int64
+	Answers         []byte
+	SubmittedAt     pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+}
+
+func (q *Queries) InsertAnswer(ctx context.Context, arg InsertAnswerParams) (InsertAnswerRow, error) {
+	row := q.db.QueryRow(ctx, insertAnswer, arg.QuestionnaireID, arg.ActorID, arg.Answers)
+	var i InsertAnswerRow
 	err := row.Scan(
 		&i.ID,
 		&i.QuestionnaireID,
-		&i.UserID,
+		&i.ActorID,
 		&i.Answers,
 		&i.SubmittedAt,
 		&i.UpdatedAt,
@@ -317,25 +337,34 @@ func (q *Queries) InsertAnswer(ctx context.Context, arg InsertAnswerParams) (Que
 }
 
 const listAnswers = `-- name: ListAnswers :many
-SELECT id, questionnaire_id, user_id, answers, submitted_at, updated_at
+SELECT id, questionnaire_id, actor_id, answers, submitted_at, updated_at
 FROM questionnaire_answers
 WHERE questionnaire_id = $1
 ORDER BY submitted_at ASC
 `
 
-func (q *Queries) ListAnswers(ctx context.Context, questionnaireID int64) ([]QuestionnaireAnswer, error) {
+type ListAnswersRow struct {
+	ID              int64
+	QuestionnaireID int64
+	ActorID         int64
+	Answers         []byte
+	SubmittedAt     pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+}
+
+func (q *Queries) ListAnswers(ctx context.Context, questionnaireID int64) ([]ListAnswersRow, error) {
 	rows, err := q.db.Query(ctx, listAnswers, questionnaireID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []QuestionnaireAnswer{}
+	items := []ListAnswersRow{}
 	for rows.Next() {
-		var i QuestionnaireAnswer
+		var i ListAnswersRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.QuestionnaireID,
-			&i.UserID,
+			&i.ActorID,
 			&i.Answers,
 			&i.SubmittedAt,
 			&i.UpdatedAt,

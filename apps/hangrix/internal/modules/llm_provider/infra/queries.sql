@@ -33,14 +33,14 @@ OFFSET sqlc.arg('off');
 
 -- name: CreateProvider :one
 INSERT INTO llm_providers (
-    name, type, base_url, api_key_encrypted, allowed_models, created_by
+    name, type, base_url, api_key_encrypted, allowed_models, actor_id
 ) VALUES (
     sqlc.arg('name'),
     sqlc.arg('type'),
     sqlc.arg('base_url'),
     sqlc.arg('api_key_encrypted'),
     sqlc.arg('allowed_models'),
-    sqlc.arg('created_by')
+    sqlc.arg('actor_id')
 )
 RETURNING *;
 

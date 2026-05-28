@@ -3,7 +3,7 @@
 -- name: CreateRunner :one
 INSERT INTO runners (
     name, owner_user_id, visibility, status,
-    enroll_token_prefix, enroll_token_hash, created_by
+    enroll_token_prefix, enroll_token_hash, actor_id
 ) VALUES (
     sqlc.arg('name'),
     sqlc.narg('owner_user_id'),
@@ -11,7 +11,7 @@ INSERT INTO runners (
     'pending',
     sqlc.arg('enroll_token_prefix'),
     sqlc.arg('enroll_token_hash'),
-    sqlc.arg('created_by')
+    sqlc.arg('actor_id')
 )
 RETURNING *;
 

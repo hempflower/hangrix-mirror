@@ -84,10 +84,10 @@ type LlmProvider struct {
 	BaseUrl         string
 	ApiKeyEncrypted string
 	AllowedModels   []string
-	CreatedBy       int64
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
 	Disabled        bool
+	ActorID         int64
 }
 
 type LlmUsageLog struct {
@@ -172,9 +172,9 @@ type Runner struct {
 	AgentTokenPrefix    pgtype.Text
 	AgentTokenHash      pgtype.Text
 	AgentTokenRevokedAt pgtype.Timestamptz
-	CreatedBy           int64
 	CreatedAt           pgtype.Timestamptz
 	UpdatedAt           pgtype.Timestamptz
+	ActorID             int64
 }
 
 type User struct {

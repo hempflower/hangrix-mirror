@@ -19,6 +19,7 @@ import (
 	"github.com/hangrix/hangrix/pkg/actor"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
+	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/service"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
@@ -30,6 +31,7 @@ type Handler struct {
 	svc              *service.Service
 	middleware       authdomain.Middleware
 	wfTokenValidator workflowdomain.WorkflowTokenValidator
+	actors           actordomain.Store
 }
 
 // HandlerDeps is the ioc-shaped constructor input.
@@ -37,6 +39,7 @@ type HandlerDeps struct {
 	Service          *service.Service
 	Middleware       authdomain.Middleware
 	WfTokenValidator workflowdomain.WorkflowTokenValidator
+	Actors           actordomain.Store
 }
 
 // NewHandler creates the handler.
@@ -45,6 +48,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		svc:              deps.Service,
 		middleware:       deps.Middleware,
 		wfTokenValidator: deps.WfTokenValidator,
+		actors:           deps.Actors,
 	}
 }
 
@@ -90,16 +94,24 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	displayName := r.FormValue("display_name")
 	inline := r.FormValue("inline") == "true"
 
-	// Workflow-authenticated uploads use authorID=0, agentRole="workflow"
-	// to satisfy the XOR constraint (author_id IS NULL, agent_role <> '').
-	authorID := int64(0)
-	agentRole := ""
+	// Resolve the caller to an actor id (user or workflow).
+	var actorID int64
 	if isWF {
-		agentRole = "workflow"
-	} else if caller != nil {
-		authorID = caller.ID
+		ref, err := h.actors.EnsureAgentRole(r.Context(), "workflow")
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "resolve workflow actor: "+err.Error())
+			return
+		}
+		actorID = ref.ActorID
+	} else {
+		ref, err := h.actors.EnsureUser(r.Context(), caller.ID, "")
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "resolve actor: "+err.Error())
+			return
+		}
+		actorID = ref.ActorID
 	}
-	attachment, err := h.svc.UploadMultipart(r.Context(), authorID, agentRole, displayName, inline, file, header)
+	attachment, err := h.svc.UploadMultipart(r.Context(), actorID, displayName, inline, file, header)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrAttachmentTooLarge):
@@ -172,11 +184,15 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only the uploader can delete. Agent-uploaded attachments (AuthorID == 0)
+	// Only the uploader can delete. Agent-uploaded attachments
 	// can be deleted by any authenticated user.
-	if att.AuthorID != 0 && caller.ID != att.AuthorID {
-		httpx.WriteError(w, http.StatusForbidden, "forbidden")
-		return
+	if att.ActorID != 0 && caller.ID != 0 {
+		// Resolve caller's actor to check ownership.
+		ref, err := h.actors.EnsureUser(r.Context(), caller.ID, "")
+		if err != nil || ref.ActorID != att.ActorID {
+			httpx.WriteError(w, http.StatusForbidden, "forbidden")
+			return
+		}
 	}
 
 	if err := h.svc.SoftDelete(r.Context(), id); err != nil {
@@ -200,8 +216,7 @@ type publicAttachment struct {
 	Kind             string  `json:"kind"`
 	Inline           bool    `json:"inline"`
 	Status           string  `json:"status"`
-	AuthorID         int64   `json:"author_id"`
-	AgentRole        string  `json:"agent_role,omitempty"`
+	ActorID          int64   `json:"actor_id"`
 	URL              string  `json:"url"`
 	MarkdownSnippet  string  `json:"markdown_snippet"`
 	CreatedAt        string  `json:"created_at"`
@@ -232,8 +247,7 @@ func toPublicAttachment(a *domain.Attachment) publicAttachment {
 		Kind:             string(a.Kind),
 		Inline:           a.Inline,
 		Status:           string(a.Status),
-		AuthorID:         a.AuthorID,
-		AgentRole:        a.AgentRole,
+		ActorID:          a.ActorID,
 		URL:              downloadURL,
 		MarkdownSnippet:  markdownSnippet,
 		CreatedAt:        a.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),

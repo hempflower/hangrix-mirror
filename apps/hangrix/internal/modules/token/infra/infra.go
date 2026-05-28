@@ -64,6 +64,7 @@ func (r *PostgresRepo) Insert(ctx context.Context, p domain.InsertParams) (*doma
 	}
 	row, err := r.q.CreateToken(ctx, tokendb.CreateTokenParams{
 		UserID:    p.UserID,
+		ActorID:   p.ActorID,
 		Name:      p.Name,
 		Prefix:    p.Prefix,
 		HashedKey: p.HashedKey,
@@ -127,6 +128,7 @@ func rowToToken(r tokendb.AccessToken) *domain.Token {
 	t := &domain.Token{
 		ID:        r.ID,
 		UserID:    r.UserID,
+		ActorID:   r.ActorID,
 		Name:      r.Name,
 		Prefix:    r.Prefix,
 		HashedKey: r.HashedKey,

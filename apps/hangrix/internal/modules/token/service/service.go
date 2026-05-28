@@ -26,6 +26,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/token/domain"
 	userdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/user/domain"
 )
@@ -49,19 +50,21 @@ const prefixRetries = 3
 // Service composes Repo + user lookup + bcrypt to implement both
 // domain.Store and domain.Validator on one type.
 type Service struct {
-	repo  domain.Repo
-	users userdomain.Repo
+	repo   domain.Repo
+	users  userdomain.Repo
+	actors actordomain.Store
 }
 
 // Deps is the ioc-shaped input. Asks for the user repo because token
 // validation must look up + check disabled-state on the bearer user.
 type Deps struct {
-	Repo  domain.Repo
-	Users userdomain.Repo
+	Repo   domain.Repo
+	Users  userdomain.Repo
+	Actors actordomain.Store
 }
 
 func New(deps *Deps) *Service {
-	return &Service{repo: deps.Repo, users: deps.Users}
+	return &Service{repo: deps.Repo, users: deps.Users, actors: deps.Actors}
 }
 
 // ---- Store impl ----
@@ -103,8 +106,14 @@ func (s *Service) Create(
 		if err != nil {
 			return nil, fmt.Errorf("generate prefix: %w", err)
 		}
+		// Resolve caller user to actor.
+		actorRef, resolveErr := s.actors.EnsureUser(ctx, userID, "")
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolve actor for user %d: %w", userID, resolveErr)
+		}
 		row, err = s.repo.Insert(ctx, domain.InsertParams{
 			UserID:    userID,
+			ActorID:   actorRef.ActorID,
 			Name:      n,
 			Prefix:    prefix,
 			HashedKey: string(hashed),

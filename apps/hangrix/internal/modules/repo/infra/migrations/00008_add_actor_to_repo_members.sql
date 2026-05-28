@@ -7,6 +7,10 @@
 
 ALTER TABLE repo_members ADD COLUMN IF NOT EXISTS actor_id BIGINT;
 
+-- ON DELETE SET NULL (not CASCADE): repo_members is an append-only audit log
+-- that must survive actor deletion. When an agent role is removed from the
+-- host config or a user is deleted, the membership row stays intact with
+-- actor_id=NULL so the historical record remains traceable.
 ALTER TABLE repo_members
     ADD CONSTRAINT fk_repo_members_actor
     FOREIGN KEY (actor_id) REFERENCES actors(id) ON DELETE SET NULL;
