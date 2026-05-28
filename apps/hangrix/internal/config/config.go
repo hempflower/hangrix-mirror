@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hangrix/hangrix/apps/hangrix/internal/config/envexpand"
+
 	"github.com/spf13/viper"
 )
 
@@ -133,6 +135,8 @@ func NewConfig(path string) (*Config, error) {
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
+
+	envexpand.ApplyToViper(v, nil)
 
 	var c Config
 	if err := v.Unmarshal(&c); err != nil {
