@@ -12,23 +12,27 @@ package handler
 import (
 	"github.com/go-chi/chi/v5"
 
+	issuegatedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue_gate/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
 )
 
 type Handler struct {
 	api       AgentAPI
 	validator runnerdomain.SessionTokenValidator
+	gate      issuegatedomain.IssueActivityGate
 }
 
 type HandlerDeps struct {
 	API       AgentAPI
 	Validator runnerdomain.SessionTokenValidator
+	Gate      issuegatedomain.IssueActivityGate
 }
 
 func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
 		api:       deps.API,
 		validator: deps.Validator,
+		gate:      deps.Gate,
 	}
 }
 
@@ -37,6 +41,9 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 	if h.api != nil {
 		r.Route("/api/v1", func(r chi.Router) {
 			r.Use(BearerAuth(h.validator))
+			if h.gate != nil {
+				r.Use(IssueGateMiddleware(h.gate))
+			}
 			RegisterV1Routes(r, h.api)
 		})
 	}

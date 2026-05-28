@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/agent_session/domain"
 	gitdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/git/domain"
+	issuegatedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue_gate/domain"
 	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	repodomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
@@ -37,6 +39,7 @@ type Spawner struct {
 	git      gitdomain.Git
 	blob     domain.HostBlobReader
 	runner   runnerdomain.Repo
+	gate     issuegatedomain.IssueActivityGate
 	box      *cryptobox.Box
 	hostURL  string
 }
@@ -48,6 +51,7 @@ type SpawnerDeps struct {
 	Git      gitdomain.Git
 	Blob     domain.HostBlobReader
 	Runner   runnerdomain.Repo
+	Gate     issuegatedomain.IssueActivityGate
 	Config   *config.Config
 }
 
@@ -66,6 +70,7 @@ func NewSpawner(deps *SpawnerDeps) *Spawner {
 		git:      deps.Git,
 		blob:     deps.Blob,
 		runner:   deps.Runner,
+		gate:     deps.Gate,
 		box:      box,
 		hostURL:  deps.Config.Server.URL,
 	}
@@ -91,6 +96,24 @@ func (s *Spawner) OnTrigger(ctx context.Context, in domain.TriggerInput) ([]doma
 	if !agentsconfig.IsValidTrigger(string(in.Trigger)) {
 		return nil, fmt.Errorf("spawner: trigger %q not recognised", in.Trigger)
 	}
+
+	// Gate: skip spawning on closed/merged issues. Return nil, nil so
+	// the caller treats this as "nothing to do" rather than an error.
+	if s.gate != nil {
+		if err := s.gate.CheckIssue(ctx, in.RepoID, in.IssueNumber); err != nil {
+			var term *issuegatedomain.ErrIssueTerminal
+			if errors.As(err, &term) {
+				log.Printf("spawner: issue #%d is %s — skipping spawn (repo=%d trigger=%s)",
+					term.IssueNumber, term.State, in.RepoID, in.Trigger)
+				return nil, nil
+			}
+			// Non-terminal errors (DB failures) are logged but
+			// don't block spawn — a transient hiccup shouldn't
+			// suppress a genuine trigger.
+			s.recordSpawnError(ctx, in, "", fmt.Errorf("issue gate check: %w", err))
+		}
+	}
+
 	log.Printf("spawner: OnTrigger repo=%d issue=%d trigger=%s cause=%s role=%q",
 		in.RepoID, in.IssueNumber, in.Trigger, in.CauseID, in.RoleKey)
 

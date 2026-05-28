@@ -19,6 +19,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/healthz"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/hello"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue"
+	issuegate "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue_gate"
 	llmprovider "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider"
 	llmproxy "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_proxy"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/org"
@@ -53,6 +54,7 @@ func main() {
 		repo.Module(),
 		release.Module(),
 		issue.Module(),
+		issuegate.Module(),
 		planengine.Module(),
 		questionnaire.Module(),
 		llmprovider.Module(),
