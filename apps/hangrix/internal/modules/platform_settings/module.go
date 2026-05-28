@@ -42,6 +42,7 @@ func Module() *ioc.Module {
 	// service layer.
 	repo := m.Provide(infra.NewPostgresRepo)
 	repo.ToSelf()
+	repo.ToInterface(new(service.Repo))
 
 	// Service: cache + Store interface. Bind to domain.Store so the
 	// reaper and admin handlers consume it through the interface.

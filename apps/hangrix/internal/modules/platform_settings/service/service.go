@@ -20,7 +20,7 @@ const cacheTTL = 30 * time.Second
 
 // Service implements domain.Store with a short-TTL cache.
 type Service struct {
-	repo     repo
+	repo     Repo
 	registry *domain.Registry
 
 	mu    sync.RWMutex
@@ -32,16 +32,16 @@ type cacheEntry struct {
 	expiresAt time.Time
 }
 
-// repo is the narrow persistence surface we need — just enough to
+// Repo is the narrow persistence surface we need — just enough to
 // decouple from the infra package.
-type repo interface {
+type Repo interface {
 	GetSetting(ctx context.Context, key string) (domain.Setting, error)
 	UpsertSetting(ctx context.Context, key, value, description string) error
 	ListSettings(ctx context.Context) ([]domain.Setting, error)
 }
 
 type ServiceDeps struct {
-	Repo     repo
+	Repo     Repo
 	Registry *domain.Registry
 }
 
