@@ -86,6 +86,7 @@ type AttachmentUploadParams struct {
 	Inline      bool
 	CommentID   int64
 	AgentRole   string
+	ActorID     int64 // resolved actor_id — fast path when the caller already resolved it
 }
 
 // Uploader is the cross-module seam for uploading attachments from the

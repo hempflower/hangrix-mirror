@@ -18,6 +18,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/hangrix/hangrix/pkg/actor"
+
+	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 )
@@ -47,12 +50,14 @@ var ErrAttachmentExtension = errors.New("file type not allowed")
 type Service struct {
 	store           domain.Store
 	attachmentsPath string
+	actorResolver   actordomain.Resolver
 }
 
 // ServiceDeps is the ioc-shaped input.
 type ServiceDeps struct {
-	Store  domain.Store
-	Config *config.Config
+	Store         domain.Store
+	Config        *config.Config
+	ActorResolver actordomain.Resolver
 }
 
 // NewService wires the service with the store and the configured attachments
@@ -61,6 +66,7 @@ func NewService(deps *ServiceDeps) *Service {
 	return &Service{
 		store:           deps.Store,
 		attachmentsPath: deps.Config.Storage.AttachmentsPath,
+		actorResolver:   deps.ActorResolver,
 	}
 }
 
@@ -245,7 +251,19 @@ func (s *Service) Upload(
 		displayName = params.Name
 	}
 
-	attachment, err := s.store.CreateAttachment(ctx, 0,
+	actorID := int64(0)
+	if params.ActorID > 0 {
+		actorID = params.ActorID
+	} else if params.AgentRole != "" && s.actorResolver != nil {
+		resolved, err := s.actorResolver.From(ctx, actor.AgentRef(params.AgentRole))
+		if err == nil {
+			actorID = resolved.ActorID
+		}
+	}
+	if actorID == 0 {
+		actorID = 1 // fallback to system actor
+	}
+	attachment, err := s.store.CreateAttachment(ctx, actorID,
 		storageKey, params.Name, displayName, int64(len(params.Data)),
 		clientMime, detectedMime, sha256Sum, kind, params.Inline)
 	if err != nil {

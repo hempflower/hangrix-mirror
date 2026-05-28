@@ -19,6 +19,7 @@ import (
 	"github.com/hangrix/hangrix/pkg/actor"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
+	actordomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/actor/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/attachment/service"
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
@@ -30,6 +31,7 @@ type Handler struct {
 	svc              *service.Service
 	middleware       authdomain.Middleware
 	wfTokenValidator workflowdomain.WorkflowTokenValidator
+	actorResolver    actordomain.Resolver
 }
 
 // HandlerDeps is the ioc-shaped constructor input.
@@ -37,6 +39,7 @@ type HandlerDeps struct {
 	Service          *service.Service
 	Middleware       authdomain.Middleware
 	WfTokenValidator workflowdomain.WorkflowTokenValidator
+	ActorResolver    actordomain.Resolver
 }
 
 // NewHandler creates the handler.
@@ -45,6 +48,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 		svc:              deps.Service,
 		middleware:       deps.Middleware,
 		wfTokenValidator: deps.WfTokenValidator,
+		actorResolver:    deps.ActorResolver,
 	}
 }
 
@@ -90,14 +94,26 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	displayName := r.FormValue("display_name")
 	inline := r.FormValue("inline") == "true"
 
-	// Workflow-authenticated uploads use authorID=0, agentRole="workflow"
-	// to satisfy the XOR constraint (author_id IS NULL, agent_role <> '').
+	// Resolve actor_id via actor.Resolver. For workflow uploads the actor
+	// Ref was stored in request context by authGate; for human callers we
+	// resolve user_id → actor_id via EnsureUser.
 	actorID := int64(0)
-	
 	if isWF {
-		actorID = 1 // system actor for workflow uploads
-	} else if caller != nil {
-		actorID = caller.ID
+		wfActor, _ := actor.WorkflowActorFromRequest(r)
+		if h.actorResolver != nil {
+			resolved, err := h.actorResolver.From(r.Context(), wfActor)
+			if err == nil {
+				actorID = resolved.ActorID
+			}
+		}
+		if actorID == 0 {
+			actorID = 1 // fallback to system actor
+		}
+	} else if caller != nil && h.actorResolver != nil {
+		resolved, err := h.actorResolver.From(r.Context(), actor.UserRef(caller.ID, ""))
+		if err == nil {
+			actorID = resolved.ActorID
+		}
 	}
 	attachment, err := h.svc.UploadMultipart(r.Context(), actorID, displayName, inline, file, header)
 	if err != nil {
@@ -172,11 +188,21 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only the uploader can delete. Agent-uploaded attachments (AuthorID == 0)
-	// can be deleted by any authenticated user.
-	if att.ActorID != 0 && caller.ID != att.ActorID {
-		httpx.WriteError(w, http.StatusForbidden, "forbidden")
-		return
+	// Only the uploader can delete. Resolve the caller's user_id → actor_id
+	// and compare against the attachment's actor_id. System-actor attachments
+	// (ActorID == 0) can be deleted by any authenticated user.
+	if att.ActorID != 0 {
+		callerActorID := int64(0)
+		if h.actorResolver != nil {
+			resolved, err := h.actorResolver.From(r.Context(), actor.UserRef(caller.ID, ""))
+			if err == nil {
+				callerActorID = resolved.ActorID
+			}
+		}
+		if callerActorID != att.ActorID {
+			httpx.WriteError(w, http.StatusForbidden, "forbidden")
+			return
+		}
 	}
 
 	if err := h.svc.SoftDelete(r.Context(), id); err != nil {
