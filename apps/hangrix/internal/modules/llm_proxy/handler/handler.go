@@ -59,6 +59,7 @@ import (
 	"github.com/hangrix/hangrix/apps/hangrix/internal/httpx"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/config"
+	issuegatedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue_gate/domain"
 	llmdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_provider/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/llm_proxy/upstream"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
@@ -85,6 +86,7 @@ const (
 type Handler struct {
 	lookup    llmdomain.Lookup
 	validator runnerdomain.SessionTokenValidator
+	gate      issuegatedomain.IssueActivityGate
 	registry  *upstream.Registry
 	box       *cryptobox.Box
 	client    *http.Client
@@ -93,6 +95,7 @@ type Handler struct {
 type HandlerDeps struct {
 	Lookup    llmdomain.Lookup
 	Validator runnerdomain.SessionTokenValidator
+	Gate      issuegatedomain.IssueActivityGate
 	Registry  *upstream.Registry
 	Config    *config.Config
 }
@@ -105,6 +108,7 @@ func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
 		lookup:    deps.Lookup,
 		validator: deps.Validator,
+		gate:      deps.Gate,
 		registry:  deps.Registry,
 		box:       box,
 		client:    &http.Client{Timeout: upstreamTimeout},
@@ -145,6 +149,23 @@ func (h *Handler) bearerAuth(next http.Handler) http.Handler {
 				httpx.WriteError(w, http.StatusInternalServerError, err.Error())
 			}
 			return
+		}
+		// Gate: block LLM calls against closed/merged issues.
+		if h.gate != nil && sess.IssueNumber != nil && sess.RepoID != nil {
+			if err := h.gate.CheckIssue(r.Context(), *sess.RepoID, *sess.IssueNumber); err != nil {
+				var term *issuegatedomain.ErrIssueTerminal
+				if errors.As(err, &term) {
+					httpx.WriteJSON(w, http.StatusForbidden, map[string]any{
+						"error":        term.Error(),
+						"code":         "issue_terminal",
+						"issue_number": term.IssueNumber,
+						"issue_state":  string(term.State),
+					})
+					return
+				}
+				httpx.WriteError(w, http.StatusInternalServerError, "internal error checking issue state")
+				return
+			}
 		}
 		ctx := context.WithValue(r.Context(), ctxKeySession, sess)
 		next.ServeHTTP(w, r.WithContext(ctx))

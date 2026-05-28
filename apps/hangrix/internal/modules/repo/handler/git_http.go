@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	authdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/auth/domain"
+	issuegatedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue_gate/domain"
 	orgdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/org/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/repo/domain"
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
@@ -523,6 +524,21 @@ func (h *Handler) authorizeGitWrite(w http.ResponseWriter, r *http.Request) (*do
 	if !ok {
 		challengeBasicAuth(w)
 		return nil, "", nil, false
+	}
+	// Gate: block git pushes from agent sessions targeting closed/merged issues.
+	if h.gate != nil && caller.authMethod == "session" && caller.session != nil {
+		sess := caller.session
+		if sess.IssueNumber != nil && sess.RepoID != nil {
+			if err := h.gate.CheckIssue(r.Context(), *sess.RepoID, *sess.IssueNumber); err != nil {
+				var term *issuegatedomain.ErrIssueTerminal
+				if errors.As(err, &term) {
+					http.Error(w, term.Error(), http.StatusForbidden)
+					return nil, "", nil, false
+				}
+				http.Error(w, "issue gate check: "+err.Error(), http.StatusInternalServerError)
+				return nil, "", nil, false
+			}
+		}
 	}
 	if !h.canAccessRepo(r.Context(), caller, repo, true) {
 		http.Error(w, "forbidden", http.StatusForbidden)
