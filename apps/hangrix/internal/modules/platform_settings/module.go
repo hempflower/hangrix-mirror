@@ -38,10 +38,11 @@ func Module() *ioc.Module {
 	registry := domain.NewRegistry(lifecycleDefinitions)
 	m.Provide(func() *domain.Registry { return registry }).ToSelf()
 
-	// Persistence — narrow repo interface consumed only by the
-	// service layer.
-	repo := m.Provide(infra.NewPostgresRepo)
-	repo.ToSelf()
+	// Persistence — bind to the narrow service.Repo interface the
+	// service layer consumes. ioc matches deps by exact reflect.Type,
+	// so the concrete *infra.PostgresRepo must be registered under the
+	// interface type, not just ToSelf().
+	m.Provide(infra.NewPostgresRepo).ToInterface(new(service.Repo))
 
 	// Service: cache + Store interface. Bind to domain.Store so the
 	// reaper and admin handlers consume it through the interface.
