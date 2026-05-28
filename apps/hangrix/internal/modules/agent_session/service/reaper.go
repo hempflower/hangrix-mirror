@@ -6,50 +6,52 @@ import (
 	"time"
 
 	runnerdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/runner/domain"
+	settingsdomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/platform_settings/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/server"
 )
 
 // Reaper is the platform-side background sweeper that drives the
-// container-lifecycle gates added in migration 00004:
+// container-lifecycle gates:
 //
-//   - Idle sweep (7 days): flips container_cleanup_pending = TRUE on
-//     every live container whose session is non-running and hasn't been
-//     touched in 7 days. The runner's cleanup poll then picks the row up
-//     and `docker rm`s the container.
+//   - Idle stop: flags container_stop_pending = TRUE on every live
+//     container whose session is idle and hasn't been touched within
+//     the configured lifecycle.idle_stop_threshold. Only fires when
+//     running_jobs = 0 and container_cleanup_pending = FALSE.
+//     The runner's stop-sweeper picks the row up and `docker stop`s.
 //
-//   - Abandoned sweep (30 days): clears container_id on rows that have
-//     been flagged for cleanup for over 30 days with no runner pickup
-//     (typically because the owning runner is permanently offline).
-//     This stops the flag from blocking other state forever; the
-//     container is effectively orphaned on the host.
+//   - Idle removal: flags container_cleanup_pending = TRUE on live
+//     containers whose session hasn't been touched within the
+//     configured lifecycle.idle_removal_threshold. Runner does
+//     `docker rm`.
 //
-// Both gates are baked into the SQL queries (see queries.sql); the
-// reaper is just the scheduler. One ticker, two queries per tick, no
-// per-row work — this is intentionally lightweight so it can sit on the
-// same process as the HTTP server.
+//   - Abandoned sweep: clears container_id on rows flagged for
+//     cleanup longer than lifecycle.abandoned_cleanup_threshold with
+//     no runner pickup.
+//
+// All three thresholds are read from the platform_settings store on
+// every sweep, so an admin PATCH takes effect without a restart.
 type Reaper struct {
-	runner runnerdomain.Repo
+	runner   runnerdomain.Repo
+	settings settingsdomain.Store
 }
 
 type ReaperDeps struct {
-	Runner runnerdomain.Repo
+	Runner   runnerdomain.Repo
+	Settings settingsdomain.Store
 }
 
 func NewReaper(deps *ReaperDeps) *Reaper {
-	return &Reaper{runner: deps.Runner}
+	return &Reaper{runner: deps.Runner, settings: deps.Settings}
 }
 
 // reaperInterval is the cadence between sweeps. Hourly is plenty:
-// the gates are 7 days (idle) and 30 days (abandon), so even a 4-hour
-// reaper would still hit each row well before the next gate boundary.
-// One hour leaves room for an operator to nudge "give up after N days"
-// shorter without re-tuning the interval.
+// the shortest gate is typically 1 hour, so an hourly tick adds ≤1h
+// latency which is inside spec.
 const reaperInterval = 1 * time.Hour
 
 // Start runs the sweep on a 1-hour ticker. We also do one immediate
 // sweep on startup so a restart doesn't introduce a worst-case 1-hour
-// pause before the first reap — matters most when an operator restarts
-// the server right after archiving a large batch of issues.
+// pause before the first reap.
 func (r *Reaper) Start(ctx context.Context) {
 	r.sweepOnce(ctx)
 	t := time.NewTicker(reaperInterval)
@@ -64,20 +66,44 @@ func (r *Reaper) Start(ctx context.Context) {
 	}
 }
 
-// sweepOnce runs both queries back-to-back. We log row counts even when
-// zero so operators can confirm the reaper is alive in steady state;
-// errors are logged but never panic — the reaper is best-effort and a
-// transient DB hiccup shouldn't take the server down.
+// sweepOnce runs all three queries back-to-back. Thresholds are read
+// fresh from the setting store each sweep so a PATCH takes effect on
+// the next tick without restart.
 func (r *Reaper) sweepOnce(ctx context.Context) {
-	if n, err := r.runner.SweepIdleSessionContainers(ctx); err != nil {
-		log.Printf("reaper: idle sweep: %v", err)
-	} else if n > 0 {
-		log.Printf("reaper: flagged %d idle containers for cleanup", n)
+	// ---- stop sweep ----
+	stopT, err := r.settings.GetDuration(ctx, "lifecycle.idle_stop_threshold")
+	if err != nil {
+		log.Printf("reaper: read stop threshold: %v", err)
+	} else if stopT > 0 {
+		if n, err := r.runner.SweepIdleSessionContainersForStop(ctx, stopT); err != nil {
+			log.Printf("reaper: stop sweep: %v", err)
+		} else if n > 0 {
+			log.Printf("reaper: flagged %d containers for stop", n)
+		}
 	}
-	if n, err := r.runner.SweepAbandonedSessionContainers(ctx); err != nil {
-		log.Printf("reaper: abandoned sweep: %v", err)
-	} else if n > 0 {
-		log.Printf("reaper: cleared container_id on %d abandoned sessions (no runner pickup after 30 days)", n)
+
+	// ---- idle removal sweep ----
+	removeT, err := r.settings.GetDuration(ctx, "lifecycle.idle_removal_threshold")
+	if err != nil {
+		log.Printf("reaper: read removal threshold: %v", err)
+	} else if removeT > 0 {
+		if n, err := r.runner.SweepIdleSessionContainers(ctx, removeT); err != nil {
+			log.Printf("reaper: idle sweep: %v", err)
+		} else if n > 0 {
+			log.Printf("reaper: flagged %d idle containers for cleanup", n)
+		}
+	}
+
+	// ---- abandoned sweep ----
+	abandonT, err := r.settings.GetDuration(ctx, "lifecycle.abandoned_cleanup_threshold")
+	if err != nil {
+		log.Printf("reaper: read abandoned threshold: %v", err)
+	} else {
+		if n, err := r.runner.SweepAbandonedSessionContainers(ctx, abandonT); err != nil {
+			log.Printf("reaper: abandoned sweep: %v", err)
+		} else if n > 0 {
+			log.Printf("reaper: cleared container_id on %d abandoned sessions (no runner pickup)", n)
+		}
 	}
 }
 

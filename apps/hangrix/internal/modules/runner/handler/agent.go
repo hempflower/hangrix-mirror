@@ -101,6 +101,8 @@ func (h *AgentHandler) RegisterRoutes(r chi.Router) {
 			r.Post("/sessions/{sid}/ping", h.pingSession)
 			r.Get("/cleanup-tasks", h.listCleanupTasks)
 			r.Post("/cleanup-tasks/{sid}/done", h.markCleanupDone)
+			r.Get("/stop-tasks", h.listStopTasks)
+			r.Post("/stop-tasks/{sid}/done", h.markStopDone)
 		})
 	})
 
@@ -792,9 +794,10 @@ func (h *AgentHandler) markRunning(w http.ResponseWriter, r *http.Request) {
 }
 
 type terminateReq struct {
-	Status   string `json:"status"`
-	ExitCode *int32 `json:"exit_code,omitempty"`
-	Message  string `json:"message,omitempty"`
+	Status      string `json:"status"`
+	ExitCode    *int32 `json:"exit_code,omitempty"`
+	Message     string `json:"message,omitempty"`
+	RunningJobs int32  `json:"running_jobs,omitempty"`
 }
 
 func (h *AgentHandler) terminate(w http.ResponseWriter, r *http.Request) {
@@ -815,7 +818,7 @@ func (h *AgentHandler) terminate(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch {
 	case status == domain.SessionStatusIdle:
-		err = h.repo.MarkSessionIdle(r.Context(), id, req.ExitCode)
+		err = h.repo.MarkSessionIdle(r.Context(), id, req.ExitCode, req.RunningJobs)
 	case status.Terminal():
 		err = h.repo.MarkSessionTerminal(r.Context(), id, status, req.ExitCode, req.Message)
 	default:
@@ -1103,6 +1106,62 @@ func (h *AgentHandler) markCleanupDone(w http.ResponseWriter, r *http.Request) {
 			// The session may have been deleted between the runner's
 			// listCleanupTasks and this ACK. Treat as success — the
 			// container is gone either way and the flag is moot.
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---- stop tasks (migration 00005) ----
+
+type stopTaskDTO struct {
+	SessionID   int64  `json:"session_id"`
+	ContainerID string `json:"container_id"`
+}
+
+type stopTasksResp struct {
+	Tasks []stopTaskDTO `json:"tasks"`
+}
+
+// listStopTasks returns up to 50 (session, container) pairs the
+// platform has flagged for this runner to `docker stop`. Mirrors the
+// existing cleanup-tasks endpoint shape.
+func (h *AgentHandler) listStopTasks(w http.ResponseWriter, r *http.Request) {
+	runner := runnerFromContext(r.Context())
+	if runner == nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "no runner in context")
+		return
+	}
+	tasks, err := h.repo.ListPendingContainerStops(r.Context(), runner.ID, 50)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := stopTasksResp{Tasks: make([]stopTaskDTO, 0, len(tasks))}
+	for _, t := range tasks {
+		out.Tasks = append(out.Tasks, stopTaskDTO{SessionID: t.SessionID, ContainerID: t.ContainerID})
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// markStopDone is the runner's ACK that `docker stop` of the session's
+// container succeeded. Scoped by runner_id at the SQL layer so a runner
+// that doesn't own the session can't clear another runner's column.
+func (h *AgentHandler) markStopDone(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.ParseID(w, chi.URLParam(r, "sid"))
+	if !ok {
+		return
+	}
+	runner := runnerFromContext(r.Context())
+	if runner == nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "no runner in context")
+		return
+	}
+	if err := h.repo.MarkSessionContainerStopped(r.Context(), id, runner.ID); err != nil {
+		if errors.Is(err, domain.ErrSessionNotFound) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}

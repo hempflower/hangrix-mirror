@@ -283,3 +283,21 @@ sql:
         emit_exact_table_names: false
         emit_empty_slices: true
 
+
+  - engine: postgresql
+    queries: internal/modules/platform_settings/infra/queries.sql
+    # platform_settings FK users(id) for updated_by; union user schema
+    # so sqlc can resolve the reference at generate time.
+    schema:
+      - internal/modules/user/infra/migrations
+      - internal/modules/platform_settings/infra/migrations
+    gen:
+      go:
+        package: platformsettingsdb
+        out: internal/modules/platform_settings/infra/platformsettingsdb
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_empty_slices: true

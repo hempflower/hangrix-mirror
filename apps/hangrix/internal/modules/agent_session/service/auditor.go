@@ -35,34 +35,7 @@ func (a *Auditor) ListByIssue(ctx context.Context, repoID int64, issueNumber int
 	}
 	out := make([]domain.AuditSession, 0, len(rows))
 	for _, r := range rows {
-		var repoID int64
-		if r.RepoID != nil {
-			repoID = *r.RepoID
-		}
-		var issue int32
-		if r.IssueNumber != nil {
-			issue = *r.IssueNumber
-		}
-		cfg := json.RawMessage(r.RoleConfig)
-		if len(cfg) == 0 {
-			cfg = json.RawMessage("{}")
-		}
-		out = append(out, domain.AuditSession{
-			SessionID:    r.ID,
-			RunnerID:     r.RunnerID,
-			RepoID:       repoID,
-			Issue:        issue,
-			RoleKey:      r.RoleKey,
-			Status:       string(r.Status),
-			RepoSHA:      r.RepoSHA,
-			CauseKind:    r.CauseKind,
-			CauseID:      r.CauseID,
-			RoleConfig:   cfg,
-			ExitCode:     r.ExitCode,
-			ErrorMessage: r.ErrorMessage,
-			CreatedAt:    r.CreatedAt,
-			EndedAt:      r.EndedAt,
-		})
+		out = append(out, toAuditSession(r))
 	}
 	return out, nil
 }
@@ -90,34 +63,7 @@ func (a *Auditor) ListRecent(ctx context.Context, opts domain.RecentFilter) ([]d
 	}
 	out := make([]domain.AuditSession, 0, len(rows))
 	for _, r := range rows {
-		var repoID int64
-		if r.RepoID != nil {
-			repoID = *r.RepoID
-		}
-		var issue int32
-		if r.IssueNumber != nil {
-			issue = *r.IssueNumber
-		}
-		cfg := json.RawMessage(r.RoleConfig)
-		if len(cfg) == 0 {
-			cfg = json.RawMessage("{}")
-		}
-		out = append(out, domain.AuditSession{
-			SessionID:    r.ID,
-			RunnerID:     r.RunnerID,
-			RepoID:       repoID,
-			Issue:        issue,
-			RoleKey:      r.RoleKey,
-			Status:       string(r.Status),
-			RepoSHA:      r.RepoSHA,
-			CauseKind:    r.CauseKind,
-			CauseID:      r.CauseID,
-			RoleConfig:   cfg,
-			ExitCode:     r.ExitCode,
-			ErrorMessage: r.ErrorMessage,
-			CreatedAt:    r.CreatedAt,
-			EndedAt:      r.EndedAt,
-		})
+		out = append(out, toAuditSession(r))
 	}
 	return out, total, nil
 }
@@ -136,34 +82,8 @@ func (a *Auditor) GetSession(ctx context.Context, sessionID int64) (*domain.Audi
 	if r == nil {
 		return nil, domain.ErrSessionNotFound
 	}
-	var repoID int64
-	if r.RepoID != nil {
-		repoID = *r.RepoID
-	}
-	var issue int32
-	if r.IssueNumber != nil {
-		issue = *r.IssueNumber
-	}
-	cfg := json.RawMessage(r.RoleConfig)
-	if len(cfg) == 0 {
-		cfg = json.RawMessage("{}")
-	}
-	return &domain.AuditSession{
-		SessionID:    r.ID,
-		RunnerID:     r.RunnerID,
-		RepoID:       repoID,
-		Issue:        issue,
-		RoleKey:      r.RoleKey,
-		Status:       string(r.Status),
-		RepoSHA:      r.RepoSHA,
-		CauseKind:    r.CauseKind,
-		CauseID:      r.CauseID,
-		RoleConfig:   cfg,
-		ExitCode:     r.ExitCode,
-		ErrorMessage: r.ErrorMessage,
-		CreatedAt:    r.CreatedAt,
-		EndedAt:      r.EndedAt,
-	}, nil
+	s := toAuditSession(r)
+	return &s, nil
 }
 
 // ListMessages returns every message frame for a session in seq order.
@@ -195,6 +115,59 @@ func (a *Auditor) ListMessages(ctx context.Context, sessionID int64) ([]domain.S
 		})
 	}
 	return out, nil
+}
+
+// containerState derives the display state from an agent session's
+// container columns. See architecture segment 1 for the mapping.
+func containerState(s *runnerdomain.AgentSession) string {
+	if s.ContainerID == "" {
+		return "none"
+	}
+	if s.ContainerCleanupPending {
+		return "pending_removal"
+	}
+	if s.ContainerStopPending {
+		return "pending_stop"
+	}
+	if s.ContainerStoppedAt != nil {
+		return "stopped"
+	}
+	return "running"
+}
+
+// toAuditSession maps a runner-domain AgentSession to the agent_session AuditSession DTO.
+func toAuditSession(r *runnerdomain.AgentSession) domain.AuditSession {
+	var repoID int64
+	if r.RepoID != nil {
+		repoID = *r.RepoID
+	}
+	var issue int32
+	if r.IssueNumber != nil {
+		issue = *r.IssueNumber
+	}
+	cfg := json.RawMessage(r.RoleConfig)
+	if len(cfg) == 0 {
+		cfg = json.RawMessage("{}")
+	}
+	return domain.AuditSession{
+		SessionID:          r.ID,
+		RunnerID:           r.RunnerID,
+		RepoID:             repoID,
+		Issue:              issue,
+		RoleKey:            r.RoleKey,
+		Status:             string(r.Status),
+		RepoSHA:            r.RepoSHA,
+		CauseKind:          r.CauseKind,
+		CauseID:            r.CauseID,
+		RoleConfig:         cfg,
+		ExitCode:           r.ExitCode,
+		ErrorMessage:       r.ErrorMessage,
+		CreatedAt:          r.CreatedAt,
+		EndedAt:            r.EndedAt,
+		ContainerState:     containerState(r),
+		ContainerLastUsedAt: r.ContainerLastUsedAt,
+		ContainerStoppedAt:  r.ContainerStoppedAt,
+	}
 }
 
 var _ domain.Auditor = (*Auditor)(nil)

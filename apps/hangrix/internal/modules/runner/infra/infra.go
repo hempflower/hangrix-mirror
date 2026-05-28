@@ -538,15 +538,18 @@ func (r *PostgresRepo) MarkSessionTerminal(ctx context.Context, id int64, status
 // MarkSessionIdle flips a claimed/running session to 'idle' without
 // touching session_token_sealed. See domain.Repo for the contract: the
 // sealed plaintext must survive the container exit so a rewake re-uses
-// the same identity.
-func (r *PostgresRepo) MarkSessionIdle(ctx context.Context, id int64, exitCode *int32) error {
+// the same identity. runningJobs captures the agent's last reported count
+// so the reaper's idle-stop sweep can skip sessions with active background
+// bash jobs.
+func (r *PostgresRepo) MarkSessionIdle(ctx context.Context, id int64, exitCode *int32, runningJobs int32) error {
 	var ec pgtype.Int4
 	if exitCode != nil {
 		ec = pgtype.Int4{Int32: *exitCode, Valid: true}
 	}
 	n, err := r.q.MarkSessionIdle(ctx, runnerdb.MarkSessionIdleParams{
-		ExitCode: ec,
-		ID:       id,
+		ExitCode:    ec,
+		RunningJobs: runningJobs,
+		ID:          id,
 	})
 	if err != nil {
 		return err
@@ -691,20 +694,103 @@ func (r *PostgresRepo) ClearSessionContainer(ctx context.Context, sessionID, own
 }
 
 // SweepIdleSessionContainers flags every live container whose session has
-// been idle (in a non-running terminal-ish state) for over 7 days. The
-// platform reaper calls this on a 1-hour ticker; the runner picks the
-// flagged rows up on its next cleanup poll.
-func (r *PostgresRepo) SweepIdleSessionContainers(ctx context.Context) (int64, error) {
-	return r.q.SweepIdleSessionContainers(ctx)
+// been idle (in a non-running terminal-ish state) for longer than the
+// given threshold. The platform reaper calls this on a 1-hour ticker; the
+// runner picks the flagged rows up on its next cleanup poll.
+func (r *PostgresRepo) SweepIdleSessionContainers(ctx context.Context, threshold time.Duration) (int64, error) {
+	return r.q.SweepIdleSessionContainers(ctx, durationToInterval(threshold))
 }
 
 // SweepAbandonedSessionContainers clears the container_id column for
-// sessions that have been flagged for cleanup for over 30 days with no
-// runner pickup. After this fires, the container is orphaned on the
-// host (if the host still exists), but the session row stops claiming
-// ownership of it so user-facing affordances can show it as fully gone.
-func (r *PostgresRepo) SweepAbandonedSessionContainers(ctx context.Context) (int64, error) {
-	return r.q.SweepAbandonedSessionContainers(ctx)
+// sessions that have been flagged for cleanup for longer than the given
+// threshold with no runner pickup. After this fires, the container is
+// orphaned on the host (if the host still exists), but the session row
+// stops claiming ownership of it so user-facing affordances can show it
+// as fully gone.
+func (r *PostgresRepo) SweepAbandonedSessionContainers(ctx context.Context, threshold time.Duration) (int64, error) {
+	return r.q.SweepAbandonedSessionContainers(ctx, durationToInterval(threshold))
+}
+
+// ---- container stop lifecycle (migration 00005) ----
+
+// FlagSessionContainerStop marks one session's container for runner-side
+// docker stop. No-op when there's no live container, the container is
+// already pending removal, or stop is already flagged.
+func (r *PostgresRepo) FlagSessionContainerStop(ctx context.Context, sessionID int64) error {
+	n, err := r.q.FlagSessionContainerStop(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		// Either the row is gone, no container, already flagged for
+		// removal, or already pending stop. Probe existence for the
+		// caller's error path.
+		if _, err := r.q.GetSessionByID(ctx, sessionID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return domain.ErrSessionNotFound
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// ListPendingContainerStops powers the runner's stop-tasks poll. The
+// partial index keeps this O(flagged rows on this runner).
+func (r *PostgresRepo) ListPendingContainerStops(ctx context.Context, runnerID int64, limit int) ([]domain.ContainerStopTask, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := r.q.ListPendingContainerStops(ctx, runnerdb.ListPendingContainerStopsParams{
+		RunnerID: pgtype.Int8{Int64: runnerID, Valid: true},
+		Lim:      int32(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.ContainerStopTask, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.ContainerStopTask{
+			SessionID:   row.ID,
+			ContainerID: row.ContainerID,
+		})
+	}
+	return out, nil
+}
+
+// MarkSessionContainerStopped is the runner's ACK that docker stop
+// succeeded. Scoped by runner_id so a misrouted ACK can't clear a sibling
+// runner's column.
+func (r *PostgresRepo) MarkSessionContainerStopped(ctx context.Context, sessionID, ownerRunnerID int64) error {
+	n, err := r.q.MarkSessionContainerStopped(ctx, runnerdb.MarkSessionContainerStoppedParams{
+		ID:       sessionID,
+		RunnerID: pgtype.Int8{Int64: ownerRunnerID, Valid: true},
+	})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrSessionNotFound
+	}
+	return nil
+}
+
+// SweepIdleSessionContainersForStop flags containers for docker stop.
+func (r *PostgresRepo) SweepIdleSessionContainersForStop(ctx context.Context, threshold time.Duration) (int64, error) {
+	return r.q.SweepIdleSessionContainersForStop(ctx, durationToInterval(threshold))
+}
+
+// ResumeSessionContainer clears stop flags when a stopped container is
+// reclaimed for a new run.
+func (r *PostgresRepo) ResumeSessionContainer(ctx context.Context, sessionID int64) error {
+	n, err := r.q.ResumeSessionContainer(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrSessionNotFound
+	}
+	return nil
 }
 
 // ---- messages ----
@@ -894,6 +980,12 @@ func sessionFromRow(r runnerdb.AgentSession) *domain.AgentSession {
 		RoleConfig:              r.RoleConfig,
 		ContainerID:             r.ContainerID,
 		ContainerCleanupPending: r.ContainerCleanupPending,
+		ContainerStopPending:    r.ContainerStopPending,
+		RunningJobs:             r.RunningJobs,
+	}
+	if r.ContainerStoppedAt.Valid {
+		v := r.ContainerStoppedAt.Time
+		out.ContainerStoppedAt = &v
 	}
 	if r.ContainerLastUsedAt.Valid {
 		v := r.ContainerLastUsedAt.Time
@@ -951,6 +1043,12 @@ func messageFromRow(r runnerdb.AgentSessionMessage) *domain.Message {
 		Payload:    r.Payload,
 		CreatedAt:  r.CreatedAt.Time,
 	}
+}
+
+// durationToInterval converts a Go Duration to the pgtype.Interval that
+// sqlc expects for INTERVAL parameters.
+func durationToInterval(d time.Duration) pgtype.Interval {
+	return pgtype.Interval{Microseconds: int64(d / time.Microsecond), Valid: true}
 }
 
 func inputFromRow(r runnerdb.AgentSessionInput) *domain.SessionInput {

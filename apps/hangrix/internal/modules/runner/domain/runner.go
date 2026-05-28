@@ -252,6 +252,11 @@ type AgentSession struct {
 	ContainerID             string
 	ContainerLastUsedAt     *time.Time
 	ContainerCleanupPending bool
+
+	// Container lifecycle fields added in migration 00005.
+	ContainerStopPending bool
+	ContainerStoppedAt   *time.Time
+	RunningJobs          int32
 }
 
 // SessionTokenActive reports whether the session's identity token is
@@ -453,6 +458,16 @@ type ContainerCleanupTask struct {
 	ContainerID string
 }
 
+// ContainerStopTask is one (session, container) pair the runner's
+// stop sweeper should `docker stop`. Returned by
+// Repo.ListPendingContainerStops and consumed by the runner-facing
+// HTTP layer's `/api/runner/stop-tasks` endpoint.
+type ContainerStopTask struct {
+	SessionID   int64
+	ContainerID string
+}
+
+
 // Errors.
 var (
 	ErrRunnerNotFound         = errors.New("runner not found")
@@ -551,7 +566,10 @@ type Repo interface {
 	// in that the row is also still considered "logically alive" and
 	// SessionTokenActive returns true. Used by the runner on clean
 	// container exit when the parent issue is still open.
-	MarkSessionIdle(ctx context.Context, id int64, exitCode *int32) error
+	// runningJobs carries the agent's last reported running_jobs count
+	// so the reaper's idle-stop sweep can skip sessions with active
+	// background work.
+	MarkSessionIdle(ctx context.Context, id int64, exitCode *int32, runningJobs int32) error
 	// ResumeSession flips an idle / failed / succeeded / cancelled row
 	// back to 'pending' so a runner re-claims it. The caller chooses
 	// the token to install: rewake-from-modern-row passes through the
@@ -618,18 +636,53 @@ type Repo interface {
 	// clear a sibling runner's column.
 	ClearSessionContainer(ctx context.Context, sessionID, ownerRunnerID int64) error
 
-	// SweepIdleSessionContainers is the 7-day idle reaper: flags every
-	// live container whose session is non-running and hasn't been used in
-	// 7 days. Returns the number of rows flagged so the reaper can log
-	// what it did. Called by the platform's reaper goroutine on a 1-hour
-	// ticker.
-	SweepIdleSessionContainers(ctx context.Context) (int64, error)
+	// FlagSessionContainerStop marks one session's container for
+	// runner-side docker stop. Used by the admin "Stop now" action and
+	// the reaper's idle-stop sweep. No-op when container_id = '' or
+	// container_cleanup_pending = TRUE (a row already queued for removal
+	// skips the stop tier).
+	FlagSessionContainerStop(ctx context.Context, sessionID int64) error
 
-	// SweepAbandonedSessionContainers is the 30-day giveup sweep: clears
+	// ListPendingContainerStops returns up to `limit` (session_id,
+	// container_id) tuples that the given runner owns and the platform
+	// has flagged for stop. The runner's StopSweeper polls this and
+	// `docker stop`s each container.
+	ListPendingContainerStops(ctx context.Context, runnerID int64, limit int) ([]ContainerStopTask, error)
+
+	// MarkSessionContainerStopped is the runner's ACK that `docker stop`
+	// of (sessionID, container_id) succeeded. Sets container_stopped_at
+	// = NOW() and clears container_stop_pending. Scoped by runner_id so
+	// a misrouted ACK can't clear a sibling runner's column.
+	MarkSessionContainerStopped(ctx context.Context, sessionID, ownerRunnerID int64) error
+
+	// SweepIdleSessionContainersForStop is the idle-stop reaper: flags
+	// every live container whose session is non-running, has
+	// running_jobs = 0, container_cleanup_pending = FALSE, and hasn't
+	// been used in the given threshold duration. Returns row count for
+	// logging. Called by the platform's reaper goroutine on a 1-hour
+	// ticker.
+	SweepIdleSessionContainersForStop(ctx context.Context, threshold time.Duration) (int64, error)
+
+	// ResumeSessionContainer clears container_stopped_at and
+	// container_stop_pending on a session's container row. Called from
+	// SetSessionContainer when the runner claims a previously-stopped
+	// session, so the badge flips from "stopped" back to "running".
+	ResumeSessionContainer(ctx context.Context, sessionID int64) error
+
+	// ---- threshold-driven sweeps (replacing the old hardcoded variants) ----
+
+	// SweepIdleSessionContainers is the idle removal reaper: flags every
+	// live container whose session is non-running and hasn't been used in
+	// the given threshold. Returns the number of rows flagged so the
+	// reaper can log what it did. Called by the platform's reaper
+	// goroutine on a 1-hour ticker.
+	SweepIdleSessionContainers(ctx context.Context, threshold time.Duration) (int64, error)
+
+	// SweepAbandonedSessionContainers is the giveup sweep: clears
 	// container_id on rows that have been flagged for cleanup for over
-	// 30 days with no runner pickup (typically because the owning runner
-	// is permanently offline). Returns row count for logging.
-	SweepAbandonedSessionContainers(ctx context.Context) (int64, error)
+	// the given threshold with no runner pickup (typically because the
+	// owning runner is permanently offline). Returns row count for logging.
+	SweepAbandonedSessionContainers(ctx context.Context, threshold time.Duration) (int64, error)
 
 	// messages
 	AppendMessage(ctx context.Context, m *Message) (*Message, error)
