@@ -10,10 +10,10 @@ triggers:
   issue.comment:
     mentioned_only: true
 permission: write
+tools: [reviewer]
 llm:
   model: claude-opus-4-7
   reasoning_effort: high
-tools: [reviewer]
 ---
 # web-reviewer
 
