@@ -118,13 +118,14 @@ sql:
         emit_empty_slices: true
   - engine: postgresql
     queries: internal/modules/issue/infra/queries.sql
-    # issue_* tables FK users(id) and repos(id); union those so sqlc
-    # can resolve the joins. Runtime migrations are still applied
-    # per-module via the goose_issue version table.
+    # issue_* tables FK users(id), repos(id), and actors(id); union
+    # those so sqlc can resolve the joins. Runtime migrations are still
+    # applied per-module via the goose_issue version table.
     schema:
       - internal/modules/user/infra/migrations
       - internal/modules/org/infra/migrations
       - internal/modules/repo/infra/migrations
+      - internal/modules/actor/infra/migrations
       - internal/modules/issue/infra/migrations
     gen:
       go:

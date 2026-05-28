@@ -49,28 +49,22 @@ type Contribution struct {
 }
 
 type Issue struct {
-	ID                 int64
-	RepoID             int64
-	Number             int64
-	AuthorID           pgtype.Int8
-	Title              string
-	Body               string
-	State              string
-	BranchName         string
-	BaseBranch         string
-	HeadSha            string
-	MergeCommitSha     string
-	MergedAt           pgtype.Timestamptz
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
-	ParentID           pgtype.Int8
-	ParentNumber       int64
-	AgentRole          string
-	ActorKind          string
-	ActorUserID        pgtype.Int8
-	ActorRoleKey       string
-	ActorWorkflowRunID pgtype.Int8
-	ActorDisplayName   string
+	ID             int64
+	RepoID         int64
+	Number         int64
+	Title          string
+	Body           string
+	State          string
+	BranchName     string
+	BaseBranch     string
+	HeadSha        string
+	MergeCommitSha string
+	MergedAt       pgtype.Timestamptz
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	ParentID       pgtype.Int8
+	ParentNumber   int64
+	ActorID        int64
 }
 
 type IssueAttachment struct {
@@ -100,20 +94,14 @@ type IssueAttachment struct {
 }
 
 type IssueComment struct {
-	ID                 int64
-	IssueID            int64
-	AuthorID           pgtype.Int8
-	Body               string
-	FilePath           string
-	Line               int32
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
-	AgentRole          string
-	ActorKind          string
-	ActorUserID        pgtype.Int8
-	ActorRoleKey       string
-	ActorWorkflowRunID pgtype.Int8
-	ActorDisplayName   string
+	ID        int64
+	IssueID   int64
+	Body      string
+	FilePath  string
+	Line      int32
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+	ActorID   int64
 }
 
 type IssueCounter struct {

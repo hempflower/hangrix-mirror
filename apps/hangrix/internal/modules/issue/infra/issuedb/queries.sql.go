@@ -200,37 +200,24 @@ func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentPara
 const createComment = `-- name: CreateComment :one
 
 INSERT INTO issue_comments (
-    issue_id, author_id, agent_role, body, file_path, line,
-    actor_kind, actor_user_id, actor_role_key, actor_workflow_run_id, actor_display_name
+    issue_id, actor_id, body, file_path, line
 )
 VALUES (
     $1,
     $2,
     $3,
     $4,
-    $5,
-    $6,
-    $7,
-    $8,
-    $9,
-    $10,
-    $11
+    $5
 )
 RETURNING id, created_at, updated_at
 `
 
 type CreateCommentParams struct {
-	IssueID            int64
-	AuthorID           pgtype.Int8
-	AgentRole          string
-	Body               string
-	FilePath           string
-	Line               int32
-	ActorKind          string
-	ActorUserID        pgtype.Int8
-	ActorRoleKey       string
-	ActorWorkflowRunID pgtype.Int8
-	ActorDisplayName   string
+	IssueID  int64
+	ActorID  int64
+	Body     string
+	FilePath string
+	Line     int32
 }
 
 type CreateCommentRow struct {
@@ -240,24 +227,16 @@ type CreateCommentRow struct {
 }
 
 // ---- issue_comments ----
-// author_id and agent_role are mutually exclusive (CHECK constraint at
-// the table level). Callers pass exactly one — sqlc.narg('author_id')
-// for the human path, sqlc.arg('agent_role') for the agent path; the
-// other gets the zero value.
-// actor_* columns are dual-written alongside legacy fields.
+// Phase 3d: single actor_id replaces the 6 denormalized actor_* columns
+// and the legacy author_id/agent_role. The actor must have been resolved
+// before calling — caller passes the actors.id.
 func (q *Queries) CreateComment(ctx context.Context, arg CreateCommentParams) (CreateCommentRow, error) {
 	row := q.db.QueryRow(ctx, createComment,
 		arg.IssueID,
-		arg.AuthorID,
-		arg.AgentRole,
+		arg.ActorID,
 		arg.Body,
 		arg.FilePath,
 		arg.Line,
-		arg.ActorKind,
-		arg.ActorUserID,
-		arg.ActorRoleKey,
-		arg.ActorWorkflowRunID,
-		arg.ActorDisplayName,
 	)
 	var i CreateCommentRow
 	err := row.Scan(&i.ID, &i.CreatedAt, &i.UpdatedAt)
@@ -329,9 +308,8 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Creat
 const createIssue = `-- name: CreateIssue :one
 
 INSERT INTO issues (
-    repo_id, number, author_id, agent_role, title, body, branch_name,
-    base_branch, parent_id, parent_number,
-    actor_kind, actor_user_id, actor_role_key, actor_workflow_run_id, actor_display_name
+    repo_id, number, actor_id, title, body, branch_name,
+    base_branch, parent_id, parent_number
 )
 VALUES (
     $1,
@@ -342,33 +320,21 @@ VALUES (
     $6,
     $7,
     $8,
-    $9,
-    $10,
-    $11,
-    $12,
-    $13,
-    $14,
-    $15
+    $9
 )
 RETURNING id, state, created_at, updated_at
 `
 
 type CreateIssueParams struct {
-	RepoID             int64
-	Number             int64
-	AuthorID           pgtype.Int8
-	AgentRole          string
-	Title              string
-	Body               string
-	BranchName         string
-	BaseBranch         string
-	ParentID           pgtype.Int8
-	ParentNumber       int64
-	ActorKind          string
-	ActorUserID        pgtype.Int8
-	ActorRoleKey       string
-	ActorWorkflowRunID pgtype.Int8
-	ActorDisplayName   string
+	RepoID       int64
+	Number       int64
+	ActorID      int64
+	Title        string
+	Body         string
+	BranchName   string
+	BaseBranch   string
+	ParentID     pgtype.Int8
+	ParentNumber int64
 }
 
 type CreateIssueRow struct {
@@ -379,27 +345,20 @@ type CreateIssueRow struct {
 }
 
 // ---- issues ----
-// author_id and agent_role are mutually exclusive (CHECK constraint).
-// Human path: sqlc.narg('author_id') with the user's ID, agent_role=”.
-// Agent path: author_id=NULL (omit), agent_role with the role key.
-// actor_* columns are dual-written alongside legacy fields.
+// Phase 3d: single actor_id replaces the 6 denormalized actor_* columns
+// and the legacy author_id/agent_role. The actor must have been resolved
+// (or pre-seeded) before calling this — caller passes the actors.id.
 func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (CreateIssueRow, error) {
 	row := q.db.QueryRow(ctx, createIssue,
 		arg.RepoID,
 		arg.Number,
-		arg.AuthorID,
-		arg.AgentRole,
+		arg.ActorID,
 		arg.Title,
 		arg.Body,
 		arg.BranchName,
 		arg.BaseBranch,
 		arg.ParentID,
 		arg.ParentNumber,
-		arg.ActorKind,
-		arg.ActorUserID,
-		arg.ActorRoleKey,
-		arg.ActorWorkflowRunID,
-		arg.ActorDisplayName,
 	)
 	var i CreateIssueRow
 	err := row.Scan(
@@ -534,36 +493,39 @@ func (q *Queries) GetAttachment(ctx context.Context, id int64) (GetAttachmentRow
 
 const getCommentByID = `-- name: GetCommentByID :one
 SELECT c.id, c.issue_id,
-       COALESCE(c.author_id, 0)::BIGINT AS author_id,
-       COALESCE(u.username, '')         AS author_name,
-       c.agent_role, c.body, c.file_path, c.line,
-       c.created_at, c.updated_at,
-       c.actor_kind,
-       COALESCE(c.actor_user_id, 0)::BIGINT AS actor_user_id,
-       c.actor_role_key,
-       COALESCE(c.actor_workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
-       c.actor_display_name
+       c.actor_id,
+       CASE WHEN a.kind = 'user' THEN COALESCE(a.user_id, 0) ELSE 0 END::BIGINT AS author_id,
+       CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END         AS author_name,
+       CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
+       a.kind AS actor_kind,
+       COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
+       COALESCE(a.agent_role_key, '') AS actor_role_key,
+       COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
+       a.display_name AS actor_display_name,
+       c.body, c.file_path, c.line,
+       c.created_at, c.updated_at
 FROM issue_comments c
-LEFT JOIN users u ON u.id = c.author_id
+JOIN actors a ON a.id = c.actor_id
 WHERE c.id = $1
 `
 
 type GetCommentByIDRow struct {
 	ID                 int64
 	IssueID            int64
+	ActorID            int64
 	AuthorID           int64
 	AuthorName         string
 	AgentRole          string
-	Body               string
-	FilePath           string
-	Line               int32
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
 	ActorKind          string
 	ActorUserID        int64
 	ActorRoleKey       string
 	ActorWorkflowRunID int64
 	ActorDisplayName   string
+	Body               string
+	FilePath           string
+	Line               int32
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
 }
 
 func (q *Queries) GetCommentByID(ctx context.Context, id int64) (GetCommentByIDRow, error) {
@@ -572,19 +534,20 @@ func (q *Queries) GetCommentByID(ctx context.Context, id int64) (GetCommentByIDR
 	err := row.Scan(
 		&i.ID,
 		&i.IssueID,
+		&i.ActorID,
 		&i.AuthorID,
 		&i.AuthorName,
 		&i.AgentRole,
-		&i.Body,
-		&i.FilePath,
-		&i.Line,
-		&i.CreatedAt,
-		&i.UpdatedAt,
 		&i.ActorKind,
 		&i.ActorUserID,
 		&i.ActorRoleKey,
 		&i.ActorWorkflowRunID,
 		&i.ActorDisplayName,
+		&i.Body,
+		&i.FilePath,
+		&i.Line,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -802,20 +765,22 @@ func (q *Queries) GetEventByID(ctx context.Context, id int64) (GetEventByIDRow, 
 
 const getIssueByID = `-- name: GetIssueByID :one
 SELECT i.id, i.repo_id, i.number,
-       COALESCE(i.author_id, 0)::BIGINT AS author_id,
-       COALESCE(u.username, '')         AS author_name,
-       i.agent_role, i.title, i.body, i.state,
+       i.actor_id,
+       CASE WHEN a.kind = 'user' THEN COALESCE(a.user_id, 0) ELSE 0 END::BIGINT AS author_id,
+       CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END         AS author_name,
+       CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
+       a.kind AS actor_kind,
+       COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
+       COALESCE(a.agent_role_key, '') AS actor_role_key,
+       COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
+       a.display_name AS actor_display_name,
+       i.title, i.body, i.state,
        i.branch_name, i.base_branch,
        i.head_sha, i.merge_commit_sha, i.merged_at,
        COALESCE(i.parent_id, 0)::BIGINT AS parent_id, i.parent_number,
-       i.created_at, i.updated_at,
-       i.actor_kind,
-       COALESCE(i.actor_user_id, 0)::BIGINT AS actor_user_id,
-       i.actor_role_key,
-       COALESCE(i.actor_workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
-       i.actor_display_name
+       i.created_at, i.updated_at
 FROM issues i
-LEFT JOIN users u ON u.id = i.author_id
+JOIN actors a ON a.id = i.actor_id
 WHERE i.id = $1
 `
 
@@ -823,9 +788,15 @@ type GetIssueByIDRow struct {
 	ID                 int64
 	RepoID             int64
 	Number             int64
+	ActorID            int64
 	AuthorID           int64
 	AuthorName         string
 	AgentRole          string
+	ActorKind          string
+	ActorUserID        int64
+	ActorRoleKey       string
+	ActorWorkflowRunID int64
+	ActorDisplayName   string
 	Title              string
 	Body               string
 	State              string
@@ -838,11 +809,6 @@ type GetIssueByIDRow struct {
 	ParentNumber       int64
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
-	ActorKind          string
-	ActorUserID        int64
-	ActorRoleKey       string
-	ActorWorkflowRunID int64
-	ActorDisplayName   string
 }
 
 func (q *Queries) GetIssueByID(ctx context.Context, id int64) (GetIssueByIDRow, error) {
@@ -852,9 +818,15 @@ func (q *Queries) GetIssueByID(ctx context.Context, id int64) (GetIssueByIDRow, 
 		&i.ID,
 		&i.RepoID,
 		&i.Number,
+		&i.ActorID,
 		&i.AuthorID,
 		&i.AuthorName,
 		&i.AgentRole,
+		&i.ActorKind,
+		&i.ActorUserID,
+		&i.ActorRoleKey,
+		&i.ActorWorkflowRunID,
+		&i.ActorDisplayName,
 		&i.Title,
 		&i.Body,
 		&i.State,
@@ -867,31 +839,29 @@ func (q *Queries) GetIssueByID(ctx context.Context, id int64) (GetIssueByIDRow, 
 		&i.ParentNumber,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ActorKind,
-		&i.ActorUserID,
-		&i.ActorRoleKey,
-		&i.ActorWorkflowRunID,
-		&i.ActorDisplayName,
 	)
 	return i, err
 }
 
 const getIssueByNumber = `-- name: GetIssueByNumber :one
 SELECT i.id, i.repo_id, i.number,
-       COALESCE(i.author_id, 0)::BIGINT AS author_id,
-       COALESCE(u.username, '')         AS author_name,
-       i.agent_role, i.title, i.body, i.state,
+       i.actor_id,
+       -- Legacy compatibility fields derived from the actors row.
+       CASE WHEN a.kind = 'user' THEN COALESCE(a.user_id, 0) ELSE 0 END::BIGINT AS author_id,
+       CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END         AS author_name,
+       CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
+       a.kind AS actor_kind,
+       COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
+       COALESCE(a.agent_role_key, '') AS actor_role_key,
+       COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
+       a.display_name AS actor_display_name,
+       i.title, i.body, i.state,
        i.branch_name, i.base_branch,
        i.head_sha, i.merge_commit_sha, i.merged_at,
        COALESCE(i.parent_id, 0)::BIGINT AS parent_id, i.parent_number,
-       i.created_at, i.updated_at,
-       i.actor_kind,
-       COALESCE(i.actor_user_id, 0)::BIGINT AS actor_user_id,
-       i.actor_role_key,
-       COALESCE(i.actor_workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
-       i.actor_display_name
+       i.created_at, i.updated_at
 FROM issues i
-LEFT JOIN users u ON u.id = i.author_id
+JOIN actors a ON a.id = i.actor_id
 WHERE i.repo_id = $1 AND i.number = $2
 `
 
@@ -904,9 +874,15 @@ type GetIssueByNumberRow struct {
 	ID                 int64
 	RepoID             int64
 	Number             int64
+	ActorID            int64
 	AuthorID           int64
 	AuthorName         string
 	AgentRole          string
+	ActorKind          string
+	ActorUserID        int64
+	ActorRoleKey       string
+	ActorWorkflowRunID int64
+	ActorDisplayName   string
 	Title              string
 	Body               string
 	State              string
@@ -919,11 +895,6 @@ type GetIssueByNumberRow struct {
 	ParentNumber       int64
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
-	ActorKind          string
-	ActorUserID        int64
-	ActorRoleKey       string
-	ActorWorkflowRunID int64
-	ActorDisplayName   string
 }
 
 func (q *Queries) GetIssueByNumber(ctx context.Context, arg GetIssueByNumberParams) (GetIssueByNumberRow, error) {
@@ -933,9 +904,15 @@ func (q *Queries) GetIssueByNumber(ctx context.Context, arg GetIssueByNumberPara
 		&i.ID,
 		&i.RepoID,
 		&i.Number,
+		&i.ActorID,
 		&i.AuthorID,
 		&i.AuthorName,
 		&i.AgentRole,
+		&i.ActorKind,
+		&i.ActorUserID,
+		&i.ActorRoleKey,
+		&i.ActorWorkflowRunID,
+		&i.ActorDisplayName,
 		&i.Title,
 		&i.Body,
 		&i.State,
@@ -948,11 +925,6 @@ func (q *Queries) GetIssueByNumber(ctx context.Context, arg GetIssueByNumberPara
 		&i.ParentNumber,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ActorKind,
-		&i.ActorUserID,
-		&i.ActorRoleKey,
-		&i.ActorWorkflowRunID,
-		&i.ActorDisplayName,
 	)
 	return i, err
 }
@@ -1074,17 +1046,19 @@ func (q *Queries) ListAttachments(ctx context.Context, arg ListAttachmentsParams
 
 const listComments = `-- name: ListComments :many
 SELECT c.id, c.issue_id,
-       COALESCE(c.author_id, 0)::BIGINT AS author_id,
-       COALESCE(u.username, '')         AS author_name,
-       c.agent_role, c.body, c.file_path, c.line,
-       c.created_at, c.updated_at,
-       c.actor_kind,
-       COALESCE(c.actor_user_id, 0)::BIGINT AS actor_user_id,
-       c.actor_role_key,
-       COALESCE(c.actor_workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
-       c.actor_display_name
+       c.actor_id,
+       CASE WHEN a.kind = 'user' THEN COALESCE(a.user_id, 0) ELSE 0 END::BIGINT AS author_id,
+       CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END         AS author_name,
+       CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
+       a.kind AS actor_kind,
+       COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
+       COALESCE(a.agent_role_key, '') AS actor_role_key,
+       COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
+       a.display_name AS actor_display_name,
+       c.body, c.file_path, c.line,
+       c.created_at, c.updated_at
 FROM issue_comments c
-LEFT JOIN users u ON u.id = c.author_id
+JOIN actors a ON a.id = c.actor_id
 WHERE c.issue_id = $1
 ORDER BY c.created_at, c.id
 `
@@ -1092,19 +1066,20 @@ ORDER BY c.created_at, c.id
 type ListCommentsRow struct {
 	ID                 int64
 	IssueID            int64
+	ActorID            int64
 	AuthorID           int64
 	AuthorName         string
 	AgentRole          string
-	Body               string
-	FilePath           string
-	Line               int32
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
 	ActorKind          string
 	ActorUserID        int64
 	ActorRoleKey       string
 	ActorWorkflowRunID int64
 	ActorDisplayName   string
+	Body               string
+	FilePath           string
+	Line               int32
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
 }
 
 func (q *Queries) ListComments(ctx context.Context, issueID int64) ([]ListCommentsRow, error) {
@@ -1119,19 +1094,20 @@ func (q *Queries) ListComments(ctx context.Context, issueID int64) ([]ListCommen
 		if err := rows.Scan(
 			&i.ID,
 			&i.IssueID,
+			&i.ActorID,
 			&i.AuthorID,
 			&i.AuthorName,
 			&i.AgentRole,
-			&i.Body,
-			&i.FilePath,
-			&i.Line,
-			&i.CreatedAt,
-			&i.UpdatedAt,
 			&i.ActorKind,
 			&i.ActorUserID,
 			&i.ActorRoleKey,
 			&i.ActorWorkflowRunID,
 			&i.ActorDisplayName,
+			&i.Body,
+			&i.FilePath,
+			&i.Line,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1460,20 +1436,22 @@ func (q *Queries) ListEvents(ctx context.Context, issueID int64) ([]ListEventsRo
 
 const listIssueChildren = `-- name: ListIssueChildren :many
 SELECT i.id, i.repo_id, i.number,
-       COALESCE(i.author_id, 0)::BIGINT AS author_id,
-       COALESCE(u.username, '')         AS author_name,
-       i.agent_role, i.title, i.body, i.state,
+       i.actor_id,
+       CASE WHEN a.kind = 'user' THEN COALESCE(a.user_id, 0) ELSE 0 END::BIGINT AS author_id,
+       CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END         AS author_name,
+       CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
+       a.kind AS actor_kind,
+       COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
+       COALESCE(a.agent_role_key, '') AS actor_role_key,
+       COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
+       a.display_name AS actor_display_name,
+       i.title, i.body, i.state,
        i.branch_name, i.base_branch,
        i.head_sha, i.merge_commit_sha, i.merged_at,
        COALESCE(i.parent_id, 0)::BIGINT AS parent_id, i.parent_number,
-       i.created_at, i.updated_at,
-       i.actor_kind,
-       COALESCE(i.actor_user_id, 0)::BIGINT AS actor_user_id,
-       i.actor_role_key,
-       COALESCE(i.actor_workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
-       i.actor_display_name
+       i.created_at, i.updated_at
 FROM issues i
-LEFT JOIN users u ON u.id = i.author_id
+JOIN actors a ON a.id = i.actor_id
 WHERE i.parent_id = $1
 ORDER BY i.number ASC
 `
@@ -1482,9 +1460,15 @@ type ListIssueChildrenRow struct {
 	ID                 int64
 	RepoID             int64
 	Number             int64
+	ActorID            int64
 	AuthorID           int64
 	AuthorName         string
 	AgentRole          string
+	ActorKind          string
+	ActorUserID        int64
+	ActorRoleKey       string
+	ActorWorkflowRunID int64
+	ActorDisplayName   string
 	Title              string
 	Body               string
 	State              string
@@ -1497,11 +1481,6 @@ type ListIssueChildrenRow struct {
 	ParentNumber       int64
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
-	ActorKind          string
-	ActorUserID        int64
-	ActorRoleKey       string
-	ActorWorkflowRunID int64
-	ActorDisplayName   string
 }
 
 func (q *Queries) ListIssueChildren(ctx context.Context, parentID pgtype.Int8) ([]ListIssueChildrenRow, error) {
@@ -1517,9 +1496,15 @@ func (q *Queries) ListIssueChildren(ctx context.Context, parentID pgtype.Int8) (
 			&i.ID,
 			&i.RepoID,
 			&i.Number,
+			&i.ActorID,
 			&i.AuthorID,
 			&i.AuthorName,
 			&i.AgentRole,
+			&i.ActorKind,
+			&i.ActorUserID,
+			&i.ActorRoleKey,
+			&i.ActorWorkflowRunID,
+			&i.ActorDisplayName,
 			&i.Title,
 			&i.Body,
 			&i.State,
@@ -1532,11 +1517,6 @@ func (q *Queries) ListIssueChildren(ctx context.Context, parentID pgtype.Int8) (
 			&i.ParentNumber,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.ActorKind,
-			&i.ActorUserID,
-			&i.ActorRoleKey,
-			&i.ActorWorkflowRunID,
-			&i.ActorDisplayName,
 		); err != nil {
 			return nil, err
 		}
@@ -1550,20 +1530,22 @@ func (q *Queries) ListIssueChildren(ctx context.Context, parentID pgtype.Int8) (
 
 const listIssues = `-- name: ListIssues :many
 SELECT i.id, i.repo_id, i.number,
-       COALESCE(i.author_id, 0)::BIGINT AS author_id,
-       COALESCE(u.username, '')         AS author_name,
-       i.agent_role, i.title, i.body, i.state,
+       i.actor_id,
+       CASE WHEN a.kind = 'user' THEN COALESCE(a.user_id, 0) ELSE 0 END::BIGINT AS author_id,
+       CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END         AS author_name,
+       CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
+       a.kind AS actor_kind,
+       COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
+       COALESCE(a.agent_role_key, '') AS actor_role_key,
+       COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
+       a.display_name AS actor_display_name,
+       i.title, i.body, i.state,
        i.branch_name, i.base_branch,
        i.head_sha, i.merge_commit_sha, i.merged_at,
        COALESCE(i.parent_id, 0)::BIGINT AS parent_id, i.parent_number,
-       i.created_at, i.updated_at,
-       i.actor_kind,
-       COALESCE(i.actor_user_id, 0)::BIGINT AS actor_user_id,
-       i.actor_role_key,
-       COALESCE(i.actor_workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
-       i.actor_display_name
+       i.created_at, i.updated_at
 FROM issues i
-LEFT JOIN users u ON u.id = i.author_id
+JOIN actors a ON a.id = i.actor_id
 WHERE i.repo_id = $1
   AND ($2::TEXT IS NULL OR i.state = $2)
 ORDER BY i.number DESC
@@ -1581,9 +1563,15 @@ type ListIssuesRow struct {
 	ID                 int64
 	RepoID             int64
 	Number             int64
+	ActorID            int64
 	AuthorID           int64
 	AuthorName         string
 	AgentRole          string
+	ActorKind          string
+	ActorUserID        int64
+	ActorRoleKey       string
+	ActorWorkflowRunID int64
+	ActorDisplayName   string
 	Title              string
 	Body               string
 	State              string
@@ -1596,11 +1584,6 @@ type ListIssuesRow struct {
 	ParentNumber       int64
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
-	ActorKind          string
-	ActorUserID        int64
-	ActorRoleKey       string
-	ActorWorkflowRunID int64
-	ActorDisplayName   string
 }
 
 // State arg is optional (NULL = "any state").
@@ -1622,9 +1605,15 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]ListI
 			&i.ID,
 			&i.RepoID,
 			&i.Number,
+			&i.ActorID,
 			&i.AuthorID,
 			&i.AuthorName,
 			&i.AgentRole,
+			&i.ActorKind,
+			&i.ActorUserID,
+			&i.ActorRoleKey,
+			&i.ActorWorkflowRunID,
+			&i.ActorDisplayName,
 			&i.Title,
 			&i.Body,
 			&i.State,
@@ -1637,11 +1626,6 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]ListI
 			&i.ParentNumber,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.ActorKind,
-			&i.ActorUserID,
-			&i.ActorRoleKey,
-			&i.ActorWorkflowRunID,
-			&i.ActorDisplayName,
 		); err != nil {
 			return nil, err
 		}
@@ -1835,49 +1819,54 @@ func (q *Queries) NextIssueNumber(ctx context.Context, repoID int64) (int64, err
 const planSubtree = `-- name: PlanSubtree :many
 
 WITH RECURSIVE plan_tree AS (
-    SELECT i.id, i.number, i.title, i.state, i.agent_role,
-           i.parent_id,
-           i.actor_kind,
-           COALESCE(i.actor_user_id, 0)::BIGINT AS actor_user_id,
-           i.actor_role_key,
-           i.actor_display_name,
+    SELECT i.id, i.number, i.title, i.state,
+           i.parent_id, i.actor_id,
            0::INT AS depth,
            ARRAY[i.number] AS path
     FROM issues i
     WHERE i.id = $1
   UNION ALL
-    SELECT i.id, i.number, i.title, i.state, i.agent_role,
-           i.parent_id,
-           i.actor_kind,
-           COALESCE(i.actor_user_id, 0)::BIGINT AS actor_user_id,
-           i.actor_role_key,
-           i.actor_display_name,
+    SELECT i.id, i.number, i.title, i.state,
+           i.parent_id, i.actor_id,
            pt.depth + 1,
            pt.path || i.number
     FROM issues i
     JOIN plan_tree pt ON i.parent_id = pt.id
     WHERE pt.depth < 32
 )
-SELECT id, number, title, state, agent_role,
-       COALESCE(parent_id, 0)::BIGINT AS parent_id,
-       actor_kind, actor_user_id, actor_role_key, actor_display_name,
-       depth::INT
-FROM plan_tree
+SELECT pt.id, pt.number, pt.title, pt.state,
+       pt.actor_id,
+       COALESCE(pt.parent_id, 0)::BIGINT AS parent_id,
+       CASE WHEN a.kind = 'user' THEN COALESCE(a.user_id, 0) ELSE 0 END::BIGINT AS author_id,
+       CASE WHEN a.kind = 'user' THEN a.display_name ELSE '' END         AS author_name,
+       CASE WHEN a.kind = 'agent_role' THEN COALESCE(a.agent_role_key, '') ELSE '' END AS agent_role,
+       a.kind AS actor_kind,
+       COALESCE(a.user_id, 0)::BIGINT AS actor_user_id,
+       COALESCE(a.agent_role_key, '') AS actor_role_key,
+       COALESCE(a.workflow_run_id, 0)::BIGINT AS actor_workflow_run_id,
+       a.display_name AS actor_display_name,
+       pt.depth::INT
+FROM plan_tree pt
+JOIN actors a ON a.id = pt.actor_id
 ORDER BY path
 `
 
 type PlanSubtreeRow struct {
-	ID               int64
-	Number           int64
-	Title            string
-	State            string
-	AgentRole        string
-	ParentID         int64
-	ActorKind        string
-	ActorUserID      int64
-	ActorRoleKey     string
-	ActorDisplayName string
-	Depth            int32
+	ID                 int64
+	Number             int64
+	Title              string
+	State              string
+	ActorID            int64
+	ParentID           int64
+	AuthorID           int64
+	AuthorName         string
+	AgentRole          string
+	ActorKind          string
+	ActorUserID        int64
+	ActorRoleKey       string
+	ActorWorkflowRunID int64
+	ActorDisplayName   string
+	PtDepth            int32
 }
 
 // ---- plan subtree (recursive CTE for the whole tree) ----
@@ -1897,13 +1886,17 @@ func (q *Queries) PlanSubtree(ctx context.Context, rootID int64) ([]PlanSubtreeR
 			&i.Number,
 			&i.Title,
 			&i.State,
-			&i.AgentRole,
+			&i.ActorID,
 			&i.ParentID,
+			&i.AuthorID,
+			&i.AuthorName,
+			&i.AgentRole,
 			&i.ActorKind,
 			&i.ActorUserID,
 			&i.ActorRoleKey,
+			&i.ActorWorkflowRunID,
 			&i.ActorDisplayName,
-			&i.Depth,
+			&i.PtDepth,
 		); err != nil {
 			return nil, err
 		}
