@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hangrix/hangrix/apps/hangrix/internal/database"
+	issuedomain "github.com/hangrix/hangrix/apps/hangrix/internal/modules/issue/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire/domain"
 	"github.com/hangrix/hangrix/apps/hangrix/internal/modules/questionnaire/infra/questionnairedb"
 )
@@ -32,10 +33,15 @@ type PostgresStore struct {
 }
 
 type PostgresStoreDeps struct {
-	Pool *pgxpool.Pool
+	Pool       *pgxpool.Pool
+	IssueStore issuedomain.Store
 }
 
 func NewPostgresStore(deps *PostgresStoreDeps) *PostgresStore {
+	// ordering: ensure issue module migrations (issues + issue_events
+	// tables) run before this module's 00004 which references them.
+	_ = deps.IssueStore
+
 	sub, err := fs.Sub(migrationsFS, "migrations")
 	if err != nil {
 		panic(fmt.Errorf("questionnaire migrations sub-fs: %w", err))
