@@ -3,8 +3,7 @@
 -- appear on the issue timeline. Uses WHERE NOT EXISTS for idempotency —
 -- re-running the migration on a DB that already has some events won't
 -- create duplicates.
-INSERT INTO issue_events (issue_id, kind, payload, agent_role, created_at,
-                           actor_kind, actor_role_key, actor_display_name)
+INSERT INTO issue_events (issue_id, kind, payload, actor_id, created_at)
 SELECT q.issue_id,
        'questionnaire_posted',
        jsonb_build_object(
@@ -12,11 +11,11 @@ SELECT q.issue_id,
            'title',            q.title,
            'question_count',   (SELECT COUNT(*) FROM questionnaire_questions WHERE questionnaire_id = q.id)
        ),
-       q.created_by_agent,
-       q.created_at,
-       'agent',
-       q.created_by_agent,
-       q.created_by_agent
+       COALESCE(
+           (SELECT a.id FROM actors a WHERE a.kind = 'agent_role' AND a.agent_role_key = q.created_by_agent),
+           1  -- fallback to system actor
+       ),
+       q.created_at
 FROM questionnaires q
 WHERE NOT EXISTS (
     SELECT 1 FROM issue_events e
